@@ -1,0 +1,50 @@
+{
+  "id": "call_extended_001",
+  "title": "Extended CRM context call",
+  "started": "2026-04-24T15:30:00Z",
+  "duration": 2400,
+  "parties": [
+    {
+      "speakerId": "speaker_internal_001",
+      "name": "Internal Speaker",
+      "emailAddress": "internal@example.invalid"
+    },
+    {
+      "speakerId": "speaker_external_001",
+      "name": "External Speaker",
+      "emailAddress": "external@example.invalid"
+    }
+  ],
+  "context": {
+    "crmObjects": [
+      {
+        "type": "Account",
+        "id": "acct_001",
+        "name": "Acme Corp",
+        "fields": [
+          {
+            "name": "stage",
+            "label": "Stage",
+            "type": "string",
+            "value": "Qualified"
+          },
+          {
+            "name": "arr",
+            "label": "ARR",
+            "type": "number",
+            "value": 125000
+          }
+        ]
+      },
+      {
+        "type": "Opportunity",
+        "id": "opp_001",
+        "name": "Expansion Q2",
+        "fields": {
+          "amount": 40000,
+          "closeDate": "2026-06-30"
+        }
+      }
+    ]
+  }
+}

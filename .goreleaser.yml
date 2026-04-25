@@ -1,0 +1,41 @@
+version: 2
+
+project_name: gongctl
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gongctl
+    main: ./cmd/gongctl
+    binary: gongctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+  - id: gongmcp
+    main: ./cmd/gongmcp
+    binary: gongmcp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

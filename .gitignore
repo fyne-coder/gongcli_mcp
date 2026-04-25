@@ -1,0 +1,42 @@
+# Build outputs
+bin/
+dist/
+coverage.out
+/gongctl
+/gongmcp
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Gong/customer data exports
+/exports/
+/transcripts/
+/data/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.jsonl
+*.ndjson
+
+# Local work tracking
+AGENTS.md
+CHECKPOINT.md
+executor_tasks.md
+logs.md
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.*.swp
+
+# Scratch
+tmp/

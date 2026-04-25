@@ -1,0 +1,22 @@
+{
+  "calls": [
+    {
+      "id": "call_sanitized_001",
+      "title": "Sanitized discovery call",
+      "started": "2026-04-24T14:00:00Z",
+      "duration": 1800,
+      "parties": [
+        {
+          "speakerId": "speaker_internal_001",
+          "name": "Internal Speaker",
+          "emailAddress": "internal@example.invalid"
+        },
+        {
+          "speakerId": "speaker_external_001",
+          "name": "External Speaker",
+          "emailAddress": "external@example.invalid"
+        }
+      ]
+    }
+  ]
+}
