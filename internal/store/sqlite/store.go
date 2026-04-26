@@ -358,6 +358,17 @@ type TranscriptCRMSearchParams struct {
 	Limit      int
 }
 
+type TranscriptCallFactsSearchParams struct {
+	Query           string
+	FromDate        string
+	ToDate          string
+	LifecycleBucket string
+	Scope           string
+	System          string
+	Direction       string
+	Limit           int
+}
+
 type TranscriptCRMSearchResult struct {
 	CallID              string `json:"call_id"`
 	Title               string `json:"title"`
@@ -371,6 +382,22 @@ type TranscriptCRMSearchResult struct {
 	StartMS             int64  `json:"start_ms"`
 	EndMS               int64  `json:"end_ms"`
 	Snippet             string `json:"snippet"`
+}
+
+type TranscriptCallFactsSearchResult struct {
+	StartedAt       string `json:"started_at"`
+	CallDate        string `json:"call_date"`
+	CallMonth       string `json:"call_month"`
+	DurationSeconds int64  `json:"duration_seconds"`
+	LifecycleBucket string `json:"lifecycle_bucket"`
+	Scope           string `json:"scope"`
+	System          string `json:"system"`
+	Direction       string `json:"direction"`
+	SegmentIndex    int    `json:"segment_index"`
+	StartMS         int64  `json:"start_ms"`
+	EndMS           int64  `json:"end_ms"`
+	Snippet         string `json:"snippet"`
+	ContextExcerpt  string `json:"context_excerpt"`
 }
 
 type OpportunityCallSummaryParams struct {
@@ -2215,6 +2242,126 @@ SELECT m.call_id,
 	return out, rows.Err()
 }
 
+func (s *Store) SearchTranscriptSegmentsByCallFacts(ctx context.Context, params TranscriptCallFactsSearchParams) ([]TranscriptCallFactsSearchResult, error) {
+	queryText := strings.TrimSpace(params.Query)
+	if queryText == "" {
+		return nil, errors.New("search query is required")
+	}
+	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
+
+	where := []string{`transcript_segments_fts MATCH ?`}
+	args := []any{queryText}
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizeDateFilter(value, "from_date")
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, `cf.call_date >= ?`)
+		args = append(args, date)
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizeDateFilter(value, "to_date")
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, `cf.call_date <= ?`)
+		args = append(args, date)
+	}
+	if strings.TrimSpace(params.FromDate) != "" && strings.TrimSpace(params.ToDate) != "" {
+		fromDate, _ := normalizeDateFilter(params.FromDate, "from_date")
+		toDate, _ := normalizeDateFilter(params.ToDate, "to_date")
+		if fromDate > toDate {
+			return nil, errors.New("from_date must be on or before to_date")
+		}
+	}
+	if value := strings.TrimSpace(params.LifecycleBucket); value != "" {
+		if !isKnownLifecycleBucket(value) {
+			return nil, fmt.Errorf("unknown lifecycle bucket %q", value)
+		}
+		where = append(where, `cf.lifecycle_bucket = ?`)
+		args = append(args, strings.ToLower(value))
+	}
+	if value := strings.TrimSpace(params.Scope); value != "" {
+		scope, ok := normalizedScope(value)
+		if !ok {
+			return nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		where = append(where, `cf.scope = ?`)
+		args = append(args, scope)
+	}
+	if value := strings.TrimSpace(params.System); value != "" {
+		where = append(where, `cf.system = ?`)
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.Direction); value != "" {
+		where = append(where, `cf.direction = ?`)
+		args = append(args, value)
+	}
+
+	query := `
+SELECT cf.started_at,
+       cf.call_date,
+       cf.call_month,
+       cf.duration_seconds,
+       cf.lifecycle_bucket,
+       cf.scope,
+       cf.system,
+       cf.direction,
+       ts.segment_index,
+       ts.start_ms,
+       ts.end_ms,
+       snippet(transcript_segments_fts, 0, '', '', '...', 18),
+       substr(COALESCE((
+	       SELECT group_concat(context_text, ' ')
+	         FROM (
+		       SELECT ctx.text AS context_text
+		         FROM transcript_segments ctx
+		        WHERE ctx.call_id = ts.call_id
+		          AND ctx.segment_index BETWEEN ts.segment_index - 1 AND ts.segment_index + 1
+		        ORDER BY ctx.segment_index
+	         )
+       ), ''), 1, 800)
+  FROM transcript_segments_fts
+  JOIN transcript_segments ts
+    ON ts.id = transcript_segments_fts.rowid
+  JOIN call_facts cf
+    ON cf.call_id = ts.call_id
+ WHERE ` + strings.Join(where, ` AND `) + `
+ ORDER BY bm25(transcript_segments_fts), cf.started_at DESC, ts.segment_index
+ LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]TranscriptCallFactsSearchResult, 0)
+	for rows.Next() {
+		var row TranscriptCallFactsSearchResult
+		if err := rows.Scan(
+			&row.StartedAt,
+			&row.CallDate,
+			&row.CallMonth,
+			&row.DurationSeconds,
+			&row.LifecycleBucket,
+			&row.Scope,
+			&row.System,
+			&row.Direction,
+			&row.SegmentIndex,
+			&row.StartMS,
+			&row.EndMS,
+			&row.Snippet,
+			&row.ContextExcerpt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SummarizeOpportunityCalls(ctx context.Context, params OpportunityCallSummaryParams) ([]OpportunityCallSummary, error) {
 	limit := boundedLimit(params.Limit, defaultOpportunitySummaryLimit, maxOpportunitySummaryLimit)
 	stageValues := cleanStringList(params.StageValues)
@@ -2980,6 +3127,18 @@ func callFactGroupColumn(groupBy string) (string, string, error) {
 	default:
 		return "", "", fmt.Errorf("unsupported group_by %q", groupBy)
 	}
+}
+
+func normalizeDateFilter(value string, fieldName string) (string, error) {
+	date := strings.TrimSpace(value)
+	if date == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return "", fmt.Errorf("%s must be YYYY-MM-DD", fieldName)
+	}
+	return parsed.Format("2006-01-02"), nil
 }
 
 func normalizedScope(value string) (string, bool) {

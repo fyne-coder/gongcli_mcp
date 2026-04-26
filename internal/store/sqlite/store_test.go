@@ -1481,6 +1481,96 @@ func TestSearchTranscriptSegmentsFTS(t *testing.T) {
 	}
 }
 
+func TestSearchTranscriptSegmentsByCallFactsFiltersDateAndScope(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	for _, raw := range []json.RawMessage{
+		mustNormalizeValue(t, map[string]any{
+			"metaData": map[string]any{
+				"id":        "call-theme-q1-external",
+				"title":     "Q1 external theme call",
+				"started":   "2026-03-15T15:00:00Z",
+				"duration":  1200,
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"metaData": map[string]any{
+				"id":        "call-theme-q2-external",
+				"title":     "Q2 external theme call",
+				"started":   "2026-04-15T15:00:00Z",
+				"duration":  1200,
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"metaData": map[string]any{
+				"id":        "call-theme-q1-internal",
+				"title":     "Q1 internal theme call",
+				"started":   "2026-03-16T15:00:00Z",
+				"duration":  1200,
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "Internal",
+			},
+		}),
+	} {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert theme call: %v", err)
+		}
+	}
+	for _, callID := range []string{"call-theme-q1-external", "call-theme-q2-external", "call-theme-q1-internal"} {
+		if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "speaker",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2000, "text": "Security review is a blocker."},
+							},
+						},
+					},
+				},
+			},
+		})); err != nil {
+			t.Fatalf("upsert theme transcript: %v", err)
+		}
+	}
+
+	results, err := store.SearchTranscriptSegmentsByCallFacts(ctx, TranscriptCallFactsSearchParams{
+		Query:    "security",
+		FromDate: "2026-01-01",
+		ToDate:   "2026-03-31",
+		Scope:    "External",
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("SearchTranscriptSegmentsByCallFacts returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result count=%d want 1: %+v", len(results), results)
+	}
+	if results[0].CallDate != "2026-03-15" || results[0].Scope != "External" {
+		t.Fatalf("unexpected filtered result: %+v", results[0])
+	}
+	if !strings.Contains(strings.ToLower(results[0].Snippet), "security") {
+		t.Fatalf("snippet=%q missing highlighted query", results[0].Snippet)
+	}
+	if !strings.Contains(strings.ToLower(results[0].ContextExcerpt), "security review is a blocker") {
+		t.Fatalf("context excerpt=%q missing bounded transcript context", results[0].ContextExcerpt)
+	}
+}
+
 func TestSearchTranscriptSegmentsCapsLimit(t *testing.T) {
 	t.Parallel()
 

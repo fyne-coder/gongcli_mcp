@@ -81,6 +81,7 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 		"summarize_call_facts",
 		"rank_transcript_backlog",
 		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
 		"missing_transcripts",
 	}
 	if len(names) != len(want) {
@@ -274,6 +275,114 @@ func TestSearchTranscriptSegmentsReturnsSnippetsWithoutTextField(t *testing.T) {
 	}
 	if _, ok := rows[0]["text"]; ok {
 		t.Fatalf("unexpected raw text field in %v", rows[0])
+	}
+}
+
+func TestSearchTranscriptsByCallFactsFiltersAndRedactsIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	for _, raw := range []json.RawMessage{
+		mustJSON(t, map[string]any{
+			"metaData": map[string]any{
+				"id":        "call_theme_external",
+				"title":     "External theme evidence",
+				"started":   "2026-02-10T15:00:00Z",
+				"duration":  1800,
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+		}),
+		mustJSON(t, map[string]any{
+			"metaData": map[string]any{
+				"id":        "call_theme_internal",
+				"title":     "Internal theme evidence",
+				"started":   "2026-02-11T15:00:00Z",
+				"duration":  1800,
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "Internal",
+			},
+		}),
+	} {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert theme call: %v", err)
+		}
+	}
+	for _, item := range []struct {
+		callID    string
+		speakerID string
+		text      string
+	}{
+		{callID: "call_theme_external", speakerID: "buyer-external", text: "The implementation timeline is the main objection."},
+		{callID: "call_theme_internal", speakerID: "rep-internal", text: "The implementation timeline is the internal concern."},
+	} {
+		if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": item.callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": item.speakerID,
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2000, "text": item.text},
+							},
+						},
+					},
+				},
+			},
+		})); err != nil {
+			t.Fatalf("upsert theme transcript: %v", err)
+		}
+	}
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "theme-evidence",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcripts_by_call_facts",
+			"arguments": map[string]any{
+				"query":     "implementation",
+				"from_date": "2026-01-01",
+				"to_date":   "2026-03-31",
+				"scope":     "External",
+				"limit":     5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal call-facts transcript payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count=%d want 1: %+v", len(rows), rows)
+	}
+	if rows[0]["scope"] != "External" || rows[0]["call_date"] != "2026-02-10" {
+		t.Fatalf("unexpected filtered row: %+v", rows[0])
+	}
+	if excerpt, ok := rows[0]["context_excerpt"].(string); !ok || !strings.Contains(excerpt, "main objection") {
+		t.Fatalf("missing bounded context excerpt: %+v", rows[0])
+	}
+	for _, leaked := range []string{"call_id", "title", "speaker_id", "text"} {
+		if _, ok := rows[0][leaked]; ok {
+			t.Fatalf("call-facts transcript result leaked %s: %+v", leaked, rows[0])
+		}
 	}
 }
 

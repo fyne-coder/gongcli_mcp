@@ -78,6 +78,7 @@ type Store interface {
 	SummarizeCallFactsWithSource(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, *sqlite.ProfileQueryInfo, error)
 	CallFactsCoverage(ctx context.Context) (*sqlite.CallFactsCoverage, error)
 	SearchTranscriptSegments(ctx context.Context, query string, limit int) ([]sqlite.TranscriptSearchResult, error)
+	SearchTranscriptSegmentsByCallFacts(ctx context.Context, params sqlite.TranscriptCallFactsSearchParams) ([]sqlite.TranscriptCallFactsSearchResult, error)
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
 }
 
@@ -302,6 +303,17 @@ type summarizeCallFactsArgs struct {
 type searchTranscriptSegmentsArgs struct {
 	Query string `json:"query"`
 	Limit int    `json:"limit"`
+}
+
+type searchTranscriptsByCallFactsArgs struct {
+	Query           string `json:"query"`
+	FromDate        string `json:"from_date"`
+	ToDate          string `json:"to_date"`
+	LifecycleBucket string `json:"lifecycle_bucket"`
+	Scope           string `json:"scope"`
+	System          string `json:"system"`
+	Direction       string `json:"direction"`
+	Limit           int    `json:"limit"`
 }
 
 type missingTranscriptsArgs struct {
@@ -658,6 +670,23 @@ func NewServer(store Store, name, version string) *Server {
 				),
 			},
 			{
+				Name:        "search_transcripts_by_call_facts",
+				Description: "Search transcript snippets joined to normalized call facts with date, lifecycle, scope, system, and direction filters; returns bounded evidence excerpts without call IDs, titles, speaker IDs, or full transcript text.",
+				InputSchema: objectSchema(
+					map[string]any{
+						"query":            map[string]any{"type": "string"},
+						"from_date":        map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+						"to_date":          map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+						"lifecycle_bucket": map[string]any{"type": "string"},
+						"scope":            map[string]any{"type": "string"},
+						"system":           map[string]any{"type": "string"},
+						"direction":        map[string]any{"type": "string"},
+						"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					},
+					[]string{"query"},
+				),
+			},
+			{
 				Name:        "missing_transcripts",
 				Description: "List cached calls that do not yet have transcript segments stored in SQLite.",
 				InputSchema: objectSchema(
@@ -850,6 +879,8 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 		return s.rankTranscriptBacklog(ctx, params.Arguments)
 	case "search_transcript_segments":
 		return s.searchTranscriptSegments(ctx, params.Arguments)
+	case "search_transcripts_by_call_facts":
+		return s.searchTranscriptsByCallFacts(ctx, params.Arguments)
 	case "missing_transcripts":
 		return s.missingTranscripts(ctx, params.Arguments)
 	default:
@@ -1427,6 +1458,28 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 		})
 	}
 	return newToolResult(snippets)
+}
+
+func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args searchTranscriptsByCallFactsArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+
+	results, err := s.store.SearchTranscriptSegmentsByCallFacts(ctx, sqlite.TranscriptCallFactsSearchParams{
+		Query:           args.Query,
+		FromDate:        args.FromDate,
+		ToDate:          args.ToDate,
+		LifecycleBucket: args.LifecycleBucket,
+		Scope:           args.Scope,
+		System:          args.System,
+		Direction:       args.Direction,
+		Limit:           args.Limit,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	return newToolResult(results)
 }
 
 func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
