@@ -25,7 +25,7 @@ Current public SQLite-backed commands:
 
 - `gongctl sync calls --db PATH --from DATE --to DATE --preset business|minimal|all [--max-pages N]`
 - `gongctl sync users --db PATH [--max-pages N]`
-- `gongctl sync transcripts --db PATH --out-dir PATH [--limit N]`
+- `gongctl sync transcripts --db PATH --out-dir PATH [--limit N] [--batch-size N]`
 - `gongctl sync crm-integrations --db PATH`
 - `gongctl sync crm-schema --db PATH --integration-id ID --object-type TYPE`
 - `gongctl sync settings --db PATH --kind trackers|scorecards|workspaces [--workspace-id ID]`

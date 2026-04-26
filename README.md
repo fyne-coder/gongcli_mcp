@@ -31,6 +31,36 @@ go test -count=1 ./...
 go build -o bin/gongctl ./cmd/gongctl
 ```
 
+## Run With Docker
+
+Build the local image:
+
+```bash
+docker build -t gongctl:local .
+```
+
+Run CLI commands with credentials and a mounted data directory:
+
+```bash
+docker run --rm --env-file .env -v "$HOME/gongctl-data:/data" gongctl:local sync status --db /data/gong.db
+```
+
+Run the read-only stdio MCP server from the same image:
+
+```bash
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" --entrypoint /usr/local/bin/gongmcp gongctl:local --db /data/gong.db
+```
+
+Run the real-data Docker smoke after credentials are configured:
+
+```bash
+scripts/docker-smoke.sh
+```
+
+See [docs/docker.md](docs/docker.md) for Compose usage, MCP host configuration, and OCI registry deployment notes.
+
+Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
+
 ## Configure
 
 Use environment variables for the MVP:
@@ -53,7 +83,7 @@ Keep real SQLite databases, transcript files, and tenant profile YAML outside th
 gongctl auth check
 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business
 gongctl sync users --db ~/gongctl-data/gong.db
-gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50
+gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50 --batch-size 50
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
 gongctl sync crm-schema --db ~/gongctl-data/gong.db --integration-id CRM_INTEGRATION_ID --object-type ACCOUNT --object-type DEAL
 gongctl sync settings --db ~/gongctl-data/gong.db --kind trackers
@@ -126,6 +156,8 @@ Rules:
 - `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
 - `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
 - `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces.
+- `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 50, and the CLI caps it at 100.
+- Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.
 - `profile discover` generates an editable YAML profile from cached CRM inventory and includes confidence plus evidence for discovered mappings. Discovery is an English-biased starter and may include CRM evidence values in the YAML, so write real-tenant output to a local file outside git rather than shared logs.

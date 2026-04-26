@@ -26,4 +26,5 @@
 - read-only local MCP server
 - remote MCP design after local MCP proves useful
 - richer SQLite query/report surfaces after the current CLI contract settles
+- transcript refresh policy for re-checking already cached transcripts whose Gong content may change after initial download
 - optional value-example opt-in for unmapped fields, only with explicit redaction rules

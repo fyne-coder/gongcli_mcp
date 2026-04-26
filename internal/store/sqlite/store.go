@@ -27,7 +27,7 @@ type Store struct {
 
 const (
 	defaultMissingTranscriptsLimit = 100
-	maxMissingTranscriptsLimit     = 500
+	maxMissingTranscriptsLimit     = 10000
 	defaultTranscriptSearchLimit   = 20
 	maxTranscriptSearchLimit       = 100
 	defaultCallSearchLimit         = 20

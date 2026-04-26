@@ -239,6 +239,7 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 	dbPath := fs.String("db", "", "SQLite database path")
 	outDir := fs.String("out-dir", "", "directory for transcript JSON files")
 	limit := fs.Int("limit", 100, "maximum missing transcripts to fetch")
+	batchSize := fs.Int("batch-size", 50, "maximum call IDs per Gong transcript request")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -257,14 +258,16 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 		return err
 	}
 
-	result, err := transcriptsync.SyncMissing(ctx, client, store, *outDir, *limit)
+	result, err := transcriptsync.SyncMissingWithBatch(ctx, client, store, *outDir, *limit, *batchSize)
 	fmt.Fprintf(
 		a.err,
-		"synced transcripts: considered=%d downloaded=%d stored=%d failed=%d out_dir=%s db=%s\n",
+		"synced transcripts: considered=%d downloaded=%d stored=%d failed=%d requests=%d batch_size=%d out_dir=%s db=%s\n",
 		result.Considered,
 		result.Downloaded,
 		result.Stored,
 		result.Failed,
+		result.Requests,
+		result.BatchSize,
 		*outDir,
 		*dbPath,
 	)

@@ -476,8 +476,11 @@ func TestSyncTranscriptsDownloadsMissingCalls(t *testing.T) {
 	if err := json.Unmarshal(body, &transcriptDoc); err != nil {
 		t.Fatalf("decode transcript file: %v", err)
 	}
-	if _, ok := transcriptDoc["callTranscripts"]; !ok {
-		t.Fatalf("transcript file missing callTranscripts envelope: %+v", transcriptDoc)
+	if got := transcriptDoc["callId"]; got != "call-transcript-001" {
+		t.Fatalf("transcript file callId=%v want call-transcript-001: %+v", got, transcriptDoc)
+	}
+	if _, ok := transcriptDoc["callTranscripts"]; ok {
+		t.Fatalf("transcript file should contain a normalized single transcript, got envelope: %+v", transcriptDoc)
 	}
 
 	store = openCLITestStore(t, dbPath)

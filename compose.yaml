@@ -1,0 +1,24 @@
+services:
+  gongctl:
+    build:
+      context: .
+    image: gongctl:local
+    environment:
+      - GONG_ACCESS_KEY
+      - GONG_ACCESS_KEY_SECRET
+      - GONG_BASE_URL
+    volumes:
+      - ${GONGCTL_DATA_DIR:?Set GONGCTL_DATA_DIR to an external data directory such as $HOME/gongctl-data}:/data
+    command: ["--help"]
+
+  gongmcp:
+    build:
+      context: .
+    image: gongctl:local
+    profiles: ["mcp"]
+    entrypoint: ["/usr/local/bin/gongmcp"]
+    network_mode: "none"
+    volumes:
+      - ${GONGCTL_DATA_DIR:?Set GONGCTL_DATA_DIR to an external data directory such as $HOME/gongctl-data}:/data:ro
+    command: ["--db", "/data/gong.db"]
+    stdin_open: true

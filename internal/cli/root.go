@@ -90,7 +90,7 @@ func (a *app) usage() {
   gongctl profile show --db gong.db [--format json|yaml]
   gongctl sync calls --db gong.db --from YYYY-MM-DD --to YYYY-MM-DD --preset business|minimal|all [--max-pages N]
   gongctl sync users --db gong.db [--max-pages N]
-  gongctl sync transcripts --db gong.db --out-dir transcripts [--limit N]
+  gongctl sync transcripts --db gong.db --out-dir transcripts [--limit N] [--batch-size N]
   gongctl sync crm-integrations --db gong.db
   gongctl sync crm-schema --db gong.db --integration-id ID --object-type ACCOUNT --object-type DEAL
   gongctl sync settings --db gong.db --kind trackers|scorecards|workspaces [--workspace-id ID]

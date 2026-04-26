@@ -3,6 +3,7 @@ package transcripts
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,7 +58,11 @@ func TestSyncMissingTranscriptsSelectsOnlyMissingCalls(t *testing.T) {
 		t.Fatalf("TranscriptsSynced=%d want 2", result.TranscriptsSynced)
 	}
 
-	gotIDs := requested()
+	gotBatches := requested()
+	var gotIDs []string
+	for _, batch := range gotBatches {
+		gotIDs = append(gotIDs, batch...)
+	}
 	slices.Sort(gotIDs)
 	wantIDs := []string{"call-missing-1", "call-missing-2"}
 	if !slices.Equal(gotIDs, wantIDs) {
@@ -79,6 +84,90 @@ func TestSyncMissingTranscriptsSelectsOnlyMissingCalls(t *testing.T) {
 	}
 	if summary.LastRun.RecordsSeen != 2 || summary.LastRun.RecordsWritten != 2 {
 		t.Fatalf("LastRun counts=%d/%d want 2/2", summary.LastRun.RecordsSeen, summary.LastRun.RecordsWritten)
+	}
+}
+
+func TestSyncMissingBatchesTranscriptRequests(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	responses := map[string]string{}
+	for i := 0; i < defaultBatchSize+1; i++ {
+		callID := fmt.Sprintf("call-batch-%03d", i)
+		mustUpsertCall(t, ctx, store, map[string]any{
+			"id":      callID,
+			"title":   "Batch transcript",
+			"started": "2026-04-24T11:15:00Z",
+		})
+		responses[callID] = wrappedTranscriptPayload(callID, "speaker-batch", "Batched transcript.")
+	}
+
+	outDir := filepath.Join(t.TempDir(), "transcripts")
+	client, requested := newFakeTranscriptClient(t, responses)
+
+	result, err := SyncMissingWithBatch(ctx, client, store, outDir, defaultBatchSize+1, defaultBatchSize)
+	if err != nil {
+		t.Fatalf("SyncMissing returned error: %v", err)
+	}
+	if result.Considered != defaultBatchSize+1 {
+		t.Fatalf("Considered=%d want %d", result.Considered, defaultBatchSize+1)
+	}
+	if result.Requests != 2 {
+		t.Fatalf("Requests=%d want 2", result.Requests)
+	}
+	if result.Stored != defaultBatchSize+1 {
+		t.Fatalf("Stored=%d want %d", result.Stored, defaultBatchSize+1)
+	}
+
+	gotBatches := requested()
+	if len(gotBatches) != 2 {
+		t.Fatalf("len(requested batches)=%d want 2: %+v", len(gotBatches), gotBatches)
+	}
+	if len(gotBatches[0]) != defaultBatchSize {
+		t.Fatalf("first batch len=%d want %d", len(gotBatches[0]), defaultBatchSize)
+	}
+	if len(gotBatches[1]) != 1 {
+		t.Fatalf("second batch len=%d want 1", len(gotBatches[1]))
+	}
+}
+
+func TestSyncMissingHonorsConfiguredBatchSize(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	responses := map[string]string{}
+	for i := 0; i < 3; i++ {
+		callID := fmt.Sprintf("call-configured-batch-%03d", i)
+		mustUpsertCall(t, ctx, store, map[string]any{
+			"id":      callID,
+			"title":   "Configured batch transcript",
+			"started": "2026-04-24T11:15:00Z",
+		})
+		responses[callID] = wrappedTranscriptPayload(callID, "speaker-batch", "Configured batch transcript.")
+	}
+
+	client, requested := newFakeTranscriptClient(t, responses)
+
+	result, err := SyncMissingWithBatch(ctx, client, store, filepath.Join(t.TempDir(), "transcripts"), 3, 2)
+	if err != nil {
+		t.Fatalf("SyncMissingWithBatch returned error: %v", err)
+	}
+	if result.BatchSize != 2 {
+		t.Fatalf("BatchSize=%d want 2", result.BatchSize)
+	}
+	if result.Requests != 2 {
+		t.Fatalf("Requests=%d want 2", result.Requests)
+	}
+
+	gotBatches := requested()
+	if len(gotBatches) != 2 || len(gotBatches[0]) != 2 || len(gotBatches[1]) != 1 {
+		t.Fatalf("requested batches=%+v want lengths 2,1", gotBatches)
 	}
 }
 
@@ -346,12 +435,12 @@ func directTranscriptEnvelope(callID string, speakerID string, text string, wrap
 	return string(body)
 }
 
-func newFakeTranscriptClient(t *testing.T, responses map[string]string) (*gong.Client, func() []string) {
+func newFakeTranscriptClient(t *testing.T, responses map[string]string) (*gong.Client, func() [][]string) {
 	t.Helper()
 
 	var (
 		mu        sync.Mutex
-		requested []string
+		requested [][]string
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -370,22 +459,34 @@ func newFakeTranscriptClient(t *testing.T, responses map[string]string) (*gong.C
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("Decode returned error: %v", err)
 		}
-		if len(body.Filter.CallIDs) != 1 {
-			t.Fatalf("callIds=%v want exactly one id", body.Filter.CallIDs)
-		}
-		callID := body.Filter.CallIDs[0]
-
 		mu.Lock()
-		requested = append(requested, callID)
+		requested = append(requested, append([]string(nil), body.Filter.CallIDs...))
 		mu.Unlock()
 
-		payload, ok := responses[callID]
-		if !ok {
-			http.Error(w, `{"error":"missing fixture"}`, http.StatusNotFound)
+		items := make([]any, 0, len(body.Filter.CallIDs))
+		for _, callID := range body.Filter.CallIDs {
+			payload, ok := responses[callID]
+			if !ok {
+				http.Error(w, `{"error":"missing fixture"}`, http.StatusNotFound)
+				return
+			}
+			var envelope map[string]any
+			if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+				t.Fatalf("Unmarshal fixture returned error: %v", err)
+			}
+			if wrapped, ok := envelope["callTranscripts"].([]any); ok {
+				items = append(items, wrapped...)
+			} else {
+				items = append(items, envelope)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if len(items) == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"callTranscripts": items})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(payload))
+		_ = json.NewEncoder(w).Encode(map[string]any{"callTranscripts": items})
 	}))
 	t.Cleanup(server.Close)
 
@@ -401,9 +502,13 @@ func newFakeTranscriptClient(t *testing.T, responses map[string]string) (*gong.C
 		t.Fatalf("gong.NewClient returned error: %v", err)
 	}
 
-	return client, func() []string {
+	return client, func() [][]string {
 		mu.Lock()
 		defer mu.Unlock()
-		return append([]string(nil), requested...)
+		out := make([][]string, 0, len(requested))
+		for _, batch := range requested {
+			out = append(out, append([]string(nil), batch...))
+		}
+		return out
 	}
 }
