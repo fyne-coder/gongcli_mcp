@@ -14,6 +14,7 @@ import (
 	"github.com/arthurlee/gongctl/internal/gong"
 	"github.com/arthurlee/gongctl/internal/ratelimit"
 	"github.com/arthurlee/gongctl/internal/redact"
+	"github.com/arthurlee/gongctl/internal/version"
 )
 
 var errUsage = errors.New("usage")
@@ -63,6 +64,8 @@ func (a *app) run(ctx context.Context, args []string) error {
 		return a.profile(ctx, args[1:])
 	case "users":
 		return a.users(ctx, args[1:])
+	case "version":
+		return a.version(ctx, args[1:])
 	case "api":
 		return a.api(ctx, args[1:])
 	case "diagnose":
@@ -105,9 +108,22 @@ func (a *app) usage() {
   gongctl calls transcript --call-id CALL_ID [--out transcript.json]
   gongctl calls transcript-batch --ids-file call_ids.txt --out-dir transcripts --resume
   gongctl users list
+  gongctl version
   gongctl api raw METHOD PATH [--body body.json] [--out response.json]
   gongctl diagnose [--live]
 `)
+}
+
+func (a *app) version(ctx context.Context, args []string) error {
+	_ = ctx
+	if len(args) != 0 {
+		return fmt.Errorf("unexpected version arguments: %v", args)
+	}
+	info := version.Current()
+	fmt.Fprintf(a.out, "version: %s\n", info.Version)
+	fmt.Fprintf(a.out, "commit: %s\n", info.Commit)
+	fmt.Fprintf(a.out, "date: %s\n", info.Date)
+	return nil
 }
 
 func newClientFromEnv() (*gong.Client, error) {

@@ -7,11 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 
 	"github.com/arthurlee/gongctl/internal/mcp"
 	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	"github.com/arthurlee/gongctl/internal/version"
 )
 
 func main() {
@@ -53,22 +53,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	server := mcp.NewServer(store, "gongmcp", buildVersion())
+	server := mcp.NewServer(store, "gongmcp", version.DisplayVersion())
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintf(stderr, "serve mcp: %v\n", err)
 		return 1
 	}
 	return 0
-}
-
-func buildVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "dev"
-	}
-	version := strings.TrimSpace(info.Main.Version)
-	if version == "" || version == "(devel)" {
-		return "dev"
-	}
-	return version
 }

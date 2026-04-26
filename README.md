@@ -31,6 +31,19 @@ go test -count=1 ./...
 go build -o bin/gongctl ./cmd/gongctl
 ```
 
+Or use the Makefile to inject local version metadata:
+
+```bash
+make build
+bin/gongctl version
+```
+
+## Versioning
+
+Release versions follow SemVer-style `vX.Y.Z` tags. The next release version lives in [VERSION](VERSION), and release changes are summarized in [CHANGELOG.md](CHANGELOG.md).
+
+GoReleaser and Docker builds inject `version`, `commit`, and `date` into both `gongctl` and `gongmcp`. See [docs/release.md](docs/release.md) for the release candidate flow.
+
 ## Run With Docker
 
 Build the local image:
