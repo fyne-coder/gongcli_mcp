@@ -816,4 +816,38 @@ CREATE INDEX IF NOT EXISTS idx_profile_call_fact_cache_bucket
 CREATE INDEX IF NOT EXISTS idx_profile_call_fact_cache_started
 	ON profile_call_fact_cache(profile_id, canonical_sha256, started_at DESC);
 `,
+	`
+CREATE TABLE IF NOT EXISTS scorecard_activity (
+	answered_scorecard_id TEXT PRIMARY KEY,
+	scorecard_id TEXT NOT NULL DEFAULT '',
+	scorecard_name TEXT NOT NULL DEFAULT '',
+	call_id TEXT NOT NULL DEFAULT '',
+	call_started_at TEXT NOT NULL DEFAULT '',
+	reviewed_user_id TEXT NOT NULL DEFAULT '',
+	reviewer_user_id TEXT NOT NULL DEFAULT '',
+	editor_user_id TEXT NOT NULL DEFAULT '',
+	review_method TEXT NOT NULL DEFAULT '',
+	review_time TEXT NOT NULL DEFAULT '',
+	visibility_type TEXT NOT NULL DEFAULT '',
+	overall_score REAL NOT NULL DEFAULT 0,
+	average_score REAL NOT NULL DEFAULT 0,
+	answer_count INTEGER NOT NULL DEFAULT 0,
+	raw_json BLOB NOT NULL,
+	raw_sha256 TEXT NOT NULL,
+	first_seen_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scorecard_activity_scorecard
+	ON scorecard_activity(scorecard_id, review_time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_scorecard_activity_call
+	ON scorecard_activity(call_id);
+
+CREATE INDEX IF NOT EXISTS idx_scorecard_activity_review_method
+	ON scorecard_activity(review_method);
+
+CREATE INDEX IF NOT EXISTS idx_scorecard_activity_reviewed_user
+	ON scorecard_activity(reviewed_user_id);
+`,
 }

@@ -86,6 +86,7 @@ func (a *app) usage() {
   gongctl analyze settings --db gong.db [--kind trackers|scorecards|workspaces]
   gongctl analyze scorecards --db gong.db [--active-only]
   gongctl analyze scorecard --db gong.db --scorecard-id ID
+  gongctl analyze scorecard-activity --db gong.db [--group-by scorecard|review_method|reviewed_user|lifecycle|transcript_status]
   gongctl auth check
   gongctl profile discover --db gong.db --out gongctl-profile.yaml
   gongctl profile validate --db gong.db --profile gongctl-profile.yaml
@@ -97,6 +98,7 @@ func (a *app) usage() {
   gongctl sync crm-integrations --db gong.db
   gongctl sync crm-schema --db gong.db --integration-id ID --object-type ACCOUNT --object-type DEAL
   gongctl sync settings --db gong.db --kind trackers|scorecards|workspaces [--workspace-id ID]
+  gongctl sync scorecard-activity --db gong.db --call-from YYYY-MM-DD --call-to YYYY-MM-DD [--review-method AUTOMATIC|MANUAL|BOTH] [--max-pages N]
   gongctl sync status --db gong.db
   gongctl mcp tools
   gongctl mcp tool-info NAME

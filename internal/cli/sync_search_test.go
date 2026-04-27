@@ -399,6 +399,98 @@ func TestSyncInventoryAnalyzeAndMCPDiscoveryCommands(t *testing.T) {
 	}
 }
 
+func TestSyncAndAnalyzeScorecardActivity(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/stats/activity/scorecards" {
+			t.Fatalf("path=%q want /v2/stats/activity/scorecards", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%q want POST", r.Method)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		filter := body["filter"].(map[string]any)
+		if filter["callFromDate"] != "2026-01-01" || filter["callToDate"] != "2026-04-01" || filter["reviewMethod"] != "BOTH" {
+			t.Fatalf("unexpected scorecard activity filter: %+v", filter)
+		}
+		writeCLIJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"answeredScorecards": []map[string]any{
+				{
+					"answeredScorecardId": "answered-cli-001",
+					"scorecardId":         "scorecard-cli-activity-001",
+					"scorecardName":       "Discovery QA",
+					"callId":              "call-cli-activity-001",
+					"callStartTime":       "2026-03-01T15:00:00Z",
+					"reviewedUserId":      "user-cli-activity-001",
+					"reviewerUserId":      "reviewer-cli-activity-001",
+					"reviewMethod":        "MANUAL",
+					"reviewTime":          "2026-03-02T15:00:00Z",
+					"answers": []map[string]any{
+						{"questionId": "question-cli-activity-001", "isOverall": true, "score": 4},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	if err := a.sync(context.Background(), []string{
+		"scorecard-activity",
+		"--db", dbPath,
+		"--call-from", "2026-01-01",
+		"--call-to", "2026-04-01",
+		"--review-method", "BOTH",
+		"--max-pages", "1",
+	}); err != nil {
+		t.Fatalf("sync scorecard-activity returned error: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "synced scorecard activity") || !strings.Contains(stderr.String(), "written=1") {
+		t.Fatalf("scorecard activity stderr=%q missing summary", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := a.analyze(context.Background(), []string{"scorecard-activity", "--db", dbPath, "--group-by", "review_method"}); err != nil {
+		t.Fatalf("analyze scorecard-activity returned error: %v", err)
+	}
+	var analyzeResp struct {
+		GroupBy string                               `json:"group_by"`
+		Results []sqlite.ScorecardActivitySummaryRow `json:"results"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &analyzeResp); err != nil {
+		t.Fatalf("decode scorecard activity analysis: %v", err)
+	}
+	if analyzeResp.GroupBy != "review_method" || len(analyzeResp.Results) != 1 || analyzeResp.Results[0].GroupValue != "MANUAL" {
+		t.Fatalf("unexpected scorecard activity analysis: %+v", analyzeResp)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := a.sync(context.Background(), []string{"status", "--db", dbPath}); err != nil {
+		t.Fatalf("sync status returned error: %v", err)
+	}
+	var status struct {
+		TotalScorecardActivity int64 `json:"total_scorecard_activity"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("decode status: %v", err)
+	}
+	if status.TotalScorecardActivity != 1 {
+		t.Fatalf("total_scorecard_activity=%d want 1", status.TotalScorecardActivity)
+	}
+}
+
 func TestSyncTranscriptsDownloadsMissingCalls(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gong.db")
 	outDir := filepath.Join(t.TempDir(), "transcripts")

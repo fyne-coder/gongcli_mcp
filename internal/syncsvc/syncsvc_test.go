@@ -288,6 +288,150 @@ func TestSyncCallsRerunIsIdempotentOnRowCounts(t *testing.T) {
 	}
 }
 
+func TestSyncScorecardActivityPaginatesAndStores(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/stats/activity/scorecards" {
+			t.Fatalf("path=%q want /v2/stats/activity/scorecards", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%q want POST", r.Method)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		filter := body["filter"].(map[string]any)
+		if got := filter["callFromDate"]; got != "2026-01-01" {
+			t.Fatalf("callFromDate=%v want 2026-01-01", got)
+		}
+		if got := filter["callToDate"]; got != "2026-04-01" {
+			t.Fatalf("callToDate=%v want 2026-04-01", got)
+		}
+		if got := filter["reviewMethod"]; got != "BOTH" {
+			t.Fatalf("reviewMethod=%v want BOTH", got)
+		}
+
+		requests++
+		switch requests {
+		case 1:
+			if got := stringValue(body["cursor"]); got != "" {
+				t.Fatalf("page1 cursor=%q want empty", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 0,
+					"cursor":            "scorecards-page-2",
+				},
+				"answeredScorecards": []map[string]any{
+					scorecardActivityFixture("answered-001", "call-001"),
+				},
+			})
+		case 2:
+			if got := stringValue(body["cursor"]); got != "scorecards-page-2" {
+				t.Fatalf("page2 cursor=%q want scorecards-page-2", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 1,
+				},
+				"answeredScorecards": []map[string]any{
+					scorecardActivityFixture("answered-002", "call-002"),
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncScorecardActivity(ctx, client, store, ScorecardActivityParams{
+		CallFrom:     "2026-01-01",
+		CallTo:       "2026-04-01",
+		ReviewMethod: "BOTH",
+	})
+	if err != nil {
+		t.Fatalf("SyncScorecardActivity returned error: %v", err)
+	}
+	if result.Pages != 2 || result.RecordsSeen != 2 || result.RecordsWritten != 2 {
+		t.Fatalf("result=%+v want 2 pages/seen/written", result)
+	}
+	if result.Cursor != "scorecards-page-2" {
+		t.Fatalf("cursor=%q want scorecards-page-2", result.Cursor)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 2)
+	assertCount(t, store.DB(), "sync_runs", 1)
+
+	var scope, syncKey string
+	if err := store.DB().QueryRowContext(ctx, `SELECT scope, sync_key FROM sync_runs ORDER BY id DESC LIMIT 1`).Scan(&scope, &syncKey); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	if scope != scopeScorecardActivity {
+		t.Fatalf("scope=%q want %q", scope, scopeScorecardActivity)
+	}
+	for _, want := range []string{"call_from=2026-01-01", "call_to=2026-04-01", "review_method=BOTH"} {
+		if !strings.Contains(syncKey, want) {
+			t.Fatalf("syncKey=%q missing %q", syncKey, want)
+		}
+	}
+}
+
+func TestSyncScorecardActivityRejectsRepeatedCursorAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+				"cursor":            "loop",
+			},
+			"answeredScorecards": []map[string]any{
+				scorecardActivityFixture("answered-loop", "call-loop"),
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := SyncScorecardActivity(ctx, client, store, ScorecardActivityParams{
+		CallFrom: "2026-01-01",
+		CallTo:   "2026-04-01",
+		Cursor:   "loop",
+	})
+	if err == nil || !strings.Contains(err.Error(), "pagination cursor repeated") {
+		t.Fatalf("error=%v want repeated cursor", err)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 1)
+
+	result, err := SyncScorecardActivity(ctx, client, store, ScorecardActivityParams{
+		CallFrom: "2026-01-01",
+		CallTo:   "2026-04-01",
+		MaxPages: 1,
+	})
+	if err != nil {
+		t.Fatalf("idempotent rerun returned error: %v", err)
+	}
+	if result.RecordsSeen != 1 || result.RecordsWritten != 1 {
+		t.Fatalf("idempotent rerun result=%+v want 1/1 seen/written", result)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 1)
+}
+
 func TestSyncCRMInventoryAndSettings(t *testing.T) {
 	t.Parallel()
 
@@ -559,4 +703,21 @@ func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 func stringValue(value any) string {
 	typed, _ := value.(string)
 	return typed
+}
+
+func scorecardActivityFixture(answeredID string, callID string) map[string]any {
+	return map[string]any{
+		"answeredScorecardId": answeredID,
+		"scorecardId":         "scorecard-sync-001",
+		"scorecardName":       "Discovery QA",
+		"callId":              callID,
+		"callStartTime":       "2026-03-01T15:00:00Z",
+		"reviewedUserId":      "user-sync-001",
+		"reviewerUserId":      "reviewer-sync-001",
+		"reviewMethod":        "MANUAL",
+		"reviewTime":          "2026-03-02T15:00:00Z",
+		"answers": []map[string]any{
+			{"questionId": "question-sync-001", "isOverall": true, "score": 4},
+		},
+	}
 }

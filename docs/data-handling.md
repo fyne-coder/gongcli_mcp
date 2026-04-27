@@ -36,6 +36,8 @@ Do not log transcript text.
 
 `gongctl sync status` and the SQLite search/show commands should stay JSON-safe and metadata-oriented; logs and checkpoints should keep counts, IDs, and paths instead of transcript body content.
 
+Scorecard activity sync stores answered-scorecard raw JSON in the local SQLite cache for operator audit. Do not copy real answered scorecard payloads, answer text, call IDs, user IDs, scorecard IDs, emails, call titles, or snippets into committed fixtures, docs, logs, or PR descriptions. Use `analyze scorecard-activity` and `summarize_scorecard_activity` for aggregate reporting.
+
 Profile-aware unmapped-field summaries must stay redacted by default. Return field names, type, cardinality, population/null rate, and value-length distribution only. Do not include raw example values unless a future command adds explicit per-field opt-in and applies existing redaction rules.
 
 `search_crm_field_values` is the explicit value-lookup exception. By default it redacts call IDs, object IDs, object names, call titles, and value snippets. `include_call_ids=true` may return matching call IDs, and `include_value_snippets=true` may return bounded snippets and call titles for a specific object type, field name, and value query.

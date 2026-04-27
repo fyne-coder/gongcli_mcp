@@ -57,6 +57,7 @@ type Store interface {
 	ListGongSettings(ctx context.Context, params sqlite.GongSettingListParams) ([]sqlite.GongSettingRecord, error)
 	ListScorecards(ctx context.Context, params sqlite.ScorecardListParams) ([]sqlite.ScorecardSummary, error)
 	GetScorecardDetail(ctx context.Context, scorecardID string) (*sqlite.ScorecardDetail, error)
+	ScorecardActivityOverview(ctx context.Context, limit int) (*sqlite.ScorecardActivityOverview, error)
 	ActiveBusinessProfile(ctx context.Context) (*sqlite.BusinessProfile, error)
 	ListBusinessConcepts(ctx context.Context) ([]sqlite.BusinessConcept, error)
 	ListUnmappedCRMFields(ctx context.Context, params sqlite.UnmappedCRMFieldParams) ([]sqlite.UnmappedCRMField, error)
@@ -156,6 +157,7 @@ type publicSyncStatus struct {
 	TotalCRMSchemaFields         int64                   `json:"total_crm_schema_fields"`
 	TotalGongSettings            int64                   `json:"total_gong_settings"`
 	TotalScorecards              int64                   `json:"total_scorecards"`
+	TotalScorecardActivity       int64                   `json:"total_scorecard_activity"`
 	MissingTranscripts           int64                   `json:"missing_transcripts"`
 	RunningSyncRuns              int64                   `json:"running_sync_runs"`
 	ProfileReadiness             sqlite.ProfileReadiness `json:"profile_readiness"`
@@ -214,6 +216,10 @@ type listScorecardsArgs struct {
 
 type getScorecardArgs struct {
 	ScorecardID string `json:"scorecard_id"`
+}
+
+type summarizeScorecardActivityArgs struct {
+	Limit int `json:"limit"`
 }
 
 type listUnmappedCRMFieldsArgs struct {
@@ -349,8 +355,6 @@ type callDetailCRMObject struct {
 }
 
 type transcriptSnippet struct {
-	CallID       string `json:"call_id"`
-	SpeakerID    string `json:"speaker_id"`
 	SegmentIndex int    `json:"segment_index"`
 	StartMS      int64  `json:"start_ms"`
 	EndMS        int64  `json:"end_ms"`
@@ -472,6 +476,16 @@ func NewServer(store Store, name, version string) *Server {
 						"scorecard_id": map[string]any{"type": "string"},
 					},
 					[]string{"scorecard_id"},
+				),
+			},
+			{
+				Name:        "summarize_scorecard_activity",
+				Description: "Summarize cached answered scorecard activity as aggregate counts and scores without call IDs, user IDs, scorecard IDs, answer text, call titles, transcript snippets, emails, or raw payloads.",
+				InputSchema: objectSchema(
+					map[string]any{
+						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxCallFactGroups},
+					},
+					nil,
 				),
 			},
 			{
@@ -660,7 +674,7 @@ func NewServer(store Store, name, version string) *Server {
 			},
 			{
 				Name:        "search_transcript_segments",
-				Description: "Search transcript snippets in the local SQLite FTS index and return matched snippets only.",
+				Description: "Search transcript snippets in the local SQLite FTS index and return bounded matched snippets without call IDs, speaker IDs, titles, or full transcript text.",
 				InputSchema: objectSchema(
 					map[string]any{
 						"query": map[string]any{"type": "string"},
@@ -845,6 +859,8 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 		return s.listScorecards(ctx, params.Arguments)
 	case "get_scorecard":
 		return s.getScorecard(ctx, params.Arguments)
+	case "summarize_scorecard_activity":
+		return s.summarizeScorecardActivity(ctx, params.Arguments)
 	case "get_business_profile":
 		return s.getBusinessProfile(ctx, params.Arguments)
 	case "list_business_concepts":
@@ -1053,6 +1069,19 @@ func (s *Server) getScorecard(ctx context.Context, raw json.RawMessage) (toolCal
 		return toolCallResult{}, err
 	}
 	return newToolResult(row)
+}
+
+func (s *Server) summarizeScorecardActivity(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args summarizeScorecardActivityArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+
+	report, err := s.store.ScorecardActivityOverview(ctx, args.Limit)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	return newToolResult(report)
 }
 
 func (s *Server) getBusinessProfile(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1344,6 +1373,7 @@ func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 		TotalCRMSchemaFields:         summary.TotalCRMSchemaFields,
 		TotalGongSettings:            summary.TotalGongSettings,
 		TotalScorecards:              summary.TotalScorecards,
+		TotalScorecardActivity:       summary.TotalScorecardActivity,
 		MissingTranscripts:           summary.MissingTranscripts,
 		RunningSyncRuns:              summary.RunningSyncRuns,
 		ProfileReadiness:             profile,
@@ -1449,8 +1479,6 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 	snippets := make([]transcriptSnippet, 0, len(results))
 	for _, row := range results {
 		snippets = append(snippets, transcriptSnippet{
-			CallID:       row.CallID,
-			SpeakerID:    row.SpeakerID,
 			SegmentIndex: row.SegmentIndex,
 			StartMS:      row.StartMS,
 			EndMS:        row.EndMS,

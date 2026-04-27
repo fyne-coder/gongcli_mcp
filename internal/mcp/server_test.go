@@ -64,6 +64,7 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 		"list_gong_settings",
 		"list_scorecards",
 		"get_scorecard",
+		"summarize_scorecard_activity",
 		"get_business_profile",
 		"list_business_concepts",
 		"list_unmapped_crm_fields",
@@ -275,6 +276,66 @@ func TestSearchTranscriptSegmentsReturnsSnippetsWithoutTextField(t *testing.T) {
 	}
 	if _, ok := rows[0]["text"]; ok {
 		t.Fatalf("unexpected raw text field in %v", rows[0])
+	}
+	for _, field := range []string{"call_id", "speaker_id"} {
+		if _, ok := rows[0][field]; ok {
+			t.Fatalf("unexpected redacted field %q in %v", field, rows[0])
+		}
+	}
+}
+
+func TestSummarizeScorecardActivityRedactsIdentifiersByDefault(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedScorecardActivityMCPFixtures(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "scorecard-activity",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name":      "summarize_scorecard_activity",
+			"arguments": map[string]any{"limit": 10},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	if len(envelope.Result.Content) != 1 {
+		t.Fatalf("content count=%d want 1", len(envelope.Result.Content))
+	}
+	text := envelope.Result.Content[0].Text
+	for _, forbidden := range []string{
+		"answered-activity-001",
+		"call-activity-001",
+		"scorecard-activity-001",
+		"user-activity-001",
+		"reviewer-activity-001",
+		"question-activity-001",
+		"Confirmed pain",
+		"Raw activity call",
+		"raw_json",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("MCP scorecard activity response leaked %q: %s", forbidden, text)
+		}
+	}
+	var report sqlite.ScorecardActivityOverview
+	if err := json.Unmarshal([]byte(text), &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if report.TotalAnsweredScorecards != 1 || report.ManualCount != 1 {
+		t.Fatalf("unexpected report counts: %+v", report)
 	}
 }
 
@@ -1513,6 +1574,42 @@ func seedInventoryMCPFixtures(t *testing.T, store *sqlite.Store) {
 		},
 	})); err != nil {
 		t.Fatalf("upsert Gong scorecard: %v", err)
+	}
+}
+
+func seedScorecardActivityMCPFixtures(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-activity-001",
+		"title":    "Raw activity call",
+		"started":  "2026-03-01T15:00:00Z",
+		"duration": 600,
+	})); err != nil {
+		t.Fatalf("upsert scorecard activity call: %v", err)
+	}
+	if _, err := store.UpsertScorecardActivity(ctx, mustJSON(t, map[string]any{
+		"answeredScorecardId": "answered-activity-001",
+		"scorecardId":         "scorecard-activity-001",
+		"scorecardName":       "Discovery QA",
+		"callId":              "call-activity-001",
+		"callStartTime":       "2026-03-01T15:00:00Z",
+		"reviewedUserId":      "user-activity-001",
+		"reviewerUserId":      "reviewer-activity-001",
+		"reviewMethod":        "MANUAL",
+		"reviewTime":          "2026-03-02T15:00:00Z",
+		"answers": []map[string]any{
+			{
+				"questionId":    "question-activity-001",
+				"answerText":    "Confirmed pain",
+				"isOverall":     true,
+				"score":         4,
+				"notApplicable": false,
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert scorecard activity: %v", err)
 	}
 }
 

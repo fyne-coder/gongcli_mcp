@@ -10,6 +10,7 @@
 - `sync crm-integrations`
 - `sync crm-schema`
 - `sync settings`
+- `sync scorecard-activity`
 - `sync status`
 - `profile discover`
 - `profile validate`
@@ -21,6 +22,7 @@
 - `analyze settings`
 - `analyze scorecards`
 - `analyze scorecard`
+- `analyze scorecard-activity`
 - `analyze transcript-backlog`
 - `mcp tools`
 - `mcp tool-info`
@@ -53,6 +55,7 @@ Implemented tools are boring and auditable:
 - `list_gong_settings`
 - `list_scorecards`
 - `get_scorecard`
+- `summarize_scorecard_activity`
 - `get_business_profile`
 - `list_business_concepts`
 - `list_unmapped_crm_fields`
@@ -88,6 +91,7 @@ Guardrails:
 - lifecycle CRM comparison requires an explicit CRM `object_type`
 - call-fact summaries use an allowlisted normalized view instead of arbitrary SQL or raw JSON exposure
 - CRM schema/settings tools return cached metadata only, not raw settings payloads or CRM values; scorecard detail exposes question text as configuration metadata
+- Scorecard activity MCP output stays aggregate-only by default; it does not return call IDs, scorecard IDs, reviewer/reviewee/editor user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw activity payloads.
 - unmapped CRM field tools return redacted aggregate statistics only, not raw field example values
 - `get_sync_status` includes public readiness flags and separates embedded CRM context from CRM integration/schema inventory so zero integration inventory is not mistaken for missing call CRM context
 - `rank_transcript_backlog` and `prioritize_transcripts_by_lifecycle` favor External and Conference-style customer conversations and redact call IDs/titles in model-facing MCP output

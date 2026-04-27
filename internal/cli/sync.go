@@ -14,7 +14,7 @@ import (
 
 func (a *app) sync(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl sync [calls|users|transcripts|crm-integrations|crm-schema|settings|status]")
+		fmt.Fprintln(a.err, "usage: gongctl sync [calls|users|transcripts|crm-integrations|crm-schema|settings|scorecard-activity|status]")
 		return errUsage
 	}
 
@@ -31,12 +31,66 @@ func (a *app) sync(ctx context.Context, args []string) error {
 		return a.syncCRMSchema(ctx, args[1:])
 	case "settings":
 		return a.syncSettings(ctx, args[1:])
+	case "scorecard-activity":
+		return a.syncScorecardActivity(ctx, args[1:])
 	case "status":
 		return a.syncStatus(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown sync command %q\n", args[0])
 		return errUsage
 	}
+}
+
+func (a *app) syncScorecardActivity(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sync scorecard-activity", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	dbPath := fs.String("db", "", "SQLite database path")
+	callFrom := fs.String("call-from", "", "inclusive call from date, YYYY-MM-DD in Gong company timezone")
+	callTo := fs.String("call-to", "", "exclusive call to date, YYYY-MM-DD in Gong company timezone")
+	reviewFrom := fs.String("review-from", "", "optional inclusive review from date, YYYY-MM-DD in Gong company timezone")
+	reviewTo := fs.String("review-to", "", "optional exclusive review to date, YYYY-MM-DD in Gong company timezone")
+	reviewMethod := fs.String("review-method", "BOTH", "review method: AUTOMATIC, MANUAL, BOTH")
+	maxPages := fs.Int("max-pages", 0, "maximum pages to sync; 0 means all pages")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if strings.TrimSpace(*callFrom) == "" {
+		return fmt.Errorf("--call-from is required")
+	}
+	if strings.TrimSpace(*callTo) == "" {
+		return fmt.Errorf("--call-to is required")
+	}
+
+	store, err := openSQLiteStore(ctx, *dbPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	client, err := newClientFromEnv()
+	if err != nil {
+		return err
+	}
+
+	result, err := syncsvc.SyncScorecardActivity(ctx, client, store, syncsvc.ScorecardActivityParams{
+		CallFrom:     *callFrom,
+		CallTo:       *callTo,
+		ReviewFrom:   *reviewFrom,
+		ReviewTo:     *reviewTo,
+		ReviewMethod: *reviewMethod,
+		MaxPages:     *maxPages,
+	})
+	fmt.Fprintf(
+		a.err,
+		"synced scorecard activity: pages=%d seen=%d written=%d review_method=%s cursor=%s db=%s\n",
+		result.Pages,
+		result.RecordsSeen,
+		result.RecordsWritten,
+		strings.ToUpper(strings.TrimSpace(*reviewMethod)),
+		displayCursor(result.Cursor),
+		*dbPath,
+	)
+	return err
 }
 
 func (a *app) syncCalls(ctx context.Context, args []string) error {
@@ -306,6 +360,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		TotalCRMSchemaFields:         summary.TotalCRMSchemaFields,
 		TotalGongSettings:            summary.TotalGongSettings,
 		TotalScorecards:              summary.TotalScorecards,
+		TotalScorecardActivity:       summary.TotalScorecardActivity,
 		MissingTranscripts:           summary.MissingTranscripts,
 		RunningSyncRuns:              summary.RunningSyncRuns,
 		ProfileReadiness:             summary.ProfileReadiness,
@@ -376,6 +431,7 @@ type syncStatusResponse struct {
 	TotalCRMSchemaFields         int64                   `json:"total_crm_schema_fields"`
 	TotalGongSettings            int64                   `json:"total_gong_settings"`
 	TotalScorecards              int64                   `json:"total_scorecards"`
+	TotalScorecardActivity       int64                   `json:"total_scorecard_activity"`
 	MissingTranscripts           int64                   `json:"missing_transcripts"`
 	RunningSyncRuns              int64                   `json:"running_sync_runs"`
 	ProfileReadiness             sqlite.ProfileReadiness `json:"profile_readiness"`

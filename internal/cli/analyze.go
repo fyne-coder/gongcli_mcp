@@ -10,7 +10,7 @@ import (
 
 func (a *app) analyze(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl analyze [calls|coverage|transcript-backlog|crm-schema|settings|scorecards|scorecard]")
+		fmt.Fprintln(a.err, "usage: gongctl analyze [calls|coverage|transcript-backlog|crm-schema|settings|scorecards|scorecard|scorecard-activity]")
 		return errUsage
 	}
 
@@ -29,10 +29,52 @@ func (a *app) analyze(ctx context.Context, args []string) error {
 		return a.analyzeScorecards(ctx, args[1:])
 	case "scorecard":
 		return a.analyzeScorecard(ctx, args[1:])
+	case "scorecard-activity":
+		return a.analyzeScorecardActivity(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown analyze command %q\n", args[0])
 		return errUsage
 	}
+}
+
+func (a *app) analyzeScorecardActivity(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("analyze scorecard-activity", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	dbPath := fs.String("db", "", "SQLite database path")
+	groupBy := fs.String("group-by", "scorecard", "dimension: scorecard, review_method, reviewed_user, lifecycle, transcript_status")
+	limit := fs.Int("limit", 50, "maximum groups to return")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+
+	store, err := openSQLiteStore(ctx, *dbPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	rows, err := store.SummarizeScorecardActivity(ctx, sqlite.ScorecardActivitySummaryParams{
+		GroupBy: *groupBy,
+		Limit:   *limit,
+	})
+	if err != nil {
+		return err
+	}
+	canonicalGroupBy := *groupBy
+	if len(rows) > 0 {
+		canonicalGroupBy = rows[0].GroupBy
+	} else {
+		var err error
+		canonicalGroupBy, err = sqlite.NormalizeScorecardActivityGroupBy(*groupBy)
+		if err != nil {
+			return err
+		}
+	}
+	return writeJSONValue(a.out, scorecardActivityAnalyzeResponse{
+		GroupBy: canonicalGroupBy,
+		Limit:   normalizeSearchLimit(*limit, 50),
+		Results: rows,
+	})
 }
 
 func (a *app) analyzeCalls(ctx context.Context, args []string) error {
@@ -367,6 +409,12 @@ type scorecardsAnalyzeResponse struct {
 	ActiveOnly bool                      `json:"active_only"`
 	Limit      int                       `json:"limit"`
 	Results    []sqlite.ScorecardSummary `json:"results"`
+}
+
+type scorecardActivityAnalyzeResponse struct {
+	GroupBy string                               `json:"group_by"`
+	Limit   int                                  `json:"limit"`
+	Results []sqlite.ScorecardActivitySummaryRow `json:"results"`
 }
 
 func profileInfoSource(info *sqlite.ProfileQueryInfo) string {

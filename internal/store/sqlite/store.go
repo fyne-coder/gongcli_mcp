@@ -306,6 +306,65 @@ type ScorecardQuestion struct {
 	Options      []string `json:"options,omitempty"`
 }
 
+type ScorecardActivityRecord struct {
+	AnsweredScorecardID string  `json:"answered_scorecard_id"`
+	ScorecardID         string  `json:"scorecard_id,omitempty"`
+	ScorecardName       string  `json:"scorecard_name,omitempty"`
+	CallID              string  `json:"call_id,omitempty"`
+	CallStartedAt       string  `json:"call_started_at,omitempty"`
+	ReviewedUserID      string  `json:"reviewed_user_id,omitempty"`
+	ReviewerUserID      string  `json:"reviewer_user_id,omitempty"`
+	EditorUserID        string  `json:"editor_user_id,omitempty"`
+	ReviewMethod        string  `json:"review_method,omitempty"`
+	ReviewTime          string  `json:"review_time,omitempty"`
+	VisibilityType      string  `json:"visibility_type,omitempty"`
+	OverallScore        float64 `json:"overall_score,omitempty"`
+	AverageScore        float64 `json:"average_score,omitempty"`
+	AnswerCount         int64   `json:"answer_count"`
+	RawSHA256           string  `json:"raw_sha256,omitempty"`
+	UpdatedAt           string  `json:"updated_at,omitempty"`
+}
+
+type ScorecardActivitySummaryParams struct {
+	GroupBy string
+	Limit   int
+}
+
+type ScorecardActivitySummaryRow struct {
+	GroupBy                string  `json:"group_by"`
+	GroupValue             string  `json:"group_value"`
+	AnsweredScorecardCount int64   `json:"answered_scorecard_count"`
+	DistinctCallCount      int64   `json:"distinct_call_count"`
+	LinkedCallCount        int64   `json:"linked_call_count"`
+	ReviewedUserCount      int64   `json:"reviewed_user_count"`
+	ManualCount            int64   `json:"manual_count"`
+	AutomaticCount         int64   `json:"automatic_count"`
+	TranscriptCount        int64   `json:"transcript_count"`
+	MissingTranscriptCount int64   `json:"missing_transcript_count"`
+	AverageOverallScore    float64 `json:"average_overall_score"`
+	AverageAnswerScore     float64 `json:"average_answer_score"`
+	LatestReviewTime       string  `json:"latest_review_time"`
+}
+
+type ScorecardActivityOverview struct {
+	TotalAnsweredScorecards int64                         `json:"total_answered_scorecards"`
+	DistinctScorecards      int64                         `json:"distinct_scorecards"`
+	DistinctCalls           int64                         `json:"distinct_calls"`
+	LinkedCallCount         int64                         `json:"linked_call_count"`
+	ReviewedUserCount       int64                         `json:"reviewed_user_count"`
+	ManualCount             int64                         `json:"manual_count"`
+	AutomaticCount          int64                         `json:"automatic_count"`
+	TranscriptCount         int64                         `json:"transcript_count"`
+	MissingTranscriptCount  int64                         `json:"missing_transcript_count"`
+	AverageOverallScore     float64                       `json:"average_overall_score"`
+	AverageAnswerScore      float64                       `json:"average_answer_score"`
+	LatestReviewTime        string                        `json:"latest_review_time"`
+	ByScorecard             []ScorecardActivitySummaryRow `json:"by_scorecard"`
+	ByReviewMethod          []ScorecardActivitySummaryRow `json:"by_review_method"`
+	ByLifecycle             []ScorecardActivitySummaryRow `json:"by_lifecycle"`
+	ByTranscriptStatus      []ScorecardActivitySummaryRow `json:"by_transcript_status"`
+}
+
 type LateStageSignalParams struct {
 	ObjectType          string
 	StageField          string
@@ -594,6 +653,7 @@ type SyncStatusSummary struct {
 	TotalCRMSchemaFields         int64            `json:"total_crm_schema_fields"`
 	TotalGongSettings            int64            `json:"total_gong_settings"`
 	TotalScorecards              int64            `json:"total_scorecards"`
+	TotalScorecardActivity       int64            `json:"total_scorecard_activity"`
 	MissingTranscripts           int64            `json:"missing_transcripts"`
 	RunningSyncRuns              int64            `json:"running_sync_runs"`
 	ProfileReadiness             ProfileReadiness `json:"profile_readiness"`
@@ -694,6 +754,25 @@ type gongSettingPayload struct {
 	Active    bool
 	RawJSON   []byte
 	RawSHA256 string
+}
+
+type scorecardActivityPayload struct {
+	AnsweredScorecardID string
+	ScorecardID         string
+	ScorecardName       string
+	CallID              string
+	CallStartedAt       string
+	ReviewedUserID      string
+	ReviewerUserID      string
+	EditorUserID        string
+	ReviewMethod        string
+	ReviewTime          string
+	VisibilityType      string
+	OverallScore        float64
+	AverageScore        float64
+	AnswerCount         int64
+	RawJSON             []byte
+	RawSHA256           string
 }
 
 type contextObjectRow struct {
@@ -1286,6 +1365,79 @@ func (s *Store) UpsertGongSetting(ctx context.Context, kind string, raw json.Raw
 	}
 
 	return s.gongSettingByID(ctx, payload.Kind, payload.ObjectID)
+}
+
+func (s *Store) UpsertScorecardActivity(ctx context.Context, raw json.RawMessage) (*ScorecardActivityRecord, error) {
+	payload, err := decodeScorecardActivity(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	now := nowUTC()
+	if _, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO scorecard_activity(
+			answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_started_at,
+			reviewed_user_id, reviewer_user_id, editor_user_id, review_method, review_time,
+			visibility_type, overall_score, average_score, answer_count,
+			raw_json, raw_sha256, first_seen_at, updated_at
+		)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(answered_scorecard_id) DO UPDATE SET
+			scorecard_id = excluded.scorecard_id,
+			scorecard_name = excluded.scorecard_name,
+			call_id = excluded.call_id,
+			call_started_at = excluded.call_started_at,
+			reviewed_user_id = excluded.reviewed_user_id,
+			reviewer_user_id = excluded.reviewer_user_id,
+			editor_user_id = excluded.editor_user_id,
+			review_method = excluded.review_method,
+			review_time = excluded.review_time,
+			visibility_type = excluded.visibility_type,
+			overall_score = excluded.overall_score,
+			average_score = excluded.average_score,
+			answer_count = excluded.answer_count,
+			raw_json = excluded.raw_json,
+			raw_sha256 = excluded.raw_sha256,
+			updated_at = excluded.updated_at
+		WHERE
+			scorecard_activity.scorecard_id IS NOT excluded.scorecard_id OR
+			scorecard_activity.scorecard_name IS NOT excluded.scorecard_name OR
+			scorecard_activity.call_id IS NOT excluded.call_id OR
+			scorecard_activity.call_started_at IS NOT excluded.call_started_at OR
+			scorecard_activity.reviewed_user_id IS NOT excluded.reviewed_user_id OR
+			scorecard_activity.reviewer_user_id IS NOT excluded.reviewer_user_id OR
+			scorecard_activity.editor_user_id IS NOT excluded.editor_user_id OR
+			scorecard_activity.review_method IS NOT excluded.review_method OR
+			scorecard_activity.review_time IS NOT excluded.review_time OR
+			scorecard_activity.visibility_type IS NOT excluded.visibility_type OR
+			scorecard_activity.overall_score IS NOT excluded.overall_score OR
+			scorecard_activity.average_score IS NOT excluded.average_score OR
+			scorecard_activity.answer_count IS NOT excluded.answer_count OR
+			scorecard_activity.raw_sha256 IS NOT excluded.raw_sha256`,
+		payload.AnsweredScorecardID,
+		payload.ScorecardID,
+		payload.ScorecardName,
+		payload.CallID,
+		payload.CallStartedAt,
+		payload.ReviewedUserID,
+		payload.ReviewerUserID,
+		payload.EditorUserID,
+		payload.ReviewMethod,
+		payload.ReviewTime,
+		payload.VisibilityType,
+		payload.OverallScore,
+		payload.AverageScore,
+		payload.AnswerCount,
+		payload.RawJSON,
+		payload.RawSHA256,
+		now,
+		now,
+	); err != nil {
+		return nil, err
+	}
+
+	return s.scorecardActivityByID(ctx, payload.AnsweredScorecardID)
 }
 
 func (s *Store) UpsertTranscript(ctx context.Context, raw json.RawMessage) (*TranscriptRecord, error) {
@@ -1890,6 +2042,154 @@ func (s *Store) GetScorecardDetail(ctx context.Context, scorecardID string) (*Sc
 		return nil, err
 	}
 	return decodeScorecardDetail(raw, cachedUpdatedAt)
+}
+
+func (s *Store) scorecardActivityByID(ctx context.Context, answeredScorecardID string) (*ScorecardActivityRecord, error) {
+	var row ScorecardActivityRecord
+	if err := s.db.QueryRowContext(ctx, `
+SELECT answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_started_at,
+       reviewed_user_id, reviewer_user_id, editor_user_id, review_method, review_time,
+       visibility_type, overall_score, average_score, answer_count, raw_sha256, updated_at
+  FROM scorecard_activity
+ WHERE answered_scorecard_id = ?`, answeredScorecardID).Scan(
+		&row.AnsweredScorecardID,
+		&row.ScorecardID,
+		&row.ScorecardName,
+		&row.CallID,
+		&row.CallStartedAt,
+		&row.ReviewedUserID,
+		&row.ReviewerUserID,
+		&row.EditorUserID,
+		&row.ReviewMethod,
+		&row.ReviewTime,
+		&row.VisibilityType,
+		&row.OverallScore,
+		&row.AverageScore,
+		&row.AnswerCount,
+		&row.RawSHA256,
+		&row.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (s *Store) SummarizeScorecardActivity(ctx context.Context, params ScorecardActivitySummaryParams) ([]ScorecardActivitySummaryRow, error) {
+	groupBy, column, err := scorecardActivityGroupColumn(params.GroupBy)
+	if err != nil {
+		return nil, err
+	}
+	limit := boundedLimit(params.Limit, defaultCallFactsLimit, maxCallFactsLimit)
+	groupExpr := `COALESCE(NULLIF(TRIM(` + column + `), ''), 'unknown')`
+	if groupBy == "scorecard" {
+		groupExpr = `COALESCE(NULLIF(TRIM(sa.scorecard_name), ''), 'unknown')`
+	}
+
+	query := `
+SELECT '` + groupBy + `' AS group_by,
+       ` + groupExpr + ` AS group_value,
+       COUNT(*) AS answered_scorecard_count,
+       COUNT(DISTINCT NULLIF(sa.call_id, '')) AS distinct_call_count,
+       COUNT(DISTINCT c.call_id) AS linked_call_count,
+       COUNT(DISTINCT NULLIF(sa.reviewed_user_id, '')) AS reviewed_user_count,
+       COALESCE(SUM(CASE WHEN sa.review_method = 'MANUAL' THEN 1 ELSE 0 END), 0) AS manual_count,
+       COALESCE(SUM(CASE WHEN sa.review_method = 'AUTOMATIC' THEN 1 ELSE 0 END), 0) AS automatic_count,
+       COUNT(DISTINCT CASE WHEN cf.transcript_status = 'present' THEN sa.call_id END) AS transcript_count,
+       COUNT(DISTINCT CASE WHEN cf.transcript_status = 'missing' THEN sa.call_id END) AS missing_transcript_count,
+       COALESCE(AVG(NULLIF(sa.overall_score, 0)), 0) AS average_overall_score,
+       COALESCE(AVG(NULLIF(sa.average_score, 0)), 0) AS average_answer_score,
+       COALESCE(MAX(sa.review_time), '') AS latest_review_time
+  FROM scorecard_activity sa
+  LEFT JOIN calls c
+    ON c.call_id = sa.call_id
+  LEFT JOIN call_facts cf
+    ON cf.call_id = sa.call_id
+ GROUP BY group_value
+ ORDER BY answered_scorecard_count DESC, group_value
+ LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ScorecardActivitySummaryRow
+	for rows.Next() {
+		var row ScorecardActivitySummaryRow
+		if err := rows.Scan(
+			&row.GroupBy,
+			&row.GroupValue,
+			&row.AnsweredScorecardCount,
+			&row.DistinctCallCount,
+			&row.LinkedCallCount,
+			&row.ReviewedUserCount,
+			&row.ManualCount,
+			&row.AutomaticCount,
+			&row.TranscriptCount,
+			&row.MissingTranscriptCount,
+			&row.AverageOverallScore,
+			&row.AverageAnswerScore,
+			&row.LatestReviewTime,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ScorecardActivityOverview(ctx context.Context, limit int) (*ScorecardActivityOverview, error) {
+	limit = boundedLimit(limit, defaultCallFactsLimit, maxCallFactsLimit)
+	report := &ScorecardActivityOverview{}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) AS total_answered_scorecards,
+       COUNT(DISTINCT NULLIF(sa.scorecard_id, '')) AS distinct_scorecards,
+       COUNT(DISTINCT NULLIF(sa.call_id, '')) AS distinct_calls,
+       COUNT(DISTINCT c.call_id) AS linked_call_count,
+       COUNT(DISTINCT NULLIF(sa.reviewed_user_id, '')) AS reviewed_user_count,
+       COALESCE(SUM(CASE WHEN sa.review_method = 'MANUAL' THEN 1 ELSE 0 END), 0) AS manual_count,
+       COALESCE(SUM(CASE WHEN sa.review_method = 'AUTOMATIC' THEN 1 ELSE 0 END), 0) AS automatic_count,
+       COUNT(DISTINCT CASE WHEN cf.transcript_status = 'present' THEN sa.call_id END) AS transcript_count,
+       COUNT(DISTINCT CASE WHEN cf.transcript_status = 'missing' THEN sa.call_id END) AS missing_transcript_count,
+       COALESCE(AVG(NULLIF(sa.overall_score, 0)), 0) AS average_overall_score,
+       COALESCE(AVG(NULLIF(sa.average_score, 0)), 0) AS average_answer_score,
+       COALESCE(MAX(sa.review_time), '') AS latest_review_time
+  FROM scorecard_activity sa
+  LEFT JOIN calls c
+    ON c.call_id = sa.call_id
+  LEFT JOIN call_facts cf
+    ON cf.call_id = sa.call_id`).Scan(
+		&report.TotalAnsweredScorecards,
+		&report.DistinctScorecards,
+		&report.DistinctCalls,
+		&report.LinkedCallCount,
+		&report.ReviewedUserCount,
+		&report.ManualCount,
+		&report.AutomaticCount,
+		&report.TranscriptCount,
+		&report.MissingTranscriptCount,
+		&report.AverageOverallScore,
+		&report.AverageAnswerScore,
+		&report.LatestReviewTime,
+	); err != nil {
+		return nil, err
+	}
+
+	var err error
+	if report.ByScorecard, err = s.SummarizeScorecardActivity(ctx, ScorecardActivitySummaryParams{GroupBy: "scorecard", Limit: limit}); err != nil {
+		return nil, err
+	}
+	if report.ByReviewMethod, err = s.SummarizeScorecardActivity(ctx, ScorecardActivitySummaryParams{GroupBy: "review_method", Limit: limit}); err != nil {
+		return nil, err
+	}
+	if report.ByLifecycle, err = s.SummarizeScorecardActivity(ctx, ScorecardActivitySummaryParams{GroupBy: "lifecycle", Limit: limit}); err != nil {
+		return nil, err
+	}
+	if report.ByTranscriptStatus, err = s.SummarizeScorecardActivity(ctx, ScorecardActivitySummaryParams{GroupBy: "transcript_status", Limit: limit}); err != nil {
+		return nil, err
+	}
+	return report, nil
 }
 
 func (s *Store) AnalyzeLateStageSignals(ctx context.Context, params LateStageSignalParams) (*LateStageSignalsReport, error) {
@@ -3055,6 +3355,28 @@ func NormalizeCallFactsGroupBy(groupBy string) (string, error) {
 	return canonical, err
 }
 
+func NormalizeScorecardActivityGroupBy(groupBy string) (string, error) {
+	canonical, _, err := scorecardActivityGroupColumn(groupBy)
+	return canonical, err
+}
+
+func scorecardActivityGroupColumn(groupBy string) (string, string, error) {
+	switch strings.ToLower(strings.TrimSpace(groupBy)) {
+	case "", "scorecard", "scorecard_name":
+		return "scorecard", "sa.scorecard_name", nil
+	case "review_method", "method":
+		return "review_method", "sa.review_method", nil
+	case "reviewed_user", "reviewed_user_id":
+		return "reviewed_user", "sa.reviewed_user_id", nil
+	case "lifecycle", "lifecycle_bucket":
+		return "lifecycle", "cf.lifecycle_bucket", nil
+	case "transcript_status":
+		return "transcript_status", "cf.transcript_status", nil
+	default:
+		return "", "", fmt.Errorf("unsupported group_by %q", groupBy)
+	}
+}
+
 func callFactsWhere(params CallFactsSummaryParams) ([]string, []any, error) {
 	var where []string
 	var args []any
@@ -3322,6 +3644,9 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 		return nil, err
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`).Scan(&summary.TotalScorecards); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scorecard_activity`).Scan(&summary.TotalScorecardActivity); err != nil {
 		return nil, err
 	}
 	if err := s.db.QueryRowContext(
@@ -4044,6 +4369,45 @@ func decodeScorecardDetail(raw json.RawMessage, cachedUpdatedAt string) (*Scorec
 	return detail, nil
 }
 
+func decodeScorecardActivity(raw json.RawMessage) (*scorecardActivityPayload, error) {
+	normalized, err := normalizeJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var doc map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(normalized))
+	decoder.UseNumber()
+	if err := decoder.Decode(&doc); err != nil {
+		return nil, err
+	}
+
+	answeredScorecardID := firstIDString(doc, "answeredScorecardId", "id")
+	if answeredScorecardID == "" {
+		return nil, errors.New("scorecard activity payload missing answered scorecard id")
+	}
+
+	overallScore, averageScore, answerCount := scorecardActivityScores(doc["answers"])
+	return &scorecardActivityPayload{
+		AnsweredScorecardID: answeredScorecardID,
+		ScorecardID:         firstIDString(doc, "scorecardId"),
+		ScorecardName:       firstString(doc, "scorecardName", "name"),
+		CallID:              firstIDString(doc, "callId"),
+		CallStartedAt:       firstString(doc, "callStartTime", "callStartedAt", "started"),
+		ReviewedUserID:      firstIDString(doc, "reviewedUserId"),
+		ReviewerUserID:      firstIDString(doc, "reviewerUserId"),
+		EditorUserID:        firstIDString(doc, "editorUserId"),
+		ReviewMethod:        strings.ToUpper(firstString(doc, "reviewMethod")),
+		ReviewTime:          firstString(doc, "reviewTime", "reviewedAt"),
+		VisibilityType:      firstString(doc, "visibilityType"),
+		OverallScore:        overallScore,
+		AverageScore:        averageScore,
+		AnswerCount:         answerCount,
+		RawJSON:             normalized,
+		RawSHA256:           sha256Hex(normalized),
+	}, nil
+}
+
 func decodeTranscript(raw json.RawMessage) (*transcriptPayload, error) {
 	normalized, err := normalizeJSON(raw)
 	if err != nil {
@@ -4638,6 +5002,32 @@ func firstString(doc map[string]any, keys ...string) string {
 	return ""
 }
 
+func firstIDString(doc map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value, ok := doc[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			return strings.TrimSpace(typed)
+		case float64:
+			return strconv.FormatInt(int64(typed), 10)
+		case float32:
+			return strconv.FormatInt(int64(typed), 10)
+		case int:
+			return strconv.FormatInt(int64(typed), 10)
+		case int64:
+			return strconv.FormatInt(typed, 10)
+		case json.Number:
+			return strings.TrimSpace(typed.String())
+		case fmt.Stringer:
+			return strings.TrimSpace(typed.String())
+		}
+	}
+	return ""
+}
+
 func lookupAnyCase(doc map[string]any, key string) (any, bool) {
 	if value, ok := doc[key]; ok {
 		return value, true
@@ -4677,6 +5067,65 @@ func int64FromAny(value any) int64 {
 	default:
 		return 0
 	}
+}
+
+func float64FromAny(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		out, _ := typed.Float64()
+		return out
+	case string:
+		out, _ := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return out
+	default:
+		return 0
+	}
+}
+
+func scorecardActivityScores(value any) (float64, float64, int64) {
+	answers := arrayFromAny(value)
+	if len(answers) == 0 {
+		return 0, 0, 0
+	}
+	var total float64
+	var count int64
+	var overall float64
+	var hasOverall bool
+	for _, item := range answers {
+		answer, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if boolFromAny(answer["notApplicable"]) {
+			continue
+		}
+		if _, ok := answer["score"]; !ok {
+			continue
+		}
+		score := float64FromAny(answer["score"])
+		total += score
+		count++
+		if boolFromAny(answer["isOverall"]) {
+			overall = score
+			hasOverall = true
+		}
+	}
+	if count == 0 {
+		return 0, 0, 0
+	}
+	average := total / float64(count)
+	if !hasOverall {
+		overall = average
+	}
+	return overall, average, count
 }
 
 func scorecardAnswerOptions(value any) []string {

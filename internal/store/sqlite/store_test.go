@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,6 +226,129 @@ func TestInventoryUpsertsAndLists(t *testing.T) {
 	}
 	if len(detail.Questions) != 1 || detail.Questions[0].QuestionText != "Did the rep confirm pain?" {
 		t.Fatalf("unexpected scorecard detail: %+v", detail)
+	}
+}
+
+func TestScorecardActivityUpsertSummariesAndReadOnlyVersionGate(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "scorecard-activity.db")
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	raw := fixtureObject(t, "testdata/fixtures/scorecard_activity.sample.json", "answeredScorecards")
+	first, err := store.UpsertScorecardActivity(ctx, raw)
+	if err != nil {
+		t.Fatalf("first scorecard activity upsert: %v", err)
+	}
+	second, err := store.UpsertScorecardActivity(ctx, raw)
+	if err != nil {
+		t.Fatalf("second scorecard activity upsert: %v", err)
+	}
+	if first.AnsweredScorecardID != second.AnsweredScorecardID || first.RawSHA256 != second.RawSHA256 {
+		t.Fatalf("activity id/hash changed first=%+v second=%+v", first, second)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 1)
+
+	rows, err := store.SummarizeScorecardActivity(ctx, ScorecardActivitySummaryParams{GroupBy: "transcript_status", Limit: 10})
+	if err != nil {
+		t.Fatalf("SummarizeScorecardActivity returned error: %v", err)
+	}
+	if len(rows) != 1 || rows[0].GroupValue != "unknown" || rows[0].AnsweredScorecardCount != 1 {
+		t.Fatalf("unexpected missing-call transcript summary: %+v", rows)
+	}
+	if rows[0].LinkedCallCount != 0 {
+		t.Fatalf("linked_call_count=%d want 0 for soft-linked missing call", rows[0].LinkedCallCount)
+	}
+
+	status, err := store.SyncStatusSummary(ctx)
+	if err != nil {
+		t.Fatalf("SyncStatusSummary returned error: %v", err)
+	}
+	if status.TotalScorecardActivity != 1 {
+		t.Fatalf("total_scorecard_activity=%d want 1", status.TotalScorecardActivity)
+	}
+
+	if _, err := store.DB().ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", len(migrations)-1)); err != nil {
+		t.Fatalf("set stale user_version: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+	readOnly, err := OpenReadOnly(ctx, path)
+	if err == nil {
+		_ = readOnly.Close()
+		t.Fatal("OpenReadOnly returned nil error for stale schema version")
+	}
+	if !strings.Contains(err.Error(), "run a sync command with gongctl first") {
+		t.Fatalf("OpenReadOnly error=%q missing friendly upgrade guidance", err)
+	}
+}
+
+func TestScorecardActivityTranscriptCountsUseDistinctCalls(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if _, err := store.UpsertCall(ctx, fixtureObject(t, "testdata/fixtures/calls.extensive.sample.json", "calls")); err != nil {
+		t.Fatalf("upsert call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, readFixture(t, "testdata/fixtures/transcript.sample.json")); err != nil {
+		t.Fatalf("upsert transcript: %v", err)
+	}
+
+	for _, id := range []string{"answered_scorecard_distinct_001", "answered_scorecard_distinct_002"} {
+		raw := mustNormalizeValue(t, map[string]any{
+			"answeredScorecardId": id,
+			"scorecardId":         "scorecard_sanitized_001",
+			"scorecardName":       "Discovery quality",
+			"callId":              "call_sanitized_001",
+			"reviewedUserId":      "user_sanitized_001",
+			"reviewerUserId":      "user_sanitized_002",
+			"reviewMethod":        "MANUAL",
+			"reviewTime":          "2026-03-15T12:00:00Z",
+			"answers": []map[string]any{
+				{"questionId": "question_sanitized_001", "score": 0, "isOverall": true},
+				{"questionId": "question_sanitized_002", "score": 4},
+			},
+		})
+		if _, err := store.UpsertScorecardActivity(ctx, raw); err != nil {
+			t.Fatalf("upsert activity %s: %v", id, err)
+		}
+	}
+
+	overview, err := store.ScorecardActivityOverview(ctx, 10)
+	if err != nil {
+		t.Fatalf("ScorecardActivityOverview returned error: %v", err)
+	}
+	if overview.TotalAnsweredScorecards != 2 || overview.DistinctCalls != 1 {
+		t.Fatalf("unexpected overview counts: %+v", overview)
+	}
+	if overview.TranscriptCount != 1 || overview.MissingTranscriptCount != 0 {
+		t.Fatalf("overview transcript counts=%d/%d want 1/0", overview.TranscriptCount, overview.MissingTranscriptCount)
+	}
+	if overview.AverageOverallScore != 0 || overview.AverageAnswerScore != 2 {
+		t.Fatalf("overview scores overall=%f average=%f want 0/2", overview.AverageOverallScore, overview.AverageAnswerScore)
+	}
+
+	rows, err := store.SummarizeScorecardActivity(ctx, ScorecardActivitySummaryParams{GroupBy: "transcript_status", Limit: 10})
+	if err != nil {
+		t.Fatalf("SummarizeScorecardActivity returned error: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("summary rows=%d want 1: %+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.GroupValue != "present" || row.AnsweredScorecardCount != 2 || row.DistinctCallCount != 1 {
+		t.Fatalf("unexpected transcript summary row: %+v", row)
+	}
+	if row.TranscriptCount != 1 || row.MissingTranscriptCount != 0 {
+		t.Fatalf("summary transcript counts=%d/%d want 1/0", row.TranscriptCount, row.MissingTranscriptCount)
 	}
 }
 
