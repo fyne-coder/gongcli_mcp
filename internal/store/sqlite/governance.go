@@ -25,6 +25,7 @@ type GovernanceFilteredExportPlan struct {
 	DeletedContextObjects         int64  `json:"deleted_context_objects"`
 	DeletedContextFields          int64  `json:"deleted_context_fields"`
 	DeletedProfileCallFactRows    int64  `json:"deleted_profile_call_fact_rows"`
+	DeletedScorecardActivityRows  int64  `json:"deleted_scorecard_activity_rows"`
 	RemainingSuppressedCandidates int64  `json:"remaining_suppressed_candidates"`
 }
 
@@ -178,6 +179,7 @@ func governanceCallIDTableRegistry() map[string]string {
 		"call_context_objects":    "delete",
 		"call_context_fields":     "delete",
 		"profile_call_fact_cache": "delete",
+		"scorecard_activity":      "delete",
 		"transcript_segments_fts": "rebuild",
 	}
 }
@@ -224,6 +226,7 @@ func (s *Store) DeleteGovernanceSuppressedCalls(ctx context.Context, callIDs []s
 		query  string
 	}{
 		{&plan.DeletedProfileCallFactRows, `DELETE FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
+		{&plan.DeletedScorecardActivityRows, `DELETE FROM scorecard_activity WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
 		{&plan.DeletedTranscriptSegments, `DELETE FROM transcript_segments WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
 		{&plan.DeletedTranscripts, `DELETE FROM transcripts WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
 		{&plan.DeletedContextFields, `DELETE FROM call_context_fields WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},

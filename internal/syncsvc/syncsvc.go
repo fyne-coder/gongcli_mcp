@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	scopeCalls           = "calls"
-	scopeUsers           = "users"
-	scopeCRMIntegrations = "crm_integrations"
-	scopeCRMSchema       = "crm_schema"
-	scopeSettings        = "settings"
+	scopeCalls             = "calls"
+	scopeUsers             = "users"
+	scopeCRMIntegrations   = "crm_integrations"
+	scopeCRMSchema         = "crm_schema"
+	scopeSettings          = "settings"
+	scopeScorecardActivity = "scorecard_activity"
 )
 
 type CallsParams struct {
@@ -47,6 +48,16 @@ type CRMSchemaParams struct {
 type SettingsParams struct {
 	Kind        string
 	WorkspaceID string
+}
+
+type ScorecardActivityParams struct {
+	CallFrom     string
+	CallTo       string
+	ReviewFrom   string
+	ReviewTo     string
+	ReviewMethod string
+	Cursor       string
+	MaxPages     int
 }
 
 type Result struct {
@@ -197,6 +208,97 @@ func SyncSettings(ctx context.Context, client *gong.Client, store *sqlite.Store,
 		result.RecordsWritten++
 	}
 	return result, nil
+}
+
+func SyncScorecardActivity(ctx context.Context, client *gong.Client, store *sqlite.Store, params ScorecardActivityParams) (result Result, err error) {
+	if client == nil {
+		return result, errors.New("gong client is required")
+	}
+	if store == nil {
+		return result, errors.New("sqlite store is required")
+	}
+	if strings.TrimSpace(params.CallFrom) == "" {
+		return result, errors.New("call from date is required")
+	}
+	if strings.TrimSpace(params.CallTo) == "" {
+		return result, errors.New("call to date is required")
+	}
+	if params.MaxPages < 0 {
+		return result, errors.New("max pages must be >= 0")
+	}
+	reviewMethod, err := normalizeReviewMethod(params.ReviewMethod)
+	if err != nil {
+		return result, err
+	}
+
+	result.Scope = scopeScorecardActivity
+	result.SyncKey = buildScorecardActivitySyncKey(params, reviewMethod)
+	requestContext := buildScorecardActivityRequestContext(params, reviewMethod)
+
+	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
+		Scope:          scopeScorecardActivity,
+		SyncKey:        result.SyncKey,
+		Cursor:         strings.TrimSpace(params.Cursor),
+		From:           strings.TrimSpace(params.CallFrom),
+		To:             strings.TrimSpace(params.CallTo),
+		RequestContext: requestContext,
+	})
+	if err != nil {
+		return result, err
+	}
+	result.RunID = run.ID
+	defer finishRun(ctx, store, run.ID, &result, &err)
+
+	request := gong.ScorecardActivityParams{
+		CallFromDate:   strings.TrimSpace(params.CallFrom),
+		CallToDate:     strings.TrimSpace(params.CallTo),
+		ReviewFromDate: strings.TrimSpace(params.ReviewFrom),
+		ReviewToDate:   strings.TrimSpace(params.ReviewTo),
+		ReviewMethod:   reviewMethod,
+		Cursor:         strings.TrimSpace(params.Cursor),
+	}
+
+	seenCursors := map[string]struct{}{}
+	if request.Cursor != "" {
+		seenCursors[request.Cursor] = struct{}{}
+	}
+
+	for {
+		resp, err := client.ListAnsweredScorecards(ctx, request)
+		if err != nil {
+			return result, err
+		}
+
+		page, err := decodeScorecardActivityPage(resp.Body)
+		if err != nil {
+			return result, err
+		}
+
+		result.Pages++
+		result.RecordsSeen += int64(len(page.Items))
+		for _, raw := range page.Items {
+			if _, err := store.UpsertScorecardActivity(ctx, raw); err != nil {
+				return result, err
+			}
+			result.RecordsWritten++
+		}
+
+		nextCursor := strings.TrimSpace(page.Records.Cursor)
+		if nextCursor != "" {
+			result.Cursor = nextCursor
+		}
+		if nextCursor == "" {
+			return result, nil
+		}
+		if params.MaxPages > 0 && result.Pages >= params.MaxPages {
+			return result, nil
+		}
+		if _, ok := seenCursors[nextCursor]; ok {
+			return result, fmt.Errorf("pagination cursor repeated after %d page(s): %s", result.Pages, nextCursor)
+		}
+		seenCursors[nextCursor] = struct{}{}
+		request.Cursor = nextCursor
+	}
 }
 
 func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, params CallsParams) (result Result, err error) {
@@ -495,6 +597,11 @@ type usersPage struct {
 	Records gong.PageRecords
 }
 
+type scorecardActivityPage struct {
+	Items   []json.RawMessage
+	Records gong.PageRecords
+}
+
 func decodeRootItems(body []byte, keys ...string) ([]json.RawMessage, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
@@ -550,6 +657,17 @@ func decodeUsersPage(body []byte) (usersPage, error) {
 		return usersPage{}, err
 	}
 	return usersPage{Items: payload.Users, Records: payload.Records}, nil
+}
+
+func decodeScorecardActivityPage(body []byte) (scorecardActivityPage, error) {
+	var payload struct {
+		AnsweredScorecards []json.RawMessage `json:"answeredScorecards"`
+		Records            gong.PageRecords  `json:"records"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return scorecardActivityPage{}, err
+	}
+	return scorecardActivityPage{Items: payload.AnsweredScorecards, Records: payload.Records}, nil
 }
 
 func cleanObjectTypes(values []string) []string {
@@ -613,6 +731,59 @@ func buildCallRequestContext(base string, includeParties bool, fallbackWithoutPa
 		parts = append(parts, "include_parties_result=omitted_fallback")
 	} else {
 		parts = append(parts, "include_parties_result=request_sent")
+	}
+	return strings.Join(parts, ",")
+}
+
+func normalizeReviewMethod(value string) (string, error) {
+	method := strings.ToUpper(strings.TrimSpace(value))
+	if method == "" {
+		return "BOTH", nil
+	}
+	switch method {
+	case "AUTOMATIC", "MANUAL", "BOTH":
+		return method, nil
+	default:
+		return "", fmt.Errorf("--review-method must be one of: AUTOMATIC, MANUAL, BOTH")
+	}
+}
+
+func buildScorecardActivitySyncKey(params ScorecardActivityParams, reviewMethod string) string {
+	parts := []string{scopeScorecardActivity}
+	if value := strings.TrimSpace(params.CallFrom); value != "" {
+		parts = append(parts, "call_from="+value)
+	}
+	if value := strings.TrimSpace(params.CallTo); value != "" {
+		parts = append(parts, "call_to="+value)
+	}
+	if value := strings.TrimSpace(params.ReviewFrom); value != "" {
+		parts = append(parts, "review_from="+value)
+	}
+	if value := strings.TrimSpace(params.ReviewTo); value != "" {
+		parts = append(parts, "review_to="+value)
+	}
+	if value := strings.TrimSpace(reviewMethod); value != "" {
+		parts = append(parts, "review_method="+value)
+	}
+	return strings.Join(parts, ":")
+}
+
+func buildScorecardActivityRequestContext(params ScorecardActivityParams, reviewMethod string) string {
+	parts := []string{"endpoint=/v2/stats/activity/scorecards"}
+	if value := strings.TrimSpace(params.CallFrom); value != "" {
+		parts = append(parts, "call_from="+value)
+	}
+	if value := strings.TrimSpace(params.CallTo); value != "" {
+		parts = append(parts, "call_to="+value)
+	}
+	if value := strings.TrimSpace(params.ReviewFrom); value != "" {
+		parts = append(parts, "review_from="+value)
+	}
+	if value := strings.TrimSpace(params.ReviewTo); value != "" {
+		parts = append(parts, "review_to="+value)
+	}
+	if value := strings.TrimSpace(reviewMethod); value != "" {
+		parts = append(parts, "review_method="+value)
 	}
 	return strings.Join(parts, ",")
 }

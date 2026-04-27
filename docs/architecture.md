@@ -34,6 +34,7 @@ Current public SQLite-backed commands:
 - `gongctl sync crm-integrations --db PATH`
 - `gongctl sync crm-schema --db PATH --integration-id ID --object-type TYPE`
 - `gongctl sync settings --db PATH --kind trackers|scorecards|workspaces [--workspace-id ID]`
+- `gongctl sync scorecard-activity --db PATH --call-from DATE --call-to DATE [--review-method AUTOMATIC|MANUAL|BOTH]`
 - `gongctl sync status --db PATH`
 - `gongctl profile discover --db PATH --out PATH`
 - `gongctl profile validate --db PATH --profile PATH`
@@ -45,6 +46,7 @@ Current public SQLite-backed commands:
 - `gongctl analyze settings --db PATH [--kind KIND]`
 - `gongctl analyze scorecards --db PATH [--active-only]`
 - `gongctl analyze scorecard --db PATH --scorecard-id ID`
+- `gongctl analyze scorecard-activity --db PATH [--group-by scorecard|review_method|reviewed_user|lifecycle|transcript_status]`
 - `gongctl analyze transcript-backlog --db PATH [--lifecycle-source auto|profile|builtin] [--lifecycle BUCKET] [--limit N]`
 - `gongctl mcp tools`
 - `gongctl mcp tool-info NAME`
@@ -103,6 +105,7 @@ Implemented MCP tools:
 - `list_gong_settings`
 - `list_scorecards`
 - `get_scorecard`
+- `summarize_scorecard_activity`
 - `get_business_profile`
 - `list_business_concepts`
 - `list_unmapped_crm_fields`
@@ -126,7 +129,7 @@ Implemented MCP tools:
 
 Do not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or raw transcript dumps. Transcript search returns segment metadata and snippets only, and redacts call/speaker IDs by default unless an operator explicitly opts in. `get_call` returns minimized metadata plus CRM object field names/counts, not field values or participant payloads. CRM population matrices only group by allowlisted categorical fields such as `StageName`.
 
-CRM schema/settings tools expose cached metadata such as integration IDs, CRM object/field names, tracker names, scorecard names, scorecard questions, and workspaces. They do not return raw settings payloads. `search_crm_field_values` is a deliberate narrow exception for explicit user-directed value lookup: it requires object type, field name, and value query, redacts call IDs by default unless `include_call_ids=true`, and returns bounded short value snippets plus call titles only when `include_value_snippets=true` is explicitly set. Use `gongctl mcp tools` and `gongctl mcp tool-info NAME` to inspect the MCP catalog outside Claude/Codex host apps.
+CRM schema/settings tools expose cached metadata such as integration IDs, CRM object/field names, tracker names, scorecard names, scorecard questions, and workspaces. They do not return raw settings payloads. Scorecard inventory lives in `gong_settings(kind='scorecards')`; answered scorecard fill-ins live separately in `scorecard_activity` so inventory and activity remain distinct. `summarize_scorecard_activity` is aggregate-only by default and does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, or raw payloads. `search_crm_field_values` is a deliberate narrow exception for explicit user-directed value lookup: it requires object type, field name, and value query, redacts call IDs by default unless `include_call_ids=true`, and returns bounded short value snippets plus call titles only when `include_value_snippets=true` is explicitly set. Use `gongctl mcp tools` and `gongctl mcp tool-info NAME` to inspect the MCP catalog outside Claude/Codex host apps.
 
 Lifecycle read surfaces support `lifecycle_source=auto|profile|builtin`. `auto` uses an active imported profile when one exists and falls back to the frozen builtin compatibility view. Profile-aware responses include profile provenance and unavailable concepts. The builtin view intentionally remains deterministic so business users can separate sales funnel, renewal, upsell/expansion, customer success, partner, and outbound prospecting work without needing full transcripts first. Lifecycle CRM comparison remains object-scoped by requiring an explicit CRM `object_type`.
 

@@ -93,6 +93,63 @@ func TestListCallsIncludesExtendedContext(t *testing.T) {
 	}
 }
 
+func TestListAnsweredScorecardsUsesOfficialContractShape(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/stats/activity/scorecards" {
+			t.Fatalf("path=%q want /v2/stats/activity/scorecards", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%q want POST", r.Method)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode returned error: %v", err)
+		}
+		if body["cursor"] != "cursor-1" {
+			t.Fatalf("cursor=%v want cursor-1", body["cursor"])
+		}
+		filter := body["filter"].(map[string]any)
+		want := map[string]any{
+			"callFromDate":   "2026-01-01",
+			"callToDate":     "2026-04-01",
+			"reviewFromDate": "2026-02-01",
+			"reviewToDate":   "2026-03-01",
+			"reviewMethod":   "BOTH",
+		}
+		for key, value := range want {
+			if filter[key] != value {
+				t.Fatalf("filter[%s]=%v want %v; filter=%+v", key, filter[key], value, filter)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"answeredScorecards":[],"records":{"currentPageSize":0}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Options{
+		BaseURL: server.URL,
+		Credentials: auth.Credentials{
+			AccessKey:       "key",
+			AccessKeySecret: "secret",
+		},
+		MaxRetries: 0,
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.ListAnsweredScorecards(context.Background(), ScorecardActivityParams{
+		CallFromDate:   "2026-01-01",
+		CallToDate:     "2026-04-01",
+		ReviewFromDate: "2026-02-01",
+		ReviewToDate:   "2026-03-01",
+		ReviewMethod:   "BOTH",
+		Cursor:         "cursor-1",
+	}); err != nil {
+		t.Fatalf("ListAnsweredScorecards returned error: %v", err)
+	}
+}
+
 func TestRawRejectsCrossOriginAbsoluteURL(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()

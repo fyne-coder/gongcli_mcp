@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added scorecard activity sync, analysis, and aggregate MCP summary surfaces
+  for answered scorecard activity without exposing raw call/user IDs or answer
+  text.
+- Changed `search_transcript_segments` MCP output to omit raw `call_id` and
+  `speaker_id` fields by default. Use aggregate and redacted MCP surfaces unless
+  an explicit future opt-in is added.
+
 ## 0.3.2 - 2026-05-02
 
 - Added a Proxmox/Cloudflare/Keycloak lab-auth deployment harness for remote

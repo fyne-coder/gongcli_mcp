@@ -265,8 +265,10 @@ These commands are useful when an operator is working against their own tenant d
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
 gongctl sync crm-schema --db ~/gongctl-data/gong.db --integration-id CRM_INTEGRATION_ID --object-type ACCOUNT --object-type DEAL
 gongctl sync settings --db ~/gongctl-data/gong.db --kind trackers
+gongctl sync scorecard-activity --db ~/gongctl-data/gong.db --call-from 2026-01-01 --call-to 2026-04-01 --review-method BOTH
 gongctl sync run --config ~/gongctl-data/company-sync.yaml --dry-run
 gongctl sync run --config ~/gongctl-data/company-sync.yaml
+gongctl sync status --db ~/gongctl-data/gong.db
 gongctl cache inventory --db ~/gongctl-data/gong.db
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
 gongctl profile discover --db ~/gongctl-data/gong.db --out ~/gongctl-data/gongctl-profile.yaml
@@ -279,6 +281,7 @@ gongctl analyze crm-schema --db ~/gongctl-data/gong.db --object-type DEAL
 gongctl analyze settings --db ~/gongctl-data/gong.db --kind trackers
 gongctl analyze scorecards --db ~/gongctl-data/gong.db
 gongctl analyze scorecard --db ~/gongctl-data/gong.db --scorecard-id SCORECARD_ID
+gongctl analyze scorecard-activity --db ~/gongctl-data/gong.db --group-by review_method
 gongctl analyze transcript-backlog --db ~/gongctl-data/gong.db --limit 25
 gongctl mcp tool-info list_gong_settings
 gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity --crm-object-id opp_001 --limit 10
@@ -316,22 +319,24 @@ The Agent E CLI flow is SQLite-backed:
 4. `gongctl sync crm-integrations --db PATH`
 5. `gongctl sync crm-schema --db PATH --integration-id ID --object-type TYPE`
 6. `gongctl sync settings --db PATH --kind trackers|scorecards|workspaces`
-7. `gongctl sync run --config PATH [--dry-run]`
-8. `gongctl sync status --db PATH`
-9. `gongctl cache inventory --db PATH`
-10. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`
-11. `gongctl profile discover --db PATH --out PATH`
-12. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
-13. `gongctl profile validate --db PATH --profile PATH`
-14. `gongctl profile import --db PATH --profile PATH`
-15. `gongctl analyze calls --db PATH --group-by DIMENSION [--lifecycle-source auto|profile|builtin]`
-16. `gongctl analyze coverage --db PATH [--lifecycle-source auto|profile|builtin]`
-17. `gongctl analyze crm-schema --db PATH [--integration-id ID] [--object-type TYPE]`
-18. `gongctl analyze settings --db PATH [--kind KIND]`
-19. `gongctl analyze transcript-backlog --db PATH [--lifecycle-source auto|profile|builtin]`
-20. `gongctl search transcripts --db PATH --query TEXT`
-21. `gongctl search calls --db PATH [--crm-object-type TYPE] [--crm-object-id ID]`
-22. `gongctl calls show --db PATH --call-id ID --json`
+7. `gongctl sync scorecard-activity --db PATH --call-from DATE --call-to DATE [--review-method AUTOMATIC|MANUAL|BOTH]`
+8. `gongctl sync run --config PATH [--dry-run]`
+9. `gongctl sync status --db PATH`
+10. `gongctl cache inventory --db PATH`
+11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`
+12. `gongctl profile discover --db PATH --out PATH`
+13. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
+14. `gongctl profile validate --db PATH --profile PATH`
+15. `gongctl profile import --db PATH --profile PATH`
+16. `gongctl analyze calls --db PATH --group-by DIMENSION [--lifecycle-source auto|profile|builtin]`
+17. `gongctl analyze coverage --db PATH [--lifecycle-source auto|profile|builtin]`
+18. `gongctl analyze crm-schema --db PATH [--integration-id ID] [--object-type TYPE]`
+19. `gongctl analyze settings --db PATH [--kind KIND]`
+20. `gongctl analyze scorecard-activity --db PATH [--group-by scorecard|review_method|reviewed_user|lifecycle|transcript_status]`
+21. `gongctl analyze transcript-backlog --db PATH [--lifecycle-source auto|profile|builtin]`
+22. `gongctl search transcripts --db PATH --query TEXT`
+23. `gongctl search calls --db PATH [--crm-object-type TYPE] [--crm-object-id ID]`
+24. `gongctl calls show --db PATH --call-id ID --json`
 
 Rules:
 
@@ -343,6 +348,9 @@ Rules:
 - `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
 - `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
 - `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces.
+- `sync scorecard-activity` caches answered scorecard activity from Gong's scorecard
+  activity stats endpoint. It stores local raw JSON for operator audit, but
+  public summaries should use aggregate analyze/MCP surfaces.
 - `sync run --config PATH` executes a staged refresh plan from YAML. Relative
   `db` and `out_dir` paths resolve from the config file location, and
   `--dry-run` validates the file without calling Gong. Sensitive transcript and
@@ -374,6 +382,8 @@ Rules:
 - Profile-aware analysis uses a materialized SQLite read model keyed by active profile and canonical hash. Writable CLI sync/profile commands rebuild or warm it; read-only MCP requires that cache to be current and reports a stale-cache error instead of writing to SQLite.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.
 - `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads.
+- `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
+- After upgrading to a build with new SQLite migrations, run a writable `gongctl sync ...` command before starting `gongmcp`; read-only MCP refuses older schema versions and tells the operator to run a sync command first.
 - `sync` commands write concise progress summaries to `stderr`.
 - `sync status`, `search ...`, and `calls show --json` write JSON to `stdout`.
 - `analyze ...` commands write metadata-only JSON summaries to `stdout`.
@@ -489,6 +499,7 @@ Tools:
 - `list_gong_settings`
 - `list_scorecards`
 - `get_scorecard`
+- `summarize_scorecard_activity`
 - `get_business_profile`
 - `list_business_concepts`
 - `list_unmapped_crm_fields`
@@ -514,6 +525,7 @@ The MCP server requires `--db`, reads SQLite only, and intentionally does not ex
 `get_call` returns minimized call detail instead of raw cached call JSON. `crm_field_population_matrix` only allows safe categorical group fields such as `StageName`.
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
+`summarize_scorecard_activity` returns aggregate answered-scorecard counts and scores only. By default it does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw scorecard activity payloads.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
 `search_transcript_segments` returns bounded snippets, but redacts call IDs and speaker IDs by default. Exact identifiers require `include_call_ids=true` and `include_speaker_ids=true`.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
