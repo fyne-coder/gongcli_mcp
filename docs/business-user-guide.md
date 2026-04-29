@@ -60,6 +60,163 @@ Use prompts shaped like these:
 These prompts are in-bounds because they stay on reviewed cached metadata,
 bounded scorecard configuration, and backlog prioritization.
 
+## Sample Evidence-Backed Prompts
+
+The prompts in the previous section are deliberately thin so they fit the
+strict pilot allowlist. Real business work usually needs more structure: a
+specific time window, prospect-side filtering, a required output shape, and an
+explicit separation between evidence-backed findings and hypotheses.
+
+The four templates below are paste-ready for an analyst session where the
+operator has widened the MCP tool surface beyond the strict pilot allowlist.
+They go beyond what the pilot allowlist exposes by design, and each one names
+the additional tools and opt-in flags it requires. See
+[mcp-data-exposure.md](mcp-data-exposure.md#default-posture-and-optional-wider-surface)
+for how to enable that wider posture intentionally.
+
+### 1. Content gap discovery from prospect questions
+
+Business intent: surface where prospects are repeatedly asking the same thing
+on calls, and turn that into concrete recommendations for the website, nurture
+sequences, or sales-enablement collateral.
+
+Prompt:
+
+> Use Gong to answer: What prospect questions in Q1 2026 indicate gaps in
+> website, nurture, or sales enablement content?
+>
+> Only include prospect/customer-side questions where possible. For each gap
+> category, provide:
+>
+> 1. exact question pattern
+> 2. matching segment count
+> 3. unique call count
+> 4. top 5 representative quotes
+> 5. call/company/contact/title if available
+> 6. lifecycle/stage if available
+> 7. confidence level
+> 8. recommended content asset
+>
+> Separate evidence-backed findings from hypotheses. Do not claim an asset is
+> missing unless the transcript evidence supports it; flag asset gaps as
+> "possible" when the evidence only suggests a direction.
+
+Tools required: `search_transcript_quotes_with_attribution` (with
+`include_call_ids=true`, `include_call_titles=true`, and the matching
+account/opportunity opt-ins when attribution is needed),
+`search_transcript_segments`, `summarize_call_facts`, `get_sync_status`.
+
+Output discipline: reject any "asset is missing" claim that does not list at
+least the matching segment count, the unique call count, and a quote. Treat
+contact/title as present only when the attribution tool reports
+person-title status as available; never infer titles from call names.
+
+### 2. Recurring objection mining for coaching playbook updates
+
+Business intent: identify the top recurring prospect or customer objections by
+lifecycle/segment over a recent window, decide which ones are already covered
+by existing scorecard questions, and flag the ones that are not.
+
+Prompt:
+
+> Using cached Gong calls from the last 90 days, list the top recurring
+> prospect or customer objections by lifecycle and segment. For each objection
+> theme, provide:
+>
+> 1. theme label and one-sentence description
+> 2. matching segment count and unique call count
+> 3. top 5 representative customer-side quotes
+> 4. lifecycle bucket and (if present) opportunity stage
+> 5. which existing scorecard questions already address it
+> 6. whether existing coaching coverage looks sufficient, partial, or missing
+> 7. confidence level (low / medium / high)
+>
+> Treat coverage as "missing" only when no scorecard question matches the
+> theme; treat it as "partial" when a scorecard question matches but does not
+> appear in the rep-side responses on the same calls.
+
+Tools required: `search_transcript_segments`, `search_transcripts_by_call_facts`,
+`summarize_calls_by_lifecycle`, `list_scorecards`, `get_scorecard`,
+`get_sync_status`. Add `include_call_ids=true` only if the operator needs to
+follow up on individual calls.
+
+Output discipline: treat "rep-side responses absent" as a transcript-coverage
+question first; if scorecard tagging is missing because transcripts are not
+synced, flag it instead of inferring sufficiency from metadata alone.
+
+### 3. Renewal and expansion intent vs. churn risk
+
+Business intent: for customer success leaders, separate post-sales calls that
+show expansion or renewal intent from calls that show churn risk, and produce
+a per-account briefing using only what is in the cached transcripts.
+
+Prompt:
+
+> For accounts in the renewal, upsell/expansion, or customer-success
+> lifecycle buckets in the last 90 days, classify each account into one of:
+> renewal-likely, expansion-signal, at-risk, or insufficient-evidence. For
+> each account in the first three buckets, provide:
+>
+> 1. account name and (if cached) opportunity name and close date
+> 2. matching segment count and unique call count
+> 3. top 3 customer-side quotes that drove the classification
+> 4. lifecycle bucket and lifecycle source (profile or builtin)
+> 5. confidence level
+> 6. recommended next step (executive review, expansion play, save play,
+>    or "needs more transcript coverage")
+>
+> Place every account with fewer than two cached transcripts in the
+> insufficient-evidence bucket regardless of metadata signals. Do not infer
+> sentiment from call titles, durations, or scorecard scores alone.
+
+Tools required: `search_calls_by_lifecycle`, `summarize_calls_by_lifecycle`,
+`search_transcript_quotes_with_attribution` (with the Account and Opportunity
+attribution opt-ins enabled), `opportunity_call_summary`, `get_sync_status`.
+Imported business profile recommended; lifecycle answers from the builtin
+compatibility view should be flagged as directional.
+
+Output discipline: every classification must cite at least two customer-side
+quotes from at least two distinct calls; otherwise the account drops into
+insufficient-evidence rather than getting a soft label.
+
+### 4. Late-stage pipeline risk from thin transcript evidence
+
+Business intent: for RevOps or pipeline review, list late-stage opportunities
+whose transcript coverage is too thin to support a confident forecast, and
+quote the small amount of evidence that does exist so the deal review has
+something to react to.
+
+Prompt:
+
+> List the late-stage opportunities (commit, best case, or equivalent) with
+> the weakest transcript coverage in the cached dataset. For each
+> opportunity, provide:
+>
+> 1. opportunity name, account name, stage, amount, and close date if cached
+> 2. cached call count, transcript count, and total transcript minutes
+> 3. days since the most recent call
+> 4. up to 5 representative customer-side quotes that exist
+> 5. risk drivers from the late-stage CRM signal analysis
+> 6. confidence level for the forecast given the available evidence
+> 7. recommended next step (operator transcript refresh, executive sponsor
+>    call, deal-desk review, or "evidence sufficient")
+>
+> Only mark "evidence sufficient" if there are at least two calls with
+> cached transcripts in the last 30 days and at least one customer-side
+> quote covering pricing, decision criteria, or timing. Otherwise mark it as
+> needing operator refresh and name the specific sync command the operator
+> should run.
+
+Tools required: `analyze_late_stage_crm_signals`,
+`opportunities_missing_transcripts`, `opportunity_call_summary`,
+`search_transcript_quotes_with_attribution` (with Opportunity attribution
+opt-ins), `rank_transcript_backlog`, `get_sync_status`. The operator must have
+enabled the wider analyst posture for these tools to be available.
+
+Output discipline: do not turn missing transcript coverage into a forecast
+recommendation by itself; treat it as a refresh request to the operator and a
+deal-desk review trigger.
+
 ## Disallowed Prompts
 
 Do not use prompts like these:
@@ -153,7 +310,9 @@ names or transcript wording.
   the pilot operator, not commands to run themselves.
 - If the cache age, transcript coverage, settings inventory, or profile cache
   state is not acceptable for the question, stop and ask the operator to
-  refresh or review before using the answer.
+  refresh or review before using the answer. The operator-side refresh
+  procedure lives in [runbooks/operator-sync.md](runbooks/operator-sync.md);
+  business users should not run those commands themselves.
 - Lifecycle answers are only as reliable as the reviewed profile and synced CRM
   context. If profile-backed lifecycle status is absent or stale, treat the
   answer as directional rather than authoritative.

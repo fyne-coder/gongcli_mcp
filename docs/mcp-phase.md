@@ -70,6 +70,8 @@ Implemented tools are boring and auditable:
 - `summarize_call_facts`
 - `rank_transcript_backlog`
 - `search_transcript_segments`
+- `search_transcripts_by_call_facts`
+- `search_transcript_quotes_with_attribution`
 - `missing_transcripts`
 
 Guardrails:

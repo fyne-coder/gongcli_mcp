@@ -299,7 +299,13 @@ Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP
 By default, `gongmcp` exposes the full read-only MCP catalog to any connected
 host. Company pilots should narrow that surface with `gongmcp --tool-allowlist`
 or `GONGMCP_TOOL_ALLOWLIST`, then layer host and filesystem controls around the
-approved business-user subset.
+approved business-user subset. Trusted single-user analyst workstations may
+intentionally skip the allowlist and turn on per-tool opt-ins
+(`include_call_ids`, `include_speaker_ids`, `include_value_snippets`) for
+deeper, identifier-bearing questions; see
+[docs/mcp-data-exposure.md](docs/mcp-data-exposure.md) for the trade-off and
+[docs/mcp-data-exposure.md#mcp-call-volume-and-limits](docs/mcp-data-exposure.md#mcp-call-volume-and-limits)
+for how to keep MCP traffic from overwhelming the host context window.
 
 Tools:
 

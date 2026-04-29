@@ -62,6 +62,110 @@ The following tools deserve the most review before enabling them in a model-faci
 - Reserve snippet and CRM-value lookup tools for narrowly scoped investigations with explicit user intent.
 - Do not treat read-only MCP as a safe public endpoint; the host app inherits access to whatever each exposed tool returns.
 
+## Default Posture And Optional Wider Surface
+
+The defaults in this repo are shaped for an enterprise pilot where the operator
+does not yet trust the host app or the model with broad tenant data. That
+conservative posture is not the only supported posture: the same binaries
+support a deliberately wider surface for trusted single-user analyst workflows
+where deeper, identifier-bearing questions matter.
+
+What the conservative defaults give you:
+
+- `gongmcp` exposes the full read-only catalog when no allowlist is set, but
+  most identifier-bearing fields are blanked, snippet tools redact call IDs and
+  speaker IDs, and CRM-value lookups require explicit opt-in flags.
+- Pilot deployments are expected to layer `--tool-allowlist` or
+  `GONGMCP_TOOL_ALLOWLIST` on top so business users see only the approved
+  subset rather than the full catalog.
+- Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
+  so high-risk raw API, raw call JSON, transcript export, and extended
+  CRM-context flows fail closed unless the operator passes
+  `--allow-sensitive-export`.
+
+When opening up the surface is the right call:
+
+- Single-user analyst on their own workstation, with their own Gong credentials,
+  who needs exact call follow-up, named-opportunity attribution, or directed
+  CRM-value lookup.
+- A reviewed deep-dive session against a previously synced cache where the
+  operator accepts that exact identifiers and bounded snippets will flow into
+  the host model context.
+
+How to open up the surface intentionally:
+
+- Skip `--tool-allowlist` so the full read-only catalog is visible to the
+  connected host.
+- Enable per-tool opt-ins when the question requires them:
+  - `search_transcript_segments` with `include_call_ids=true` and
+    `include_speaker_ids=true` returns exact identifiers alongside snippets.
+  - `search_transcript_quotes_with_attribution` with the matching attribution
+    flags returns Account/Opportunity context joined to the quote, plus
+    `account_query` lookups.
+  - `search_crm_field_values` with `include_call_ids=true` and
+    `include_value_snippets=true` returns bounded value excerpts and call IDs
+    for a specific object/field/value query.
+- Use the record-reference tools (`search_calls`, `get_call`,
+  `missing_transcripts`) when the workflow actually needs exact calls.
+- Run `gongctl` without restricted mode, or with the `--allow-sensitive-export`
+  override, for ad-hoc operator exploration that needs raw call JSON or
+  transcript exports.
+
+The trade-off is unchanged from the rest of this document: more useful answers
+flow with more sensitive data. Pick a posture per deployment rather than per
+prompt, and prefer to scope it through `--tool-allowlist` plus opt-in defaults
+rather than through ad-hoc host policy alone.
+
+## MCP Call Volume And Limits
+
+`gongmcp` reads local SQLite. It does not call Gong. MCP traffic does not
+consume the documented Gong API budget (about 3 calls per second and 10,000
+calls per day) — that budget is spent by `gongctl sync ...` on the operator
+side.
+
+MCP traffic still has real per-call costs that scale poorly when an agent
+loops:
+
+- local SQLite I/O, especially full-text transcript searches against large
+  caches
+- wall-clock latency that compounds when the model fans out from one search
+  result into per-call follow-up tools
+- host model context tokens — every tool result chunk is added to the
+  conversation, and snippet-bearing or identifier-bearing tools are the
+  largest contributors
+- host app billing or token quotas, which agents driving many MCP calls per
+  turn can exhaust quickly
+
+Server-enforced ceilings already in effect (see `internal/mcp/server.go`):
+
+- maximum response frame of about 1 MiB
+- search results capped at 100 rows
+- missing-transcripts capped at 500 rows
+- CRM field, lifecycle, and call-fact result sets capped at 100–200 rows
+- inventory result sets capped at 200 rows
+- call-detail object/field-name lists truncated to 20 objects and 50 field
+  names
+
+Practical recommendations:
+
+- Pass tighter `limit` values when the question does not need the full cap.
+- Start with aggregate tools (`summarize_calls_by_lifecycle`,
+  `rank_transcript_backlog`, `summarize_call_facts`,
+  `analyze_late_stage_crm_signals`) before reaching for identifier-bearing or
+  snippet-bearing tools.
+- Use `--tool-allowlist` to remove tools the host should not be reaching for
+  reflexively in a given deployment lane. A narrow allowlist is usually a
+  better limit than relying on the agent to ration its own tool calls.
+- Avoid agent loops that call `search_transcript_segments` followed by
+  `get_call` for every hit; the combined output is large in both context tokens
+  and wall-clock time.
+- If a host app drives many MCP-backed turns and triggers frequent
+  `gongctl sync` runs in the background, cap the sync cadence separately so the
+  daily Gong call budget is not consumed by per-session refreshes.
+
+For company pilots, an explicit allowlist plus a reviewed sync cadence is
+usually the right pair of limits.
+
 ## Residual Risks
 
 - Tool minimization reduces exposure, but it does not anonymize all tenant metadata.

@@ -279,3 +279,11 @@ This repo currently documents a conservative deployment shape:
 If the company needs multi-tenant hosting, remote auth, browser-facing APIs, or
 centralized transcript review workflows, those belong in a separate application
 layer rather than widening `gongmcp`.
+
+The conservative defaults documented here are not the only supported posture.
+A trusted single-user analyst workstation can skip the tool allowlist and
+enable per-tool opt-ins to surface exact identifiers, bounded snippets, and
+attribution joined to Account/Opportunity context for deeper questions. See
+[mcp-data-exposure.md](mcp-data-exposure.md) for the trade-off framing and
+[mcp-data-exposure.md#mcp-call-volume-and-limits](mcp-data-exposure.md#mcp-call-volume-and-limits)
+for the per-call cost model and recommended limits.
