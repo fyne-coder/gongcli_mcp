@@ -23,6 +23,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
+	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -44,6 +45,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "stat db: %v\n", err)
 		return 1
 	}
+	provenance, err := mcp.ParseTranscriptEvidenceProvenance(*transcriptEvidenceProvenance)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 
 	ctx := context.Background()
 	store, err := sqlite.OpenReadOnly(ctx, db)
@@ -53,10 +59,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	server := mcp.NewServer(store, "gongmcp", version.DisplayVersion())
+	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), mcp.ServerOptions{
+		TranscriptEvidenceProvenance: provenance,
+	})
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintf(stderr, "serve mcp: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func envDefault(name, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
 }

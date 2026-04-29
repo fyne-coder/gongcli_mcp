@@ -444,6 +444,8 @@ type TranscriptCRMSearchResult struct {
 }
 
 type TranscriptCallFactsSearchResult struct {
+	CallID          string `json:"-"`
+	SpeakerID       string `json:"-"`
 	StartedAt       string `json:"started_at"`
 	CallDate        string `json:"call_date"`
 	CallMonth       string `json:"call_month"`
@@ -2607,6 +2609,8 @@ SELECT cf.started_at,
        cf.scope,
        cf.system,
        cf.direction,
+       ts.call_id,
+       ts.speaker_id,
        ts.segment_index,
        ts.start_ms,
        ts.end_ms,
@@ -2649,6 +2653,8 @@ SELECT cf.started_at,
 			&row.Scope,
 			&row.System,
 			&row.Direction,
+			&row.CallID,
+			&row.SpeakerID,
 			&row.SegmentIndex,
 			&row.StartMS,
 			&row.EndMS,

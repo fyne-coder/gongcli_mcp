@@ -282,6 +282,57 @@ func TestSearchTranscriptSegmentsReturnsSnippetsWithoutTextField(t *testing.T) {
 			t.Fatalf("unexpected redacted field %q in %v", field, rows[0])
 		}
 	}
+
+	aliasServer := NewServerWithOptions(store, "gongmcp", "test", ServerOptions{TranscriptEvidenceProvenance: TranscriptEvidenceAlias})
+	responses = runServer(t, aliasServer, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "snippets-alias",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query": "external",
+				"limit": 5,
+			},
+		}),
+	}))
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal alias tools/call response: %v", err)
+	}
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal alias snippet payload: %v", err)
+	}
+	if rows[0]["call_ref"] == "" || rows[0]["speaker_ref"] == "" {
+		t.Fatalf("alias mode missing call/speaker refs: %+v", rows[0])
+	}
+	for _, field := range []string{"call_id", "speaker_id"} {
+		if _, ok := rows[0][field]; ok {
+			t.Fatalf("alias mode leaked raw field %q in %v", field, rows[0])
+		}
+	}
+
+	rawServer := NewServerWithOptions(store, "gongmcp", "test", ServerOptions{TranscriptEvidenceProvenance: TranscriptEvidenceRaw})
+	responses = runServer(t, rawServer, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "snippets-raw",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query": "external",
+				"limit": 5,
+			},
+		}),
+	}))
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal raw tools/call response: %v", err)
+	}
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal raw snippet payload: %v", err)
+	}
+	if rows[0]["call_id"] == "" || rows[0]["speaker_id"] == "" {
+		t.Fatalf("raw mode missing call/speaker ids: %+v", rows[0])
+	}
 }
 
 func TestSummarizeScorecardActivityRedactsIdentifiersByDefault(t *testing.T) {
@@ -444,6 +495,64 @@ func TestSearchTranscriptsByCallFactsFiltersAndRedactsIdentifiers(t *testing.T) 
 		if _, ok := rows[0][leaked]; ok {
 			t.Fatalf("call-facts transcript result leaked %s: %+v", leaked, rows[0])
 		}
+	}
+
+	aliasServer := NewServerWithOptions(store, "gongmcp", "test", ServerOptions{TranscriptEvidenceProvenance: TranscriptEvidenceAlias})
+	responses = runServer(t, aliasServer, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "theme-evidence-alias",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcripts_by_call_facts",
+			"arguments": map[string]any{
+				"query":     "implementation",
+				"from_date": "2026-01-01",
+				"to_date":   "2026-03-31",
+				"scope":     "External",
+				"limit":     5,
+			},
+		}),
+	}))
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal alias call-facts response: %v", err)
+	}
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal alias call-facts payload: %v", err)
+	}
+	if rows[0]["call_ref"] == "" || rows[0]["speaker_ref"] == "" {
+		t.Fatalf("alias mode missing call/speaker refs: %+v", rows[0])
+	}
+	if _, ok := rows[0]["call_id"]; ok {
+		t.Fatalf("alias mode leaked call_id: %+v", rows[0])
+	}
+	if _, ok := rows[0]["speaker_id"]; ok {
+		t.Fatalf("alias mode leaked speaker_id: %+v", rows[0])
+	}
+
+	rawServer := NewServerWithOptions(store, "gongmcp", "test", ServerOptions{TranscriptEvidenceProvenance: TranscriptEvidenceRaw})
+	responses = runServer(t, rawServer, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "theme-evidence-raw",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcripts_by_call_facts",
+			"arguments": map[string]any{
+				"query":     "implementation",
+				"from_date": "2026-01-01",
+				"to_date":   "2026-03-31",
+				"scope":     "External",
+				"limit":     5,
+			},
+		}),
+	}))
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal raw call-facts response: %v", err)
+	}
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal raw call-facts payload: %v", err)
+	}
+	if rows[0]["call_id"] != "call_theme_external" || rows[0]["speaker_id"] != "buyer-external" {
+		t.Fatalf("raw mode did not expose expected provenance: %+v", rows[0])
 	}
 }
 

@@ -117,6 +117,15 @@ Replace `/Users/YOU/gongctl-data` with the absolute host path that contains `gon
 
 The MCP container does not need Gong API credentials because it only reads the SQLite cache. Use `gongctl sync ...` commands to refresh that cache.
 
+Transcript evidence provenance is redacted by default. To let an MCP host link quotes to stable non-raw call/speaker references, add:
+
+```json
+"--transcript-evidence-provenance",
+"alias"
+```
+
+after the `--db` path. Use `raw` only for local operator workflows where exposing raw Gong `call_id` and `speaker_id` to the MCP host is intentional.
+
 ## Publishing Shape
 
 For company-managed use, publish the same image to Docker Hub, GHCR, or another OCI registry and pin an immutable tag in the MCP host config. The expected operational contract is:

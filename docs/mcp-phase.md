@@ -95,6 +95,7 @@ Guardrails:
 - unmapped CRM field tools return redacted aggregate statistics only, not raw field example values
 - `get_sync_status` includes public readiness flags and separates embedded CRM context from CRM integration/schema inventory so zero integration inventory is not mistaken for missing call CRM context
 - `rank_transcript_backlog` and `prioritize_transcripts_by_lifecycle` favor External and Conference-style customer conversations and redact call IDs/titles in model-facing MCP output
+- transcript search provenance is launch-configurable with `--transcript-evidence-provenance=redacted|alias|raw`; default `redacted` omits call/speaker identifiers, `alias` emits stable non-raw `call_ref`/`speaker_ref`, and `raw` emits raw Gong IDs for local operator workflows only
 - Opportunity aggregate tools redact opportunity IDs/names, owner IDs, amounts, close dates, and latest call IDs in model-facing MCP output; use CLI/operator workflows for exact local follow-up.
 
 ## Phase 3: Remote MCP

@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,10 +86,44 @@ type Store interface {
 }
 
 type Server struct {
-	store   Store
-	name    string
-	version string
-	tools   []tool
+	store                        Store
+	name                         string
+	version                      string
+	transcriptEvidenceProvenance TranscriptEvidenceProvenance
+	tools                        []tool
+}
+
+type TranscriptEvidenceProvenance string
+
+const (
+	TranscriptEvidenceRedacted TranscriptEvidenceProvenance = "redacted"
+	TranscriptEvidenceAlias    TranscriptEvidenceProvenance = "alias"
+	TranscriptEvidenceRaw      TranscriptEvidenceProvenance = "raw"
+)
+
+type ServerOptions struct {
+	TranscriptEvidenceProvenance TranscriptEvidenceProvenance
+}
+
+func ParseTranscriptEvidenceProvenance(value string) (TranscriptEvidenceProvenance, error) {
+	switch TranscriptEvidenceProvenance(strings.ToLower(strings.TrimSpace(value))) {
+	case "", TranscriptEvidenceRedacted:
+		return TranscriptEvidenceRedacted, nil
+	case TranscriptEvidenceAlias:
+		return TranscriptEvidenceAlias, nil
+	case TranscriptEvidenceRaw:
+		return TranscriptEvidenceRaw, nil
+	default:
+		return "", fmt.Errorf("transcript evidence provenance must be one of: redacted, alias, raw")
+	}
+}
+
+func normalizeTranscriptEvidenceProvenance(value TranscriptEvidenceProvenance) TranscriptEvidenceProvenance {
+	provenance, err := ParseTranscriptEvidenceProvenance(string(value))
+	if err != nil {
+		return TranscriptEvidenceRedacted
+	}
+	return provenance
 }
 
 type Request struct {
@@ -355,13 +391,41 @@ type callDetailCRMObject struct {
 }
 
 type transcriptSnippet struct {
+	CallID       string `json:"call_id,omitempty"`
+	CallRef      string `json:"call_ref,omitempty"`
+	SpeakerID    string `json:"speaker_id,omitempty"`
+	SpeakerRef   string `json:"speaker_ref,omitempty"`
 	SegmentIndex int    `json:"segment_index"`
 	StartMS      int64  `json:"start_ms"`
 	EndMS        int64  `json:"end_ms"`
 	Snippet      string `json:"snippet"`
 }
 
+type transcriptCallFactsSnippet struct {
+	CallID          string `json:"call_id,omitempty"`
+	CallRef         string `json:"call_ref,omitempty"`
+	SpeakerID       string `json:"speaker_id,omitempty"`
+	SpeakerRef      string `json:"speaker_ref,omitempty"`
+	StartedAt       string `json:"started_at"`
+	CallDate        string `json:"call_date"`
+	CallMonth       string `json:"call_month"`
+	DurationSeconds int64  `json:"duration_seconds"`
+	LifecycleBucket string `json:"lifecycle_bucket"`
+	Scope           string `json:"scope"`
+	System          string `json:"system"`
+	Direction       string `json:"direction"`
+	SegmentIndex    int    `json:"segment_index"`
+	StartMS         int64  `json:"start_ms"`
+	EndMS           int64  `json:"end_ms"`
+	Snippet         string `json:"snippet"`
+	ContextExcerpt  string `json:"context_excerpt"`
+}
+
 func NewServer(store Store, name, version string) *Server {
+	return NewServerWithOptions(store, name, version, ServerOptions{})
+}
+
+func NewServerWithOptions(store Store, name, version string, opts ServerOptions) *Server {
 	serverName := strings.TrimSpace(name)
 	if serverName == "" {
 		serverName = "gongmcp"
@@ -370,11 +434,13 @@ func NewServer(store Store, name, version string) *Server {
 	if serverVersion == "" {
 		serverVersion = "dev"
 	}
+	provenance := normalizeTranscriptEvidenceProvenance(opts.TranscriptEvidenceProvenance)
 
 	return &Server{
-		store:   store,
-		name:    serverName,
-		version: serverVersion,
+		store:                        store,
+		name:                         serverName,
+		version:                      serverVersion,
+		transcriptEvidenceProvenance: provenance,
 		tools: []tool{
 			{
 				Name:        "get_sync_status",
@@ -674,7 +740,7 @@ func NewServer(store Store, name, version string) *Server {
 			},
 			{
 				Name:        "search_transcript_segments",
-				Description: "Search transcript snippets in the local SQLite FTS index and return bounded matched snippets without call IDs, speaker IDs, titles, or full transcript text.",
+				Description: "Search transcript snippets in the local SQLite FTS index and return bounded matched snippets. Call/speaker provenance is controlled by server transcript-evidence-provenance config: redacted by default, stable aliases in alias mode, raw IDs only in raw mode.",
 				InputSchema: objectSchema(
 					map[string]any{
 						"query": map[string]any{"type": "string"},
@@ -685,7 +751,7 @@ func NewServer(store Store, name, version string) *Server {
 			},
 			{
 				Name:        "search_transcripts_by_call_facts",
-				Description: "Search transcript snippets joined to normalized call facts with date, lifecycle, scope, system, and direction filters; returns bounded evidence excerpts without call IDs, titles, speaker IDs, or full transcript text.",
+				Description: "Search transcript snippets joined to normalized call facts with date, lifecycle, scope, system, and direction filters. Returns bounded evidence excerpts; call/speaker provenance follows server transcript-evidence-provenance config.",
 				InputSchema: objectSchema(
 					map[string]any{
 						"query":            map[string]any{"type": "string"},
@@ -1478,7 +1544,12 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 
 	snippets := make([]transcriptSnippet, 0, len(results))
 	for _, row := range results {
+		callID, callRef, speakerID, speakerRef := s.transcriptEvidenceIdentity(row.CallID, row.SpeakerID)
 		snippets = append(snippets, transcriptSnippet{
+			CallID:       callID,
+			CallRef:      callRef,
+			SpeakerID:    speakerID,
+			SpeakerRef:   speakerRef,
 			SegmentIndex: row.SegmentIndex,
 			StartMS:      row.StartMS,
 			EndMS:        row.EndMS,
@@ -1507,7 +1578,51 @@ func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawM
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(results)
+	snippets := make([]transcriptCallFactsSnippet, 0, len(results))
+	for _, row := range results {
+		callID, callRef, speakerID, speakerRef := s.transcriptEvidenceIdentity(row.CallID, row.SpeakerID)
+		snippets = append(snippets, transcriptCallFactsSnippet{
+			CallID:          callID,
+			CallRef:         callRef,
+			SpeakerID:       speakerID,
+			SpeakerRef:      speakerRef,
+			StartedAt:       row.StartedAt,
+			CallDate:        row.CallDate,
+			CallMonth:       row.CallMonth,
+			DurationSeconds: row.DurationSeconds,
+			LifecycleBucket: row.LifecycleBucket,
+			Scope:           row.Scope,
+			System:          row.System,
+			Direction:       row.Direction,
+			SegmentIndex:    row.SegmentIndex,
+			StartMS:         row.StartMS,
+			EndMS:           row.EndMS,
+			Snippet:         row.Snippet,
+			ContextExcerpt:  row.ContextExcerpt,
+		})
+	}
+	return newToolResult(snippets)
+}
+
+func (s *Server) transcriptEvidenceIdentity(callID, speakerID string) (string, string, string, string) {
+	switch s.transcriptEvidenceProvenance {
+	case TranscriptEvidenceRaw:
+		return callID, "", speakerID, ""
+	case TranscriptEvidenceAlias:
+		callRef := stableEvidenceRef("call", callID)
+		speakerRef := stableEvidenceRef("speaker", callID+"\x00"+speakerID)
+		return "", callRef, "", speakerRef
+	default:
+		return "", "", "", ""
+	}
+}
+
+func stableEvidenceRef(prefix, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return prefix + "_" + hex.EncodeToString(sum[:])[:12]
 }
 
 func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
