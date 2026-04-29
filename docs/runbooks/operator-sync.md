@@ -97,7 +97,7 @@ is:
 ```bash
 bin/gongctl sync calls --db <data-root>/cache/gong.db --from YYYY-MM-DD --to YYYY-MM-DD --preset minimal
 bin/gongctl sync users --db <data-root>/cache/gong.db
-bin/gongctl sync transcripts --db <data-root>/cache/gong.db --out-dir <data-root>/transcripts --limit 50 --batch-size 50
+bin/gongctl sync transcripts --db <data-root>/cache/gong.db --out-dir <data-root>/transcripts --limit 50 --batch-size 100
 bin/gongctl sync crm-integrations --db <data-root>/cache/gong.db
 bin/gongctl sync crm-schema --db <data-root>/cache/gong.db --integration-id <approved-integration> --object-type ACCOUNT --object-type DEAL
 bin/gongctl sync settings --db <data-root>/cache/gong.db --kind scorecards

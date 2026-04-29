@@ -17,7 +17,7 @@ const (
 	scopeTranscripts  = "transcripts"
 	transcriptSyncKey = "transcripts:missing"
 	defaultSyncLimit  = 100
-	defaultBatchSize  = 50
+	defaultBatchSize  = 100
 	maxBatchSize      = 100
 )
 

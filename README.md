@@ -147,7 +147,7 @@ GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-
 gongctl auth check
 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business
 gongctl sync users --db ~/gongctl-data/gong.db
-gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50 --batch-size 50
+gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50 --batch-size 100
 gongctl sync status --db ~/gongctl-data/gong.db
 gongctl analyze coverage --db ~/gongctl-data/gong.db
 gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
@@ -259,7 +259,7 @@ Rules:
   extended-context steps are flagged in dry-run output, but runtime approval is
   still required through `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` when restricted mode is enabled.
-- `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 50, and the CLI caps it at 100.
+- `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 100, and the CLI caps it at 100.
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.

@@ -322,7 +322,7 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 	dbPath := fs.String("db", "", "SQLite database path")
 	outDir := fs.String("out-dir", "", "directory for transcript JSON files")
 	limit := fs.Int("limit", 100, "maximum missing transcripts to fetch")
-	batchSize := fs.Int("batch-size", 50, "maximum call IDs per Gong transcript request")
+	batchSize := fs.Int("batch-size", 100, "maximum call IDs per Gong transcript request")
 	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow transcript sync in restricted mode")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -561,7 +561,7 @@ func normalizeSyncRunStep(baseDir string, idx int, step *syncRunStepConfig) erro
 			step.Limit = 100
 		}
 		if step.BatchSize == 0 {
-			step.BatchSize = 50
+			step.BatchSize = 100
 		}
 	case "crm-integrations":
 	case "crm-schema":
