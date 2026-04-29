@@ -1,4 +1,4 @@
-module github.com/arthurlee/gongctl
+module github.com/fyne-coder/gongcli_mcp
 
 go 1.22
 

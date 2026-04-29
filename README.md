@@ -1,12 +1,26 @@
 # gongctl
 
-`gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms.
+`gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 
 ## Status
 
 Bootstrap scaffold, not a production release yet.
+
+For company evaluation, start with the enterprise pilot packet:
+
+- [Enterprise deployment](docs/enterprise-deployment.md)
+- [Security model](docs/security-model.md)
+- [MCP data exposure](docs/mcp-data-exposure.md)
+- [Operator sync runbook](docs/runbooks/operator-sync.md)
+- [Business-user guide](docs/business-user-guide.md)
+- [Pilot plan](docs/pilot-plan.md)
+
+Current pilot hardening in this worktree includes a restricted/company CLI mode
+for high-risk commands. Enable it with `GONGCTL_RESTRICTED=1` or
+`gongctl --restricted ...`, then use `--allow-sensitive-export` or
+`GONGCTL_ALLOW_SENSITIVE_EXPORT=1` only for approved operator actions.
 
 Current defaults are based on Gong public help-center guidance available on 2026-04-24:
 
@@ -58,10 +72,11 @@ Run CLI commands with credentials and a mounted data directory:
 docker run --rm --env-file .env -v "$HOME/gongctl-data:/data" gongctl:local sync status --db /data/gong.db
 ```
 
-Run the read-only stdio MCP server from the same image:
+Run the read-only stdio MCP server from the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" --entrypoint /usr/local/bin/gongmcp gongctl:local --db /data/gong.db
+docker build --target mcp -t gongctl:mcp-local .
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" gongctl:mcp-local --db /data/gong.db
 ```
 
 Run the real-data Docker smoke after credentials are configured:
@@ -90,47 +105,112 @@ Or copy `.env.example` to `.env` and fill in the same keys. `.env` is gitignored
 
 Keep real SQLite databases, transcript files, and tenant profile YAML outside the source repo, for example under `~/gongctl-data/`. The repo ignores `data/` as a last-resort safety net, but public docs use an external path so copy/paste examples do not encourage committing tenant data.
 
-## CLI Shape
+## Restricted Company Mode
+
+Use restricted mode for company-managed CLI runs:
+
+```bash
+export GONGCTL_RESTRICTED=1
+```
+
+Or prefix an individual command:
+
+```bash
+gongctl --restricted sync status --db ~/gongctl-data/gong.db
+```
+
+When restricted mode is enabled, these commands are blocked unless you add
+`--allow-sensitive-export` or set `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`:
+
+- `gongctl api raw ...`
+- `gongctl calls show --json`
+- `gongctl calls list --context extended ...`
+- `gongctl calls export ...`
+- `gongctl calls transcript ...`
+- `gongctl calls transcript-batch ...`
+- `gongctl sync transcripts ...`
+- `gongctl sync calls --preset business`
+- `gongctl sync calls --preset all`
+- `gongctl sync calls --include-parties`
+
+Approved override example:
+
+```bash
+GONGCTL_RESTRICTED=1 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --allow-sensitive-export --out calls-with-crm-context.json
+GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business --allow-sensitive-export
+GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset minimal --include-parties --allow-sensitive-export
+```
+
+## Public Quickstart Shape
 
 ```bash
 gongctl auth check
 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business
 gongctl sync users --db ~/gongctl-data/gong.db
-gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50 --batch-size 50
+gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50 --batch-size 100
+gongctl sync status --db ~/gongctl-data/gong.db
+gongctl analyze coverage --db ~/gongctl-data/gong.db
+gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
+gongctl mcp tools
+gongmcp --db ~/gongctl-data/gong.db
+gongctl diagnose
+```
+
+The public path stays local: authenticate, sync a local SQLite cache, inspect readiness, search bounded snippets, and optionally expose the cache through the read-only MCP server.
+
+For repeatable operator refreshes, stage the approved steps in YAML and dry-run
+them before the scheduled job uses the same file:
+
+```bash
+gongctl sync run --config testdata/fixtures/sync-run-minimal.yaml --dry-run
+gongctl cache inventory --db ~/gongctl-data/gong.db
+gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
+```
+
+## Advanced Local Operator Commands
+
+These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
+
+```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
 gongctl sync crm-schema --db ~/gongctl-data/gong.db --integration-id CRM_INTEGRATION_ID --object-type ACCOUNT --object-type DEAL
 gongctl sync settings --db ~/gongctl-data/gong.db --kind trackers
-gongctl sync status --db ~/gongctl-data/gong.db
+gongctl sync run --config ~/gongctl-data/company-sync.yaml --dry-run
+gongctl sync run --config ~/gongctl-data/company-sync.yaml
+gongctl cache inventory --db ~/gongctl-data/gong.db
+gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
 gongctl profile discover --db ~/gongctl-data/gong.db --out ~/gongctl-data/gongctl-profile.yaml
 gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile import --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile show --db ~/gongctl-data/gong.db
 gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle
 gongctl analyze calls --db ~/gongctl-data/gong.db --group-by deal_stage --lifecycle-source profile
-gongctl analyze coverage --db ~/gongctl-data/gong.db
 gongctl analyze crm-schema --db ~/gongctl-data/gong.db --object-type DEAL
 gongctl analyze settings --db ~/gongctl-data/gong.db --kind trackers
 gongctl analyze scorecards --db ~/gongctl-data/gong.db
 gongctl analyze scorecard --db ~/gongctl-data/gong.db --scorecard-id SCORECARD_ID
 gongctl analyze transcript-backlog --db ~/gongctl-data/gong.db --limit 25
-gongctl mcp tools
 gongctl mcp tool-info list_gong_settings
-gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
 gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity --crm-object-id opp_001 --limit 10
 gongctl calls show --db ~/gongctl-data/gong.db --call-id CALL_ID --json
-gongmcp --db ~/gongctl-data/gong.db
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --json
-gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --out calls-with-crm-context.json
+gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --out calls-with-crm-context.json --allow-sensitive-export
 gongctl calls export --from 2026-04-01 --to 2026-04-24 --out calls.jsonl
 gongctl calls export --from 2026-04-01 --to 2026-04-24 --context extended --out calls.jsonl --max-pages 2
 gongctl calls transcript --call-id CALL_ID --out transcript.json
 gongctl calls transcript-batch --ids-file call_ids.txt --out-dir transcripts --resume
 gongctl users list
 gongctl api raw POST /v2/calls/transcript --body body.json
-gongctl diagnose
 ```
 
 The typed commands are intentionally thin wrappers over `internal/gong.Client`. If Gong changes an endpoint contract, the fallback is `gongctl api raw ...` while the typed wrapper is updated.
+
+In company mode, run these commands with `GONGCTL_RESTRICTED=1` and add
+`--allow-sensitive-export` only when the operator has explicit approval for the
+extra data exposure. `sync run --config` does not support a per-step
+`allow_sensitive_export` YAML bypass; restricted-mode approval must be supplied
+at runtime with the global flag or environment variable so reviewed schedules
+cannot silently self-authorize sensitive steps.
 
 `calls export` follows Gong's `records.cursor` pagination and drains all pages by default. Use `--max-pages N` for bounded smoke tests.
 
@@ -146,19 +226,22 @@ The Agent E CLI flow is SQLite-backed:
 4. `gongctl sync crm-integrations --db PATH`
 5. `gongctl sync crm-schema --db PATH --integration-id ID --object-type TYPE`
 6. `gongctl sync settings --db PATH --kind trackers|scorecards|workspaces`
-7. `gongctl sync status --db PATH`
-8. `gongctl profile discover --db PATH --out PATH`
-9. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
-10. `gongctl profile validate --db PATH --profile PATH`
-11. `gongctl profile import --db PATH --profile PATH`
-12. `gongctl analyze calls --db PATH --group-by DIMENSION [--lifecycle-source auto|profile|builtin]`
-13. `gongctl analyze coverage --db PATH [--lifecycle-source auto|profile|builtin]`
-14. `gongctl analyze crm-schema --db PATH [--integration-id ID] [--object-type TYPE]`
-15. `gongctl analyze settings --db PATH [--kind KIND]`
-16. `gongctl analyze transcript-backlog --db PATH [--lifecycle-source auto|profile|builtin]`
-17. `gongctl search transcripts --db PATH --query TEXT`
-18. `gongctl search calls --db PATH [--crm-object-type TYPE] [--crm-object-id ID]`
-19. `gongctl calls show --db PATH --call-id ID --json`
+7. `gongctl sync run --config PATH [--dry-run]`
+8. `gongctl sync status --db PATH`
+9. `gongctl cache inventory --db PATH`
+10. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`
+11. `gongctl profile discover --db PATH --out PATH`
+12. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
+13. `gongctl profile validate --db PATH --profile PATH`
+14. `gongctl profile import --db PATH --profile PATH`
+15. `gongctl analyze calls --db PATH --group-by DIMENSION [--lifecycle-source auto|profile|builtin]`
+16. `gongctl analyze coverage --db PATH [--lifecycle-source auto|profile|builtin]`
+17. `gongctl analyze crm-schema --db PATH [--integration-id ID] [--object-type TYPE]`
+18. `gongctl analyze settings --db PATH [--kind KIND]`
+19. `gongctl analyze transcript-backlog --db PATH [--lifecycle-source auto|profile|builtin]`
+20. `gongctl search transcripts --db PATH --query TEXT`
+21. `gongctl search calls --db PATH [--crm-object-type TYPE] [--crm-object-id ID]`
+22. `gongctl calls show --db PATH --call-id ID --json`
 
 Rules:
 
@@ -166,13 +249,29 @@ Rules:
 - `sync calls --preset business` requests Gong `Extended` context.
 - `sync calls --preset minimal` does not request Gong context.
 - `sync calls --preset all` currently maps to `Extended` context as well; it is documented separately so it can diverge later without changing the CLI shape.
+- `sync calls --include-parties` requests Gong call participant fields such as names, emails, speaker IDs, and titles. Use it only for approved operator refreshes because returned participant payloads are cached in raw call JSON.
 - `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
 - `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
 - `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces.
-- `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 50, and the CLI caps it at 100.
+- `sync run --config PATH` executes a staged refresh plan from YAML. Relative
+  `db` and `out_dir` paths resolve from the config file location, and
+  `--dry-run` validates the file without calling Gong. Sensitive transcript and
+  extended-context steps are flagged in dry-run output, but runtime approval is
+  still required through `--allow-sensitive-export` or
+  `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` when restricted mode is enabled.
+- `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 100, and the CLI caps it at 100.
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.
+- `cache inventory --db PATH` opens the database read-only and reports file
+  size, primary table counts, call date range, transcript and CRM-context
+  presence, profile status, and last sync metadata with a sensitive-data
+  warning.
+- `cache purge --db PATH --older-than YYYY-MM-DD` is dry-run by default and
+  reports calls, transcripts, transcript segments, CRM context, and profile
+  fact-cache rows that would be deleted. Confirmed purges enable SQLite
+  `secure_delete`, checkpoint/truncate WAL state, and run `VACUUM`; still add
+  `--confirm` only after backup, retention, and legal-hold checks are complete.
 - `profile discover` generates an editable YAML profile from cached CRM inventory and includes confidence plus evidence for discovered mappings. Discovery is an English-biased starter and may include CRM evidence values in the YAML, so write real-tenant output to a local file outside git rather than shared logs.
 - Discovered profiles are starter drafts, not universal truth. A human should review tenant lifecycle, object, field, and methodology mappings before relying on profile-aware separation of sales and post-sales calls.
 - `profile validate` rejects malformed YAML, unsupported profile versions, unsupported rule operators, unsafe regex rules, missing required lifecycle buckets, and mapped fields that do not exist in cached CRM data.
@@ -196,6 +295,11 @@ For non-client-specific business prompt examples, see [docs/public-readiness.md]
 
 `gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
+
+By default, `gongmcp` exposes the full read-only MCP catalog to any connected
+host. Company pilots should narrow that surface with `gongmcp --tool-allowlist`
+or `GONGMCP_TOOL_ALLOWLIST`, then layer host and filesystem controls around the
+approved business-user subset.
 
 Tools:
 
@@ -227,6 +331,8 @@ Tools:
 - `summarize_call_facts`
 - `rank_transcript_backlog`
 - `search_transcript_segments`
+- `search_transcripts_by_call_facts`
+- `search_transcript_quotes_with_attribution`
 - `missing_transcripts`
 
 The MCP server requires `--db`, reads SQLite only, and intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
@@ -234,6 +340,8 @@ The MCP server requires `--db`, reads SQLite only, and intentionally does not ex
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
+`search_transcript_segments` returns bounded snippets, but redacts call IDs and speaker IDs by default. Exact identifiers require `include_call_ids=true` and `include_speaker_ids=true`.
+`search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 
 ## Data Handling Rules
 

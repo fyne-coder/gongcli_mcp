@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	profilepkg "github.com/arthurlee/gongctl/internal/profile"
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
 func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
@@ -52,38 +52,7 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 
-	want := []string{
-		"get_sync_status",
-		"search_calls",
-		"get_call",
-		"list_crm_object_types",
-		"list_crm_fields",
-		"list_crm_integrations",
-		"list_cached_crm_schema_objects",
-		"list_cached_crm_schema_fields",
-		"list_gong_settings",
-		"list_scorecards",
-		"get_scorecard",
-		"get_business_profile",
-		"list_business_concepts",
-		"list_unmapped_crm_fields",
-		"search_crm_field_values",
-		"analyze_late_stage_crm_signals",
-		"opportunities_missing_transcripts",
-		"search_transcripts_by_crm_context",
-		"opportunity_call_summary",
-		"crm_field_population_matrix",
-		"list_lifecycle_buckets",
-		"summarize_calls_by_lifecycle",
-		"search_calls_by_lifecycle",
-		"prioritize_transcripts_by_lifecycle",
-		"compare_lifecycle_crm_fields",
-		"summarize_call_facts",
-		"rank_transcript_backlog",
-		"search_transcript_segments",
-		"search_transcripts_by_call_facts",
-		"missing_transcripts",
-	}
+	want := expectedToolNames()
 	if len(names) != len(want) {
 		t.Fatalf("tool count=%d want %d (%v)", len(names), len(want), names)
 	}
@@ -97,6 +66,50 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 			if name == blocked {
 				t.Fatalf("unexpected tool %q exposed", blocked)
 			}
+		}
+	}
+}
+
+func TestToolsListOnlyReturnsAllowlistedTools(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{
+		"get_sync_status",
+		"list_scorecards",
+		"search_transcript_segments",
+	}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "init",
+		Method:  "initialize",
+		Params:  mustJSON(t, map[string]any{}),
+	})+requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "tools",
+		Method:  "tools/list",
+	}))
+
+	var listed struct {
+		Result toolsListResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[1], &listed); err != nil {
+		t.Fatalf("unmarshal tools/list response: %v", err)
+	}
+
+	got := make([]string, 0, len(listed.Result.Tools))
+	for _, item := range listed.Result.Tools {
+		got = append(got, item.Name)
+	}
+	want := []string{"get_sync_status", "list_scorecards", "search_transcript_segments"}
+	if len(got) != len(want) {
+		t.Fatalf("tool count=%d want %d (%v)", len(got), len(want), got)
+	}
+	for idx, name := range want {
+		if got[idx] != name {
+			t.Fatalf("tool[%d]=%q want %q", idx, got[idx], name)
 		}
 	}
 }
@@ -230,6 +243,44 @@ func TestUnknownToolReturnsToolError(t *testing.T) {
 	}
 }
 
+func TestAllowlistedServerRejectsNonAllowedToolCallsWithGenericError(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{"get_sync_status"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "blocked",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_calls",
+			"arguments": map[string]any{
+				"limit": 1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected tool error result, got %+v", envelope.Result)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if got := payload["error"]; got != "tool is not available" {
+		t.Fatalf("error=%q want generic hidden-tool message", got)
+	}
+}
+
 func TestSearchTranscriptSegmentsReturnsSnippetsWithoutTextField(t *testing.T) {
 	t.Parallel()
 
@@ -273,8 +324,61 @@ func TestSearchTranscriptSegmentsReturnsSnippetsWithoutTextField(t *testing.T) {
 	if _, ok := rows[0]["snippet"]; !ok {
 		t.Fatalf("snippet field missing in %v", rows[0])
 	}
+	if got := rows[0]["call_id"]; got != "" {
+		t.Fatalf("call_id default=%v want redacted empty string", got)
+	}
+	if got := rows[0]["speaker_id"]; got != "" {
+		t.Fatalf("speaker_id default=%v want redacted empty string", got)
+	}
 	if _, ok := rows[0]["text"]; ok {
 		t.Fatalf("unexpected raw text field in %v", rows[0])
+	}
+}
+
+func TestSearchTranscriptSegmentsCanOptIntoIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "snippets-with-ids",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query":               "external",
+				"limit":               5,
+				"include_call_ids":    true,
+				"include_speaker_ids": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal snippet payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("snippet count=%d want 1", len(rows))
+	}
+	if got := rows[0]["call_id"]; got == "" {
+		t.Fatalf("call_id was not returned after opt-in: %v", rows[0])
+	}
+	if got := rows[0]["speaker_id"]; got == "" {
+		t.Fatalf("speaker_id was not returned after opt-in: %v", rows[0])
 	}
 }
 
@@ -386,6 +490,142 @@ func TestSearchTranscriptsByCallFactsFiltersAndRedactsIdentifiers(t *testing.T) 
 	}
 }
 
+func TestSearchTranscriptQuotesWithAttributionRedactsNamesByDefault(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	call := mustJSON(t, map[string]any{
+		"id":      "call_attribution_mcp",
+		"title":   "Attribution MCP call",
+		"started": "2026-02-12T15:00:00Z",
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct_attribution_mcp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Named Account"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp_attribution_mcp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Named Opportunity"},
+					map[string]any{"name": "StageName", "value": "Discovery"},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, call); err != nil {
+		t.Fatalf("upsert attribution call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_attribution_mcp",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is the problem."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert attribution transcript: %v", err)
+	}
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "attribution",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":             "implementation",
+				"from_date":         "2026-01-01",
+				"to_date":           "2026-03-31",
+				"industry":          "Manufacturing",
+				"opportunity_stage": "Discovery",
+				"limit":             5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal attribution payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count=%d want 1: %+v", len(rows), rows)
+	}
+	for _, leaked := range []string{"call_id", "title", "account_name", "account_website", "opportunity_name", "opportunity_close_date", "opportunity_probability"} {
+		if _, ok := rows[0][leaked]; ok {
+			t.Fatalf("attribution result leaked %s by default: %+v", leaked, rows[0])
+		}
+	}
+	if rows[0]["account_industry"] != "Manufacturing" || rows[0]["opportunity_stage"] != "Discovery" {
+		t.Fatalf("missing safe attribution metadata: %+v", rows[0])
+	}
+	if rows[0]["participant_status"] == "" || rows[0]["person_title_status"] == "" {
+		t.Fatalf("missing person/title status: %+v", rows[0])
+	}
+	if text, ok := rows[0]["context_excerpt"].(string); !ok || !strings.Contains(text, "Implementation timeline") {
+		t.Fatalf("missing bounded context excerpt: %+v", rows[0])
+	}
+}
+
+func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "attribution-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":         "implementation",
+				"account_query": "Named Account",
+				"limit":         5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected account_query tool error, got %+v", envelope.Result)
+	}
+	if !strings.Contains(envelope.Result.Content[0].Text, "include_account_names") {
+		t.Fatalf("tool error missing opt-in guidance: %+v", envelope.Result)
+	}
+}
+
 func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 	t.Parallel()
 
@@ -415,7 +655,7 @@ func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 		t.Fatalf("unexpected tool error: %+v", envelope.Result)
 	}
 	text := envelope.Result.Content[0].Text
-	for _, leaked := range []string{"internal@example.invalid", "external@example.invalid", "40000", "125000"} {
+	for _, leaked := range []string{"internal@example.invalid", "external@example.invalid", "40000", "125000", "Acme Corp", "Expansion Q2"} {
 		if strings.Contains(text, leaked) {
 			t.Fatalf("minimized call detail leaked %q in %s", leaked, text)
 		}
@@ -432,6 +672,9 @@ func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 		t.Fatalf("crm object count=%d want 2", len(detail.CRMObjects))
 	}
 	for _, object := range detail.CRMObjects {
+		if object.ObjectName != "" {
+			t.Fatalf("object name leaked in minimized call detail: %+v", object)
+		}
 		if object.FieldCount == 0 || len(object.FieldNames) == 0 {
 			t.Fatalf("object missing field metadata: %+v", object)
 		}
@@ -639,6 +882,40 @@ func TestCRMToolsReturnAggregates(t *testing.T) {
 		t.Fatalf("value search leaked object details: %+v", values[0])
 	}
 
+	withIDsResponses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "values_with_ids",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_crm_field_values",
+			"arguments": map[string]any{
+				"object_type":            "Opportunity",
+				"field_name":             "amount",
+				"value_query":            "40000",
+				"include_value_snippets": true,
+				"include_call_ids":       true,
+				"limit":                  5,
+			},
+		}),
+	}))
+
+	var withIDsEnvelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(withIDsResponses[0], &withIDsEnvelope); err != nil {
+		t.Fatalf("unmarshal values_with_ids response: %v", err)
+	}
+	var withIDs []sqlite.CRMFieldValueMatch
+	if err := json.Unmarshal([]byte(withIDsEnvelope.Result.Content[0].Text), &withIDs); err != nil {
+		t.Fatalf("unmarshal value matches with ids: %v", err)
+	}
+	if len(withIDs) != 1 || withIDs[0].CallID == "" || withIDs[0].ValueSnippet == "" || withIDs[0].Title == "" {
+		t.Fatalf("expected opt-in call identifiers and snippets: %+v", withIDs)
+	}
+	if withIDs[0].ObjectID != "" || withIDs[0].ObjectName != "" {
+		t.Fatalf("value search leaked object details with ids: %+v", withIDs[0])
+	}
+
 	var signalsEnvelope struct {
 		Result toolCallResult `json:"result"`
 	}
@@ -651,6 +928,42 @@ func TestCRMToolsReturnAggregates(t *testing.T) {
 	}
 	if report.ObjectType != "Opportunity" || report.LateCalls == 0 || len(report.Signals) == 0 {
 		t.Fatalf("unexpected signal report: %+v", report)
+	}
+}
+
+func expectedToolNames() []string {
+	return []string{
+		"get_sync_status",
+		"search_calls",
+		"get_call",
+		"list_crm_object_types",
+		"list_crm_fields",
+		"list_crm_integrations",
+		"list_cached_crm_schema_objects",
+		"list_cached_crm_schema_fields",
+		"list_gong_settings",
+		"list_scorecards",
+		"get_scorecard",
+		"get_business_profile",
+		"list_business_concepts",
+		"list_unmapped_crm_fields",
+		"search_crm_field_values",
+		"analyze_late_stage_crm_signals",
+		"opportunities_missing_transcripts",
+		"search_transcripts_by_crm_context",
+		"opportunity_call_summary",
+		"crm_field_population_matrix",
+		"list_lifecycle_buckets",
+		"summarize_calls_by_lifecycle",
+		"search_calls_by_lifecycle",
+		"prioritize_transcripts_by_lifecycle",
+		"compare_lifecycle_crm_fields",
+		"summarize_call_facts",
+		"rank_transcript_backlog",
+		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
+		"search_transcript_quotes_with_attribution",
+		"missing_transcripts",
 	}
 }
 

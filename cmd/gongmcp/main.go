@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/arthurlee/gongctl/internal/mcp"
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
-	"github.com/arthurlee/gongctl/internal/version"
+	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/version"
 )
 
 func main() {
@@ -23,6 +23,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
+	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when unset")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -45,6 +46,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	allowlist, err := parseToolAllowlist(*toolAllowlist, os.Getenv("GONGMCP_TOOL_ALLOWLIST"))
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid tool allowlist: %v\n", err)
+		return 2
+	}
+
 	ctx := context.Background()
 	store, err := sqlite.OpenReadOnly(ctx, db)
 	if err != nil {
@@ -53,10 +60,46 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	server := mcp.NewServer(store, "gongmcp", version.DisplayVersion())
+	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), mcp.WithToolAllowlist(allowlist))
 	if err := server.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintf(stderr, "serve mcp: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func parseToolAllowlist(flagValue, envValue string) ([]string, error) {
+	raw := strings.TrimSpace(flagValue)
+	if raw == "" {
+		raw = strings.TrimSpace(envValue)
+	}
+	if raw == "" {
+		return nil, nil
+	}
+
+	catalog := make(map[string]struct{}, len(mcp.ToolCatalog()))
+	for _, tool := range mcp.ToolCatalog() {
+		catalog[tool.Name] = struct{}{}
+	}
+
+	seen := make(map[string]struct{})
+	names := make([]string, 0)
+	for _, piece := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(piece)
+		if name == "" {
+			continue
+		}
+		if _, ok := catalog[name]; !ok {
+			return nil, fmt.Errorf("unknown tool %q", name)
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("no valid tool names provided")
+	}
+	return names, nil
 }

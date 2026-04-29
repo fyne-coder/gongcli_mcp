@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
-func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
+func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gong.db")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/calls/extensive" {
@@ -35,6 +35,10 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 		selector := body["contentSelector"].(map[string]any)
 		if selector["context"] != "Extended" {
 			t.Fatalf("contentSelector=%v want Extended", selector)
+		}
+		exposedFields, ok := selector["exposedFields"].(map[string]any)
+		if !ok || exposedFields["parties"] != true {
+			t.Fatalf("contentSelector.exposedFields=%#v want parties=true", selector["exposedFields"])
 		}
 
 		writeCLIJSON(t, w, map[string]any{
@@ -71,7 +75,7 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	a := &app{out: &stdout, err: &stderr}
+	a := &app{out: &stdout, err: &stderr, restricted: true}
 
 	err := a.sync(context.Background(), []string{
 		"calls",
@@ -79,6 +83,8 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 		"--from", "2026-04-20",
 		"--to", "2026-04-24",
 		"--preset", "business",
+		"--include-parties",
+		"--allow-sensitive-export",
 		"--max-pages", "1",
 	})
 	if err != nil {
@@ -133,6 +139,12 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 			} `json:"crm_segmentation"`
 			CRMInventoryNote string `json:"crm_inventory_note"`
 		} `json:"public_readiness"`
+		AttributionCoverage struct {
+			CallsWithTitles       int64  `json:"calls_with_titles"`
+			CallsWithParties      int64  `json:"calls_with_parties"`
+			PersonTitleStatus     string `json:"person_title_status"`
+			RecommendedNextAction string `json:"recommended_next_action"`
+		} `json:"attribution_coverage"`
 		LastRun struct {
 			Scope string `json:"scope"`
 		} `json:"last_run"`
@@ -158,6 +170,12 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 	if !strings.Contains(status.PublicReadiness.CRMInventoryNote, "Embedded CRM context") {
 		t.Fatalf("missing CRM inventory note: %+v", status.PublicReadiness)
 	}
+	if status.AttributionCoverage.CallsWithTitles != 1 || status.AttributionCoverage.CallsWithParties != 1 {
+		t.Fatalf("unexpected attribution coverage: %+v", status.AttributionCoverage)
+	}
+	if status.AttributionCoverage.PersonTitleStatus == "" {
+		t.Fatalf("missing person title status: %+v", status.AttributionCoverage)
+	}
 	if status.LastRun.Scope != "calls" {
 		t.Fatalf("last_run.scope=%q want calls", status.LastRun.Scope)
 	}
@@ -166,6 +184,55 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("status stderr=%q want empty", stderr.String())
+	}
+}
+
+func TestSyncRestrictedModeBlocksSensitiveSubcommands(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gong.db")
+	outDir := filepath.Join(dir, "transcripts")
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "sync-calls-business",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "business"},
+			want: "sync calls --preset business is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-calls-all",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "all"},
+			want: "sync calls --preset all is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-calls-include-parties",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "minimal", "--include-parties"},
+			want: "sync calls --include-parties is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-transcripts",
+			args: []string{"transcripts", "--db", dbPath, "--out-dir", outDir},
+			want: "sync transcripts is blocked because restricted mode is enabled",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			a := &app{out: &stdout, err: &stderr, restricted: true}
+
+			err := a.sync(context.Background(), tc.args)
+			if err == nil {
+				t.Fatal("sync returned nil error, want restricted-mode failure")
+			}
+			if got := err.Error(); !strings.Contains(got, tc.want) || !strings.Contains(got, "--allow-sensitive-export") {
+				t.Fatalf("err=%q missing restricted-mode guidance", got)
+			}
+		})
 	}
 }
 

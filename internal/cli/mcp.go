@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/arthurlee/gongctl/internal/mcp"
+	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 )
 
 func (a *app) mcp(ctx context.Context, args []string) error {

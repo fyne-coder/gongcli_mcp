@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/arthurlee/gongctl/internal/cli"
+	"github.com/fyne-coder/gongcli_mcp/internal/cli"
 )
 
 func main() {

@@ -20,6 +20,6 @@ The MVP supports Gong access key and access key secret via environment variables
 
 Report security issues through GitHub private vulnerability reporting:
 
-https://github.com/arthurlee/gongctl/security/advisories/new
+https://github.com/fyne-coder/gongcli_mcp/security/advisories/new
 
 Do not include customer transcript text or credentials in public issues, pull requests, or discussions.

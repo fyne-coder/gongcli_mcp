@@ -11,7 +11,7 @@ builds:
     main: ./cmd/gongctl
     binary: gongctl
     ldflags:
-      - -s -w -X github.com/arthurlee/gongctl/internal/version.Version={{ .Version }} -X github.com/arthurlee/gongctl/internal/version.Commit={{ .Commit }} -X github.com/arthurlee/gongctl/internal/version.Date={{ .Date }}
+      - -s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version={{ .Version }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit={{ .Commit }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Date={{ .Date }}
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,7 +24,7 @@ builds:
     main: ./cmd/gongmcp
     binary: gongmcp
     ldflags:
-      - -s -w -X github.com/arthurlee/gongctl/internal/version.Version={{ .Version }} -X github.com/arthurlee/gongctl/internal/version.Commit={{ .Commit }} -X github.com/arthurlee/gongctl/internal/version.Date={{ .Date }}
+      - -s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version={{ .Version }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit={{ .Commit }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Date={{ .Date }}
     env:
       - CGO_ENABLED=0
     goos:

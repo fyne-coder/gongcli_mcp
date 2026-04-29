@@ -10,10 +10,11 @@ import (
 var defaultDateLocation = mustLoadLocation("America/New_York")
 
 type CallListParams struct {
-	From    string
-	To      string
-	Cursor  string
-	Context string
+	From          string
+	To            string
+	Cursor        string
+	Context       string
+	ExposeParties bool
 }
 
 type TranscriptParams struct {
@@ -44,8 +45,15 @@ func (c *Client) ListCalls(ctx context.Context, params CallListParams) (*Respons
 	if params.Cursor != "" {
 		body["cursor"] = params.Cursor
 	}
+	contentSelector := map[string]any{}
 	if params.Context != "" {
-		body["contentSelector"] = map[string]any{"context": params.Context}
+		contentSelector["context"] = params.Context
+	}
+	if params.ExposeParties {
+		contentSelector["exposedFields"] = map[string]any{"parties": true}
+	}
+	if len(contentSelector) > 0 {
+		body["contentSelector"] = contentSelector
 	}
 
 	encoded, err := json.Marshal(body)

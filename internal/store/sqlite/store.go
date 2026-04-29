@@ -67,6 +67,7 @@ type FinishSyncRunParams struct {
 	RecordsSeen    int64
 	RecordsWritten int64
 	ErrorText      string
+	RequestContext string
 }
 
 type SyncRun struct {
@@ -369,6 +370,17 @@ type TranscriptCallFactsSearchParams struct {
 	Limit           int
 }
 
+type TranscriptAttributionSearchParams struct {
+	Query            string
+	FromDate         string
+	ToDate           string
+	LifecycleBucket  string
+	Industry         string
+	AccountQuery     string
+	OpportunityStage string
+	Limit            int
+}
+
 type TranscriptCRMSearchResult struct {
 	CallID              string `json:"call_id"`
 	Title               string `json:"title"`
@@ -398,6 +410,30 @@ type TranscriptCallFactsSearchResult struct {
 	EndMS           int64  `json:"end_ms"`
 	Snippet         string `json:"snippet"`
 	ContextExcerpt  string `json:"context_excerpt"`
+}
+
+type TranscriptAttributionSearchResult struct {
+	CallID                 string `json:"call_id,omitempty"`
+	Title                  string `json:"title,omitempty"`
+	StartedAt              string `json:"started_at"`
+	CallDate               string `json:"call_date,omitempty"`
+	LifecycleBucket        string `json:"lifecycle_bucket,omitempty"`
+	AccountName            string `json:"account_name,omitempty"`
+	AccountIndustry        string `json:"account_industry,omitempty"`
+	AccountWebsite         string `json:"account_website,omitempty"`
+	OpportunityName        string `json:"opportunity_name,omitempty"`
+	OpportunityStage       string `json:"opportunity_stage,omitempty"`
+	OpportunityType        string `json:"opportunity_type,omitempty"`
+	OpportunityCloseDate   string `json:"opportunity_close_date,omitempty"`
+	OpportunityProbability string `json:"opportunity_probability,omitempty"`
+	ParticipantStatus      string `json:"participant_status"`
+	PersonTitleStatus      string `json:"person_title_status"`
+	PersonTitleSource      string `json:"person_title_source,omitempty"`
+	SegmentIndex           int    `json:"segment_index"`
+	StartMS                int64  `json:"start_ms"`
+	EndMS                  int64  `json:"end_ms"`
+	Snippet                string `json:"snippet"`
+	ContextExcerpt         string `json:"context_excerpt"`
 }
 
 type OpportunityCallSummaryParams struct {
@@ -582,25 +618,64 @@ type CallFactsCoverage struct {
 }
 
 type SyncStatusSummary struct {
-	TotalCalls                   int64            `json:"total_calls"`
-	TotalUsers                   int64            `json:"total_users"`
-	TotalTranscripts             int64            `json:"total_transcripts"`
-	TotalTranscriptSegments      int64            `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64            `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64            `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64            `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64            `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64            `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64            `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64            `json:"total_gong_settings"`
-	TotalScorecards              int64            `json:"total_scorecards"`
-	MissingTranscripts           int64            `json:"missing_transcripts"`
-	RunningSyncRuns              int64            `json:"running_sync_runs"`
-	ProfileReadiness             ProfileReadiness `json:"profile_readiness"`
-	PublicReadiness              PublicReadiness  `json:"public_readiness"`
-	LastRun                      *SyncRun         `json:"last_run,omitempty"`
-	LastSuccessfulRun            *SyncRun         `json:"last_successful_run,omitempty"`
-	States                       []SyncState      `json:"states"`
+	TotalCalls                   int64               `json:"total_calls"`
+	TotalUsers                   int64               `json:"total_users"`
+	TotalTranscripts             int64               `json:"total_transcripts"`
+	TotalTranscriptSegments      int64               `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64               `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64               `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64               `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64               `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64               `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64               `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64               `json:"total_gong_settings"`
+	TotalScorecards              int64               `json:"total_scorecards"`
+	MissingTranscripts           int64               `json:"missing_transcripts"`
+	RunningSyncRuns              int64               `json:"running_sync_runs"`
+	ProfileReadiness             ProfileReadiness    `json:"profile_readiness"`
+	PublicReadiness              PublicReadiness     `json:"public_readiness"`
+	AttributionCoverage          AttributionCoverage `json:"attribution_coverage"`
+	LastRun                      *SyncRun            `json:"last_run,omitempty"`
+	LastSuccessfulRun            *SyncRun            `json:"last_successful_run,omitempty"`
+	States                       []SyncState         `json:"states"`
+}
+
+type AttributionCoverage struct {
+	CallsWithTitles       int64  `json:"calls_with_titles"`
+	CallsWithParties      int64  `json:"calls_with_parties"`
+	CallsWithPartyTitles  int64  `json:"calls_with_party_titles"`
+	UsersWithTitles       int64  `json:"users_with_titles"`
+	AccountNameCalls      int64  `json:"account_name_calls"`
+	AccountIndustryCalls  int64  `json:"account_industry_calls"`
+	OpportunityStageCalls int64  `json:"opportunity_stage_calls"`
+	ContactObjectCalls    int64  `json:"contact_object_calls"`
+	LeadObjectCalls       int64  `json:"lead_object_calls"`
+	ObjectsWithNames      int64  `json:"objects_with_names"`
+	ParticipantStatus     string `json:"participant_status"`
+	PersonTitleStatus     string `json:"person_title_status"`
+	RecommendedNextAction string `json:"recommended_next_action,omitempty"`
+}
+
+type CacheInventory struct {
+	TableCounts         []CacheTableCount  `json:"table_counts"`
+	OldestCallStartedAt string             `json:"oldest_call_started_at,omitempty"`
+	NewestCallStartedAt string             `json:"newest_call_started_at,omitempty"`
+	Summary             *SyncStatusSummary `json:"summary"`
+}
+
+type CacheTableCount struct {
+	Table string `json:"table"`
+	Rows  int64  `json:"rows"`
+}
+
+type CachePurgePlan struct {
+	StartedBefore          string `json:"started_before"`
+	CallCount              int64  `json:"call_count"`
+	TranscriptCount        int64  `json:"transcript_count"`
+	TranscriptSegmentCount int64  `json:"transcript_segment_count"`
+	ContextObjectCount     int64  `json:"context_object_count"`
+	ContextFieldCount      int64  `json:"context_field_count"`
+	ProfileCallFactCount   int64  `json:"profile_call_fact_count"`
 }
 
 type ProfileReadiness struct {
@@ -876,7 +951,13 @@ func (s *Store) FinishSyncRun(ctx context.Context, runID int64, params FinishSyn
 	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE sync_runs
-		    SET finished_at = ?, status = ?, cursor = ?, records_seen = ?, records_written = ?, error_text = ?
+		    SET finished_at = ?,
+		        status = ?,
+		        cursor = ?,
+		        records_seen = ?,
+		        records_written = ?,
+		        error_text = ?,
+		        request_context = CASE WHEN ? <> '' THEN ? ELSE request_context END
 		  WHERE id = ?`,
 		finishedAt,
 		status,
@@ -884,6 +965,8 @@ func (s *Store) FinishSyncRun(ctx context.Context, runID int64, params FinishSyn
 		params.RecordsSeen,
 		params.RecordsWritten,
 		strings.TrimSpace(params.ErrorText),
+		strings.TrimSpace(params.RequestContext),
+		strings.TrimSpace(params.RequestContext),
 		runID,
 	); err != nil {
 		return err
@@ -977,7 +1060,7 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*CallRecor
 				title = excluded.title,
 				started_at = excluded.started_at,
 				duration_seconds = excluded.duration_seconds,
-				parties_count = excluded.parties_count,
+				parties_count = CASE WHEN excluded.parties_count > 0 THEN excluded.parties_count ELSE calls.parties_count END,
 				raw_json = CASE WHEN calls.context_present = 1 THEN calls.raw_json ELSE excluded.raw_json END,
 				raw_sha256 = CASE WHEN calls.context_present = 1 THEN calls.raw_sha256 ELSE excluded.raw_sha256 END,
 				updated_at = excluded.updated_at
@@ -985,7 +1068,7 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*CallRecor
 				calls.title IS NOT excluded.title OR
 				calls.started_at IS NOT excluded.started_at OR
 				calls.duration_seconds IS NOT excluded.duration_seconds OR
-				calls.parties_count IS NOT excluded.parties_count OR
+				(excluded.parties_count > 0 AND calls.parties_count IS NOT excluded.parties_count) OR
 				(calls.context_present = 0 AND calls.raw_sha256 IS NOT excluded.raw_sha256)`
 	}
 	if _, err := tx.ExecContext(
@@ -2362,6 +2445,267 @@ SELECT cf.started_at,
 	return out, rows.Err()
 }
 
+func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, params TranscriptAttributionSearchParams) ([]TranscriptAttributionSearchResult, error) {
+	queryText := strings.TrimSpace(params.Query)
+	if queryText == "" {
+		return nil, errors.New("search query is required")
+	}
+	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
+
+	where := []string{`transcript_segments_fts MATCH ?`}
+	args := []any{queryText}
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizeDateFilter(value, "from_date")
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, `COALESCE(cf.call_date, substr(c.started_at, 1, 10)) >= ?`)
+		args = append(args, date)
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizeDateFilter(value, "to_date")
+		if err != nil {
+			return nil, err
+		}
+		where = append(where, `COALESCE(cf.call_date, substr(c.started_at, 1, 10)) <= ?`)
+		args = append(args, date)
+	}
+	if strings.TrimSpace(params.FromDate) != "" && strings.TrimSpace(params.ToDate) != "" {
+		fromDate, _ := normalizeDateFilter(params.FromDate, "from_date")
+		toDate, _ := normalizeDateFilter(params.ToDate, "to_date")
+		if fromDate > toDate {
+			return nil, errors.New("from_date must be on or before to_date")
+		}
+	}
+	if value := strings.TrimSpace(params.LifecycleBucket); value != "" {
+		if !isKnownLifecycleBucket(value) {
+			return nil, fmt.Errorf("unknown lifecycle bucket %q", value)
+		}
+		where = append(where, `cf.lifecycle_bucket = ?`)
+		args = append(args, strings.ToLower(value))
+	}
+	if value := strings.TrimSpace(params.Industry); value != "" {
+		where = append(where, `EXISTS (
+			SELECT 1
+			  FROM call_context_objects filter_o
+			  JOIN call_context_fields filter_f
+			    ON filter_f.call_id = filter_o.call_id AND filter_f.object_key = filter_o.object_key
+			 WHERE filter_o.call_id = ts.call_id
+			   AND filter_o.object_type = 'Account'
+			   AND filter_f.field_name = 'Industry'
+			   AND LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(?) || '%'
+		)`)
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.AccountQuery); value != "" {
+		where = append(where, `EXISTS (
+			SELECT 1
+			  FROM call_context_objects filter_o
+			  JOIN call_context_fields filter_f
+			    ON filter_f.call_id = filter_o.call_id AND filter_f.object_key = filter_o.object_key
+			 WHERE filter_o.call_id = ts.call_id
+			   AND filter_o.object_type = 'Account'
+			   AND filter_f.field_name = 'Name'
+			   AND LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(?) || '%'
+		)`)
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.OpportunityStage); value != "" {
+		where = append(where, `EXISTS (
+			SELECT 1
+			  FROM call_context_objects filter_o
+			  JOIN call_context_fields filter_f
+			    ON filter_f.call_id = filter_o.call_id AND filter_f.object_key = filter_o.object_key
+			 WHERE filter_o.call_id = ts.call_id
+			   AND filter_o.object_type = 'Opportunity'
+			   AND filter_f.field_name = 'StageName'
+			   AND LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(?) || '%'
+		)`)
+		args = append(args, value)
+	}
+
+	selectedArgs := make([]any, 0, 3)
+	selectedAccountWhere := []string{`o.object_type = 'Account'`}
+	if value := strings.TrimSpace(params.Industry); value != "" {
+		selectedAccountWhere = append(selectedAccountWhere, `EXISTS (
+			SELECT 1
+			  FROM call_context_fields selected_f
+			 WHERE selected_f.call_id = o.call_id
+			   AND selected_f.object_key = o.object_key
+			   AND selected_f.field_name = 'Industry'
+			   AND LOWER(TRIM(selected_f.field_value_text)) LIKE '%' || LOWER(?) || '%'
+		)`)
+		selectedArgs = append(selectedArgs, value)
+	}
+	if value := strings.TrimSpace(params.AccountQuery); value != "" {
+		selectedAccountWhere = append(selectedAccountWhere, `EXISTS (
+			SELECT 1
+			  FROM call_context_fields selected_f
+			 WHERE selected_f.call_id = o.call_id
+			   AND selected_f.object_key = o.object_key
+			   AND selected_f.field_name = 'Name'
+			   AND LOWER(TRIM(selected_f.field_value_text)) LIKE '%' || LOWER(?) || '%'
+		)`)
+		selectedArgs = append(selectedArgs, value)
+	}
+	selectedOpportunityWhere := []string{`o.object_type = 'Opportunity'`}
+	if value := strings.TrimSpace(params.OpportunityStage); value != "" {
+		selectedOpportunityWhere = append(selectedOpportunityWhere, `EXISTS (
+			SELECT 1
+			  FROM call_context_fields selected_f
+			 WHERE selected_f.call_id = o.call_id
+			   AND selected_f.object_key = o.object_key
+			   AND selected_f.field_name = 'StageName'
+			   AND LOWER(TRIM(selected_f.field_value_text)) LIKE '%' || LOWER(?) || '%'
+		)`)
+		selectedArgs = append(selectedArgs, value)
+	}
+
+	query := `
+WITH matched_segments AS (
+	SELECT ts.call_id,
+	       c.title,
+	       c.started_at,
+	       c.parties_count,
+	       COALESCE(cf.call_date, substr(c.started_at, 1, 10)) AS call_date,
+	       COALESCE(cf.lifecycle_bucket, '') AS lifecycle_bucket,
+	       ts.segment_index,
+	       ts.start_ms,
+	       ts.end_ms,
+	       snippet(transcript_segments_fts, 0, '', '', '...', 18) AS snippet,
+	       COALESCE((SELECT COUNT(1) FROM json_each(c.raw_json, '$.parties') p WHERE TRIM(COALESCE(json_extract(p.value, '$.title'), json_extract(p.value, '$.jobTitle'), json_extract(p.value, '$.job_title'), '')) <> ''), 0) +
+	       COALESCE((SELECT COUNT(1) FROM json_each(c.raw_json, '$.metaData.parties') p WHERE TRIM(COALESCE(json_extract(p.value, '$.title'), json_extract(p.value, '$.jobTitle'), json_extract(p.value, '$.job_title'), '')) <> ''), 0) AS party_title_count,
+	       bm25(transcript_segments_fts) AS rank
+	  FROM transcript_segments_fts
+	  JOIN transcript_segments ts
+	    ON ts.id = transcript_segments_fts.rowid
+	  JOIN calls c
+	    ON c.call_id = ts.call_id
+	  LEFT JOIN call_facts cf
+	    ON cf.call_id = ts.call_id
+	 WHERE ` + strings.Join(where, ` AND `) + `
+	 ORDER BY rank, c.started_at DESC, ts.call_id, ts.segment_index
+),
+selected_account AS (
+	SELECT call_id, object_key
+	  FROM (
+		SELECT o.call_id,
+		       o.object_key,
+		       ROW_NUMBER() OVER (PARTITION BY o.call_id ORDER BY o.object_id, o.object_key) AS rn
+		  FROM call_context_objects o
+		  JOIN (SELECT DISTINCT call_id FROM matched_segments) m
+		    ON m.call_id = o.call_id
+		 WHERE ` + strings.Join(selectedAccountWhere, ` AND `) + `
+	  )
+	 WHERE rn = 1
+),
+selected_opportunity AS (
+	SELECT call_id, object_key
+	  FROM (
+		SELECT o.call_id,
+		       o.object_key,
+		       ROW_NUMBER() OVER (PARTITION BY o.call_id ORDER BY o.object_id, o.object_key) AS rn
+		  FROM call_context_objects o
+		  JOIN (SELECT DISTINCT call_id FROM matched_segments) m
+		    ON m.call_id = o.call_id
+		 WHERE ` + strings.Join(selectedOpportunityWhere, ` AND `) + `
+	  )
+	 WHERE rn = 1
+)
+SELECT m.call_id,
+       m.title,
+       m.started_at,
+       m.call_date,
+       m.lifecycle_bucket,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_account sa ON sa.call_id = f.call_id AND sa.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'Name' LIMIT 1), '') AS account_name,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_account sa ON sa.call_id = f.call_id AND sa.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'Industry' LIMIT 1), '') AS account_industry,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_account sa ON sa.call_id = f.call_id AND sa.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'Website' LIMIT 1), '') AS account_website,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_opportunity so ON so.call_id = f.call_id AND so.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'Name' LIMIT 1), '') AS opportunity_name,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_opportunity so ON so.call_id = f.call_id AND so.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'StageName' LIMIT 1), '') AS opportunity_stage,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_opportunity so ON so.call_id = f.call_id AND so.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'Type' LIMIT 1), '') AS opportunity_type,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_opportunity so ON so.call_id = f.call_id AND so.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'CloseDate' LIMIT 1), '') AS opportunity_close_date,
+       COALESCE((SELECT TRIM(f.field_value_text) FROM call_context_fields f JOIN selected_opportunity so ON so.call_id = f.call_id AND so.object_key = f.object_key WHERE f.call_id = m.call_id AND f.field_name = 'Probability' LIMIT 1), '') AS opportunity_probability,
+       CASE WHEN m.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END AS participant_status,
+       CASE
+	       WHEN m.party_title_count > 0 THEN 'available'
+	       WHEN EXISTS (
+		       SELECT 1
+		         FROM call_context_objects po
+		        WHERE po.call_id = m.call_id
+		          AND po.object_type IN ('Contact', 'Lead')
+	       ) THEN 'contact_or_lead_present_title_unverified'
+	       WHEN m.parties_count > 0 THEN 'participants_present_check_party_titles'
+	       ELSE 'missing_from_cache'
+       END AS person_title_status,
+       CASE
+	       WHEN m.party_title_count > 0 THEN 'call_parties'
+	       WHEN EXISTS (
+		       SELECT 1
+		         FROM call_context_objects po
+		        WHERE po.call_id = m.call_id
+		          AND po.object_type IN ('Contact', 'Lead')
+	       ) THEN 'contact_or_lead_object'
+	       ELSE ''
+       END AS person_title_source,
+       m.segment_index,
+       m.start_ms,
+       m.end_ms,
+       m.snippet,
+       substr(COALESCE((
+	       SELECT group_concat(context_text, ' ')
+	         FROM (
+		       SELECT ctx.text AS context_text
+		         FROM transcript_segments ctx
+		        WHERE ctx.call_id = m.call_id
+		          AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1
+		        ORDER BY ctx.segment_index
+	         )
+       ), ''), 1, 800) AS context_excerpt
+  FROM matched_segments m
+ ORDER BY m.rank, m.started_at DESC, m.call_id, m.segment_index
+ LIMIT ?`
+	args = append(args, selectedArgs...)
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]TranscriptAttributionSearchResult, 0)
+	for rows.Next() {
+		var row TranscriptAttributionSearchResult
+		if err := rows.Scan(
+			&row.CallID,
+			&row.Title,
+			&row.StartedAt,
+			&row.CallDate,
+			&row.LifecycleBucket,
+			&row.AccountName,
+			&row.AccountIndustry,
+			&row.AccountWebsite,
+			&row.OpportunityName,
+			&row.OpportunityStage,
+			&row.OpportunityType,
+			&row.OpportunityCloseDate,
+			&row.OpportunityProbability,
+			&row.ParticipantStatus,
+			&row.PersonTitleStatus,
+			&row.PersonTitleSource,
+			&row.SegmentIndex,
+			&row.StartMS,
+			&row.EndMS,
+			&row.Snippet,
+			&row.ContextExcerpt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SummarizeOpportunityCalls(ctx context.Context, params OpportunityCallSummaryParams) ([]OpportunityCallSummary, error) {
 	limit := boundedLimit(params.Limit, defaultOpportunitySummaryLimit, maxOpportunitySummaryLimit)
 	stageValues := cleanStringList(params.StageValues)
@@ -3336,6 +3680,11 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sync_runs WHERE status = 'running'`).Scan(&summary.RunningSyncRuns); err != nil {
 		return nil, err
 	}
+	attributionCoverage, err := s.attributionCoverage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	summary.AttributionCoverage = attributionCoverage
 
 	lastRun, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, finished_at, records_seen, records_written, error_text FROM sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`)
 	if err != nil {
@@ -3389,6 +3738,206 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 	summary.ProfileReadiness = profileReadiness
 	summary.PublicReadiness = buildPublicReadiness(summary)
 	return summary, nil
+}
+
+func (s *Store) attributionCoverage(ctx context.Context) (AttributionCoverage, error) {
+	var coverage AttributionCoverage
+	scalars := []struct {
+		target *int64
+		query  string
+	}{
+		{&coverage.CallsWithTitles, `SELECT COUNT(*) FROM calls WHERE TRIM(title) <> ''`},
+		{&coverage.CallsWithParties, `SELECT COUNT(*) FROM calls WHERE parties_count > 0`},
+		{&coverage.CallsWithPartyTitles, `SELECT COUNT(*) FROM calls WHERE
+			COALESCE((SELECT COUNT(1) FROM json_each(calls.raw_json, '$.parties') p WHERE TRIM(COALESCE(json_extract(p.value, '$.title'), json_extract(p.value, '$.jobTitle'), json_extract(p.value, '$.job_title'), '')) <> ''), 0) +
+			COALESCE((SELECT COUNT(1) FROM json_each(calls.raw_json, '$.metaData.parties') p WHERE TRIM(COALESCE(json_extract(p.value, '$.title'), json_extract(p.value, '$.jobTitle'), json_extract(p.value, '$.job_title'), '')) <> ''), 0) > 0`},
+		{&coverage.UsersWithTitles, `SELECT COUNT(*) FROM users WHERE TRIM(title) <> ''`},
+		{&coverage.AccountNameCalls, `SELECT COUNT(DISTINCT o.call_id) FROM call_context_objects o JOIN call_context_fields f ON f.call_id = o.call_id AND f.object_key = o.object_key WHERE o.object_type = 'Account' AND f.field_name = 'Name' AND TRIM(f.field_value_text) <> ''`},
+		{&coverage.AccountIndustryCalls, `SELECT COUNT(DISTINCT o.call_id) FROM call_context_objects o JOIN call_context_fields f ON f.call_id = o.call_id AND f.object_key = o.object_key WHERE o.object_type = 'Account' AND f.field_name = 'Industry' AND TRIM(f.field_value_text) <> ''`},
+		{&coverage.OpportunityStageCalls, `SELECT COUNT(DISTINCT o.call_id) FROM call_context_objects o JOIN call_context_fields f ON f.call_id = o.call_id AND f.object_key = o.object_key WHERE o.object_type = 'Opportunity' AND f.field_name = 'StageName' AND TRIM(f.field_value_text) <> ''`},
+		{&coverage.ContactObjectCalls, `SELECT COUNT(DISTINCT call_id) FROM call_context_objects WHERE object_type = 'Contact'`},
+		{&coverage.LeadObjectCalls, `SELECT COUNT(DISTINCT call_id) FROM call_context_objects WHERE object_type = 'Lead'`},
+		{&coverage.ObjectsWithNames, `SELECT COUNT(*) FROM call_context_objects WHERE TRIM(object_name) <> ''`},
+	}
+	for _, scalar := range scalars {
+		if err := s.db.QueryRowContext(ctx, scalar.query).Scan(scalar.target); err != nil {
+			return AttributionCoverage{}, err
+		}
+	}
+	if coverage.CallsWithParties > 0 {
+		coverage.ParticipantStatus = "present"
+	} else {
+		coverage.ParticipantStatus = "missing_from_cache"
+	}
+	if coverage.CallsWithPartyTitles > 0 {
+		coverage.PersonTitleStatus = "party_titles_available"
+	} else if coverage.UsersWithTitles > 0 || coverage.ContactObjectCalls > 0 || coverage.LeadObjectCalls > 0 {
+		coverage.PersonTitleStatus = "title_source_present_but_call_titles_unverified"
+	} else if coverage.CallsWithParties > 0 {
+		coverage.PersonTitleStatus = "participants_present_check_party_titles"
+	} else {
+		coverage.PersonTitleStatus = "missing_from_cache"
+	}
+	if coverage.CallsWithParties == 0 {
+		coverage.RecommendedNextAction = "Re-sync calls with exposed participant fields enabled; sync users for internal titles and Contact/Lead CRM context for durable external person titles."
+	}
+	return coverage, nil
+}
+
+func (s *Store) CacheInventory(ctx context.Context) (*CacheInventory, error) {
+	summary, err := s.SyncStatusSummary(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &CacheInventory{
+		Summary:     summary,
+		TableCounts: []CacheTableCount{},
+	}
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(MIN(started_at), ''), COALESCE(MAX(started_at), '')
+		   FROM calls
+		  WHERE TRIM(started_at) <> ''`,
+	).Scan(&out.OldestCallStartedAt, &out.NewestCallStartedAt); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT name, COALESCE(sql, '')
+		   FROM sqlite_master
+		  WHERE type = 'table'
+		    AND name NOT LIKE 'sqlite_%'
+		  ORDER BY name`,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	type inventoryTable struct {
+		name string
+		sql  string
+	}
+	var tables []inventoryTable
+	for rows.Next() {
+		var tableName string
+		var tableSQL string
+		if err := rows.Scan(&tableName, &tableSQL); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if !inventoryTableVisible(tableName, tableSQL) {
+			continue
+		}
+		tables = append(tables, inventoryTable{name: tableName, sql: tableSQL})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, table := range tables {
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, strings.ReplaceAll(table.name, `"`, `""`))
+		var count int64
+		if err := s.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+			return nil, err
+		}
+		out.TableCounts = append(out.TableCounts, CacheTableCount{Table: table.name, Rows: count})
+	}
+	return out, nil
+}
+
+func (s *Store) PlanCachePurgeBefore(ctx context.Context, startedBefore string) (*CachePurgePlan, error) {
+	startedBefore = strings.TrimSpace(startedBefore)
+	if startedBefore == "" {
+		return nil, errors.New("started_before is required")
+	}
+	plan := &CachePurgePlan{StartedBefore: startedBefore}
+	for _, item := range []struct {
+		target *int64
+		query  string
+	}{
+		{&plan.CallCount, `SELECT COUNT(*) FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?`},
+		{&plan.TranscriptCount, `SELECT COUNT(*) FROM transcripts WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.TranscriptSegmentCount, `SELECT COUNT(*) FROM transcript_segments WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.ContextObjectCount, `SELECT COUNT(*) FROM call_context_objects WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.ContextFieldCount, `SELECT COUNT(*) FROM call_context_fields WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.ProfileCallFactCount, `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+	} {
+		if err := s.db.QueryRowContext(ctx, item.query, startedBefore).Scan(item.target); err != nil {
+			return nil, err
+		}
+	}
+	return plan, nil
+}
+
+func (s *Store) PurgeCacheBefore(ctx context.Context, startedBefore string) (*CachePurgePlan, error) {
+	plan, err := s.PlanCachePurgeBefore(ctx, startedBefore)
+	if err != nil {
+		return nil, err
+	}
+	if plan.CallCount == 0 {
+		return plan, nil
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA secure_delete = ON`); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	for _, query := range []string{
+		`DELETE FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM transcript_segments WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM transcripts WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM call_context_fields WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM call_context_objects WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, plan.StartedBefore); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transcript_segments_fts(transcript_segments_fts) VALUES ('optimize')`); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if err := s.compactAfterPurge(ctx); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func (s *Store) compactAfterPurge(ctx context.Context) error {
+	for _, query := range []string{
+		`PRAGMA wal_checkpoint(TRUNCATE)`,
+		`VACUUM`,
+		`PRAGMA optimize`,
+	} {
+		if _, err := s.db.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func inventoryTableVisible(name string, tableSQL string) bool {
+	lowerName := strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(lowerName, "transcript_segments_fts_") {
+		return false
+	}
+	if strings.Contains(strings.ToUpper(tableSQL), "VIRTUAL TABLE") {
+		return false
+	}
+	return true
 }
 
 func (s *Store) profileReadiness(ctx context.Context) (ProfileReadiness, error) {
@@ -4209,12 +4758,15 @@ func buildContextObject(defaultType string, doc map[string]any, index int) (cont
 	}
 	objectID := firstString(doc, "id", "objectId", "crmId")
 	objectName := firstString(doc, "name", "displayName", "label", "title")
+	fields := extractContextFields(fieldsValue)
+	if objectName == "" {
+		objectName = contextObjectNameFromFields(fields)
+	}
 	rawJSON, err := normalizeJSONValue(doc)
 	if err != nil {
 		return contextObjectRow{}, false
 	}
 
-	fields := extractContextFields(fieldsValue)
 	return contextObjectRow{
 		ObjectKey:  contextObjectKey(objectType, objectID, objectName, index),
 		ObjectType: objectType,
@@ -4223,6 +4775,20 @@ func buildContextObject(defaultType string, doc map[string]any, index int) (cont
 		RawJSON:    rawJSON,
 		Fields:     fields,
 	}, true
+}
+
+func contextObjectNameFromFields(fields []contextFieldRow) string {
+	for _, field := range fields {
+		if strings.EqualFold(strings.TrimSpace(field.FieldName), "Name") && strings.TrimSpace(field.ValueText) != "" {
+			return strings.TrimSpace(field.ValueText)
+		}
+	}
+	for _, field := range fields {
+		if strings.EqualFold(strings.TrimSpace(field.FieldLabel), "Name") && strings.TrimSpace(field.ValueText) != "" {
+			return strings.TrimSpace(field.ValueText)
+		}
+	}
+	return ""
 }
 
 func extractContextFields(value any) []contextFieldRow {

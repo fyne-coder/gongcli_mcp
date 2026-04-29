@@ -6,12 +6,35 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
-      - run: go test ./...
+          go-version: "1.26.x"
+      - run: make secret-scan
+      - run: go test -count=1 ./...
+      - run: go vet ./...
+      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+      - run: $(go env GOPATH)/bin/staticcheck -checks=all,-U1000,-ST1000 ./...
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+      - run: $(go env GOPATH)/bin/govulncheck ./...
       - run: go build ./cmd/gongctl
       - run: go build ./cmd/gongmcp
+      - run: make sbom
+      - run: make checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          path: |
+            dist/checksums.txt
+            dist/sbom-go-modules.json
+            dist/build-env.txt
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build -t gongctl:ci .
+      - run: docker build --target mcp -t gongctl:mcp-ci .

@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
 func (a *app) analyze(ctx context.Context, args []string) error {

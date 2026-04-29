@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/arthurlee/gongctl/internal/auth"
+	"github.com/fyne-coder/gongcli_mcp/internal/auth"
 )
 
 func TestRawSetsBasicAuth(t *testing.T) {
@@ -67,6 +67,10 @@ func TestListCallsIncludesExtendedContext(t *testing.T) {
 		if got := contentSelector["context"]; got != "Extended" {
 			t.Fatalf("contentSelector.context = %q, want Extended", got)
 		}
+		exposedFields, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok || exposedFields["parties"] != true {
+			t.Fatalf("contentSelector.exposedFields = %#v, want parties=true", contentSelector["exposedFields"])
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"calls":[],"records":{"currentPageSize":0}}`))
 	}))
@@ -84,7 +88,7 @@ func TestListCallsIncludesExtendedContext(t *testing.T) {
 		t.Fatalf("NewClient returned error: %v", err)
 	}
 
-	if _, err := client.ListCalls(context.Background(), CallListParams{Context: "Extended"}); err != nil {
+	if _, err := client.ListCalls(context.Background(), CallListParams{Context: "Extended", ExposeParties: true}); err != nil {
 		t.Fatalf("ListCalls returned error: %v", err)
 	}
 }

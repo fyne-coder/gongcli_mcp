@@ -23,8 +23,11 @@ func (a *app) api(ctx context.Context, args []string) error {
 }
 
 func (a *app) apiRaw(ctx context.Context, args []string) error {
-	method, path, bodySpec, out, err := parseRawArgs(args)
+	method, path, bodySpec, out, allowSensitiveExport, err := parseRawArgs(args)
 	if err != nil {
+		return err
+	}
+	if err := a.requireSensitiveExport("api raw", allowSensitiveExport, "it can return arbitrary raw Gong API payloads"); err != nil {
 		return err
 	}
 
@@ -47,10 +50,11 @@ func (a *app) apiRaw(ctx context.Context, args []string) error {
 	return writeOutput(out, a.out, resp.Body)
 }
 
-func parseRawArgs(args []string) (string, string, string, string, error) {
+func parseRawArgs(args []string) (string, string, string, string, bool, error) {
 	var positionals []string
 	var body string
 	var out string
+	var allowSensitiveExport bool
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -58,29 +62,31 @@ func parseRawArgs(args []string) (string, string, string, string, error) {
 		case "--body":
 			i++
 			if i >= len(args) {
-				return "", "", "", "", fmt.Errorf("--body requires a value")
+				return "", "", "", "", false, fmt.Errorf("--body requires a value")
 			}
 			body = args[i]
 		case "--out":
 			i++
 			if i >= len(args) {
-				return "", "", "", "", fmt.Errorf("--out requires a value")
+				return "", "", "", "", false, fmt.Errorf("--out requires a value")
 			}
 			out = args[i]
+		case "--allow-sensitive-export":
+			allowSensitiveExport = true
 		case "-h", "--help":
-			return "", "", "", "", errUsage
+			return "", "", "", "", false, errUsage
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return "", "", "", "", fmt.Errorf("unknown api raw flag %q", arg)
+				return "", "", "", "", false, fmt.Errorf("unknown api raw flag %q", arg)
 			}
 			positionals = append(positionals, arg)
 		}
 	}
 
 	if len(positionals) != 2 {
-		return "", "", "", "", fmt.Errorf("api raw requires METHOD and PATH")
+		return "", "", "", "", false, fmt.Errorf("api raw requires METHOD and PATH")
 	}
-	return positionals[0], positionals[1], body, out, nil
+	return positionals[0], positionals[1], body, out, allowSensitiveExport, nil
 }
 
 func readBody(spec string) ([]byte, error) {

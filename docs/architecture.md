@@ -92,7 +92,7 @@ Implemented MCP tools:
 - `search_transcript_segments`
 - `missing_transcripts`
 
-Do not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or raw transcript dumps. Transcript search returns segment metadata and snippets only. `get_call` returns minimized metadata plus CRM object field names/counts, not field values or participant payloads. CRM population matrices only group by allowlisted categorical fields such as `StageName`.
+Do not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or raw transcript dumps. Transcript search returns segment metadata and snippets only, and redacts call/speaker IDs by default unless an operator explicitly opts in. `get_call` returns minimized metadata plus CRM object field names/counts, not field values or participant payloads. CRM population matrices only group by allowlisted categorical fields such as `StageName`.
 
 CRM schema/settings tools expose cached metadata such as integration IDs, CRM object/field names, tracker names, scorecard names, scorecard questions, and workspaces. They do not return raw settings payloads. `search_crm_field_values` is a deliberate narrow exception for explicit user-directed value lookup: it requires object type, field name, and value query, redacts call IDs by default unless `include_call_ids=true`, and returns bounded short value snippets plus call titles only when `include_value_snippets=true` is explicitly set. Use `gongctl mcp tools` and `gongctl mcp tool-info NAME` to inspect the MCP catalog outside Claude/Codex host apps.
 

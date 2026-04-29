@@ -89,6 +89,7 @@ Guardrails:
 - call-fact summaries use an allowlisted normalized view instead of arbitrary SQL or raw JSON exposure
 - CRM schema/settings tools return cached metadata only, not raw settings payloads or CRM values; scorecard detail exposes question text as configuration metadata
 - unmapped CRM field tools return redacted aggregate statistics only, not raw field example values
+- `search_transcript_segments` returns bounded snippets, but redacts call IDs and speaker IDs by default; exact IDs require `include_call_ids=true` and `include_speaker_ids=true`
 - `get_sync_status` includes public readiness flags and separates embedded CRM context from CRM integration/schema inventory so zero integration inventory is not mistaken for missing call CRM context
 - `rank_transcript_backlog` and `prioritize_transcripts_by_lifecycle` favor External and Conference-style customer conversations and redact call IDs/titles in model-facing MCP output
 - Opportunity aggregate tools redact opportunity IDs/names, owner IDs, amounts, close dates, and latest call IDs in model-facing MCP output; use CLI/operator workflows for exact local follow-up.
