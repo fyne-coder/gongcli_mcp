@@ -273,8 +273,61 @@ func TestSearchTranscriptSegmentsReturnsSnippetsWithoutTextField(t *testing.T) {
 	if _, ok := rows[0]["snippet"]; !ok {
 		t.Fatalf("snippet field missing in %v", rows[0])
 	}
+	if got := rows[0]["call_id"]; got != "" {
+		t.Fatalf("call_id default=%v want redacted empty string", got)
+	}
+	if got := rows[0]["speaker_id"]; got != "" {
+		t.Fatalf("speaker_id default=%v want redacted empty string", got)
+	}
 	if _, ok := rows[0]["text"]; ok {
 		t.Fatalf("unexpected raw text field in %v", rows[0])
+	}
+}
+
+func TestSearchTranscriptSegmentsCanOptIntoIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "snippets-with-ids",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query":               "external",
+				"limit":               5,
+				"include_call_ids":    true,
+				"include_speaker_ids": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal snippet payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("snippet count=%d want 1", len(rows))
+	}
+	if got := rows[0]["call_id"]; got == "" {
+		t.Fatalf("call_id was not returned after opt-in: %v", rows[0])
+	}
+	if got := rows[0]["speaker_id"]; got == "" {
+		t.Fatalf("speaker_id was not returned after opt-in: %v", rows[0])
 	}
 }
 

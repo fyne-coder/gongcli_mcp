@@ -301,8 +301,10 @@ type summarizeCallFactsArgs struct {
 }
 
 type searchTranscriptSegmentsArgs struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
+	Query             string `json:"query"`
+	Limit             int    `json:"limit"`
+	IncludeCallIDs    bool   `json:"include_call_ids"`
+	IncludeSpeakerIDs bool   `json:"include_speaker_ids"`
 }
 
 type searchTranscriptsByCallFactsArgs struct {
@@ -406,7 +408,7 @@ func NewServer(store Store, name, version string) *Server {
 			},
 			{
 				Name:        "list_crm_fields",
-				Description: "List fields for one cached CRM object type with population counts and short example values.",
+				Description: "List fields for one cached CRM object type with population counts and no raw example values.",
 				InputSchema: objectSchema(
 					map[string]any{
 						"object_type": map[string]any{"type": "string"},
@@ -660,11 +662,13 @@ func NewServer(store Store, name, version string) *Server {
 			},
 			{
 				Name:        "search_transcript_segments",
-				Description: "Search transcript snippets in the local SQLite FTS index and return matched snippets only.",
+				Description: "Search transcript snippets in the local SQLite FTS index with call and speaker IDs redacted by default.",
 				InputSchema: objectSchema(
 					map[string]any{
-						"query": map[string]any{"type": "string"},
-						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+						"query":               map[string]any{"type": "string"},
+						"limit":               map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+						"include_call_ids":    map[string]any{"type": "boolean"},
+						"include_speaker_ids": map[string]any{"type": "boolean"},
 					},
 					[]string{"query"},
 				),
@@ -1448,9 +1452,17 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 
 	snippets := make([]transcriptSnippet, 0, len(results))
 	for _, row := range results {
+		callID := row.CallID
+		if !args.IncludeCallIDs {
+			callID = ""
+		}
+		speakerID := row.SpeakerID
+		if !args.IncludeSpeakerIDs {
+			speakerID = ""
+		}
 		snippets = append(snippets, transcriptSnippet{
-			CallID:       row.CallID,
-			SpeakerID:    row.SpeakerID,
+			CallID:       callID,
+			SpeakerID:    speakerID,
 			SegmentIndex: row.SegmentIndex,
 			StartMS:      row.StartMS,
 			EndMS:        row.EndMS,

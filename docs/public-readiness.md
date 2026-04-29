@@ -124,6 +124,7 @@ The local MCP server is aggregate-first:
 - does not call Gong live
 - does not expose raw transcripts
 - does not expose raw CRM values by default
+- redacts transcript search call IDs and speaker IDs by default
 - does not expose full participant/user records
 - does not expose profile import or mutation
 

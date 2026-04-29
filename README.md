@@ -1,8 +1,8 @@
 # gongctl
 
-`gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms.
+`gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 
 ## Status
 
@@ -90,35 +90,45 @@ Or copy `.env.example` to `.env` and fill in the same keys. `.env` is gitignored
 
 Keep real SQLite databases, transcript files, and tenant profile YAML outside the source repo, for example under `~/gongctl-data/`. The repo ignores `data/` as a last-resort safety net, but public docs use an external path so copy/paste examples do not encourage committing tenant data.
 
-## CLI Shape
+## Public Quickstart Shape
 
 ```bash
 gongctl auth check
 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business
 gongctl sync users --db ~/gongctl-data/gong.db
 gongctl sync transcripts --db ~/gongctl-data/gong.db --out-dir ~/gongctl-data/transcripts --limit 50 --batch-size 50
+gongctl sync status --db ~/gongctl-data/gong.db
+gongctl analyze coverage --db ~/gongctl-data/gong.db
+gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
+gongctl mcp tools
+gongmcp --db ~/gongctl-data/gong.db
+gongctl diagnose
+```
+
+The public path stays local: authenticate, sync a local SQLite cache, inspect readiness, search bounded snippets, and optionally expose the cache through the read-only MCP server.
+
+## Advanced Local Operator Commands
+
+These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
+
+```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
 gongctl sync crm-schema --db ~/gongctl-data/gong.db --integration-id CRM_INTEGRATION_ID --object-type ACCOUNT --object-type DEAL
 gongctl sync settings --db ~/gongctl-data/gong.db --kind trackers
-gongctl sync status --db ~/gongctl-data/gong.db
 gongctl profile discover --db ~/gongctl-data/gong.db --out ~/gongctl-data/gongctl-profile.yaml
 gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile import --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile show --db ~/gongctl-data/gong.db
 gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle
 gongctl analyze calls --db ~/gongctl-data/gong.db --group-by deal_stage --lifecycle-source profile
-gongctl analyze coverage --db ~/gongctl-data/gong.db
 gongctl analyze crm-schema --db ~/gongctl-data/gong.db --object-type DEAL
 gongctl analyze settings --db ~/gongctl-data/gong.db --kind trackers
 gongctl analyze scorecards --db ~/gongctl-data/gong.db
 gongctl analyze scorecard --db ~/gongctl-data/gong.db --scorecard-id SCORECARD_ID
 gongctl analyze transcript-backlog --db ~/gongctl-data/gong.db --limit 25
-gongctl mcp tools
 gongctl mcp tool-info list_gong_settings
-gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
 gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity --crm-object-id opp_001 --limit 10
 gongctl calls show --db ~/gongctl-data/gong.db --call-id CALL_ID --json
-gongmcp --db ~/gongctl-data/gong.db
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --json
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --out calls-with-crm-context.json
 gongctl calls export --from 2026-04-01 --to 2026-04-24 --out calls.jsonl
@@ -127,7 +137,6 @@ gongctl calls transcript --call-id CALL_ID --out transcript.json
 gongctl calls transcript-batch --ids-file call_ids.txt --out-dir transcripts --resume
 gongctl users list
 gongctl api raw POST /v2/calls/transcript --body body.json
-gongctl diagnose
 ```
 
 The typed commands are intentionally thin wrappers over `internal/gong.Client`. If Gong changes an endpoint contract, the fallback is `gongctl api raw ...` while the typed wrapper is updated.
@@ -234,6 +243,7 @@ The MCP server requires `--db`, reads SQLite only, and intentionally does not ex
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
+`search_transcript_segments` returns bounded snippets, but redacts call IDs and speaker IDs by default. Exact identifiers require `include_call_ids=true` and `include_speaker_ids=true`.
 
 ## Data Handling Rules
 
