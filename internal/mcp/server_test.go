@@ -490,6 +490,142 @@ func TestSearchTranscriptsByCallFactsFiltersAndRedactsIdentifiers(t *testing.T) 
 	}
 }
 
+func TestSearchTranscriptQuotesWithAttributionRedactsNamesByDefault(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	call := mustJSON(t, map[string]any{
+		"id":      "call_attribution_mcp",
+		"title":   "Attribution MCP call",
+		"started": "2026-02-12T15:00:00Z",
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct_attribution_mcp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Named Account"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp_attribution_mcp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Named Opportunity"},
+					map[string]any{"name": "StageName", "value": "Discovery"},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, call); err != nil {
+		t.Fatalf("upsert attribution call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_attribution_mcp",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is the problem."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert attribution transcript: %v", err)
+	}
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "attribution",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":             "implementation",
+				"from_date":         "2026-01-01",
+				"to_date":           "2026-03-31",
+				"industry":          "Manufacturing",
+				"opportunity_stage": "Discovery",
+				"limit":             5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal attribution payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("row count=%d want 1: %+v", len(rows), rows)
+	}
+	for _, leaked := range []string{"call_id", "title", "account_name", "account_website", "opportunity_name", "opportunity_close_date", "opportunity_probability"} {
+		if _, ok := rows[0][leaked]; ok {
+			t.Fatalf("attribution result leaked %s by default: %+v", leaked, rows[0])
+		}
+	}
+	if rows[0]["account_industry"] != "Manufacturing" || rows[0]["opportunity_stage"] != "Discovery" {
+		t.Fatalf("missing safe attribution metadata: %+v", rows[0])
+	}
+	if rows[0]["participant_status"] == "" || rows[0]["person_title_status"] == "" {
+		t.Fatalf("missing person/title status: %+v", rows[0])
+	}
+	if text, ok := rows[0]["context_excerpt"].(string); !ok || !strings.Contains(text, "Implementation timeline") {
+		t.Fatalf("missing bounded context excerpt: %+v", rows[0])
+	}
+}
+
+func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "attribution-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":         "implementation",
+				"account_query": "Named Account",
+				"limit":         5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected account_query tool error, got %+v", envelope.Result)
+	}
+	if !strings.Contains(envelope.Result.Content[0].Text, "include_account_names") {
+		t.Fatalf("tool error missing opt-in guidance: %+v", envelope.Result)
+	}
+}
+
 func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 	t.Parallel()
 
@@ -519,7 +655,7 @@ func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 		t.Fatalf("unexpected tool error: %+v", envelope.Result)
 	}
 	text := envelope.Result.Content[0].Text
-	for _, leaked := range []string{"internal@example.invalid", "external@example.invalid", "40000", "125000"} {
+	for _, leaked := range []string{"internal@example.invalid", "external@example.invalid", "40000", "125000", "Acme Corp", "Expansion Q2"} {
 		if strings.Contains(text, leaked) {
 			t.Fatalf("minimized call detail leaked %q in %s", leaked, text)
 		}
@@ -536,6 +672,9 @@ func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 		t.Fatalf("crm object count=%d want 2", len(detail.CRMObjects))
 	}
 	for _, object := range detail.CRMObjects {
+		if object.ObjectName != "" {
+			t.Fatalf("object name leaked in minimized call detail: %+v", object)
+		}
 		if object.FieldCount == 0 || len(object.FieldNames) == 0 {
 			t.Fatalf("object missing field metadata: %+v", object)
 		}
@@ -823,6 +962,7 @@ func expectedToolNames() []string {
 		"rank_transcript_backlog",
 		"search_transcript_segments",
 		"search_transcripts_by_call_facts",
+		"search_transcript_quotes_with_attribution",
 		"missing_transcripts",
 	}
 }

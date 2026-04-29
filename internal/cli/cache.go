@@ -90,6 +90,7 @@ func (a *app) cacheInventory(ctx context.Context, args []string) error {
 		TotalScorecards:              inventory.Summary.TotalScorecards,
 		MissingTranscripts:           inventory.Summary.MissingTranscripts,
 		RunningSyncRuns:              inventory.Summary.RunningSyncRuns,
+		AttributionCoverage:          inventory.Summary.AttributionCoverage,
 	}
 	for _, state := range inventory.Summary.States {
 		response.SyncStates = append(response.SyncStates, syncStateJSON{
@@ -247,20 +248,21 @@ type cachePurgeResponse struct {
 }
 
 type cacheInventorySummaryJSON struct {
-	TotalCalls                   int64 `json:"total_calls"`
-	TotalUsers                   int64 `json:"total_users"`
-	TotalTranscripts             int64 `json:"total_transcripts"`
-	TotalTranscriptSegments      int64 `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64 `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64 `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64 `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64 `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64 `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64 `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64 `json:"total_gong_settings"`
-	TotalScorecards              int64 `json:"total_scorecards"`
-	MissingTranscripts           int64 `json:"missing_transcripts"`
-	RunningSyncRuns              int64 `json:"running_sync_runs"`
+	TotalCalls                   int64                      `json:"total_calls"`
+	TotalUsers                   int64                      `json:"total_users"`
+	TotalTranscripts             int64                      `json:"total_transcripts"`
+	TotalTranscriptSegments      int64                      `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64                      `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64                      `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64                      `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64                      `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64                      `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64                      `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64                      `json:"total_gong_settings"`
+	TotalScorecards              int64                      `json:"total_scorecards"`
+	MissingTranscripts           int64                      `json:"missing_transcripts"`
+	RunningSyncRuns              int64                      `json:"running_sync_runs"`
+	AttributionCoverage          sqlite.AttributionCoverage `json:"attribution_coverage"`
 }
 
 type cacheTranscriptPresenceJSON struct {

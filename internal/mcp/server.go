@@ -79,6 +79,7 @@ type Store interface {
 	CallFactsCoverage(ctx context.Context) (*sqlite.CallFactsCoverage, error)
 	SearchTranscriptSegments(ctx context.Context, query string, limit int) ([]sqlite.TranscriptSearchResult, error)
 	SearchTranscriptSegmentsByCallFacts(ctx context.Context, params sqlite.TranscriptCallFactsSearchParams) ([]sqlite.TranscriptCallFactsSearchResult, error)
+	SearchTranscriptQuotesWithAttribution(ctx context.Context, params sqlite.TranscriptAttributionSearchParams) ([]sqlite.TranscriptAttributionSearchResult, error)
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
 }
 
@@ -147,22 +148,23 @@ type ToolInfo struct {
 }
 
 type publicSyncStatus struct {
-	TotalCalls                   int64                   `json:"total_calls"`
-	TotalUsers                   int64                   `json:"total_users"`
-	TotalTranscripts             int64                   `json:"total_transcripts"`
-	TotalTranscriptSegments      int64                   `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64                   `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64                   `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64                   `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64                   `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64                   `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64                   `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64                   `json:"total_gong_settings"`
-	TotalScorecards              int64                   `json:"total_scorecards"`
-	MissingTranscripts           int64                   `json:"missing_transcripts"`
-	RunningSyncRuns              int64                   `json:"running_sync_runs"`
-	ProfileReadiness             sqlite.ProfileReadiness `json:"profile_readiness"`
-	PublicReadiness              sqlite.PublicReadiness  `json:"public_readiness"`
+	TotalCalls                   int64                      `json:"total_calls"`
+	TotalUsers                   int64                      `json:"total_users"`
+	TotalTranscripts             int64                      `json:"total_transcripts"`
+	TotalTranscriptSegments      int64                      `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64                      `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64                      `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64                      `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64                      `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64                      `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64                      `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64                      `json:"total_gong_settings"`
+	TotalScorecards              int64                      `json:"total_scorecards"`
+	MissingTranscripts           int64                      `json:"missing_transcripts"`
+	RunningSyncRuns              int64                      `json:"running_sync_runs"`
+	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`
+	PublicReadiness              sqlite.PublicReadiness     `json:"public_readiness"`
+	AttributionCoverage          sqlite.AttributionCoverage `json:"attribution_coverage"`
 }
 
 type toolsCallParams struct {
@@ -319,6 +321,21 @@ type searchTranscriptsByCallFactsArgs struct {
 	System          string `json:"system"`
 	Direction       string `json:"direction"`
 	Limit           int    `json:"limit"`
+}
+
+type searchTranscriptQuotesWithAttributionArgs struct {
+	Query                   string `json:"query"`
+	FromDate                string `json:"from_date"`
+	ToDate                  string `json:"to_date"`
+	LifecycleBucket         string `json:"lifecycle_bucket"`
+	Industry                string `json:"industry"`
+	AccountQuery            string `json:"account_query"`
+	OpportunityStage        string `json:"opportunity_stage"`
+	Limit                   int    `json:"limit"`
+	IncludeCallIDs          bool   `json:"include_call_ids"`
+	IncludeCallTitles       bool   `json:"include_call_titles"`
+	IncludeAccountNames     bool   `json:"include_account_names"`
+	IncludeOpportunityNames bool   `json:"include_opportunity_names"`
 }
 
 type missingTranscriptsArgs struct {
@@ -733,6 +750,27 @@ func defaultTools() []tool {
 			),
 		},
 		{
+			Name:        "search_transcript_quotes_with_attribution",
+			Description: "Search bounded transcript quote snippets and join available call, Account, Opportunity, industry, and attribution-readiness metadata; identifiers and names require explicit opt-in flags.",
+			InputSchema: objectSchema(
+				map[string]any{
+					"query":                     map[string]any{"type": "string"},
+					"from_date":                 map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"to_date":                   map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"lifecycle_bucket":          map[string]any{"type": "string"},
+					"industry":                  map[string]any{"type": "string"},
+					"account_query":             map[string]any{"type": "string"},
+					"opportunity_stage":         map[string]any{"type": "string"},
+					"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"include_call_ids":          map[string]any{"type": "boolean"},
+					"include_call_titles":       map[string]any{"type": "boolean"},
+					"include_account_names":     map[string]any{"type": "boolean"},
+					"include_opportunity_names": map[string]any{"type": "boolean"},
+				},
+				[]string{"query"},
+			),
+		},
+		{
 			Name:        "missing_transcripts",
 			Description: "List cached calls that do not yet have transcript segments stored in SQLite.",
 			InputSchema: objectSchema(
@@ -933,6 +971,8 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 		return s.searchTranscriptSegments(ctx, params.Arguments)
 	case "search_transcripts_by_call_facts":
 		return s.searchTranscriptsByCallFacts(ctx, params.Arguments)
+	case "search_transcript_quotes_with_attribution":
+		return s.searchTranscriptQuotesWithAttribution(ctx, params.Arguments)
 	case "missing_transcripts":
 		return s.missingTranscripts(ctx, params.Arguments)
 	default:
@@ -1400,6 +1440,7 @@ func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 		RunningSyncRuns:              summary.RunningSyncRuns,
 		ProfileReadiness:             profile,
 		PublicReadiness:              summary.PublicReadiness,
+		AttributionCoverage:          summary.AttributionCoverage,
 	}
 }
 
@@ -1540,6 +1581,54 @@ func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawM
 		return toolCallResult{}, err
 	}
 	return newToolResult(results)
+}
+
+func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args searchTranscriptQuotesWithAttributionArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+	if strings.TrimSpace(args.AccountQuery) != "" && !args.IncludeAccountNames {
+		return toolCallResult{}, errors.New("account_query requires include_account_names=true because it can probe customer names")
+	}
+
+	results, err := s.store.SearchTranscriptQuotesWithAttribution(ctx, sqlite.TranscriptAttributionSearchParams{
+		Query:            args.Query,
+		FromDate:         args.FromDate,
+		ToDate:           args.ToDate,
+		LifecycleBucket:  args.LifecycleBucket,
+		Industry:         args.Industry,
+		AccountQuery:     args.AccountQuery,
+		OpportunityStage: args.OpportunityStage,
+		Limit:            args.Limit,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	return newToolResult(mcpTranscriptAttributionResults(results, args))
+}
+
+func mcpTranscriptAttributionResults(rows []sqlite.TranscriptAttributionSearchResult, args searchTranscriptQuotesWithAttributionArgs) []sqlite.TranscriptAttributionSearchResult {
+	out := make([]sqlite.TranscriptAttributionSearchResult, len(rows))
+	for i, row := range rows {
+		if !args.IncludeCallIDs {
+			row.CallID = ""
+		}
+		if !args.IncludeCallTitles {
+			row.Title = ""
+		}
+		if !args.IncludeAccountNames {
+			row.AccountName = ""
+			row.AccountWebsite = ""
+		}
+		if !args.IncludeOpportunityNames {
+			row.OpportunityName = ""
+			row.OpportunityCloseDate = ""
+			row.OpportunityProbability = ""
+		}
+		out[i] = row
+	}
+	return out
 }
 
 func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1750,6 +1839,7 @@ func minimizeCallDetail(detail *sqlite.CallDetail) {
 		detail.CRMObjectsTruncated = true
 	}
 	for idx := range detail.CRMObjects {
+		detail.CRMObjects[idx].ObjectName = ""
 		if len(detail.CRMObjects[idx].FieldNames) > maxCallDetailFieldNames {
 			detail.CRMObjects[idx].FieldNames = detail.CRMObjects[idx].FieldNames[:maxCallDetailFieldNames]
 			detail.CRMObjects[idx].FieldNamesTruncated = true
@@ -1954,15 +2044,45 @@ func buildCallDetailCRMObject(defaultType string, doc map[string]any) (callDetai
 	if objectType == "" {
 		objectType = defaultType
 	}
+	objectName := firstJSONString(doc, "name", "displayName", "label", "title")
+	if objectName == "" {
+		objectName = crmNameFromFields(fieldsValue)
+	}
 	return callDetailCRMObject{
 		ObjectType:          objectType,
 		ObjectID:            firstJSONString(doc, "id", "objectId", "crmId"),
-		ObjectName:          firstJSONString(doc, "name", "displayName", "label", "title"),
+		ObjectName:          objectName,
 		FieldCount:          fieldCount,
 		PopulatedFieldCount: populatedCount,
 		FieldNames:          fieldNames,
 		FieldNamesTruncated: fieldNamesTruncated,
 	}, true
+}
+
+func crmNameFromFields(value any) string {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := firstJSONString(itemMap, "name", "fieldName", "apiName", "label", "displayName")
+			if strings.EqualFold(strings.TrimSpace(name), "Name") {
+				return strings.TrimSpace(firstJSONString(itemMap, "value"))
+			}
+		}
+	case map[string]any:
+		if value, ok := typed["Name"]; ok {
+			return strings.TrimSpace(fmt.Sprint(value))
+		}
+		for key, value := range typed {
+			if strings.EqualFold(strings.TrimSpace(key), "Name") {
+				return strings.TrimSpace(fmt.Sprint(value))
+			}
+		}
+	}
+	return ""
 }
 
 func summarizeCRMFieldNames(value any) ([]string, int, int) {

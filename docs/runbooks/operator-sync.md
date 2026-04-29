@@ -104,6 +104,13 @@ bin/gongctl sync settings --db <data-root>/cache/gong.db --kind scorecards
 bin/gongctl sync status --db <data-root>/cache/gong.db
 ```
 
+Only add `--include-parties` after approval for participant-level data capture.
+That option requests call participant fields such as names, emails, speaker IDs,
+and titles and stores them in cached raw call payloads. If Gong rejects the
+participant selector, the sync retries without parties and records
+`include_parties_result=omitted_fallback` in sync history so operators can see
+that participant/title data was not captured.
+
 For scheduled or repeatable jobs, keep the approved stages in one YAML config
 and dry-run the exact file before enabling it in cron, launchd, or a container
 job:
@@ -138,8 +145,9 @@ Notes:
 - Transcript sync increases the sensitivity of the stored data. Only run it when
   transcript-backed search or analysis is in scope.
 - In restricted mode, `sync transcripts`, `sync calls --preset business`,
-  `sync calls --preset all`, `calls list --context extended`, transcript export
-  commands, raw API passthrough, and raw call JSON require `--allow-sensitive-export` or
+  `sync calls --preset all`, `sync calls --include-parties`,
+  `calls list --context extended`, transcript export commands, raw API
+  passthrough, and raw call JSON require `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`. Treat that override as an approval gate,
   not a convenience flag.
 - `sync run --config` files cannot contain a per-step sensitive-export bypass.

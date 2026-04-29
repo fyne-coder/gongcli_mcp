@@ -21,12 +21,13 @@ const (
 )
 
 type CallsParams struct {
-	From     string
-	To       string
-	Cursor   string
-	Context  string
-	Preset   string
-	MaxPages int
+	From          string
+	To            string
+	Cursor        string
+	Context       string
+	Preset        string
+	MaxPages      int
+	ExposeParties bool
 }
 
 type UsersParams struct {
@@ -49,13 +50,14 @@ type SettingsParams struct {
 }
 
 type Result struct {
-	RunID          int64
-	Scope          string
-	SyncKey        string
-	Cursor         string
-	Pages          int
-	RecordsSeen    int64
-	RecordsWritten int64
+	RunID                    int64
+	Scope                    string
+	SyncKey                  string
+	Cursor                   string
+	Pages                    int
+	RecordsSeen              int64
+	RecordsWritten           int64
+	ParticipantCaptureStatus string
 }
 
 func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store *sqlite.Store, params CRMIntegrationsParams) (result Result, err error) {
@@ -210,6 +212,11 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 
 	result.Scope = scopeCalls
 	result.SyncKey = buildSyncKey(scopeCalls, params.Preset, params.Context, params.From, params.To)
+	baseRequestContext := buildRequestContext(params.Preset, params.Context)
+	requestContext := buildCallRequestContext(baseRequestContext, params.ExposeParties, false)
+	if params.ExposeParties {
+		result.ParticipantCaptureStatus = "requested"
+	}
 
 	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
 		Scope:          scopeCalls,
@@ -217,7 +224,7 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 		Cursor:         strings.TrimSpace(params.Cursor),
 		From:           strings.TrimSpace(params.From),
 		To:             strings.TrimSpace(params.To),
-		RequestContext: buildRequestContext(params.Preset, params.Context),
+		RequestContext: requestContext,
 	})
 	if err != nil {
 		return result, err
@@ -237,6 +244,7 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 			RecordsSeen:    result.RecordsSeen,
 			RecordsWritten: result.RecordsWritten,
 			ErrorText:      errorText,
+			RequestContext: requestContext,
 		})
 		if finishErr != nil {
 			if err != nil {
@@ -248,10 +256,11 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 	}()
 
 	request := gong.CallListParams{
-		From:    strings.TrimSpace(params.From),
-		To:      strings.TrimSpace(params.To),
-		Cursor:  strings.TrimSpace(params.Cursor),
-		Context: strings.TrimSpace(params.Context),
+		From:          strings.TrimSpace(params.From),
+		To:            strings.TrimSpace(params.To),
+		Cursor:        strings.TrimSpace(params.Cursor),
+		Context:       strings.TrimSpace(params.Context),
+		ExposeParties: params.ExposeParties,
 	}
 
 	seenCursors := map[string]struct{}{}
@@ -261,6 +270,12 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 
 	for {
 		resp, err := client.ListCalls(ctx, request)
+		if err != nil && request.ExposeParties && result.Pages == 0 && result.RecordsSeen == 0 && canRetryWithoutParties(err) {
+			request.ExposeParties = false
+			result.ParticipantCaptureStatus = "omitted_fallback"
+			requestContext = buildCallRequestContext(baseRequestContext, params.ExposeParties, true)
+			resp, err = client.ListCalls(ctx, request)
+		}
 		if err != nil {
 			return result, err
 		}
@@ -295,6 +310,14 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 		seenCursors[nextCursor] = struct{}{}
 		request.Cursor = nextCursor
 	}
+}
+
+func canRetryWithoutParties(err error) bool {
+	var httpErr *gong.HTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	return httpErr.StatusCode == 400 || httpErr.StatusCode == 422
 }
 
 func SyncUsers(ctx context.Context, client *gong.Client, store *sqlite.Store, params UsersParams) (result Result, err error) {
@@ -573,6 +596,23 @@ func buildRequestContext(preset string, requestContext string) string {
 	}
 	if value := strings.TrimSpace(requestContext); value != "" {
 		parts = append(parts, "context="+value)
+	}
+	return strings.Join(parts, ",")
+}
+
+func buildCallRequestContext(base string, includeParties bool, fallbackWithoutParties bool) string {
+	parts := make([]string, 0, 3)
+	if value := strings.TrimSpace(base); value != "" {
+		parts = append(parts, value)
+	}
+	if !includeParties {
+		return strings.Join(parts, ",")
+	}
+	parts = append(parts, "include_parties_requested=true")
+	if fallbackWithoutParties {
+		parts = append(parts, "include_parties_result=omitted_fallback")
+	} else {
+		parts = append(parts, "include_parties_result=request_sent")
 	}
 	return strings.Join(parts, ",")
 }

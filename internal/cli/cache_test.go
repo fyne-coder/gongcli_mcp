@@ -114,10 +114,17 @@ func TestCacheInventoryReportsSummaryAndWarnings(t *testing.T) {
 		OldestCallStartedAt string `json:"oldest_call_started_at"`
 		NewestCallStartedAt string `json:"newest_call_started_at"`
 		Summary             struct {
-			TotalCalls         int64 `json:"total_calls"`
-			TotalUsers         int64 `json:"total_users"`
-			TotalTranscripts   int64 `json:"total_transcripts"`
-			MissingTranscripts int64 `json:"missing_transcripts"`
+			TotalCalls          int64 `json:"total_calls"`
+			TotalUsers          int64 `json:"total_users"`
+			TotalTranscripts    int64 `json:"total_transcripts"`
+			MissingTranscripts  int64 `json:"missing_transcripts"`
+			AttributionCoverage struct {
+				CallsWithTitles       int64  `json:"calls_with_titles"`
+				CallsWithParties      int64  `json:"calls_with_parties"`
+				UsersWithTitles       int64  `json:"users_with_titles"`
+				PersonTitleStatus     string `json:"person_title_status"`
+				RecommendedNextAction string `json:"recommended_next_action"`
+			} `json:"attribution_coverage"`
 		} `json:"summary"`
 		TranscriptPresence struct {
 			HasTranscripts     bool  `json:"has_transcripts"`
@@ -150,6 +157,12 @@ func TestCacheInventoryReportsSummaryAndWarnings(t *testing.T) {
 	}
 	if resp.Summary.TotalCalls != 2 || resp.Summary.TotalUsers != 1 || resp.Summary.TotalTranscripts != 1 || resp.Summary.MissingTranscripts != 1 {
 		t.Fatalf("unexpected summary: %+v", resp.Summary)
+	}
+	if resp.Summary.AttributionCoverage.CallsWithTitles != 2 || resp.Summary.AttributionCoverage.CallsWithParties != 0 || resp.Summary.AttributionCoverage.UsersWithTitles != 0 {
+		t.Fatalf("unexpected attribution coverage: %+v", resp.Summary.AttributionCoverage)
+	}
+	if resp.Summary.AttributionCoverage.PersonTitleStatus != "missing_from_cache" || resp.Summary.AttributionCoverage.RecommendedNextAction == "" {
+		t.Fatalf("unexpected title readiness: %+v", resp.Summary.AttributionCoverage)
 	}
 	if !resp.TranscriptPresence.HasTranscripts || resp.TranscriptPresence.CachedTranscripts != 1 || resp.TranscriptPresence.MissingTranscripts != 1 {
 		t.Fatalf("unexpected transcript presence: %+v", resp.TranscriptPresence)

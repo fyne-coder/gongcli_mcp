@@ -109,6 +109,7 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 	preset := fs.String("preset", "", "sync preset: business, minimal, all")
 	maxPages := fs.Int("max-pages", 0, "maximum pages to sync; 0 means all pages")
 	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow extended CRM-context sync in restricted mode")
+	includeParties := fs.Bool("include-parties", false, "request Gong call participant fields such as names, emails, and titles")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -132,6 +133,15 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	if *includeParties {
+		if err := a.requireSensitiveExport(
+			"sync calls --include-parties",
+			*allowSensitiveExport,
+			"participant fields can include names, emails, speaker IDs, and titles and are stored in raw call payloads",
+		); err != nil {
+			return err
+		}
+	}
 
 	store, err := openSQLiteStore(ctx, *dbPath)
 	if err != nil {
@@ -145,21 +155,23 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 	}
 
 	result, err := syncsvc.SyncCalls(ctx, client, store, syncsvc.CallsParams{
-		From:     *from,
-		To:       *to,
-		Context:  requestContext,
-		Preset:   presetName,
-		MaxPages: *maxPages,
+		From:          *from,
+		To:            *to,
+		Context:       requestContext,
+		Preset:        presetName,
+		MaxPages:      *maxPages,
+		ExposeParties: *includeParties,
 	})
 	fmt.Fprintf(
 		a.err,
-		"synced calls: pages=%d seen=%d written=%d preset=%s context=%s cursor=%s db=%s\n",
+		"synced calls: pages=%d seen=%d written=%d preset=%s context=%s cursor=%s%s db=%s\n",
 		result.Pages,
 		result.RecordsSeen,
 		result.RecordsWritten,
 		presetName,
 		displayContext(requestContext),
 		displayCursor(result.Cursor),
+		displayParticipantCaptureStatus(result.ParticipantCaptureStatus),
 		*dbPath,
 	)
 	return err
@@ -385,6 +397,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		RunningSyncRuns:              summary.RunningSyncRuns,
 		ProfileReadiness:             summary.ProfileReadiness,
 		PublicReadiness:              summary.PublicReadiness,
+		AttributionCoverage:          summary.AttributionCoverage,
 		LastRun:                      newSyncRunJSON(summary.LastRun),
 		LastSuccessfulRun:            newSyncRunJSON(summary.LastSuccessfulRun),
 		States:                       []syncStateJSON{},
@@ -436,6 +449,13 @@ func displayContext(value string) string {
 		return "none"
 	}
 	return value
+}
+
+func displayParticipantCaptureStatus(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return " participant_capture=" + strings.TrimSpace(value)
 }
 
 func loadSyncRunConfig(path string) (*syncRunConfig, error) {
@@ -620,6 +640,7 @@ func newSyncRunResponse(config *syncRunConfig, dryRun bool) syncRunResponse {
 			To:                      step.To,
 			Preset:                  step.Preset,
 			MaxPages:                step.MaxPages,
+			IncludeParties:          step.IncludeParties,
 			SettingsKind:            step.SettingsKind,
 			WorkspaceID:             step.WorkspaceID,
 			IntegrationID:           step.IntegrationID,
@@ -637,7 +658,7 @@ func syncRunStepRequiresSensitiveExport(step syncRunStepConfig) bool {
 	case "transcripts":
 		return true
 	case "calls":
-		return step.Preset == "business" || step.Preset == "all"
+		return step.Preset == "business" || step.Preset == "all" || step.IncludeParties
 	default:
 		return false
 	}
@@ -655,6 +676,13 @@ func (a *app) authorizeSyncRunStep(step *syncRunStepConfig) error {
 				"these presets request Extended Gong context and can cache CRM field values",
 			)
 		}
+		if step.IncludeParties {
+			return a.requireSensitiveExport(
+				"sync run calls step include_parties",
+				false,
+				"participant fields can include names, emails, speaker IDs, and titles and are stored in raw call payloads",
+			)
+		}
 	}
 	return nil
 }
@@ -669,11 +697,12 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 			return err
 		}
 		syncResult, err := syncsvc.SyncCalls(ctx, client, store, syncsvc.CallsParams{
-			From:     step.From,
-			To:       step.To,
-			Context:  requestContext,
-			Preset:   presetName,
-			MaxPages: step.MaxPages,
+			From:          step.From,
+			To:            step.To,
+			Context:       requestContext,
+			Preset:        presetName,
+			MaxPages:      step.MaxPages,
+			ExposeParties: step.IncludeParties,
 		})
 		if err != nil {
 			return err
@@ -746,25 +775,26 @@ func populateSyncRunServiceResult(target *syncRunStepResult, source syncsvc.Resu
 }
 
 type syncStatusResponse struct {
-	TotalCalls                   int64                   `json:"total_calls"`
-	TotalUsers                   int64                   `json:"total_users"`
-	TotalTranscripts             int64                   `json:"total_transcripts"`
-	TotalTranscriptSegments      int64                   `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64                   `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64                   `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64                   `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64                   `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64                   `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64                   `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64                   `json:"total_gong_settings"`
-	TotalScorecards              int64                   `json:"total_scorecards"`
-	MissingTranscripts           int64                   `json:"missing_transcripts"`
-	RunningSyncRuns              int64                   `json:"running_sync_runs"`
-	ProfileReadiness             sqlite.ProfileReadiness `json:"profile_readiness"`
-	PublicReadiness              sqlite.PublicReadiness  `json:"public_readiness"`
-	LastRun                      *syncRunJSON            `json:"last_run,omitempty"`
-	LastSuccessfulRun            *syncRunJSON            `json:"last_successful_run,omitempty"`
-	States                       []syncStateJSON         `json:"states"`
+	TotalCalls                   int64                      `json:"total_calls"`
+	TotalUsers                   int64                      `json:"total_users"`
+	TotalTranscripts             int64                      `json:"total_transcripts"`
+	TotalTranscriptSegments      int64                      `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64                      `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64                      `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64                      `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64                      `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64                      `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64                      `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64                      `json:"total_gong_settings"`
+	TotalScorecards              int64                      `json:"total_scorecards"`
+	MissingTranscripts           int64                      `json:"missing_transcripts"`
+	RunningSyncRuns              int64                      `json:"running_sync_runs"`
+	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`
+	PublicReadiness              sqlite.PublicReadiness     `json:"public_readiness"`
+	AttributionCoverage          sqlite.AttributionCoverage `json:"attribution_coverage"`
+	LastRun                      *syncRunJSON               `json:"last_run,omitempty"`
+	LastSuccessfulRun            *syncRunJSON               `json:"last_successful_run,omitempty"`
+	States                       []syncStateJSON            `json:"states"`
 }
 
 type syncRunJSON struct {
@@ -804,19 +834,20 @@ type syncRunConfig struct {
 }
 
 type syncRunStepConfig struct {
-	Name          string   `yaml:"name,omitempty" json:"name,omitempty"`
-	Action        string   `yaml:"action" json:"action"`
-	From          string   `yaml:"from,omitempty" json:"from,omitempty"`
-	To            string   `yaml:"to,omitempty" json:"to,omitempty"`
-	Preset        string   `yaml:"preset,omitempty" json:"preset,omitempty"`
-	MaxPages      int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
-	OutDir        string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
-	Limit         int      `yaml:"limit,omitempty" json:"limit,omitempty"`
-	BatchSize     int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
-	IntegrationID string   `yaml:"integration_id,omitempty" json:"integration_id,omitempty"`
-	ObjectTypes   []string `yaml:"object_types,omitempty" json:"object_types,omitempty"`
-	SettingsKind  string   `yaml:"settings_kind,omitempty" json:"settings_kind,omitempty"`
-	WorkspaceID   string   `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	Name           string   `yaml:"name,omitempty" json:"name,omitempty"`
+	Action         string   `yaml:"action" json:"action"`
+	From           string   `yaml:"from,omitempty" json:"from,omitempty"`
+	To             string   `yaml:"to,omitempty" json:"to,omitempty"`
+	Preset         string   `yaml:"preset,omitempty" json:"preset,omitempty"`
+	MaxPages       int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
+	OutDir         string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
+	Limit          int      `yaml:"limit,omitempty" json:"limit,omitempty"`
+	BatchSize      int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
+	IncludeParties bool     `yaml:"include_parties,omitempty" json:"include_parties,omitempty"`
+	IntegrationID  string   `yaml:"integration_id,omitempty" json:"integration_id,omitempty"`
+	ObjectTypes    []string `yaml:"object_types,omitempty" json:"object_types,omitempty"`
+	SettingsKind   string   `yaml:"settings_kind,omitempty" json:"settings_kind,omitempty"`
+	WorkspaceID    string   `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 type syncRunResponse struct {
@@ -846,6 +877,7 @@ type syncRunStepResult struct {
 	OutDir                  string                  `json:"out_dir,omitempty"`
 	Limit                   int                     `json:"limit,omitempty"`
 	BatchSize               int                     `json:"batch_size,omitempty"`
+	IncludeParties          bool                    `json:"include_parties,omitempty"`
 	Scope                   string                  `json:"scope,omitempty"`
 	SyncKey                 string                  `json:"sync_key,omitempty"`
 	RunID                   int64                   `json:"run_id,omitempty"`

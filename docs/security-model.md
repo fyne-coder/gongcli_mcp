@@ -75,13 +75,17 @@ Implementation controls on the CLI side:
 - `GONGCTL_RESTRICTED=1` or `gongctl --restricted ...` turns on restricted/company mode.
 - In restricted mode, `api raw`, `calls show --json`, `calls export`,
   `calls list --context extended`, `calls transcript`, `calls transcript-batch`,
-  `sync transcripts`, and `sync calls --preset business|all` are blocked unless
-  the operator adds `--allow-sensitive-export` or sets
+  `sync transcripts`, `sync calls --preset business|all`, and
+  `sync calls --include-parties` are blocked unless the operator adds
+  `--allow-sensitive-export` or sets
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`.
 - `gongctl sync run --config ... --dry-run` validates staged operator refresh
   configs without calling Gong so reviewed schedules can be checked before
   execution. The config file cannot self-authorize sensitive steps; runtime
   approval must come from the operator flag or environment variable.
+- Approved `--include-parties` syncs record the requested participant mode in
+  sync history. If Gong rejects that selector and the job retries without
+  parties, the run records `include_parties_result=omitted_fallback`.
 - `gongctl cache inventory --db ...` is read-only and returns cache metadata,
   sync history, profile status, and a sensitive-data warning. Even though it
   avoids transcript bodies and raw payload dumps, its output should still be

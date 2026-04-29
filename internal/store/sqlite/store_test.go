@@ -109,6 +109,61 @@ func TestUpsertIdempotency(t *testing.T) {
 	}
 }
 
+func TestUpsertCallContextObjectNameFallsBackToNameField(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	raw := mustNormalizeValue(t, map[string]any{
+		"id":      "call-name-fallback",
+		"title":   "Name fallback call",
+		"started": "2026-04-29T12:00:00Z",
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-name-fallback",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Example Account"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-name-fallback",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Example Opportunity"},
+					map[string]any{"name": "StageName", "value": "Discovery"},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, raw); err != nil {
+		t.Fatalf("upsert call: %v", err)
+	}
+
+	rows, err := store.DB().QueryContext(ctx, `SELECT object_type, object_name FROM call_context_objects ORDER BY object_type`)
+	if err != nil {
+		t.Fatalf("query context objects: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var objectType, objectName string
+		if err := rows.Scan(&objectType, &objectName); err != nil {
+			t.Fatalf("scan context object: %v", err)
+		}
+		got[objectType] = objectName
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate context objects: %v", err)
+	}
+	if got["Account"] != "Example Account" || got["Opportunity"] != "Example Opportunity" {
+		t.Fatalf("unexpected object names: %+v", got)
+	}
+}
+
 func TestInventoryUpsertsAndLists(t *testing.T) {
 	t.Parallel()
 
@@ -1568,6 +1623,222 @@ func TestSearchTranscriptSegmentsByCallFactsFiltersDateAndScope(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(results[0].ContextExcerpt), "security review is a blocker") {
 		t.Fatalf("context excerpt=%q missing bounded transcript context", results[0].ContextExcerpt)
+	}
+}
+
+func TestSearchTranscriptQuotesWithAttributionJoinsCRMMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	callRaw := mustNormalizeValue(t, map[string]any{
+		"id":       "call-attribution",
+		"title":    "Attribution evidence call",
+		"started":  "2026-02-12T15:00:00Z",
+		"duration": 1800,
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-attribution",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Example Manufacturing"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+					map[string]any{"name": "Website", "value": "https://example.invalid"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-attribution",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Example Deal"},
+					map[string]any{"name": "StageName", "value": "Discovery"},
+					map[string]any{"name": "Type", "value": "New Business"},
+					map[string]any{"name": "CloseDate", "value": "2026-03-31"},
+					map[string]any{"name": "Probability", "value": "25"},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, callRaw); err != nil {
+		t.Fatalf("upsert attribution call: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":      "call-attribution-with-parties",
+		"title":   "Different call with parties",
+		"started": "2026-02-13T15:00:00Z",
+		"parties": []any{
+			map[string]any{"speakerId": "rep", "title": "Account Executive"},
+		},
+	})); err != nil {
+		t.Fatalf("upsert attribution parties call: %v", err)
+	}
+	transcriptRaw := mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call-attribution",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is our biggest question."},
+						},
+					},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertTranscript(ctx, transcriptRaw); err != nil {
+		t.Fatalf("upsert attribution transcript: %v", err)
+	}
+
+	results, err := store.SearchTranscriptQuotesWithAttribution(ctx, TranscriptAttributionSearchParams{
+		Query:            "implementation",
+		FromDate:         "2026-01-01",
+		ToDate:           "2026-03-31",
+		Industry:         "manufacturing",
+		OpportunityStage: "Discovery",
+		Limit:            10,
+	})
+	if err != nil {
+		t.Fatalf("SearchTranscriptQuotesWithAttribution returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result count=%d want 1: %+v", len(results), results)
+	}
+	row := results[0]
+	if row.CallID != "call-attribution" || row.Title != "Attribution evidence call" || row.AccountName != "Example Manufacturing" || row.AccountIndustry != "Manufacturing" || row.OpportunityName != "Example Deal" || row.OpportunityStage != "Discovery" {
+		t.Fatalf("unexpected attribution row: %+v", row)
+	}
+	if row.ParticipantStatus != "missing_from_cache" || row.PersonTitleStatus != "missing_from_cache" {
+		t.Fatalf("unexpected person/title status: %+v", row)
+	}
+	if !strings.Contains(strings.ToLower(row.ContextExcerpt), "implementation timeline") {
+		t.Fatalf("context excerpt=%q missing evidence", row.ContextExcerpt)
+	}
+}
+
+func TestSearchTranscriptQuotesWithAttributionKeepsMultiObjectFieldsTogether(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":      "call-multi-attribution",
+		"title":   "Multi object attribution",
+		"started": "2026-02-14T15:00:00Z",
+		"context": []any{
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-a",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Opportunity A"},
+					map[string]any{"name": "StageName", "value": "Stage A"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-b",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Opportunity B"},
+					map[string]any{"name": "StageName", "value": "Stage B"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert multi attribution call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call-multi-attribution",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Implementation detail matters."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert multi attribution transcript: %v", err)
+	}
+
+	results, err := store.SearchTranscriptQuotesWithAttribution(ctx, TranscriptAttributionSearchParams{
+		Query: "implementation",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("SearchTranscriptQuotesWithAttribution returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result count=%d want 1: %+v", len(results), results)
+	}
+	if results[0].OpportunityName != "Opportunity A" || results[0].OpportunityStage != "Stage A" {
+		t.Fatalf("opportunity fields were mixed across objects: %+v", results[0])
+	}
+
+	filtered, err := store.SearchTranscriptQuotesWithAttribution(ctx, TranscriptAttributionSearchParams{
+		Query:            "implementation",
+		OpportunityStage: "Stage B",
+		Limit:            10,
+	})
+	if err != nil {
+		t.Fatalf("filtered SearchTranscriptQuotesWithAttribution returned error: %v", err)
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("filtered result count=%d want 1: %+v", len(filtered), filtered)
+	}
+	if filtered[0].OpportunityName != "Opportunity B" || filtered[0].OpportunityStage != "Stage B" {
+		t.Fatalf("filtered opportunity fields did not come from matched object: %+v", filtered[0])
+	}
+}
+
+func TestUpsertCallWithoutPartiesDoesNotErasePriorPartyCount(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":      "call-party-preserve",
+		"title":   "Party preserve",
+		"started": "2026-02-15T15:00:00Z",
+		"parties": []any{
+			map[string]any{"speakerId": "buyer", "title": "VP Operations"},
+		},
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-party-preserve",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Party Account"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert full party call: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":      "call-party-preserve",
+		"title":   "Party preserve",
+		"started": "2026-02-15T15:00:00Z",
+	})); err != nil {
+		t.Fatalf("upsert reduced party call: %v", err)
+	}
+
+	detail, err := store.GetCallDetail(ctx, "call-party-preserve")
+	if err != nil {
+		t.Fatalf("GetCallDetail returned error: %v", err)
+	}
+	if detail.PartiesCount != 1 {
+		t.Fatalf("PartiesCount=%d want preserved 1", detail.PartiesCount)
 	}
 }
 

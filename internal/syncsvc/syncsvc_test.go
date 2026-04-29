@@ -50,6 +50,10 @@ func TestSyncCallsPaginatesAndStoresContext(t *testing.T) {
 		if !ok || contentSelector["context"] != "Extended" {
 			t.Fatalf("contentSelector=%#v want Extended", body["contentSelector"])
 		}
+		exposedFields, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok || exposedFields["parties"] != true {
+			t.Fatalf("contentSelector.exposedFields=%#v want parties=true", contentSelector["exposedFields"])
+		}
 
 		requests++
 		switch requests {
@@ -113,10 +117,11 @@ func TestSyncCallsPaginatesAndStoresContext(t *testing.T) {
 
 	client := newTestClient(t, server)
 	result, err := SyncCalls(ctx, client, store, CallsParams{
-		From:    "2026-04-20",
-		To:      "2026-04-24",
-		Context: "Extended",
-		Preset:  "daily",
+		From:          "2026-04-20",
+		To:            "2026-04-24",
+		Context:       "Extended",
+		Preset:        "daily",
+		ExposeParties: true,
 	})
 	if err != nil {
 		t.Fatalf("SyncCalls returned error: %v", err)
@@ -156,14 +161,91 @@ func TestSyncCallsPaginatesAndStoresContext(t *testing.T) {
 	if !strings.Contains(syncKey, "preset=daily") || !strings.Contains(syncKey, "context=Extended") {
 		t.Fatalf("syncKey=%q missing preset/context", syncKey)
 	}
-	if requestContext != "preset=daily,context=Extended" {
-		t.Fatalf("requestContext=%q want preset=daily,context=Extended", requestContext)
+	for _, want := range []string{"preset=daily", "context=Extended", "include_parties_requested=true", "include_parties_result=request_sent"} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
 	}
 	if status != "success" {
 		t.Fatalf("status=%q want success", status)
 	}
 	if seen != 2 || written != 2 {
 		t.Fatalf("seen/written=%d/%d want 2/2", seen, written)
+	}
+}
+
+func TestSyncCallsFallsBackWhenExposedPartiesRejected(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		contentSelector, _ := body["contentSelector"].(map[string]any)
+		if requests == 1 {
+			exposedFields, ok := contentSelector["exposedFields"].(map[string]any)
+			if !ok || exposedFields["parties"] != true {
+				t.Fatalf("first request exposedFields=%#v want parties=true", contentSelector["exposedFields"])
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"unsupported exposed fields"}`))
+			return
+		}
+		if _, ok := contentSelector["exposedFields"]; ok {
+			t.Fatalf("fallback request still included exposedFields: %#v", contentSelector)
+		}
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"calls": []map[string]any{
+				{
+					"id":      "call-fallback",
+					"title":   "Fallback",
+					"started": "2026-04-22T10:00:00Z",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncCalls(ctx, client, store, CallsParams{
+		Context:       "Extended",
+		Preset:        "daily",
+		ExposeParties: true,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests=%d want fallback retry count 2", requests)
+	}
+	if result.RecordsWritten != 1 {
+		t.Fatalf("records written=%d want 1", result.RecordsWritten)
+	}
+	if result.ParticipantCaptureStatus != "omitted_fallback" {
+		t.Fatalf("ParticipantCaptureStatus=%q want omitted_fallback", result.ParticipantCaptureStatus)
+	}
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query fallback sync run: %v", err)
+	}
+	for _, want := range []string{"include_parties_requested=true", "include_parties_result=omitted_fallback"} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("fallback requestContext=%q missing %q", requestContext, want)
+		}
 	}
 }
 

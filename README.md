@@ -131,12 +131,14 @@ When restricted mode is enabled, these commands are blocked unless you add
 - `gongctl sync transcripts ...`
 - `gongctl sync calls --preset business`
 - `gongctl sync calls --preset all`
+- `gongctl sync calls --include-parties`
 
 Approved override example:
 
 ```bash
 GONGCTL_RESTRICTED=1 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --allow-sensitive-export --out calls-with-crm-context.json
 GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business --allow-sensitive-export
+GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset minimal --include-parties --allow-sensitive-export
 ```
 
 ## Public Quickstart Shape
@@ -247,6 +249,7 @@ Rules:
 - `sync calls --preset business` requests Gong `Extended` context.
 - `sync calls --preset minimal` does not request Gong context.
 - `sync calls --preset all` currently maps to `Extended` context as well; it is documented separately so it can diverge later without changing the CLI shape.
+- `sync calls --include-parties` requests Gong call participant fields such as names, emails, speaker IDs, and titles. Use it only for approved operator refreshes because returned participant payloads are cached in raw call JSON.
 - `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
 - `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
 - `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces.
@@ -329,6 +332,7 @@ Tools:
 - `rank_transcript_backlog`
 - `search_transcript_segments`
 - `search_transcripts_by_call_facts`
+- `search_transcript_quotes_with_attribution`
 - `missing_transcripts`
 
 The MCP server requires `--db`, reads SQLite only, and intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
@@ -337,6 +341,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
 `search_transcript_segments` returns bounded snippets, but redacts call IDs and speaker IDs by default. Exact identifiers require `include_call_ids=true` and `include_speaker_ids=true`.
+`search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 
 ## Data Handling Rules
 

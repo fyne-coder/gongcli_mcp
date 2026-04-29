@@ -124,6 +124,7 @@ Do not expose these tools to business users during the pilot:
 - `opportunities_missing_transcripts`
 - `search_transcripts_by_crm_context`
 - `search_transcripts_by_call_facts`
+- `search_transcript_quotes_with_attribution`
 - `opportunity_call_summary`
 - `crm_field_population_matrix`
 - `list_lifecycle_buckets`
@@ -135,6 +136,12 @@ Do not expose these tools to business users during the pilot:
 These tools are operator-only or expansion-candidate tools because they can
 reveal tenant structure, allow directed value lookup, or move too close to
 exact-call review for an initial business pilot.
+
+`search_transcript_quotes_with_attribution` is the right tool for marketing
+asks like “top quotes by Q1 theme, industry, and opportunity stage.” It returns
+bounded snippets plus available CRM attribution. Contact/person title should be
+used only when the tool reports it as present; do not infer titles from call
+names or transcript wording.
 
 ## Cache Freshness Caveats
 

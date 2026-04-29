@@ -12,6 +12,7 @@ Rules:
 - do not expose raw Gong API passthrough, arbitrary SQL, profile import, raw cached call JSON, or full transcript dumps
 - return transcript snippets only, not full transcript bodies
 - use `search_transcripts_by_call_facts` for scoped transcript evidence by date, lifecycle, scope, system, or direction; it may return bounded neighboring-segment excerpts, but must not return call IDs, titles, speaker IDs, or full transcript text
+- use `search_transcript_quotes_with_attribution` when business users need bounded quote evidence with available Account/Opportunity attribution; call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities require explicit opt-in flags, and person/contact titles must be reported as unavailable when not present in the cache
 - redact call IDs and speaker IDs from transcript segment search by default; exact identifiers require explicit opt-in flags
 - keep profile-aware tools tied to imported SQLite profile state
 - return lifecycle source and profile provenance when profile-aware behavior is used

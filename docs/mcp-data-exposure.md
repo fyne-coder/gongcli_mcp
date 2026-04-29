@@ -35,10 +35,11 @@ Current fixed boundaries:
 | `get_business_profile`, `list_business_concepts` | Restricted | Config | Redacts source path, source hash, canonical hash, and imported-by identity | Still exposes tenant lifecycle/methodology concepts and mapping logic |
 | `opportunities_missing_transcripts`, `opportunity_call_summary` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, owner IDs, amount, close date, and latest call IDs | Still reveals stage, coverage, duration totals, and latest-call timing at an opportunity-summary level |
 | `search_transcripts_by_call_facts` | Restricted | Snippet | No call IDs, titles, or speaker IDs in the result shape | Still returns bounded transcript/context excerpts plus lifecycle/scope/system/direction metadata |
+| `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
 | `search_transcripts_by_crm_context` | Restricted | Snippet | Server blanks call ID, title, object ID, object name, and speaker ID | Still returns transcript-derived snippets tied to an object type and call time |
 | `search_calls`, `search_calls_by_lifecycle`, `missing_transcripts` | Admin-only | Record reference | Return minimized call metadata rather than raw JSON | Exposes call IDs, titles, timestamps, and durations |
-| `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, and CRM field values; truncates object and field-name lists | Still exposes call ID/title plus CRM object IDs, object names, and field names for one call |
+| `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; truncates object and field-name lists | Still exposes call ID/title plus CRM object IDs and field names for one call |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
 
 ## Highest-Risk MCP Tools
@@ -49,7 +50,7 @@ The following tools deserve the most review before enabling them in a model-faci
 | --- | --- |
 | `get_call`, `search_calls`, `search_calls_by_lifecycle`, `missing_transcripts` | Direct record references including call IDs and titles |
 | `get_scorecard`, `list_gong_settings`, `list_scorecards`, `list_crm_integrations` | Internal configuration inventory and identifiers |
-| `search_transcript_segments`, `search_transcripts_by_crm_context`, `search_transcripts_by_call_facts` | Transcript-derived snippet exposure |
+| `search_transcript_segments`, `search_transcripts_by_crm_context`, `search_transcripts_by_call_facts`, `search_transcript_quotes_with_attribution` | Transcript-derived snippet exposure |
 | `search_crm_field_values` | Explicit value lookup path with opt-in snippets and call identifiers |
 
 ## Practical Usage Guidance
