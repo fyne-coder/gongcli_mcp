@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-04-29
+
 - Aligned the Go module path, Docker OCI source label, GoReleaser ldflags, and
   private vulnerability reporting URL to `github.com/fyne-coder/gongcli_mcp`.
 - Added `gongmcp --tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST` to enforce
@@ -14,6 +16,11 @@
 - Added CI/release hardening for repo-local secret-pattern scanning, vet,
   staticcheck, govulncheck, Go module inventory, checksums, and default plus
   MCP-only Docker builds.
+- Added `search_transcript_quotes_with_attribution` for bounded transcript quote
+  evidence joined to safe Account/Opportunity attribution metadata.
+- Added approved `sync calls --include-parties` participant capture for title
+  readiness, with restricted-mode gating and sync-history fallback reporting.
+- Changed the transcript sync default batch size to 100.
 
 ## 0.1.1 - 2026-04-29
 
