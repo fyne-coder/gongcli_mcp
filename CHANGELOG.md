@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Refreshed enterprise pilot docs with a "Default Posture And Optional Wider
+  Surface" section and an "MCP Call Volume And Limits" section in
+  `docs/mcp-data-exposure.md` so single-user analyst workflows have a
+  documented path to widen the catalog and turn on per-tool opt-ins, and so
+  operators see the per-call cost model and server-enforced ceilings.
+- Added four evidence-backed sample prompt templates to
+  `docs/business-user-guide.md` covering content-gap discovery from prospect
+  questions, recurring objection mining, renewal/expansion vs. churn risk, and
+  late-stage pipeline risk; each lists required tools, opt-in flags, and an
+  evidence-discipline rule.
+- Caught up the canonical MCP catalog lists in `docs/architecture.md` and
+  `docs/mcp-phase.md` to include `search_transcripts_by_call_facts` and
+  `search_transcript_quotes_with_attribution`.
+- Tagged Gate 1 (all six outcomes shipped) and Gate 2 (items 1, 2, 4, 5
+  shipped; 3 and 6 partial) status in `docs/roadmap.md`.
+- Cross-linked the new posture and volume sections from `README.md` and
+  `docs/enterprise-deployment.md`, and pointed the business-user
+  cache-freshness caveats at the operator sync runbook.
+
 ## 0.2.0 - 2026-04-29
 
 - Aligned the Go module path, Docker OCI source label, GoReleaser ldflags, and
