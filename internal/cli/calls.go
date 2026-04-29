@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	checkpointstore "github.com/arthurlee/gongctl/internal/checkpoint"
-	exportjsonl "github.com/arthurlee/gongctl/internal/export"
-	"github.com/arthurlee/gongctl/internal/gong"
+	checkpointstore "github.com/fyne-coder/gongcli_mcp/internal/checkpoint"
+	exportjsonl "github.com/fyne-coder/gongcli_mcp/internal/export"
+	"github.com/fyne-coder/gongcli_mcp/internal/gong"
 )
 
 func (a *app) calls(ctx context.Context, args []string) error {
@@ -44,6 +44,7 @@ func (a *app) callsList(ctx context.Context, args []string) error {
 	cursor := fs.String("cursor", "", "Gong pagination cursor")
 	contextMode := fs.String("context", "none", "call context to include: none, extended")
 	out := fs.String("out", "", "write response JSON to path")
+	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow sensitive extended context in restricted mode")
 	_ = fs.Bool("json", false, "print raw JSON response")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -51,6 +52,11 @@ func (a *app) callsList(ctx context.Context, args []string) error {
 	contextSelector, err := parseCallContext(*contextMode)
 	if err != nil {
 		return err
+	}
+	if contextSelector != "" {
+		if err := a.requireSensitiveExport("calls list --context extended", *allowSensitiveExport, "it can return live Gong call payloads with embedded CRM context"); err != nil {
+			return err
+		}
 	}
 
 	client, err := newClientFromEnv()
@@ -73,6 +79,7 @@ func (a *app) callsExport(ctx context.Context, args []string) error {
 	contextMode := fs.String("context", "none", "call context to include: none, extended")
 	maxPages := fs.Int("max-pages", 0, "maximum pages to export; 0 means all pages")
 	out := fs.String("out", "", "write JSONL to path or - for stdout")
+	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow sensitive export in restricted mode")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -85,6 +92,9 @@ func (a *app) callsExport(ctx context.Context, args []string) error {
 	}
 	if *maxPages < 0 {
 		return fmt.Errorf("--max-pages must be >= 0")
+	}
+	if err := a.requireSensitiveExport("calls export", *allowSensitiveExport, "it can export raw call JSON and CRM context at scale"); err != nil {
+		return err
 	}
 
 	client, err := newClientFromEnv()
@@ -146,11 +156,15 @@ func (a *app) callsTranscript(ctx context.Context, args []string) error {
 	fs.SetOutput(a.err)
 	callID := fs.String("call-id", "", "Gong call ID")
 	out := fs.String("out", "", "write response JSON to path")
+	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow transcript export in restricted mode")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
 	if *callID == "" {
 		return fmt.Errorf("--call-id is required")
+	}
+	if err := a.requireSensitiveExport("calls transcript", *allowSensitiveExport, "it can return raw transcript payloads"); err != nil {
+		return err
 	}
 
 	client, err := newClientFromEnv()
@@ -170,6 +184,7 @@ func (a *app) callsShow(ctx context.Context, args []string) error {
 	dbPath := fs.String("db", "", "SQLite database path")
 	callID := fs.String("call-id", "", "stored Gong call ID")
 	asJSON := fs.Bool("json", false, "print stored call JSON to stdout")
+	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow raw call JSON in restricted mode")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -178,6 +193,9 @@ func (a *app) callsShow(ctx context.Context, args []string) error {
 	}
 	if !*asJSON {
 		return fmt.Errorf("--json is required")
+	}
+	if err := a.requireSensitiveExport("calls show --json", *allowSensitiveExport, "it can print raw cached call JSON"); err != nil {
+		return err
 	}
 
 	store, err := openSQLiteStore(ctx, *dbPath)
@@ -199,6 +217,7 @@ func (a *app) callsTranscriptBatch(ctx context.Context, args []string) error {
 	idsFile := fs.String("ids-file", "", "file with one call ID per line")
 	outDir := fs.String("out-dir", "", "directory for transcript JSON files")
 	resume := fs.Bool("resume", false, "skip completed calls from checkpoint or existing files")
+	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow transcript export in restricted mode")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -207,6 +226,9 @@ func (a *app) callsTranscriptBatch(ctx context.Context, args []string) error {
 	}
 	if *outDir == "" {
 		return fmt.Errorf("--out-dir is required")
+	}
+	if err := a.requireSensitiveExport("calls transcript-batch", *allowSensitiveExport, "it can write raw transcript files in bulk"); err != nil {
+		return err
 	}
 
 	ids, err := readIDs(*idsFile)

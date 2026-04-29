@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/arthurlee/gongctl/internal/auth"
-	"github.com/arthurlee/gongctl/internal/gong"
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/auth"
+	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
 func TestSyncCallsPaginatesAndStoresContext(t *testing.T) {

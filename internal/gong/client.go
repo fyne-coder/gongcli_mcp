@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/arthurlee/gongctl/internal/auth"
-	"github.com/arthurlee/gongctl/internal/ratelimit"
+	"github.com/fyne-coder/gongcli_mcp/internal/auth"
+	"github.com/fyne-coder/gongcli_mcp/internal/ratelimit"
 )
 
 const DefaultBaseURL = "https://api.gong.io"

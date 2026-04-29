@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	checkpointstore "github.com/arthurlee/gongctl/internal/checkpoint"
+	checkpointstore "github.com/fyne-coder/gongcli_mcp/internal/checkpoint"
 )
 
 func TestNewCLIHTTPClientTimeout(t *testing.T) {

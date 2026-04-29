@@ -603,6 +603,28 @@ type SyncStatusSummary struct {
 	States                       []SyncState      `json:"states"`
 }
 
+type CacheInventory struct {
+	TableCounts         []CacheTableCount  `json:"table_counts"`
+	OldestCallStartedAt string             `json:"oldest_call_started_at,omitempty"`
+	NewestCallStartedAt string             `json:"newest_call_started_at,omitempty"`
+	Summary             *SyncStatusSummary `json:"summary"`
+}
+
+type CacheTableCount struct {
+	Table string `json:"table"`
+	Rows  int64  `json:"rows"`
+}
+
+type CachePurgePlan struct {
+	StartedBefore          string `json:"started_before"`
+	CallCount              int64  `json:"call_count"`
+	TranscriptCount        int64  `json:"transcript_count"`
+	TranscriptSegmentCount int64  `json:"transcript_segment_count"`
+	ContextObjectCount     int64  `json:"context_object_count"`
+	ContextFieldCount      int64  `json:"context_field_count"`
+	ProfileCallFactCount   int64  `json:"profile_call_fact_count"`
+}
+
 type ProfileReadiness struct {
 	Active                  bool     `json:"active"`
 	Status                  string   `json:"status"`
@@ -3389,6 +3411,162 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 	summary.ProfileReadiness = profileReadiness
 	summary.PublicReadiness = buildPublicReadiness(summary)
 	return summary, nil
+}
+
+func (s *Store) CacheInventory(ctx context.Context) (*CacheInventory, error) {
+	summary, err := s.SyncStatusSummary(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &CacheInventory{
+		Summary:     summary,
+		TableCounts: []CacheTableCount{},
+	}
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT COALESCE(MIN(started_at), ''), COALESCE(MAX(started_at), '')
+		   FROM calls
+		  WHERE TRIM(started_at) <> ''`,
+	).Scan(&out.OldestCallStartedAt, &out.NewestCallStartedAt); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT name, COALESCE(sql, '')
+		   FROM sqlite_master
+		  WHERE type = 'table'
+		    AND name NOT LIKE 'sqlite_%'
+		  ORDER BY name`,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	type inventoryTable struct {
+		name string
+		sql  string
+	}
+	var tables []inventoryTable
+	for rows.Next() {
+		var tableName string
+		var tableSQL string
+		if err := rows.Scan(&tableName, &tableSQL); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if !inventoryTableVisible(tableName, tableSQL) {
+			continue
+		}
+		tables = append(tables, inventoryTable{name: tableName, sql: tableSQL})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, table := range tables {
+		query := fmt.Sprintf(`SELECT COUNT(*) FROM "%s"`, strings.ReplaceAll(table.name, `"`, `""`))
+		var count int64
+		if err := s.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+			return nil, err
+		}
+		out.TableCounts = append(out.TableCounts, CacheTableCount{Table: table.name, Rows: count})
+	}
+	return out, nil
+}
+
+func (s *Store) PlanCachePurgeBefore(ctx context.Context, startedBefore string) (*CachePurgePlan, error) {
+	startedBefore = strings.TrimSpace(startedBefore)
+	if startedBefore == "" {
+		return nil, errors.New("started_before is required")
+	}
+	plan := &CachePurgePlan{StartedBefore: startedBefore}
+	for _, item := range []struct {
+		target *int64
+		query  string
+	}{
+		{&plan.CallCount, `SELECT COUNT(*) FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?`},
+		{&plan.TranscriptCount, `SELECT COUNT(*) FROM transcripts WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.TranscriptSegmentCount, `SELECT COUNT(*) FROM transcript_segments WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.ContextObjectCount, `SELECT COUNT(*) FROM call_context_objects WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.ContextFieldCount, `SELECT COUNT(*) FROM call_context_fields WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+		{&plan.ProfileCallFactCount, `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`},
+	} {
+		if err := s.db.QueryRowContext(ctx, item.query, startedBefore).Scan(item.target); err != nil {
+			return nil, err
+		}
+	}
+	return plan, nil
+}
+
+func (s *Store) PurgeCacheBefore(ctx context.Context, startedBefore string) (*CachePurgePlan, error) {
+	plan, err := s.PlanCachePurgeBefore(ctx, startedBefore)
+	if err != nil {
+		return nil, err
+	}
+	if plan.CallCount == 0 {
+		return plan, nil
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA secure_delete = ON`); err != nil {
+		return nil, err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	for _, query := range []string{
+		`DELETE FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM transcript_segments WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM transcripts WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM call_context_fields WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM call_context_objects WHERE call_id IN (SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?)`,
+		`DELETE FROM calls WHERE TRIM(started_at) <> '' AND started_at < ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, plan.StartedBefore); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transcript_segments_fts(transcript_segments_fts) VALUES ('optimize')`); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if err := s.compactAfterPurge(ctx); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func (s *Store) compactAfterPurge(ctx context.Context) error {
+	for _, query := range []string{
+		`PRAGMA wal_checkpoint(TRUNCATE)`,
+		`VACUUM`,
+		`PRAGMA optimize`,
+	} {
+		if _, err := s.db.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func inventoryTableVisible(name string, tableSQL string) bool {
+	lowerName := strings.ToLower(strings.TrimSpace(name))
+	if strings.HasPrefix(lowerName, "transcript_segments_fts_") {
+		return false
+	}
+	if strings.Contains(strings.ToUpper(tableSQL), "VIRTUAL TABLE") {
+		return false
+	}
+	return true
 }
 
 func (s *Store) profileReadiness(ctx context.Context) (ProfileReadiness, error) {

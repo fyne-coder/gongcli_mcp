@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	profilepkg "github.com/arthurlee/gongctl/internal/profile"
+	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 )
 
 const (

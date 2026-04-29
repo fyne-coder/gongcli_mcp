@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Aligned the Go module path, Docker OCI source label, GoReleaser ldflags, and
+  private vulnerability reporting URL to `github.com/fyne-coder/gongcli_mcp`.
+- Added `gongmcp --tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST` to enforce
+  server-side MCP tool subsets for company deployments.
+- Added restricted/company CLI mode for high-risk raw API, transcript,
+  raw JSON, export, and extended CRM-context commands.
+- Added `gongctl sync run --config ...` for repeatable operator refresh plans.
+- Added `gongctl cache inventory` and dry-run-first `gongctl cache purge` for
+  local cache governance and retention workflows.
+- Added CI/release hardening for repo-local secret-pattern scanning, vet,
+  staticcheck, govulncheck, Go module inventory, checksums, and default plus
+  MCP-only Docker builds.
+
 ## 0.1.1 - 2026-04-29
 
 - Added Docker packaging for local CLI and read-only MCP deployment.

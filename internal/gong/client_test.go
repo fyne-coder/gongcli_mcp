@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/arthurlee/gongctl/internal/auth"
+	"github.com/fyne-coder/gongcli_mcp/internal/auth"
 )
 
 func TestRawSetsBasicAuth(t *testing.T) {

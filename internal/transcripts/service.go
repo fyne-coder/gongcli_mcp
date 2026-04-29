@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/arthurlee/gongctl/internal/gong"
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/arthurlee/gongctl/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/gong"
 )
 
 func (a *app) users(ctx context.Context, args []string) error {

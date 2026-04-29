@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	profilepkg "github.com/arthurlee/gongctl/internal/profile"
+	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 )
 
 func TestMigrateIdempotent(t *testing.T) {
@@ -1662,6 +1662,219 @@ func TestSyncRunLifecycleAndSummary(t *testing.T) {
 	}
 	if summary.States[0].Cursor != "cursor_002" {
 		t.Fatalf("sync state cursor=%q want cursor_002", summary.States[0].Cursor)
+	}
+}
+
+func TestCacheInventoryReportsTableCountsAndDates(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-inventory-001",
+		"title":    "Inventory first call",
+		"started":  "2026-04-20T14:00:00Z",
+		"duration": 1800,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Opportunity",
+					"id":   "opp-inventory-001",
+					"name": "Inventory opp",
+					"fields": []map[string]any{
+						{"name": "StageName", "label": "Stage", "value": "Proposal"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall(first) returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-inventory-002",
+		"title":    "Inventory second call",
+		"started":  "2026-04-24T14:00:00Z",
+		"duration": 900,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall(second) returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+		"callId": "call-inventory-001",
+		"transcript": []any{
+			map[string]any{
+				"speakerId": "spk-1",
+				"sentences": []map[string]any{
+					{"start": 0, "end": 1000, "text": "Inventory transcript sentence."},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertTranscript returned error: %v", err)
+	}
+	run, err := store.StartSyncRun(ctx, StartSyncRunParams{
+		Scope:   "calls",
+		SyncKey: "calls:preset=minimal",
+		From:    "2026-04-20",
+		To:      "2026-04-24",
+	})
+	if err != nil {
+		t.Fatalf("StartSyncRun returned error: %v", err)
+	}
+	if err := store.FinishSyncRun(ctx, run.ID, FinishSyncRunParams{
+		Status:         "success",
+		RecordsSeen:    2,
+		RecordsWritten: 2,
+	}); err != nil {
+		t.Fatalf("FinishSyncRun returned error: %v", err)
+	}
+
+	inventory, err := store.CacheInventory(ctx)
+	if err != nil {
+		t.Fatalf("CacheInventory returned error: %v", err)
+	}
+	if inventory.Summary == nil {
+		t.Fatal("CacheInventory summary was nil")
+	}
+	if inventory.OldestCallStartedAt != "2026-04-20T14:00:00Z" || inventory.NewestCallStartedAt != "2026-04-24T14:00:00Z" {
+		t.Fatalf("unexpected call range: oldest=%q newest=%q", inventory.OldestCallStartedAt, inventory.NewestCallStartedAt)
+	}
+	if inventory.Summary.TotalCalls != 2 || inventory.Summary.TotalTranscripts != 1 || inventory.Summary.MissingTranscripts != 1 {
+		t.Fatalf("unexpected inventory summary: %+v", inventory.Summary)
+	}
+	if inventory.Summary.ProfileReadiness.Status != "not_configured" {
+		t.Fatalf("profile status=%q want not_configured", inventory.Summary.ProfileReadiness.Status)
+	}
+
+	tableCounts := map[string]int64{}
+	for _, table := range inventory.TableCounts {
+		tableCounts[table.Table] = table.Rows
+	}
+	if tableCounts["calls"] != 2 || tableCounts["call_context_fields"] != 1 || tableCounts["transcripts"] != 1 || tableCounts["sync_runs"] != 1 {
+		t.Fatalf("unexpected inventory table counts: %+v", tableCounts)
+	}
+	if _, ok := tableCounts["transcript_segments_fts"]; ok {
+		t.Fatalf("inventory unexpectedly included FTS virtual table: %+v", tableCounts)
+	}
+}
+
+func TestCachePurgeBeforePlansAndDeletesCacheRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-purge-store-old",
+		"title":    "Store purge old call",
+		"started":  "2026-04-20T14:00:00Z",
+		"duration": 1800,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Opportunity",
+					"id":   "opp-purge-store-old",
+					"name": "Old purge opportunity",
+					"fields": []map[string]any{
+						{"name": "StageName", "label": "Stage", "value": "Discovery"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall(old) returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-purge-store-new",
+		"title":    "Store purge new call",
+		"started":  "2026-04-24T14:00:00Z",
+		"duration": 900,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall(new) returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+		"callId": "call-purge-store-old",
+		"transcript": []any{
+			map[string]any{
+				"speakerId": "spk-1",
+				"sentences": []map[string]any{
+					{"start": 0, "end": 1000, "text": "needle old purge transcript"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertTranscript returned error: %v", err)
+	}
+
+	plan, err := store.PlanCachePurgeBefore(ctx, "2026-04-22")
+	if err != nil {
+		t.Fatalf("PlanCachePurgeBefore returned error: %v", err)
+	}
+	if plan.CallCount != 1 || plan.TranscriptCount != 1 || plan.TranscriptSegmentCount != 1 || plan.ContextObjectCount != 1 || plan.ContextFieldCount != 1 {
+		t.Fatalf("unexpected purge plan: %+v", plan)
+	}
+
+	results, err := store.SearchTranscriptSegments(ctx, "needle", 10)
+	if err != nil {
+		t.Fatalf("SearchTranscriptSegments before purge returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("search results before purge=%d want 1", len(results))
+	}
+
+	executed, err := store.PurgeCacheBefore(ctx, "2026-04-22")
+	if err != nil {
+		t.Fatalf("PurgeCacheBefore returned error: %v", err)
+	}
+	if executed.CallCount != 1 || executed.TranscriptSegmentCount != 1 {
+		t.Fatalf("unexpected executed purge plan: %+v", executed)
+	}
+	var secureDelete int
+	if err := store.DB().QueryRowContext(ctx, `PRAGMA secure_delete`).Scan(&secureDelete); err != nil {
+		t.Fatalf("query secure_delete returned error: %v", err)
+	}
+	if secureDelete == 0 {
+		t.Fatal("secure_delete pragma was not enabled during purge")
+	}
+
+	inventory, err := store.CacheInventory(ctx)
+	if err != nil {
+		t.Fatalf("CacheInventory after purge returned error: %v", err)
+	}
+	if inventory.Summary.TotalCalls != 1 || inventory.Summary.TotalTranscripts != 0 || inventory.Summary.TotalEmbeddedCRMFields != 0 {
+		t.Fatalf("unexpected summary after purge: %+v", inventory.Summary)
+	}
+	if inventory.OldestCallStartedAt != "2026-04-24T14:00:00Z" || inventory.NewestCallStartedAt != "2026-04-24T14:00:00Z" {
+		t.Fatalf("unexpected remaining date range: oldest=%q newest=%q", inventory.OldestCallStartedAt, inventory.NewestCallStartedAt)
+	}
+	results, err = store.SearchTranscriptSegments(ctx, "needle", 10)
+	if err != nil {
+		t.Fatalf("SearchTranscriptSegments after purge returned error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("search results after purge=%d want 0", len(results))
 	}
 }
 

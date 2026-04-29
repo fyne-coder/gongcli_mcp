@@ -9,10 +9,11 @@ Runs a small real-data Docker smoke:
   1. gongctl auth check
   2. gongctl sync calls --preset minimal --max-pages 1
   3. gongctl sync status
-  4. gongmcp tools/list over the same mounted SQLite DB
+  4. gongmcp tools/list from the MCP-only image over the same mounted SQLite DB
 
 Options:
-  --image IMAGE       Container image to test (default: GONGCTL_IMAGE or gongctl:local)
+  --image IMAGE       CLI container image to test (default: GONGCTL_IMAGE or gongctl:local)
+  --mcp-image IMAGE   MCP-only image to test (default: GONGCTL_MCP_IMAGE or gongctl:mcp-local)
   --data-dir DIR     Host data directory to mount (default: GONGCTL_DATA_DIR or ~/gongctl-data)
   --db NAME          SQLite filename inside the data dir (default: GONGCTL_DB_NAME or gong-smoke.db)
   --env-file FILE    Optional env file for Gong credentials (default: GONGCTL_ENV_FILE or .env)
@@ -27,6 +28,7 @@ USAGE
 }
 
 image="${GONGCTL_IMAGE:-gongctl:local}"
+mcp_image="${GONGCTL_MCP_IMAGE:-gongctl:mcp-local}"
 data_dir="${GONGCTL_DATA_DIR:-$HOME/gongctl-data}"
 db_name="${GONGCTL_DB_NAME:-gong-smoke.db}"
 env_file="${GONGCTL_ENV_FILE:-.env}"
@@ -37,6 +39,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
       image="${2:?--image requires a value}"
+      shift 2
+      ;;
+    --mcp-image)
+      mcp_image="${2:?--mcp-image requires a value}"
       shift 2
       ;;
     --data-dir)
@@ -109,6 +115,7 @@ if command -v id >/dev/null 2>&1; then
 fi
 
 echo "image: $image"
+echo "mcp_image: $mcp_image"
 echo "data_dir: $data_dir"
 echo "db: $host_db_path"
 echo "from: $from"
@@ -148,8 +155,7 @@ printf '%s\n' \
     --network none \
     "${write_user_args[@]}" \
     -v "$data_dir:/data:ro" \
-    --entrypoint /usr/local/bin/gongmcp \
-    "$image" \
+    "$mcp_image" \
     --db "$db_path" \
   > "$mcp_output"
 

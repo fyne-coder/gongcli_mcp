@@ -9,12 +9,15 @@ can answer a narrow set of business questions without giving business users
 
 Prove that a business user can get useful, bounded answers from a reviewed local
 cache through a narrow MCP tool set, while operator-owned sync and profile
-workflows remain separate. Native `gongmcp` tool allowlisting is a planned
-production-readiness control; until then, enforce the tool set through the MCP
-host, wrapper configuration, or operator policy.
+workflows remain separate. Enforce the approved tool set with
+`gongmcp --tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`, and layer host policy
+on top if the deployment needs stricter prompts or routing.
 
-This is a policy-enforced pilot lane today. The current binaries do not enforce
-server-side MCP tool allowlists or a restricted/company CLI mode.
+This is now a software-enforced pilot lane for the first risk gates: `gongmcp`
+can enforce the reviewed MCP tool subset, and restricted/company CLI mode blocks
+high-risk raw API, transcript/export, raw cached JSON, and extended-context
+commands unless an approved operator supplies the explicit override. Storage,
+host, retention, and user-access controls still remain company responsibilities.
 
 ## Non-Negotiable Boundary
 

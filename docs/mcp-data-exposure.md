@@ -8,6 +8,7 @@ Current fixed boundaries:
 
 - MCP reads a local SQLite cache only.
 - MCP does not call Gong live.
+- `gongmcp --tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool surface; when neither is set, the full read-only catalog remains available.
 - MCP does not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or full transcript dumps.
 
 ## Exposure Levels
@@ -54,6 +55,7 @@ The following tools deserve the most review before enabling them in a model-faci
 ## Practical Usage Guidance
 
 - Use aggregate tools first for readiness, coverage, and prioritization questions.
+- In company deployments, set a server-side tool allowlist instead of relying on host prompts alone.
 - Treat config and profile tools as sensitive even when they do not include transcript text.
 - Reserve record-reference tools for operator workflows that actually need exact calls.
 - Reserve snippet and CRM-value lookup tools for narrowly scoped investigations with explicit user intent.

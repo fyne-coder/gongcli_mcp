@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	profilepkg "github.com/arthurlee/gongctl/internal/profile"
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
 func (a *app) profile(ctx context.Context, args []string) error {

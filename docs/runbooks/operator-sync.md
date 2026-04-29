@@ -39,6 +39,7 @@ host or volume ACLs, for example owner-only access on single-user pilots.
 ## Approved Operating Rules
 
 - Run writable commands only from `gongctl`, never from `gongmcp`.
+- Default company-managed CLI jobs to `GONGCTL_RESTRICTED=1`.
 - Keep real SQLite, transcript, and profile files outside the checkout.
 - Use metadata-only logs. Do not log transcript bodies or secret values.
 - Do not give business users Gong credentials, writable storage, or transcript
@@ -55,6 +56,7 @@ host or volume ACLs, for example owner-only access on single-user pilots.
 Source build example:
 
 ```bash
+export GONGCTL_RESTRICTED=1
 bin/gongctl version
 bin/gongctl auth check
 ```
@@ -102,14 +104,60 @@ bin/gongctl sync settings --db <data-root>/cache/gong.db --kind scorecards
 bin/gongctl sync status --db <data-root>/cache/gong.db
 ```
 
+For scheduled or repeatable jobs, keep the approved stages in one YAML config
+and dry-run the exact file before enabling it in cron, launchd, or a container
+job:
+
+```bash
+cat > <data-root>/configs/company-sync.yaml <<'YAML'
+version: 1
+db: ../cache/gong.db
+steps:
+  - name: daily_calls
+    action: calls
+    from: 2026-04-01
+    to: 2026-04-02
+    preset: minimal
+  - name: directory_users
+    action: users
+  - name: tracker_settings
+    action: settings
+    settings_kind: trackers
+YAML
+
+bin/gongctl sync run --config <data-root>/configs/company-sync.yaml --dry-run
+bin/gongctl sync run --config <data-root>/configs/company-sync.yaml
+bin/gongctl cache inventory --db <data-root>/cache/gong.db
+bin/gongctl cache purge --db <data-root>/cache/gong.db --older-than 2026-04-01 --dry-run
+```
+
 Notes:
 
 - Use `--preset minimal` unless approved business questions require embedded CRM
   context from `business` or `all`.
 - Transcript sync increases the sensitivity of the stored data. Only run it when
   transcript-backed search or analysis is in scope.
+- In restricted mode, `sync transcripts`, `sync calls --preset business`,
+  `sync calls --preset all`, `calls list --context extended`, transcript export
+  commands, raw API passthrough, and raw call JSON require `--allow-sensitive-export` or
+  `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`. Treat that override as an approval gate,
+  not a convenience flag.
+- `sync run --config` files cannot contain a per-step sensitive-export bypass.
+  Sensitive steps are visible in dry-run output, but restricted-mode approval is
+  supplied only at runtime by the operator.
 - `sync status` is the required post-refresh verification step because it shows
   cache population and readiness state.
+- `cache inventory` is the secondary verification step for storage governance.
+  It reports database size, table counts, oldest/newest call dates, transcript
+  presence, CRM-context presence, profile status, and last sync metadata.
+- `cache purge --older-than YYYY-MM-DD` is dry-run unless `--confirm` is present.
+  Save the dry-run JSON plan with the retention/change record, then run the
+  confirmed command only after backup, legal-hold, and data-owner checks pass.
+  The command removes matching cached calls and dependent transcript, CRM
+  context, and profile fact-cache rows, then enables SQLite `secure_delete`,
+  checkpoints/truncates WAL state, and runs `VACUUM`; it does not remove
+  transcript JSON files, snapshots, backups, profiles, CRM schema inventory,
+  settings inventory, or sync history.
 - If the pilot uses a reviewed business profile, validate and import it only
   from the protected profile path:
 
@@ -133,8 +181,7 @@ printf '%s\n' \
 | docker run --rm -i \
     --network none \
     -v <data-root>/cache:/data:ro \
-    --entrypoint /usr/local/bin/gongmcp \
-    gongctl:local \
+    gongctl:mcp-local \
     --db /data/gong.db
 ```
 
@@ -143,14 +190,13 @@ Pass criteria:
 - `gongmcp` starts without requesting Gong credentials
 - the data mount is read-only
 - the runtime works without network access
-- direct `tools/list` currently shows the full read-only MCP catalog because
-  native server-side tool allowlisting is not implemented yet
+- direct `tools/list` shows only the configured allowlist when
+  `--tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST` is set
 
 If you expose MCP through a host app, point that host at the same read-only
-database path and expose only the approved tool set. Native `gongmcp`
-allowlisting is a planned production-readiness control; until then, enforce the
-approved tool set through the MCP host, wrapper configuration, or operator
-policy.
+database path and expose only the approved tool set. Keep the `gongmcp`
+allowlist and host-side tool policy aligned so wrapper configuration does not
+accidentally broaden the business-user surface.
 
 ## Scheduled Refresh Ownership
 
@@ -158,6 +204,8 @@ If refreshes are scheduled instead of manual:
 
 - assign one named owner for the job and one backup owner
 - record the approved cadence and scope
+- keep the job config file under operator-controlled storage so the exact staged
+  refresh is reviewable
 - run scheduled sync where the writable data root and backup target are already
   available
 - keep MCP consumer hosts read-only and separate from the refresh job when

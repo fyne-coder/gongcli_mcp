@@ -18,9 +18,9 @@ local database files. Those workflows stay with the pilot operator.
 
 - Business users interact with a host application connected to `gongmcp`.
 - `gongmcp` reads a reviewed SQLite cache only; it does not call Gong live.
-- Current `gongmcp` exposes its full tool catalog to the connected host. The
-  approved business-user subset is enforced outside `gongmcp` today, through
-  host policy, wrapper configuration, and operator process.
+- `gongmcp` can enforce a reviewed server-side tool subset through
+  `--tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`. If those are not set, the
+  full read-only catalog remains visible to the connected host.
 - Results reflect the last approved sync and profile state, not current tenant
   state.
 - Outputs must stay aggregate-first, metadata-oriented, and bounded.
@@ -33,8 +33,7 @@ local database files. Those workflows stay with the pilot operator.
   decides whether the answers are useful enough to continue.
 - Pilot operator: runs `gongctl`, manages credentials, refreshes the cache,
   validates profile state, and exposes only the approved MCP tool set through
-  the host policy available for the pilot. Native `gongmcp` tool allowlisting is
-  a planned production-readiness control.
+  `gongmcp` allowlisting plus any host-side policy needed for the pilot.
 - Security or RevOps reviewer: confirms acceptable-use boundaries, storage
   location, retention, and tool allowlist before business access starts.
 - Business user: asks approved business questions through the host application
@@ -81,9 +80,9 @@ or sponsor for a separate review.
 
 ## Approved MCP Tools For Business Users
 
-The pilot tool set should stay narrow. Until native `gongmcp` tool allowlisting
-is implemented, enforce this through the MCP host, wrapper configuration, or
-operator policy.
+The pilot tool set should stay narrow. Configure native `gongmcp` tool
+allowlisting for the deployment and keep host prompts or wrapper policy aligned
+with the same approved set.
 
 - `get_sync_status`
 - `summarize_call_facts`

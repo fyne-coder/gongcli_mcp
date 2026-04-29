@@ -7,6 +7,7 @@ Rules:
 - read from the SQLite store surfaces; do not call Gong directly
 - keep tools read-only
 - require `--db` at the `cmd/gongmcp` boundary
+- support optional MCP tool allowlisting through `gongmcp --tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`; when unset, serve the full read-only catalog
 - keep browser/session auth separate from agent-client auth
 - do not expose raw Gong API passthrough, arbitrary SQL, profile import, raw cached call JSON, or full transcript dumps
 - return transcript snippets only, not full transcript bodies

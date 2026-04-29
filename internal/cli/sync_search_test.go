@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
-func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
+func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gong.db")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/calls/extensive" {
@@ -71,7 +71,7 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	a := &app{out: &stdout, err: &stderr}
+	a := &app{out: &stdout, err: &stderr, restricted: true}
 
 	err := a.sync(context.Background(), []string{
 		"calls",
@@ -79,6 +79,7 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 		"--from", "2026-04-20",
 		"--to", "2026-04-24",
 		"--preset", "business",
+		"--allow-sensitive-export",
 		"--max-pages", "1",
 	})
 	if err != nil {
@@ -166,6 +167,50 @@ func TestSyncCallsBusinessPresetAndStatusJSON(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("status stderr=%q want empty", stderr.String())
+	}
+}
+
+func TestSyncRestrictedModeBlocksSensitiveSubcommands(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gong.db")
+	outDir := filepath.Join(dir, "transcripts")
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "sync-calls-business",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "business"},
+			want: "sync calls --preset business is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-calls-all",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "all"},
+			want: "sync calls --preset all is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-transcripts",
+			args: []string{"transcripts", "--db", dbPath, "--out-dir", outDir},
+			want: "sync transcripts is blocked because restricted mode is enabled",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			a := &app{out: &stdout, err: &stderr, restricted: true}
+
+			err := a.sync(context.Background(), tc.args)
+			if err == nil {
+				t.Fatal("sync returned nil error, want restricted-mode failure")
+			}
+			if got := err.Error(); !strings.Contains(got, tc.want) || !strings.Contains(got, "--allow-sensitive-export") {
+				t.Fatalf("err=%q missing restricted-mode guidance", got)
+			}
+		})
 	}
 }
 

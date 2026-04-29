@@ -12,16 +12,14 @@ This document defines the current enterprise pilot deployment shape for
   wrapper policy. They do not run live syncs, handle Gong credentials, or write
   to SQLite.
 
-This is a pilot-candidate operating model, not a hosted service design and not
-yet a software-enforced enterprise mode. Customer identity, raw transcripts,
-secrets, and tenant-specific filesystem details should stay outside shared docs
-and outside the source repo.
+This is a pilot-candidate operating model, not a hosted service design.
+Customer identity, raw transcripts, secrets, and tenant-specific filesystem
+details should stay outside shared docs and outside the source repo.
 
-Current limitations matter for deployment approval: `gongmcp` does not yet have
-server-side tool allowlisting, and `gongctl` does not yet have a restricted
-company mode. Until those controls are implemented, tool access and CLI access
-are enforced by host configuration, wrapper configuration, filesystem access,
-and operator process.
+Current limitations still matter for deployment approval: `gongmcp` can narrow
+its tool surface with an allowlist, and `gongctl` now has a restricted company
+mode for high-risk CLI commands, but neither control replaces operator
+ownership of storage, host policy, and process access.
 
 ## Roles And Ownership
 
@@ -43,9 +41,8 @@ and operator process.
 ### Platform / security owner
 
 - approves host, filesystem, backup, and monitoring controls
-- approves the MCP tool set exposed to business users. Native `gongmcp`
-  allowlisting is a planned production-readiness control; until then, restrict
-  tool access through the MCP host, wrapper configuration, or operator policy.
+- approves the MCP tool set exposed to business users and configures the
+  `gongmcp` allowlist for that deployment
 - owns incident escalation and credential rotation policy
 
 ## Supported Deployment Modes
@@ -77,6 +74,7 @@ product boundary.
 
 Use when business-user access must be separated from the writable sync runtime.
 
+- Build and publish the Docker `mcp` target, not the default full CLI image.
 - `gongmcp` runs with `--network none` when containerized.
 - Mount the SQLite cache read-only.
 - Do not provide Gong credentials to the MCP process.
@@ -122,6 +120,56 @@ Storage-specific guidance:
 - For shared environments, separate the writable sync runtime from the
   business-user MCP runtime even if both read the same protected data root.
 
+## Restricted CLI Mode
+
+For company-managed operator jobs, enable restricted mode by default with
+`GONGCTL_RESTRICTED=1` or `gongctl --restricted ...`.
+
+In restricted mode, these commands require an explicit override
+(`--allow-sensitive-export` or `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`):
+
+- `api raw`
+- `calls list --context extended`
+- `calls show --json`
+- `calls export`
+- `calls transcript`
+- `calls transcript-batch`
+- `sync transcripts`
+- `sync calls --preset business`
+- `sync calls --preset all`
+
+This keeps the default lane safe for `sync status`, `sync users`, minimal call
+syncs, schema/settings inventory, and read-model analysis while forcing an
+affirmative operator decision for transcript, raw-payload, and extended
+CRM-context flows.
+
+The reviewed YAML for `sync run --config ...` cannot self-authorize sensitive
+steps. In restricted mode, sensitive transcript or extended-context steps still
+require the operator to pass `--allow-sensitive-export` or set
+`GONGCTL_ALLOW_SENSITIVE_EXPORT=1` at runtime.
+
+## Config-Driven Refresh Jobs
+
+For recurring refreshes, prefer a reviewed YAML config and run the same file in
+dry-run mode before enabling the scheduler:
+
+```bash
+bin/gongctl sync run --config /srv/gongctl/company-sync.yaml --dry-run
+bin/gongctl sync run --config /srv/gongctl/company-sync.yaml
+bin/gongctl cache inventory --db /srv/gongctl/cache/gong.db
+bin/gongctl cache purge --db /srv/gongctl/cache/gong.db --older-than 2026-04-01 --dry-run
+```
+
+The config runner resolves relative `db` and transcript `out_dir` paths from
+the config location, so one reviewed file can travel with the operator-managed
+job definition. `cache inventory` is the companion read-only governance check
+for DB size, primary table counts, date range, transcript/CRM-context presence,
+profile status, and last sync metadata.
+
+`cache purge` is dry-run by default. Use it to preview retention cleanup, then
+run the same command with `--confirm` only after backup, legal-hold, and owner
+approval checks are complete.
+
 ## Admin-Run Sync Contract
 
 The pilot operating contract is admin-run refresh, then read-only consumption.
@@ -143,6 +191,8 @@ The scheduler is an operator concern, not an end-user concern.
 - The owner should be a named IT/RevOps operator or managed service account.
 - The schedule should be documented with scope, time window, and escalation
   contact.
+- The scheduled job should point at a reviewed `sync run --config ...` file
+  rather than re-encoding flags in multiple places.
 - Writable jobs should run where protected storage is already mounted.
 - Read-only MCP hosts should consume the latest approved cache; they should not
   mutate it.
@@ -162,6 +212,8 @@ Backup policy should be owned by the company operating the pilot:
 - back up the SQLite cache before upgrades, major sync-scope changes, and
   profile changes
 - include transcript and profile storage in the same backup plan
+- review `cache inventory` output alongside backup logs so unusual DB growth or
+  missing sync metadata is caught early
 - verify that restores can be mounted back into a read-only MCP runtime before
   treating the backup as valid
 
@@ -171,6 +223,16 @@ Retention policy should define:
 - how long transcript files are kept
 - when stale profiles and exports are removed
 - who approves retention exceptions
+
+For approved retention cleanup, run `cache purge --older-than YYYY-MM-DD`
+without `--confirm` first and keep the JSON plan with the change record. The
+confirmed purge deletes matching calls plus dependent transcripts, transcript
+segments, embedded CRM context, and profile call-fact cache rows. It enables
+SQLite `secure_delete`, checkpoints/truncates WAL state, and runs `VACUUM` to
+reduce retained bytes in the active database file. It does not delete sync-run
+history, profile definitions, CRM schema inventory, settings inventory,
+transcript JSON files outside SQLite, snapshots, or backups; handle those
+through the company retention workflow.
 
 Decommissioning should include:
 

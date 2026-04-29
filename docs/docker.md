@@ -13,6 +13,13 @@ The container does not turn `gongmcp` into an HTTP service. MCP remains a stdio 
 docker build -t gongctl:local .
 ```
 
+Build the MCP-only target for business-user hosts that should not contain the
+writable CLI binary:
+
+```bash
+docker build --target mcp -t gongctl:mcp-local .
+```
+
 Or use Compose:
 
 ```bash
@@ -69,7 +76,8 @@ Run the repeatable real-data smoke used before tagging:
 scripts/docker-smoke.sh
 ```
 
-The smoke uses the local image by default and runs:
+The smoke uses the full local image for operator CLI steps and the MCP-only
+image for the no-network MCP step by default. It runs:
 
 - `auth check`
 - `sync calls --preset minimal --max-pages 1`
@@ -98,15 +106,13 @@ Point an MCP host at `docker run` with stdin kept open:
         "run",
         "--rm",
         "-i",
-        "--network",
-        "none",
-        "-v",
-        "/Users/YOU/gongctl-data:/data:ro",
-        "--entrypoint",
-        "/usr/local/bin/gongmcp",
-        "gongctl:local",
-        "--db",
-        "/data/gong.db"
+	        "--network",
+	        "none",
+	        "-v",
+	        "/Users/YOU/gongctl-data:/data:ro",
+	        "gongctl:mcp-local",
+	        "--db",
+	        "/data/gong.db"
       ]
     }
   }
@@ -119,7 +125,10 @@ The MCP container does not need Gong API credentials because it only reads the S
 
 ## Publishing Shape
 
-For company-managed use, publish the same image to Docker Hub, GHCR, or another OCI registry and pin an immutable tag in the MCP host config. The expected operational contract is:
+For company-managed use, publish two distinct artifacts: the full image for
+operator sync jobs and the MCP-only target for business-user MCP hosts. Do not
+point business-user hosts at the full image. Pin immutable tags or digests in
+the MCP host config. The expected operational contract is:
 
 - the company controls the image tag and rollout
 - each tenant/user controls credentials and local or mounted data
@@ -127,3 +136,5 @@ For company-managed use, publish the same image to Docker Hub, GHCR, or another 
 - MCP stays read-only until an explicit remote-auth design exists
 - shared hosts should avoid long-lived plain environment variables where possible; Docker socket access can expose container environment through inspection
 - production rollouts should pin immutable digests and can add image signing outside this repo's local-development defaults
+- MCP host configs must use the MCP-only target once published, with no Gong
+  credentials, `--network none`, and a read-only SQLite mount

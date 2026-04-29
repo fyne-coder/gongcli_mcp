@@ -10,10 +10,11 @@ The current design is intentionally local-first:
 - `gongmcp` reads a previously synced SQLite cache and does not call Gong directly.
 - The repository can be public; tenant data, credentials, and local cache files cannot.
 
-Current enforcement limits are important: `gongmcp` does not yet implement
-server-side tool allowlisting, and `gongctl` does not yet implement a
-restricted/company mode. Business-user tool subsets and keeping users off the
-CLI are currently host, wrapper, filesystem, and operator-process controls.
+Current enforcement limits are important: `gongctl` now has a
+restricted/company mode for high-risk CLI commands, and `gongmcp` can enforce a
+server-side tool allowlist. Business-user deployments still need approved host,
+filesystem, and operator-process controls because allowlisting narrows tools but
+does not make returned Gong-derived data non-sensitive.
 
 ## Trust Boundaries
 
@@ -69,6 +70,30 @@ Implementation controls on the MCP side:
 - `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB.
 - Profile-aware reads refuse stale-cache rebuilds instead of mutating SQLite from MCP.
 
+Implementation controls on the CLI side:
+
+- `GONGCTL_RESTRICTED=1` or `gongctl --restricted ...` turns on restricted/company mode.
+- In restricted mode, `api raw`, `calls show --json`, `calls export`,
+  `calls list --context extended`, `calls transcript`, `calls transcript-batch`,
+  `sync transcripts`, and `sync calls --preset business|all` are blocked unless
+  the operator adds `--allow-sensitive-export` or sets
+  `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`.
+- `gongctl sync run --config ... --dry-run` validates staged operator refresh
+  configs without calling Gong so reviewed schedules can be checked before
+  execution. The config file cannot self-authorize sensitive steps; runtime
+  approval must come from the operator flag or environment variable.
+- `gongctl cache inventory --db ...` is read-only and returns cache metadata,
+  sync history, profile status, and a sensitive-data warning. Even though it
+  avoids transcript bodies and raw payload dumps, its output should still be
+  handled as tenant operational metadata.
+- `gongctl cache purge --db ... --older-than YYYY-MM-DD` is dry-run by default.
+  Confirmed purges delete matching call rows and dependent cached transcripts,
+  transcript segments, embedded CRM context, and profile call-fact cache rows,
+  then use SQLite `secure_delete`, WAL checkpoint/truncation, and `VACUUM`.
+  Operators must still handle transcript files, snapshots, backups, sync
+  history, profile definitions, CRM schema inventory, and settings inventory
+  through company retention controls.
+
 ## High-Risk CLI Commands
 
 These commands are valid operator tools, but they should be treated as restricted during an enterprise pilot because they can surface or create sensitive tenant data:
@@ -77,11 +102,21 @@ These commands are valid operator tools, but they should be treated as restricte
 | --- | --- | --- |
 | `gongctl api raw ...` | Bypasses typed minimization and can return raw Gong payloads | Use only for operator debugging; keep output local |
 | `gongctl calls show --json` | Returns raw cached call detail | Do not paste into tickets, docs, or prompts |
-| `gongctl calls list/export --context extended ...` | Can emit embedded CRM context and customer identifiers at scale | Write to external files only; review before sharing |
+| `gongctl calls list/export --context extended ...` | Can emit embedded CRM context and customer identifiers at scale | Restricted mode requires explicit override; write to external files only and review before sharing |
 | `gongctl calls transcript ...` and `gongctl calls transcript-batch ...` | Produces transcript payloads and transcript files | Store outside the repo and outside shared logs |
 | `gongctl sync transcripts ...` | Pulls transcript content into the local cache/filesystem | Use least-privilege data location and operator-owned storage |
 | `gongctl sync calls --preset business` | Caches embedded CRM context that may include sensitive field values | Use only when that context is needed |
 | `gongctl profile discover/show/import ...` | Discovery output and active profile state can expose tenant CRM field names, lifecycle terms, tracker/scorecard references, and evidence values | Keep profile files outside git; review before sharing |
+
+In restricted/company mode, raw API, raw call JSON, extended call-context,
+transcript/export, and extended sync command families are blocked by default and
+require the explicit sensitive-export override. Profile commands remain
+operator-only by policy because they can expose tenant metadata, but they are
+not currently blocked by the restricted-mode gate.
+
+Cache-retention delete commands now use a reviewed dry-run/confirmation shape.
+They remain operator-only and should be paired with backup, legal-hold, and
+data-owner approval records.
 
 ## Recommended Pilot Controls
 
@@ -99,7 +134,6 @@ These commands are valid operator tools, but they should be treated as restricte
 - Some MCP tools still expose sensitive metadata such as call titles, call IDs, object IDs, scorecard IDs, workspace IDs, and question text.
 - Transcript snippet tools and explicit CRM value lookups can still reveal sensitive content in bounded excerpts.
 - The repo documents safe storage patterns, but it does not currently add encryption-at-rest, host-level DLP, remote revocation, centralized audit logging, or MCP-side authentication/RBAC.
-- The repo does not yet enforce an MCP tool allowlist or restricted CLI mode in
-  the binaries, so company pilots rely on trusted host configuration and
-  operator access control.
+- The MCP binary enforces a tool allowlist when configured, but MCP output still
+  inherits the sensitivity of the cached dataset and the approved host.
 - Docker hardening helps only if the host itself is trusted; Docker socket or host compromise bypasses container-level isolation.

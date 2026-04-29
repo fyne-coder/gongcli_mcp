@@ -6,8 +6,8 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/arthurlee/gongctl/internal/store/sqlite"
-	transcriptsearch "github.com/arthurlee/gongctl/internal/transcripts"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	transcriptsearch "github.com/fyne-coder/gongcli_mcp/internal/transcripts"
 )
 
 func (a *app) search(ctx context.Context, args []string) error {
