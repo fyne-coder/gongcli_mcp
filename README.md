@@ -8,6 +8,15 @@ This project starts as a local CLI and keeps the API client boundary narrow. A r
 
 Bootstrap scaffold, not a production release yet.
 
+For company evaluation, start with the enterprise pilot packet:
+
+- [Enterprise deployment](docs/enterprise-deployment.md)
+- [Security model](docs/security-model.md)
+- [MCP data exposure](docs/mcp-data-exposure.md)
+- [Operator sync runbook](docs/runbooks/operator-sync.md)
+- [Business-user guide](docs/business-user-guide.md)
+- [Pilot plan](docs/pilot-plan.md)
+
 Current defaults are based on Gong public help-center guidance available on 2026-04-24:
 
 - Gong API supports retrieving analyzed call data, call transcripts, users, activity, and related stats.
@@ -206,6 +215,11 @@ For non-client-specific business prompt examples, see [docs/public-readiness.md]
 `gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
 
+Current `gongmcp` exposes the full MCP catalog to any connected host. Native
+server-side tool allowlisting is planned but not implemented yet; company pilots
+must enforce any business-user subset through the host, wrapper configuration,
+or operator process.
+
 Tools:
 
 - `get_sync_status`
@@ -236,6 +250,7 @@ Tools:
 - `summarize_call_facts`
 - `rank_transcript_backlog`
 - `search_transcript_segments`
+- `search_transcripts_by_call_facts`
 - `missing_transcripts`
 
 The MCP server requires `--db`, reads SQLite only, and intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
