@@ -99,7 +99,7 @@ func (a *app) supportBundle(ctx context.Context, args []string) error {
 		Files:                               supportBundleFiles(*includeEnv),
 		ContainsRawCustomerData:             false,
 		ContainsCustomerOperationalMetadata: true,
-		RedactionPolicy:                     "metadata_only_no_payloads_no_transcripts_no_identifiers_no_secrets_no_paths",
+		RedactionPolicy:                     "metadata_only_no_payloads_no_transcripts_no_direct_customer_content_identifiers_no_secrets_no_paths",
 	})
 }
 
@@ -240,18 +240,15 @@ func newSupportMCPTools() supportMCPTools {
 		})
 	}
 	return supportMCPTools{
-		ToolCount: toolsLen(tools),
+		ToolCount: len(tools),
 		Tools:     tools,
 	}
 }
 
-func toolsLen(tools []supportMCPTool) int {
-	return len(tools)
-}
-
 func supportRedactionPolicy() supportRedactionPolicyJSON {
 	return supportRedactionPolicyJSON{
-		Mode: "metadata_only",
+		Mode:                                "metadata_only",
+		ContainsCustomerOperationalMetadata: true,
 		ExcludedByDefault: []string{
 			"Gong credentials and MCP bearer tokens",
 			"raw Gong API payloads",
@@ -261,7 +258,7 @@ func supportRedactionPolicy() supportRedactionPolicyJSON {
 			"call titles, call IDs, object IDs, speaker IDs, and user IDs",
 			"local .env contents and full local filesystem paths",
 		},
-		SupportPolicy: "Share this bundle before sharing logs or payloads. Raw customer data requires explicit customer approval and a time-bound support exception.",
+		SupportPolicy: "Share this bundle before sharing logs or payloads. It excludes direct customer content by design but still contains customer operational metadata. Raw customer data requires explicit customer approval and a time-bound support exception.",
 	}
 }
 
@@ -381,9 +378,10 @@ type supportMCPTool struct {
 }
 
 type supportRedactionPolicyJSON struct {
-	Mode              string   `json:"mode"`
-	ExcludedByDefault []string `json:"excluded_by_default"`
-	SupportPolicy     string   `json:"support_policy"`
+	Mode                                string   `json:"mode"`
+	ContainsCustomerOperationalMetadata bool     `json:"contains_customer_operational_metadata"`
+	ExcludedByDefault                   []string `json:"excluded_by_default"`
+	SupportPolicy                       string   `json:"support_policy"`
 }
 
 type supportEnvironmentPresenceJSON struct {

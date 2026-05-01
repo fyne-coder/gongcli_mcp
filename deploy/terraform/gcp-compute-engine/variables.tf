@@ -46,6 +46,12 @@ variable "service_account_email" {
   description = "Service account for the VM."
 }
 
+variable "service_account_scopes" {
+  type        = list(string)
+  description = "Least-privilege OAuth scopes for the VM service account."
+  default     = ["https://www.googleapis.com/auth/logging.write"]
+}
+
 variable "bearer_token_file_path" {
   type        = string
   description = "Host path where customer secret tooling writes the internal bearer token."
@@ -56,6 +62,11 @@ variable "tool_allowlist" {
   type        = string
   description = "Comma-separated MCP tool allowlist."
   default     = "get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog"
+}
+
+variable "allowed_origins" {
+  type        = string
+  description = "Comma-separated HTTP Origin allowlist for browser-capable MCP clients hitting the customer HTTPS endpoint."
 }
 
 variable "machine_type" {

@@ -250,20 +250,26 @@ proxy/TLS boundary, or a client that expects Streamable HTTP.
 Start a localhost-only HTTP MCP endpoint:
 
 ```bash
+printf '%s\n' 'replace-with-a-long-random-local-test-token' > "$HOME/gongctl-data/gongmcp-token"
+
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
+  -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
   -e GONGMCP_TOOL_ALLOWLIST=get_sync_status,search_calls,search_transcript_segments,rank_transcript_backlog \
+  -e GONGMCP_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 \
   -v "$HOME/gongctl-data:/data:ro" \
+  -v "$HOME/gongctl-data/gongmcp-token:/run/secrets/gongmcp_token:ro" \
   ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 \
   --http 0.0.0.0:8080 \
-  --auth-mode none \
+  --auth-mode bearer \
   --allow-open-network \
   --db /data/gong.db
 ```
 
 The container binds internally to `0.0.0.0`, but Docker publishes it only on
 `127.0.0.1`. Non-local/private-pilot HTTP should use bearer auth, an explicit
-tool allowlist, and TLS termination at a trusted company proxy or gateway.
+tool allowlist, an explicit Origin allowlist, and TLS termination at a trusted
+company proxy or gateway.
 
 Some desktop MCP clients still launch local stdio processes from their config
 file. For those clients, use a bridge such as `mcp-remote`:

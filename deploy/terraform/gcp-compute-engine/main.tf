@@ -1,4 +1,7 @@
 terraform {
+  # Starter example only. Not production-ready as-is; add customer gateway/SSO,
+  # WAF or equivalent controls, access logs, rate limits, token rotation,
+  # least-privilege egress, release approvals, and audited operations before use.
   required_version = ">= 1.6.0"
 
   required_providers {
@@ -55,6 +58,7 @@ resource "google_compute_instance" "gongmcp" {
     user-data = templatefile("${path.module}/startup.yaml.tftpl", {
       image                  = var.gongmcp_image
       tool_allowlist         = var.tool_allowlist
+      allowed_origins        = var.allowed_origins
       db_path                = "/data/gong.db"
       bearer_token_file_path = var.bearer_token_file_path
     })
@@ -62,7 +66,7 @@ resource "google_compute_instance" "gongmcp" {
 
   service_account {
     email  = var.service_account_email
-    scopes = ["cloud-platform"]
+    scopes = var.service_account_scopes
   }
 }
 
@@ -73,4 +77,9 @@ output "instance_name" {
 output "mcp_path" {
   value       = "/mcp"
   description = "Put a customer HTTPS load balancer or reverse proxy in front of the VM before user testing."
+}
+
+output "health_path" {
+  value       = "/healthz"
+  description = "Use this path for infrastructure health checks instead of probing MCP JSON-RPC."
 }

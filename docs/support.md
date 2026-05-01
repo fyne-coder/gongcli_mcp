@@ -56,8 +56,8 @@ Current `gongctl support bundle` files:
   booleans for known environment variables, never values
 
 The bundle is customer-boundary operational metadata. It is designed to exclude
-raw customer content, customer identifiers, secrets, and local paths; it is not
-designed to be posted in public issues.
+raw customer content, direct customer-content identifiers, secrets, and local
+paths; it is not designed to be posted in public issues.
 
 Operator-supplied case notes may add sanitized details such as:
 

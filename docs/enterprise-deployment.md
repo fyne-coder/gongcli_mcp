@@ -97,12 +97,17 @@ customer-managed endpoint instead of launching a local subprocess/container on
 each workstation.
 
 - Run `gongmcp --http ADDR --auth-mode bearer --tool-allowlist ... --db PATH`.
-- Expose only `/mcp` to approved clients through TLS termination at a trusted
-  company proxy/gateway or equivalent private-network boundary.
+- Expose `/mcp` to approved clients through TLS termination at a trusted
+  company proxy/gateway or equivalent private-network boundary. Use `/healthz`
+  for infrastructure health checks; do not use MCP JSON-RPC as the health
+  probe.
+- Set `--allowed-origins` or `GONGMCP_ALLOWED_ORIGINS` for every non-local HTTP
+  deployment so browser-capable MCP clients cannot bypass the proxy boundary
+  through DNS rebinding.
 - Keep `gongctl` sync jobs separate from this read-only process.
 - Store bearer tokens outside Git, SQLite, images, docs, and shared logs.
-- Treat `--auth-mode none --allow-open-network` as temporary private-pilot
-  scaffolding only, never as an internet-facing posture.
+- Treat `--auth-mode none --dev-allow-no-auth-localhost` as local developer
+  scaffolding only. Non-local unauthenticated HTTP is not supported.
 
 The initial HTTP mode is intentionally small: POST JSON-RPC requests to `/mcp`;
 GET streaming/SSE, user management, OIDC, tenant routing, and hosted transcript

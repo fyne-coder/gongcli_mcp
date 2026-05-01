@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,12 +34,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when unset; required for HTTP")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
-	authMode := flags.String("auth-mode", "", "HTTP auth mode: none or bearer; defaults to GONGMCP_AUTH_MODE or none")
+	authMode := flags.String("auth-mode", "", "HTTP auth mode: none or bearer; defaults to GONGMCP_AUTH_MODE or bearer")
 	bearerToken := flags.String("bearer-token", "", "Bearer token for HTTP auth; defaults to GONGMCP_BEARER_TOKEN")
 	bearerTokenFile := flags.String("bearer-token-file", "", "Path to bearer token file; defaults to GONGMCP_BEARER_TOKEN_FILE")
 	allowOpenNetwork := flags.Bool("allow-open-network", false, "Allow non-local HTTP bind addresses; defaults to GONGMCP_ALLOW_OPEN_NETWORK=1")
+	devAllowNoAuthLocalhost := flags.Bool("dev-allow-no-auth-localhost", false, "Allow unauthenticated HTTP only on localhost for local development")
+	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
-	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE=1")
+	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -120,7 +125,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), serverOptions...)
 
-	httpConfig, err := resolveHTTPConfig(*httpAddr, *forceStdio, *authMode, *bearerToken, *bearerTokenFile, *allowOpenNetwork, allowlist, os.Getenv)
+	httpConfig, err := resolveHTTPConfig(*httpAddr, *forceStdio, *authMode, *bearerToken, *bearerTokenFile, *allowOpenNetwork, *devAllowNoAuthLocalhost, *allowedOrigins, allowlist, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid http config: %v\n", err)
 		return 2
@@ -129,7 +134,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if httpConfig.OpenNetworkWarning {
 			fmt.Fprintln(stderr, "warning: starting HTTP MCP on a non-local address; terminate TLS at a trusted proxy/gateway and use only for explicit private-network pilots")
 		}
-		handler := authMiddleware(server, httpConfig)
+		handler := httpHandler(server, httpConfig, stderr)
 		httpServer := &http.Server{
 			Addr:              httpConfig.Addr,
 			Handler:           handler,
@@ -221,9 +226,11 @@ type httpConfig struct {
 	AuthMode           string
 	BearerToken        string
 	OpenNetworkWarning bool
+	LocalBind          bool
+	AllowedOrigins     map[string]struct{}
 }
 
-func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag, tokenFileFlag string, allowOpenNetworkFlag bool, allowlist []string, getenv getenvFunc) (httpConfig, error) {
+func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag, tokenFileFlag string, allowOpenNetworkFlag, devAllowNoAuthLocalhost bool, allowedOriginsFlag string, allowlist []string, getenv getenvFunc) (httpConfig, error) {
 	if forceStdio {
 		if strings.TrimSpace(addrFlag) != "" {
 			return httpConfig{}, fmt.Errorf("--stdio cannot be combined with --http")
@@ -241,28 +248,44 @@ func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag
 
 	authModeSource := firstNonEmpty(authModeFlag, getenv("GONGMCP_AUTH_MODE"))
 	authMode := strings.ToLower(authModeSource)
+	localBind := isLocalHTTPAddr(addr)
 	if authMode == "" {
 		if bearerTokenSourceConfigured(tokenFlag, tokenFileFlag, getenv) {
 			authMode = "bearer"
-		} else {
+		} else if devAllowNoAuthLocalhost && localBind {
 			authMode = "none"
+		} else {
+			authMode = "bearer"
 		}
 	}
 	if authMode != "none" && authMode != "bearer" {
 		return httpConfig{}, fmt.Errorf("auth-mode must be none or bearer")
 	}
+	if authMode == "none" {
+		if !devAllowNoAuthLocalhost {
+			return httpConfig{}, fmt.Errorf("auth-mode=none requires --dev-allow-no-auth-localhost")
+		}
+		if !localBind {
+			return httpConfig{}, fmt.Errorf("auth-mode=none is only allowed for localhost development")
+		}
+	}
 
-	localBind := isLocalHTTPAddr(addr)
 	allowOpenNetwork := allowOpenNetworkFlag || truthy(getenv("GONGMCP_ALLOW_OPEN_NETWORK"))
 	if !localBind {
 		if !allowOpenNetwork {
 			return httpConfig{}, fmt.Errorf("non-local HTTP address %q requires --allow-open-network and TLS termination at a trusted proxy or gateway", addr)
 		}
 	}
+	allowedOrigins, err := parseAllowedOrigins(allowedOriginsFlag, getenv("GONGMCP_ALLOWED_ORIGINS"))
+	if err != nil {
+		return httpConfig{}, err
+	}
+	if !localBind && len(allowedOrigins) == 0 {
+		return httpConfig{}, fmt.Errorf("non-local HTTP address %q requires --allowed-origins or GONGMCP_ALLOWED_ORIGINS for Origin validation", addr)
+	}
 
 	token := ""
 	if authMode == "bearer" {
-		var err error
 		token, err = resolveBearerToken(tokenFlag, tokenFileFlag, getenv)
 		if err != nil {
 			return httpConfig{}, err
@@ -275,7 +298,49 @@ func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag
 		AuthMode:           authMode,
 		BearerToken:        token,
 		OpenNetworkWarning: !localBind,
+		LocalBind:          localBind,
+		AllowedOrigins:     allowedOrigins,
 	}, nil
+}
+
+func parseAllowedOrigins(flagValue, envValue string) (map[string]struct{}, error) {
+	raw := strings.TrimSpace(flagValue)
+	if raw == "" {
+		raw = strings.TrimSpace(envValue)
+	}
+	out := map[string]struct{}{}
+	if raw == "" {
+		return out, nil
+	}
+	for _, piece := range strings.Split(raw, ",") {
+		origin := strings.TrimSpace(piece)
+		if origin == "" {
+			continue
+		}
+		normalized, err := normalizeOrigin(origin)
+		if err != nil {
+			return nil, err
+		}
+		out[normalized] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no valid allowed origins provided")
+	}
+	return out, nil
+}
+
+func normalizeOrigin(origin string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil {
+		return "", fmt.Errorf("invalid allowed origin %q", origin)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid allowed origin %q: scheme must be http or https", origin)
+	}
+	if parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid allowed origin %q: use scheme://host[:port] only", origin)
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
 }
 
 func resolveBearerToken(tokenFlag, tokenFileFlag string, getenv getenvFunc) (string, error) {
@@ -322,6 +387,114 @@ func readBearerTokenFile(path string) (string, error) {
 		return "", fmt.Errorf("auth-mode=bearer requires bearer token or bearer token file")
 	}
 	return token, nil
+}
+
+func httpHandler(server *mcp.Server, cfg httpConfig, accessLog io.Writer) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", originMiddleware(accessLogMiddleware(authMiddleware(server, cfg), cfg, accessLog), cfg))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodHead {
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"status":"ok","service":"gongmcp","version":%q}`+"\n", version.DisplayVersion())
+	})
+	return mux
+}
+
+func originMiddleware(next http.Handler, cfg httpConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		normalized, err := normalizeOrigin(origin)
+		if err != nil || !originAllowed(normalized, cfg) {
+			http.Error(w, "invalid origin", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func originAllowed(origin string, cfg httpConfig) bool {
+	if _, ok := cfg.AllowedOrigins[origin]; ok {
+		return true
+	}
+	return cfg.LocalBind && isLocalOrigin(origin)
+}
+
+func isLocalOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func accessLogMiddleware(next http.Handler, cfg httpConfig, out io.Writer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		requestID := fmt.Sprintf("%d", start.UnixNano())
+		var body bytes.Buffer
+		if r.Body != nil {
+			r.Body = io.NopCloser(io.TeeReader(r.Body, &body))
+		}
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		method, toolName := mcpHTTPAccessInfo(body.Bytes())
+		fmt.Fprintf(out, "mcp_http_access request_id=%s method=%q tool=%q status=%d duration_ms=%d remote_addr=%q auth_mode=%q\n",
+			requestID,
+			method,
+			toolName,
+			recorder.status,
+			time.Since(start).Milliseconds(),
+			r.RemoteAddr,
+			cfg.AuthMode,
+		)
+	})
+}
+
+func mcpHTTPAccessInfo(payload []byte) (string, string) {
+	var req struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return "", ""
+	}
+	if req.Method != "tools/call" {
+		return req.Method, ""
+	}
+	var params struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return req.Method, ""
+	}
+	return req.Method, strings.TrimSpace(params.Name)
 }
 
 func authMiddleware(next http.Handler, cfg httpConfig) http.Handler {

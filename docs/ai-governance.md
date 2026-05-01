@@ -1,8 +1,14 @@
-# AI Governance Customer Exclusion
+# Deterministic AI Exclusion Filtering
 
-`gongctl` can apply a private AI governance YAML file to produce an MCP-facing
-SQLite copy that excludes calls linked to configured customer names, aliases,
-domains, or email fragments before results reach an MCP host or LLM.
+`gongctl` can apply a private YAML file to produce an MCP-facing SQLite copy
+that excludes calls linked to configured customer names, aliases, domains, or
+email fragments before results reach an MCP host or LLM.
+
+This is a deterministic name-based exclusion filter. It is not legal consent
+management, contractual AI-restriction management, DPA enforcement, or a
+substitute for customer approval workflows. Operators remain responsible for
+the restricted-customer list, aliases, account hierarchy, domains, and review of
+the local audit before MCP/AI use.
 
 The public repo must not contain a company's real restricted-customer list. Keep
 the real file in a private mounted path, secret-managed config volume, or

@@ -17,6 +17,7 @@ write_files:
         -p 127.0.0.1:8080:8080 \
         -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
         -e GONGMCP_TOOL_ALLOWLIST=${tool_allowlist} \
+        -e GONGMCP_ALLOWED_ORIGINS=${allowed_origins} \
         -v /mnt/disks/gong-data:/data:ro \
         -v ${bearer_token_file_path}:/run/secrets/gongmcp_token:ro \
         ${image} \

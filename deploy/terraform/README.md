@@ -1,9 +1,11 @@
 # Terraform Examples
 
-These are starter examples for customer-hosted `gongmcp` HTTP pilots. They are
-not reusable production modules. Copy the closest example into the customer's
-infrastructure repo, wire it to existing networking, storage, DNS, TLS, secret
-management, logging, and change-control standards, then pin image digests before
+These are non-production starter examples for customer-hosted `gongmcp` HTTP
+pilots. They are not reusable production modules or reference architectures.
+Copy the closest example into the customer's infrastructure repo, wire it to
+existing networking, storage, DNS, TLS, secret management, logging,
+identity-aware gateway/SSO, WAF or equivalent controls, rate limits, token
+rotation, and change-control standards, then pin image digests before
 promotion.
 
 The examples assume:
@@ -31,7 +33,10 @@ Before applying any example, decide:
 - how the SQLite cache is refreshed and promoted to the read-only MCP runtime
 - whether the MCP DB is a physically filtered governance copy
 - which tools are allowlisted
+- which browser/client origins are allowed to call the MCP endpoint
 - where the bearer token or OAuth broker secret lives
+- how secrets stay out of Terraform state, shell history, image layers, logs,
+  and Git
 - which HTTPS endpoint users paste into ChatGPT, Claude, or another remote MCP
   client
 - where MCP access logs are stored and how raw payload logging is disabled

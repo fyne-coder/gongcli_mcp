@@ -1,4 +1,7 @@
 terraform {
+  # Starter example only. Not production-ready as-is; add customer gateway/SSO,
+  # WAF or equivalent controls, access logs, rate limits, token rotation,
+  # least-privilege egress, release approvals, and audited operations before use.
   required_version = ">= 1.6.0"
 
   required_providers {
@@ -70,6 +73,11 @@ resource "azurerm_container_app" "gongmcp" {
       env {
         name  = "GONGMCP_TOOL_ALLOWLIST"
         value = var.tool_allowlist
+      }
+
+      env {
+        name  = "GONGMCP_ALLOWED_ORIGINS"
+        value = var.allowed_origins
       }
 
       env {

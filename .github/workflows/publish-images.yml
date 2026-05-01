@@ -21,7 +21,53 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require tag or default branch dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          echo "Manual image publishing must run from the default branch." >&2
+          exit 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Release gates
+        shell: bash
+        run: |
+          go test ./...
+          go vet ./...
+          make secret-scan
+
       - uses: docker/setup-buildx-action@v3
+
+      - name: Docker smoke build
+        shell: bash
+        run: |
+          docker build -t gongctl:release-smoke .
+          docker build --target mcp -t gongmcp:release-smoke .
+          docker run --rm --entrypoint /bin/sh gongctl:release-smoke -c 'test -x /usr/local/bin/gongctl && test -x /usr/local/bin/gongmcp'
+          docker run --rm --entrypoint /bin/sh gongmcp:release-smoke -c 'test -x /usr/local/bin/gongmcp'
+
+      - name: Scan gongctl image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: gongctl:release-smoke
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Scan gongmcp image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: gongmcp:release-smoke
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
 
       - uses: docker/login-action@v3
         with:
@@ -50,8 +96,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=v${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-
 
       - name: Build and publish gongctl image
@@ -78,8 +122,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=v${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-
 
       - name: Build and publish gongmcp image

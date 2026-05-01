@@ -154,6 +154,7 @@ docker run --rm \
   -p 8080:8080 \
   -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
   -e GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+  -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
   -v /srv/gongctl/gong.db:/data/gong.db:ro \
   -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \
   ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 \
@@ -167,27 +168,24 @@ HTTP mode does not need Gong credentials and still opens SQLite read-only. It is
 a private-pilot request/response endpoint over one operator-owned cache, not a
 tenant router or hosted review application. HTTP mode always requires an explicit
 tool allowlist, including loopback binds behind a proxy. Non-local binds also
-require `--allow-open-network` and should sit behind TLS termination at a
-trusted company proxy/gateway. The customer's IT/platform owner manages bearer
-tokens outside the repo, image, and SQLite cache. Suitable places include
-Docker secrets, mounted secret files, systemd environment files, Kubernetes
-Secrets, or a company secret manager.
+require `--allow-open-network`, an explicit Origin allowlist, and TLS
+termination at a trusted company proxy/gateway. The customer's IT/platform
+owner manages bearer tokens outside the repo, image, and SQLite cache. Suitable
+places include Docker secrets, mounted secret files, systemd environment files,
+Kubernetes Secrets, or a company secret manager.
+Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
+JSON-RPC traffic.
 
-Unauthenticated HTTP is for localhost development or explicit private-network
-pilots only:
+Unauthenticated HTTP is blocked by default. It is only for explicit local
+development with the native binary, not for shared Docker pilots:
 
 ```bash
-docker run --rm \
-  -p 127.0.0.1:8080:8080 \
-  -e GONGMCP_TOOL_ALLOWLIST=get_sync_status \
-  -v /srv/gongctl/gong.db:/data/gong.db:ro \
-  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 \
-  --http 127.0.0.1:8080 \
-  --auth-mode none \
-  --db /data/gong.db
+GONGMCP_TOOL_ALLOWLIST=get_sync_status \
+  gongmcp --http 127.0.0.1:8080 --auth-mode none --dev-allow-no-auth-localhost --db /srv/gongctl/gong.db
 ```
 
-Binding HTTP to a non-local address fails unless `--allow-open-network` is set.
+Non-local unauthenticated HTTP is not supported. Binding HTTP to a non-local
+address requires bearer auth and fails unless `--allow-open-network` is set.
 Use that override only behind an approved TLS/private-network boundary during a
 temporary pilot.
 

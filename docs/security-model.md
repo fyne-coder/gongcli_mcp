@@ -83,9 +83,17 @@ Implementation controls on the MCP side:
 - `gongmcp` opens SQLite through `sqlite.OpenReadOnly(...)`.
 - `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB.
 - Profile-aware reads refuse stale-cache rebuilds instead of mutating SQLite from MCP.
-- HTTP mode exposes only `/mcp`, supports `--auth-mode none|bearer`, requires
-  an explicit tool allowlist, and blocks non-local binds unless
-  `--allow-open-network` is set.
+- HTTP mode exposes `/mcp` plus unauthenticated `/healthz`, defaults to bearer
+  auth, requires an explicit tool allowlist, and blocks non-local binds unless
+  `--allow-open-network` is set. `--auth-mode none` requires
+  `--dev-allow-no-auth-localhost` and is limited to localhost development.
+- HTTP mode validates the `Origin` header when present. Non-local HTTP binds
+  require `--allowed-origins` or `GONGMCP_ALLOWED_ORIGINS`; localhost binds
+  allow loopback origins for local development.
+- HTTP MCP writes payload-free access log lines with request ID, JSON-RPC
+  method, tool name when present, HTTP status, duration, remote address, and
+  auth mode. It does not log tool arguments, result bodies, transcripts, CRM
+  values, or bearer tokens.
 - AI governance mode suppresses configured customer-name/alias matches from
   supported MCP record/snippet tools and fails closed for unsupported aggregate
   tools while the filter is active. It does not return filtered-call counts over

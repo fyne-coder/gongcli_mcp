@@ -130,6 +130,12 @@ func TestSupportBundleWritesMetadataOnlyBundle(t *testing.T) {
 	if !strings.Contains(body, `"GONG_ACCESS_KEY_SECRET": true`) {
 		t.Fatalf("support bundle missing env presence boolean:\n%s", body)
 	}
+	if !strings.Contains(body, `"contains_customer_operational_metadata": true`) {
+		t.Fatalf("support bundle missing operational metadata warning:\n%s", body)
+	}
+	if strings.Contains(body, "no_identifiers") {
+		t.Fatalf("support bundle overstates identifier exclusion:\n%s", body)
+	}
 }
 
 func readSupportBundleBody(t *testing.T, dir string) string {

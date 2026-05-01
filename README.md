@@ -357,13 +357,14 @@ Rules:
 
 For non-client-specific business prompt examples, see [docs/public-readiness.md](docs/public-readiness.md). Public examples should avoid tenant field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs.
 
-## AI Governance Exclusions
+## Deterministic AI Exclusion Filtering
 
 For companies with customer-specific AI-use restrictions, keep the real
 restricted-customer list in a private YAML file outside Git and load it with
 `gongmcp --ai-governance-config PATH` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
 `gongctl governance audit --db PATH --config PATH` verifies deterministic
-name/alias matches before MCP use. See
+name/alias matches before MCP use. This is a local exclusion filter, not legal
+consent management or contractual enforcement. See
 [docs/ai-governance.md](docs/ai-governance.md); the tracked example config uses
 synthetic names only. For MCP/LLM use, default to a physically filtered MCP DB:
 
@@ -399,6 +400,7 @@ can expose the same read-only MCP tools over a minimal HTTP `/mcp` endpoint:
 
 ```bash
 GONGMCP_BEARER_TOKEN="<customer-managed-token>" \
+GONGMCP_ALLOWED_ORIGINS="https://approved-client.example.com" \
 GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
@@ -409,20 +411,26 @@ non-local use. It is not a hosted SaaS layer, tenant router, browser app, or
 full streaming MCP service. Every HTTP mode requires an explicit tool allowlist,
 including loopback binds behind a proxy; the preferred shape is a loopback bind
 behind the TLS gateway. Any non-loopback `--http` bind also requires
-`--allow-open-network`. Unauthenticated HTTP is allowed only for localhost
-development or explicit private-network pilots:
+`--allow-open-network`. Unauthenticated HTTP is blocked by default and is
+available only for explicit localhost development with
+`--dev-allow-no-auth-localhost`:
 
 ```bash
 GONGMCP_TOOL_ALLOWLIST=get_sync_status \
-  gongmcp --http 127.0.0.1:8080 --auth-mode none --db /srv/gongctl/gong.db
+  gongmcp --http 127.0.0.1:8080 --auth-mode none --dev-allow-no-auth-localhost --db /srv/gongctl/gong.db
 ```
 
-Binding HTTP to a non-local address requires `--allow-open-network`; use that
-override only behind an approved TLS/private-network boundary. Bearer tokens
+Non-local unauthenticated HTTP is not supported. Binding HTTP to a non-local
+address requires bearer auth plus `--allow-open-network`; use that override
+only behind an approved TLS/private-network boundary. Bearer tokens
 are owned by the customer/operator and should come from an environment
 variable, secret file, systemd environment file, Docker secret, Kubernetes
 Secret, or company secret manager. Do not commit MCP bearer tokens to Git,
 SQLite, docs, images, or shared logs.
+Non-local HTTP also requires `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`
+so the server can reject unexpected browser `Origin` headers.
+Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
+JSON-RPC traffic.
 
 Tools:
 

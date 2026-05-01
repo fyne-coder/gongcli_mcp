@@ -11,7 +11,7 @@ of the package supports deployment, security review, support, and operations.
 | Need | Included artifact |
 | --- | --- |
 | Docker image or source-deployable package | [Docker deployment](docker.md), [Release versioning](release.md), `Dockerfile`, `.github/workflows/publish-images.yml` |
-| Terraform examples | [`deploy/terraform`](../deploy/terraform/README.md) |
+| Terraform examples | Non-production starters in [`deploy/terraform`](../deploy/terraform/README.md) |
 | Environment-variable config | [Configuration surfaces](configuration-surfaces.md), `.env.example`, [Docker deployment](docker.md) |
 | Read-only mode by default | [Security model](security-model.md), [Enterprise deployment](enterprise-deployment.md) |
 | Tool allowlist | [MCP data exposure](mcp-data-exposure.md), [Enterprise deployment](enterprise-deployment.md) |
@@ -33,10 +33,13 @@ flowchart LR
   Gong["Gong API"] -->|"HTTPS, operator credentials"| Sync["gongctl sync job"]
   Sync -->|"writes approved cache"| Data["Customer-owned data root\nSQLite, transcripts, profiles"]
   Data -->|"read-only mount"| MCP["gongmcp\nread-only MCP"]
+  Edge["Customer HTTPS/auth boundary\nGateway, proxy, or broker"] -->|"internal bearer HTTP"| MCP
   MCP -->|"stdio or HTTP /mcp"| Host["Approved MCP host\nClaude, ChatGPT via remote HTTPS, or internal client"]
+  Host -->|"HTTPS"| Edge
   Host -->|"prompts and tool results"| Model["Approved AI/model environment"]
   Operator["IT/RevOps operator"] --> Sync
   Security["Customer security controls\nsecrets, TLS, logs, backups"] --> Data
+  Security --> Edge
   Security --> MCP
 ```
 

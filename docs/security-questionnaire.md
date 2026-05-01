@@ -55,6 +55,7 @@ with customer-specific deployment facts before submitting to a security team.
 | --- | --- |
 | Is the MCP cache read-only? | `gongmcp` opens SQLite read-only and should run with a read-only mount. |
 | Is network access required for MCP? | Stdio Docker MCP can run with `--network none`. HTTP MCP needs only the MCP listener behind customer-managed TLS/auth. |
+| Does HTTP MCP validate browser origins? | Yes. Non-local HTTP requires `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`; unexpected `Origin` headers are rejected before auth or tool dispatch. |
 | Are result sizes bounded? | Yes. MCP tools enforce bounded result counts and the server enforces an MCP frame-size limit. |
 | Is data encrypted at rest? | The package does not implement its own encryption layer. Use customer host, disk, volume, database, backup, and cloud encryption controls. |
 | Is data encrypted in transit? | Gong API calls use HTTPS. Remote MCP should be exposed only through customer-managed HTTPS. Local stdio does not traverse the network. |

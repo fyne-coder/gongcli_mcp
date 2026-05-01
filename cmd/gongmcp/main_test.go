@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -249,47 +250,60 @@ func TestRunToolAllowlistFlagPrecedenceOverEnv(t *testing.T) {
 	}
 }
 
-func TestResolveHTTPConfigRequiresExplicitOpenNetworkForNoAuth(t *testing.T) {
+func TestResolveHTTPConfigRequiresBearerByDefaultAndNoAuthDevLocalhost(t *testing.T) {
 	getenv := func(string) string { return "" }
 
-	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", false, []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", false, false, "", []string{"get_sync_status"}, getenv); err == nil {
+		t.Fatal("resolveHTTPConfig allowed auth-mode=none without dev localhost override")
+	}
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", true, true, "https://app.example.com", []string{"get_sync_status"}, getenv); err == nil {
+		t.Fatal("resolveHTTPConfig allowed non-local no-auth HTTP")
+	}
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "", "", false, false, "https://app.example.com", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local bind without explicit override")
 	}
 
-	cfg, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", true, nil, getenv)
+	cfg, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", true, false, "https://app.example.com", nil, getenv)
 	if err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local bind without tool allowlist")
 	}
 
-	cfg, err = resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", true, []string{"get_sync_status"}, getenv)
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", true, false, "", []string{"get_sync_status"}, getenv); err == nil {
+		t.Fatal("resolveHTTPConfig allowed non-local HTTP without allowed origins")
+	}
+
+	cfg, err = resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", true, false, "https://app.example.com", []string{"get_sync_status"}, getenv)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig returned error with override and allowlist: %v", err)
 	}
-	if !cfg.Enabled || cfg.AuthMode != "none" || !cfg.OpenNetworkWarning {
+	if !cfg.Enabled || cfg.AuthMode != "bearer" || !cfg.OpenNetworkWarning {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", false, nil, getenv); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", false, true, "", nil, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed HTTP without tool allowlist")
 	}
-
-	local, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", false, []string{"get_sync_status"}, getenv)
-	if err != nil {
-		t.Fatalf("resolveHTTPConfig rejected local open bind with allowlist: %v", err)
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, false, "", []string{"get_sync_status"}, getenv); err == nil {
+		t.Fatal("resolveHTTPConfig allowed default bearer mode without token")
 	}
-	if local.OpenNetworkWarning {
+
+	local, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", false, true, "", []string{"get_sync_status"}, getenv)
+	if err != nil {
+		t.Fatalf("resolveHTTPConfig rejected explicit local dev no-auth with allowlist: %v", err)
+	}
+	if local.AuthMode != "none" || local.OpenNetworkWarning {
 		t.Fatalf("local config should not warn: %+v", local)
 	}
 }
 
 func TestResolveHTTPConfigRejectsUnknownAuthMode(t *testing.T) {
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "basic", "", "", false, []string{"get_sync_status"}, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "basic", "", "", false, false, "", []string{"get_sync_status"}, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed unknown auth mode")
 	}
 }
 
 func TestResolveHTTPConfigCanForceStdioWithHTTPAddrEnv(t *testing.T) {
-	cfg, err := resolveHTTPConfig("", true, "", "", "", false, nil, func(key string) string {
+	cfg, err := resolveHTTPConfig("", true, "", "", "", false, false, "", nil, func(key string) string {
 		if key == "GONGMCP_HTTP_ADDR" {
 			return "127.0.0.1:0"
 		}
@@ -302,7 +316,7 @@ func TestResolveHTTPConfigCanForceStdioWithHTTPAddrEnv(t *testing.T) {
 		t.Fatalf("force stdio should disable HTTP config: %+v", cfg)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", true, "", "", "", false, nil, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", true, "", "", "", false, false, "", nil, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed --stdio with --http")
 	}
 }
@@ -322,7 +336,7 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 		}
 	}
 	allowlist := []string{"get_sync_status"}
-	cfg, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, allowlist, getenv)
+	cfg, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, false, "", allowlist, getenv)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig returned error: %v", err)
 	}
@@ -331,7 +345,7 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	}
 
 	envFile := getenv
-	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "flag-token", "", false, allowlist, envFile)
+	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "flag-token", "", false, false, "", allowlist, envFile)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig did not let bearer token flag override env file: %v", err)
 	}
@@ -345,7 +359,7 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 		}
 		return ""
 	}
-	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "", tokenPath, false, allowlist, envToken)
+	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "", tokenPath, false, false, "", allowlist, envToken)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig did not let bearer token file flag override env token: %v", err)
 	}
@@ -353,16 +367,16 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 		t.Fatalf("bearer token=%q want file-token", cfg.BearerToken)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "flag-token", tokenPath, false, allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "flag-token", tokenPath, false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed both raw token and token file")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", "", false, allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed bearer mode without token")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", filepath.Join(t.TempDir(), "missing-token"), false, allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", filepath.Join(t.TempDir(), "missing-token"), false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed unreadable token file")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, allowlist, func(key string) string {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, false, "", allowlist, func(key string) string {
 		switch key {
 		case "GONGMCP_BEARER_TOKEN":
 			return "env-token"
@@ -444,6 +458,101 @@ func TestBearerHTTPStackProtectsMCPRequests(t *testing.T) {
 	}
 	if !strings.Contains(authorizedRecorder.Body.String(), `"protocolVersion"`) {
 		t.Fatalf("authorized response=%q missing initialize result", authorizedRecorder.Body.String())
+	}
+}
+
+func TestHTTPHandlerExposesUnauthenticatedHealthzOnly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	store, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	server := mcp.NewServer(store, "gongmcp", "test")
+	var accessLog bytes.Buffer
+	handler := httpHandler(server, httpConfig{
+		Enabled:     true,
+		Addr:        "127.0.0.1:0",
+		AuthMode:    "bearer",
+		BearerToken: "expected-token",
+	}, &accessLog)
+
+	health := httptest.NewRecorder()
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%q", health.Code, health.Body.String())
+	}
+	if !strings.Contains(health.Body.String(), `"status":"ok"`) {
+		t.Fatalf("health body=%q missing status", health.Body.String())
+	}
+
+	mcpRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(mcpRecorder, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`)))
+	if mcpRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("mcp status=%d want unauthorized", mcpRecorder.Code)
+	}
+	if !strings.Contains(accessLog.String(), `auth_mode="bearer"`) {
+		t.Fatalf("access log missing auth mode: %s", accessLog.String())
+	}
+	if strings.Contains(accessLog.String(), `{}`) {
+		t.Fatalf("access log leaked request payload: %s", accessLog.String())
+	}
+}
+
+func TestHTTPHandlerValidatesOrigin(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	store, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	server := mcp.NewServer(store, "gongmcp", "test")
+	handler := httpHandler(server, httpConfig{
+		Enabled:     true,
+		Addr:        "0.0.0.0:8080",
+		AuthMode:    "bearer",
+		BearerToken: "expected-token",
+		AllowedOrigins: map[string]struct{}{
+			"https://chatgpt.example.com": {},
+		},
+	}, io.Discard)
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
+
+	allowed := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	allowed.Header.Set("Origin", "https://chatgpt.example.com")
+	allowed.Header.Set("Authorization", "Bearer expected-token")
+	allowedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(allowedRecorder, allowed)
+	if allowedRecorder.Code != http.StatusOK {
+		t.Fatalf("allowed status=%d body=%q", allowedRecorder.Code, allowedRecorder.Body.String())
+	}
+
+	blocked := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	blocked.Header.Set("Origin", "https://attacker.example.com")
+	blocked.Header.Set("Authorization", "Bearer expected-token")
+	blockedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(blockedRecorder, blocked)
+	if blockedRecorder.Code != http.StatusForbidden {
+		t.Fatalf("blocked status=%d want forbidden body=%q", blockedRecorder.Code, blockedRecorder.Body.String())
+	}
+}
+
+func TestHTTPHandlerAllowsLoopbackOriginsForLocalBind(t *testing.T) {
+	handler := httpHandler(mcp.NewServer(nil, "gongmcp", "test"), httpConfig{
+		Enabled:   true,
+		Addr:      "127.0.0.1:8080",
+		AuthMode:  "none",
+		LocalBind: true,
+	}, io.Discard)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+	req.Header.Set("Origin", "http://localhost:3000")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("loopback origin status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
 

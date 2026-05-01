@@ -1,4 +1,7 @@
 terraform {
+  # Starter example only. Not production-ready as-is; add customer gateway/SSO,
+  # WAF or equivalent controls, access logs, rate limits, token rotation,
+  # least-privilege egress, release approvals, and audited operations before use.
   required_version = ">= 1.6.0"
 
   required_providers {
@@ -118,8 +121,8 @@ resource "aws_lb_target_group" "this" {
 
   health_check {
     enabled             = true
-    path                = "/mcp"
-    matcher             = "200-499"
+    path                = "/healthz"
+    matcher             = "200"
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
@@ -177,6 +180,9 @@ resource "aws_ecs_task_definition" "gongmcp" {
     environment = [{
       name  = "GONGMCP_TOOL_ALLOWLIST"
       value = var.tool_allowlist
+      }, {
+      name  = "GONGMCP_ALLOWED_ORIGINS"
+      value = var.allowed_origins
     }]
     secrets = [{
       name      = "GONGMCP_BEARER_TOKEN"

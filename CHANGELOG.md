@@ -18,6 +18,12 @@
 - Added auth-ready HTTP MCP private-pilot mode for `gongmcp`, with bearer-token
   support, HTTP allowlist and non-local bind guardrails, request timeouts, and docs
   that separate stdio, private HTTP, and future hosted/OIDC service boundaries.
+- Tightened HTTP MCP so bearer auth is the default for HTTP, unauthenticated
+  HTTP requires an explicit localhost development flag, `/healthz` is available
+  for infrastructure checks, and payload-free HTTP access logs record method,
+  tool, status, duration, remote address, and auth mode.
+- Added HTTP Origin validation for MCP requests; non-local HTTP deployments now
+  require `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`.
 - Added private AI governance config support for deterministic customer-name
   exclusion from MCP output, plus a local `gongctl governance audit` command and
   synthetic-only docs/examples.
@@ -28,6 +34,8 @@
 - Added a GHCR publishing workflow for separate `gongctl` and MCP-only
   `gongmcp` images, plus release/docs updates for public Git and container
   consumption.
+- Added GHCR release gates for tests, vet, secret scan, Docker smoke builds, and
+  image vulnerability scans before image push.
 - Refreshed enterprise pilot docs with a "Default Posture And Optional Wider
   Surface" section and an "MCP Call Volume And Limits" section in
   `docs/mcp-data-exposure.md` so single-user analyst workflows have a

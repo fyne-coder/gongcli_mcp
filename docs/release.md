@@ -47,15 +47,18 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
 10. Run `make docker-build-ghcr`.
 11. Run `make docker-build-ghcr-mcp`.
 12. Tag the release as `v$(cat VERSION)`.
-13. Push the tag; `.github/workflows/publish-images.yml` publishes:
+13. Push the tag; `.github/workflows/publish-images.yml` reruns tests, vet,
+    secret scan, Docker smoke builds, and image vulnerability scans before it
+    publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
 14. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
 15. Run GoReleaser from the tag.
 
-The GHCR workflow can also be run manually from GitHub Actions. Manual runs use
-the current `VERSION` file for `vX.Y.Z` and `X.Y.Z` image tags.
+The GHCR workflow can also be run manually from GitHub Actions from the default
+branch. Manual runs publish SHA-tagged images only; release version tags come
+from protected `vX.Y.Z` tag pushes.
 
 ## Supply-Chain Notes
 

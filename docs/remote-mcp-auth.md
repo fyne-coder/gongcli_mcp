@@ -20,14 +20,17 @@ Current boundary:
 `gongmcp` supports:
 
 - stdio MCP for local desktop hosts
-- HTTP `/mcp` for private pilots
+- Streamable HTTP-style POST `/mcp` for private pilots
+- GET `/mcp` returns 405 because server-sent streaming is not implemented yet
 - static bearer-token validation for HTTP mode
 - required HTTP tool allowlist
+- Origin validation for HTTP requests
 - read-only SQLite access
 - non-local bind guardrails
 
-It does not currently implement native OAuth 2.1, dynamic client registration,
-per-user RBAC, tenant routing, or a browser-facing consent application.
+It does not currently implement native OAuth 2.1, Protected Resource Metadata,
+dynamic client registration, per-user RBAC, tenant routing, or a browser-facing
+consent application.
 
 ## Remote MCP Auth Decision
 
@@ -49,6 +52,8 @@ client, confirm the endpoint provides:
 
 - HTTPS URL ending at the MCP endpoint, for example
   `https://gong-mcp.example.com/mcp`
+- a stable browser `Origin` value that can be allowlisted in `gongmcp` or at
+  the gateway
 - OAuth 2.1-compatible authorization flow for HTTP MCP clients
 - protected-resource metadata for the MCP resource
 - authorization-server discovery through OAuth/OIDC metadata
@@ -62,6 +67,8 @@ client, confirm the endpoint provides:
 
 Protocol references:
 
+- MCP Streamable HTTP transport:
+  <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
 - OpenAI MCP server guide:
   <https://developers.openai.com/api/docs/mcp>
 - ChatGPT developer mode guide:
@@ -76,6 +83,7 @@ participants.
 
 ```bash
 GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
+GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
 GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
   gongmcp \
     --http 127.0.0.1:8080 \
@@ -86,7 +94,9 @@ GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_ca
 Put TLS, DNS, and network access in front of that loopback service using a
 customer gateway. This is not enough for ChatGPT's app-style OAuth flow, but it
 is useful for curl, MCP Inspector, internal gateway testing, and controlled
-service-to-service pilots.
+service-to-service pilots. If the approved client sends an `Origin` header,
+that origin must match `GONGMCP_ALLOWED_ORIGINS`; unexpected origins receive
+`403 Forbidden` before auth or tool dispatch.
 
 ## Option B: OAuth Broker In Front Of `gongmcp`
 
@@ -109,6 +119,8 @@ The broker owns:
 - consent and scope presentation
 - access-token issuance
 - token validation and mapping to internal bearer auth
+- Origin validation at the edge plus a matching internal `GONGMCP_ALLOWED_ORIGINS`
+  policy when browser clients are involved
 - audit logging for user/app/tool access
 
 `gongmcp` owns:
@@ -218,7 +230,9 @@ Expected:
 - unauthorized request returns `401`
 - authorized request returns only approved tools
 - `get_sync_status` works before any search tools are enabled
-- logs do not contain transcripts, CRM values, tokens, or raw payload bodies
+- HTTP access logs include request ID, JSON-RPC method, tool name when present,
+  HTTP status, duration, remote address, and auth mode. They do not contain
+  tool arguments, transcripts, CRM values, tokens, or raw payload bodies.
 
 ## Backlog For Native OAuth
 
@@ -227,10 +241,16 @@ Native OAuth in `gongmcp` should be a separate implementation slice.
 Likely scope:
 
 - `--auth-mode oauth2`
-- protected-resource metadata endpoint
+- Protected Resource Metadata endpoint at
+  `/.well-known/oauth-protected-resource` and, if needed, endpoint-scoped
+  metadata such as `/.well-known/oauth-protected-resource/mcp`
+- `WWW-Authenticate` 401 challenges with `resource_metadata` and required
+  scope hints
 - issuer/audience/scope configuration
 - JWKS discovery and cache
-- per-tool scope mapping
+- business-level per-tool scope mapping such as `gong_evidence.search`,
+  `gong_evidence.read_excerpt`, `account_timeline.read`, `brief.generate`, and
+  `profiles.list`
 - structured audit log for MCP calls
 - interop tests with MCP Inspector, ChatGPT developer mode, and Claude remote
   add-by-URL

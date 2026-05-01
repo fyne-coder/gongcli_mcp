@@ -48,6 +48,11 @@ variable "tool_allowlist" {
   default     = "get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog"
 }
 
+variable "allowed_origins" {
+  type        = string
+  description = "Comma-separated HTTP Origin allowlist for browser-capable MCP clients hitting the customer HTTPS endpoint."
+}
+
 variable "external_ingress_enabled" {
   type        = bool
   description = "Whether Container Apps exposes an external HTTPS endpoint."
