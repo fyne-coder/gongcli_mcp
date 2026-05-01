@@ -40,8 +40,8 @@ Release images are published to GHCR as two separate packages:
 Use immutable version tags or digest-pinned references in company deployments:
 
 ```bash
-docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0
-docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.0
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0
 ```
 
 The `gongctl` image includes both binaries, but business-user MCP hosts should
@@ -131,7 +131,7 @@ Point an MCP host at `docker run` with stdin kept open:
         "none",
         "-v",
         "/Users/YOU/gongctl-data:/data:ro",
-        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0",
+        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0",
         "--db",
         "/data/gong.db"
       ]
@@ -157,7 +157,7 @@ docker run --rm \
   -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
   -v /srv/gongctl/gong.db:/data/gong.db:ro \
   -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \
-  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0 \
   --http 0.0.0.0:8080 \
   --auth-mode bearer \
   --allow-open-network \

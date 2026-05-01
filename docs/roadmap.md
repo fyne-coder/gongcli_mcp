@@ -19,7 +19,7 @@ hardening as one broad "production ready" milestone. The product boundary stays:
 Goal: a company can run a limited, reviewed pilot with admin-only sync and
 business-user MCP access over a read-only cache.
 
-Status as of 2026-04-29 (v0.2.0): all six required outcomes have shipped. The
+Status as of 2026-05-01 (v0.3.0): all six required outcomes have shipped. The
 list is kept here as the contract for what "Gate 1" means; new pilots should
 verify each item against the current binary and docs rather than treating the
 status line as a guarantee.
@@ -58,7 +58,7 @@ Pilot packet docs:
 Goal: the project is safe to operate repeatedly inside a company with defined
 owners, retention, upgrade, rollback, and security controls.
 
-Status as of 2026-04-29 (v0.2.0): items 1, 2, 4, and 5 have shipped. Items 3
+Status as of 2026-05-01 (v0.3.0): items 1, 2, 4, and 5 have shipped. Items 3
 and 6 are partially shipped: regression tests and the exposure-classification
 table exist, but a written tool-intake checklist is not in the repo, and backup
 guidance is documented while a formal migration-test harness is not.

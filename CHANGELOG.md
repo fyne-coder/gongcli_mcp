@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-05-01
+
 - Added a customer-hosted Data Boundary Statement, support-access runbook, and
   `gongctl support bundle` metadata-only diagnostic command for sanitized
   support intake without raw transcripts, payloads, secrets, local paths, or
@@ -54,6 +56,15 @@
 - Cross-linked the new posture and volume sections from `README.md` and
   `docs/enterprise-deployment.md`, and pointed the business-user
   cache-freshness caveats at the operator sync runbook.
+- Added `gongmcp --list-tool-presets` so operators can inspect the exact
+  built-in MCP tool profiles from the binary they are deploying.
+- Added current/previous bearer-token file support for private HTTP bridge
+  rotation and payload-free access logs that record the accepted token slot.
+- Added `gongctl profile history`, `profile diff`, `profile activate`,
+  `profile import --activate=false`, and `profile schema` for RevOps profile
+  review, staged activation, and rollback workflows.
+- Pinned GitHub Actions to commit SHAs and added release docs for image digest
+  verification and digest-pinned customer deployments.
 
 ## 0.2.0 - 2026-04-29
 

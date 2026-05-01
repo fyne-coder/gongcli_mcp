@@ -107,8 +107,8 @@ paths:
   backups: backups
 
 images:
-  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0
-  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0
+  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.0
+  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0
 ```
 
 This should not contain Gong credentials. Credentials should remain environment

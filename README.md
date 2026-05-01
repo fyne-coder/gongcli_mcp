@@ -26,7 +26,7 @@ question, better tracker/theme inputs, and known coverage limits.
 
 ## Status
 
-Early public release. `v0.2.0` is enterprise-pilot ready for operator-managed
+Early public release. `v0.3.0` is enterprise-pilot ready for operator-managed
 local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
 requires signed/provenance-backed release artifacts, stable deprecation policy,
 and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
@@ -122,14 +122,14 @@ For the fastest end-to-end path, use the [Quickstart](docs/quickstart.md).
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.0 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.0 sync status --db /data/gong.db
 ```
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
