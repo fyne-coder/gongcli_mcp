@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,16 +129,15 @@ func ExportGovernanceFilteredDB(ctx context.Context, sourcePath, outputPath stri
 		}
 	}
 
-	source, err := Open(ctx, sourceAbs)
+	source, err := OpenReadOnly(ctx, sourceAbs)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := source.db.ExecContext(ctx, `VACUUM main INTO ?`, outputAbs); err != nil {
-		_ = source.Close()
-		return nil, fmt.Errorf("copy source db: %w", err)
-	}
 	if err := source.Close(); err != nil {
 		return nil, err
+	}
+	if err := vacuumReadOnlyDBInto(ctx, sourceAbs, outputAbs); err != nil {
+		return nil, fmt.Errorf("copy source db: %w", err)
 	}
 
 	out, err := Open(ctx, outputAbs)
@@ -152,6 +153,33 @@ func ExportGovernanceFilteredDB(ctx context.Context, sourcePath, outputPath stri
 	plan.SourceDBPath = sourceAbs
 	plan.OutputDBPath = outputAbs
 	return plan, nil
+}
+
+func vacuumReadOnlyDBInto(ctx context.Context, sourceAbs, outputAbs string) error {
+	db, err := sql.Open("sqlite", sqliteFileURI(sourceAbs, url.Values{"mode": []string{"ro"}}))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 5000`); err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `VACUUM main INTO ?`, outputAbs)
+	return err
+}
+
+func governanceCallIDTableRegistry() map[string]string {
+	return map[string]string{
+		"calls":                   "delete",
+		"transcripts":             "delete",
+		"transcript_segments":     "delete",
+		"call_context_objects":    "delete",
+		"call_context_fields":     "delete",
+		"profile_call_fact_cache": "delete",
+		"transcript_segments_fts": "rebuild",
+	}
 }
 
 func (s *Store) DeleteGovernanceSuppressedCalls(ctx context.Context, callIDs []string) (*GovernanceFilteredExportPlan, error) {
@@ -260,7 +288,8 @@ SELECT
 	(SELECT COUNT(*) FROM transcript_segments WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
 	(SELECT COUNT(*) FROM call_context_objects WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
 	(SELECT COUNT(*) FROM call_context_fields WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
-	(SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids))
+	(SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
+	(SELECT COUNT(*) FROM transcript_segments_fts WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids))
 `).Scan(&count)
 	if err != nil {
 		return 0, err

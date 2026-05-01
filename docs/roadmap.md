@@ -99,6 +99,20 @@ Required outcomes:
 5. A tested feedback loop for adding MCP tools without widening the default data
    exposure surface.
 
+Review-driven hardening backlog before `main`/1.0:
+
+- Token rotation for private HTTP bridge mode: support current/previous bearer
+  tokens or equivalent gateway-managed rotation without downtime.
+- Release workflow hardening: pin GitHub Actions to commit SHAs or document an
+  enforced trusted-actions policy, then add image-signing or digest-verification
+  instructions for customers.
+- Profile operations: add staged import/activation/history/diff or equivalent
+  rollback ergonomics for RevOps-admin profile changes.
+- Profile schema: publish JSON Schema or a generated `profile schema` command.
+- Native remote OAuth: implement Protected Resource Metadata, issuer/audience
+  validation, scopes, and per-user audit only after the private bridge boundary
+  stays stable.
+
 ## Feature Direction
 
 - Keep MCP read-only over cached SQLite. Do not add live Gong API calls to MCP.

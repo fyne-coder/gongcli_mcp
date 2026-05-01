@@ -58,6 +58,9 @@ Current `gongctl support bundle` files:
 The bundle is customer-boundary operational metadata. It is designed to exclude
 raw customer content, direct customer-content identifiers, secrets, and local
 paths; it is not designed to be posted in public issues.
+The generated response and redaction policy label this explicitly as
+`sensitivity: customer_operational_metadata`; share it only under the
+customer's support policy.
 
 Operator-supplied case notes may add sanitized details such as:
 

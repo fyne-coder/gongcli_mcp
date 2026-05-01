@@ -31,9 +31,15 @@ resource "azurerm_container_app" "gongmcp" {
   container_app_environment_id = var.container_app_environment_id
   revision_mode                = "Single"
 
+  identity {
+    type = "SystemAssigned"
+  }
+
   secret {
-    name  = "gongmcp-bearer-token"
-    value = var.bearer_token
+    name                = "gongmcp-bearer-token"
+    value               = var.bearer_token_key_vault_secret_id == "" ? var.bearer_token : null
+    key_vault_secret_id = var.bearer_token_key_vault_secret_id == "" ? null : var.bearer_token_key_vault_secret_id
+    identity            = var.bearer_token_key_vault_secret_id == "" ? null : "system"
   }
 
   ingress {
@@ -89,6 +95,13 @@ resource "azurerm_container_app" "gongmcp" {
         name = "gong-data"
         path = "/data"
       }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.bearer_token != "" || var.bearer_token_key_vault_secret_id != ""
+      error_message = "Set bearer_token_key_vault_secret_id for Key Vault-backed secrets, or bearer_token for a lab-only Terraform-state-managed secret."
     }
   }
 }

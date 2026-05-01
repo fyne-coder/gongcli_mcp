@@ -483,8 +483,19 @@ func TestHTTPHandlerExposesUnauthenticatedHealthzOnly(t *testing.T) {
 	if health.Code != http.StatusOK {
 		t.Fatalf("health status=%d body=%q", health.Code, health.Body.String())
 	}
-	if !strings.Contains(health.Body.String(), `"status":"ok"`) {
-		t.Fatalf("health body=%q missing status", health.Body.String())
+	if !json.Valid(health.Body.Bytes()) {
+		t.Fatalf("health body is not valid JSON: %q", health.Body.String())
+	}
+	var healthPayload struct {
+		Status  string `json:"status"`
+		Service string `json:"service"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(health.Body.Bytes(), &healthPayload); err != nil {
+		t.Fatalf("unmarshal health JSON: %v", err)
+	}
+	if healthPayload.Status != "ok" || healthPayload.Service != "gongmcp" || healthPayload.Version == "" {
+		t.Fatalf("unexpected health payload: %+v", healthPayload)
 	}
 
 	mcpRecorder := httptest.NewRecorder()
@@ -509,6 +520,7 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 	defer store.Close()
 
 	server := mcp.NewServer(store, "gongmcp", "test")
+	var accessLog bytes.Buffer
 	handler := httpHandler(server, httpConfig{
 		Enabled:     true,
 		Addr:        "0.0.0.0:8080",
@@ -517,8 +529,24 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 		AllowedOrigins: map[string]struct{}{
 			"https://chatgpt.example.com": {},
 		},
-	}, io.Discard)
+	}, &accessLog)
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/mcp", nil)
+	preflight.Header.Set("Origin", "https://chatgpt.example.com")
+	preflight.Header.Set("Access-Control-Request-Method", "POST")
+	preflight.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+	preflightRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(preflightRecorder, preflight)
+	if preflightRecorder.Code != http.StatusNoContent {
+		t.Fatalf("preflight status=%d body=%q", preflightRecorder.Code, preflightRecorder.Body.String())
+	}
+	if got := preflightRecorder.Header().Get("Access-Control-Allow-Origin"); got != "https://chatgpt.example.com" {
+		t.Fatalf("preflight allow origin=%q", got)
+	}
+	if got := preflightRecorder.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Authorization") || !strings.Contains(got, "Content-Type") {
+		t.Fatalf("preflight allow headers=%q", got)
+	}
 
 	allowed := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
 	allowed.Header.Set("Origin", "https://chatgpt.example.com")
@@ -536,6 +564,10 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 	handler.ServeHTTP(blockedRecorder, blocked)
 	if blockedRecorder.Code != http.StatusForbidden {
 		t.Fatalf("blocked status=%d want forbidden body=%q", blockedRecorder.Code, blockedRecorder.Body.String())
+	}
+	logOutput := accessLog.String()
+	if !strings.Contains(logOutput, "status=204") || !strings.Contains(logOutput, "status=200") || !strings.Contains(logOutput, "status=403") {
+		t.Fatalf("access log did not record preflight, success, and origin rejection: %s", logOutput)
 	}
 }
 

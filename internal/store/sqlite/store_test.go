@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -2271,6 +2272,12 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close source returned error: %v", err)
 	}
+	if err := os.Chmod(sourcePath, 0400); err != nil {
+		t.Fatalf("chmod source read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(sourcePath, 0600)
+	})
 
 	plan, err := ExportGovernanceFilteredDB(ctx, sourcePath, outputPath, []string{"call-governance-export-blocked", "call-governance-export-mentioned", "call-governance-export-email"}, false)
 	if err != nil {
@@ -2308,6 +2315,99 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 			t.Fatalf("filtered DB retained blocked governance candidate: %+v", candidate)
 		}
 	}
+}
+
+func TestGovernanceSuppressedCallIDTableRegistryCoversSchema(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	tables, err := schemaTablesWithColumn(ctx, store, "call_id")
+	if err != nil {
+		t.Fatalf("schemaTablesWithColumn returned error: %v", err)
+	}
+	registry := governanceCallIDTableRegistry()
+	var missing []string
+	for _, table := range tables {
+		if _, ok := registry[table]; !ok {
+			missing = append(missing, table)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("governance call_id registry missing tables: %s", strings.Join(missing, ", "))
+	}
+	var extra []string
+	tableSet := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		tableSet[table] = struct{}{}
+	}
+	for table := range registry {
+		if _, ok := tableSet[table]; !ok {
+			extra = append(extra, table)
+		}
+	}
+	sort.Strings(extra)
+	if len(extra) > 0 {
+		t.Fatalf("governance call_id registry includes tables not present in schema: %s", strings.Join(extra, ", "))
+	}
+}
+
+func schemaTablesWithColumn(ctx context.Context, store *Store, column string) ([]string, error) {
+	rows, err := store.DB().QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+
+	var tables []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		tables = append(tables, table)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, table := range tables {
+		infoRows, err := store.DB().QueryContext(ctx, `PRAGMA table_info(`+quoteSQLiteIdentForTest(table)+`)`)
+		if err != nil {
+			return nil, err
+		}
+		hasColumn := false
+		for infoRows.Next() {
+			var cid int
+			var name, typeName string
+			var notNull int
+			var defaultValue any
+			var pk int
+			if err := infoRows.Scan(&cid, &name, &typeName, &notNull, &defaultValue, &pk); err != nil {
+				_ = infoRows.Close()
+				return nil, err
+			}
+			if name == column {
+				hasColumn = true
+			}
+		}
+		if err := infoRows.Close(); err != nil {
+			return nil, err
+		}
+		if hasColumn {
+			out = append(out, table)
+		}
+	}
+	return out, nil
+}
+
+func quoteSQLiteIdentForTest(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func TestProfileImportAndProfileAwareFacts(t *testing.T) {

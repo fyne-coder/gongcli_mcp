@@ -35,10 +35,21 @@ variable "allowed_ingress_cidrs" {
   description = "CIDR ranges allowed to reach HTTPS."
 }
 
+variable "alb_egress_cidrs" {
+  type        = list(string)
+  description = "Private CIDR ranges where the ALB may reach ECS tasks on port 8080."
+}
+
 variable "internal_alb" {
   type        = bool
   description = "Whether the ALB is internal."
   default     = true
+}
+
+variable "acknowledge_no_sso_gateway" {
+  type        = bool
+  description = "Set true only when an externally reachable static-bearer lab bridge has a customer-approved SSO/gateway/WAF plan outside this starter."
+  default     = false
 }
 
 variable "acm_certificate_arn" {
@@ -71,6 +82,30 @@ variable "tool_allowlist" {
 variable "allowed_origins" {
   type        = string
   description = "Comma-separated HTTP Origin allowlist for browser-capable MCP clients hitting the customer HTTPS endpoint."
+}
+
+variable "service_egress_cidrs" {
+  type        = list(string)
+  description = "Explicit customer-approved egress CIDRs for the ECS service. Leave empty for no internet egress; add only required private endpoints such as EFS/VPC services."
+  default     = []
+}
+
+variable "cloudwatch_log_kms_key_id" {
+  type        = string
+  description = "Optional KMS key ARN/ID for encrypting the CloudWatch log group."
+  default     = ""
+}
+
+variable "alb_access_logs_bucket" {
+  type        = string
+  description = "Optional S3 bucket for ALB access logs. Production deployments should enable this with a customer-owned bucket."
+  default     = ""
+}
+
+variable "alb_access_logs_prefix" {
+  type        = string
+  description = "S3 prefix for ALB access logs when alb_access_logs_bucket is set."
+  default     = "gongmcp"
 }
 
 variable "cpu" {

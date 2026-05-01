@@ -39,6 +39,15 @@ reviewed profile is imported.
 
 4. Review and edit the YAML. Keep it outside git when it describes a real customer tenant. The reviewer should confirm lifecycle buckets, post-sales signals, attribution fields, and methodology concepts before using the profile for sales-vs-post-sales or attribution claims. A synthetic, import-shape example lives at [docs/examples/business-profile.example.yaml](examples/business-profile.example.yaml).
 
+   Before import, require evidence for every mapped object, field, and lifecycle
+   bucket:
+
+   - population count and distinct value count
+   - top observed values from the reviewed cache
+   - at least two positive examples that should match
+   - at least two negative examples that should not match
+   - RevOps or process-owner signoff
+
 5. Validate and import:
 
    ```bash
@@ -56,6 +65,21 @@ reviewed profile is imported.
    ```
 
 Run `gongctl sync status --db ~/gongctl-data/gong.db` after import to see the profile readiness report. It shows whether a profile is active, whether the profile read model is fresh, concept counts, unavailable concepts, and what blocks reliable tenant-specific lifecycle separation. Use `gongctl profile show`, `list_business_concepts`, and `list_unmapped_crm_fields` when you need the detailed mapped/unmapped field view.
+
+Do not expose profile-aware MCP answers to business users until:
+
+- `profile_readiness.active=true`
+- the profile cache is fresh
+- the lifecycle core buckets are present
+- attribution coverage has been reviewed
+- unavailable concepts have either been accepted or fixed
+- transcript coverage is sufficient for the intended prompts
+
+Rollback is currently explicit rather than staged: keep the prior reviewed YAML
+outside git, re-import it if a new profile is wrong, and use
+`--lifecycle-source builtin` for CLI analysis while investigating. Native
+`profile import --activate=false`, `profile activate`, `profile history`, and
+`profile diff` are backlog items, not current commands.
 
 ## YAML Shape
 
@@ -105,6 +129,18 @@ methodology:
 
 The required MCP lifecycle core is `open`, `closed_won`, `closed_lost`, `post_sales`, and `unknown`. A partial profile may import with warnings, but profile-aware tools report unavailable concepts explicitly instead of silently substituting a missing mapping.
 
+Common starting mappings:
+
+| CRM pattern | Deal object | Account object | Stage field | Notes |
+| --- | --- | --- | --- | --- |
+| Salesforce-style | `Opportunity` | `Account` | `StageName` | `ForecastCategoryName` is useful context but is not the same as lifecycle stage. |
+| HubSpot-style | `Deal` | `Company` | `dealstage` | `pipeline` helps segment processes but should not replace the stage field. |
+
+Common bad mappings: `Type`, `Status`, `CreatedDate`, owner fields, source
+campaigns, or forecast categories used as the only lifecycle stage. These may
+be useful methodology or segmentation fields, but they should not drive the
+core lifecycle buckets without reviewer evidence.
+
 ## YAML Fields
 
 - `version`: Profile schema version. Use `1`.
@@ -129,6 +165,10 @@ The required MCP lifecycle core is `open`, `closed_won`, `closed_lost`, `post_sa
 - `confidence` and `evidence`: Optional discovery metadata. `profile discover`
   may include these to explain why it picked an object, field, or lifecycle
   value. Operators can keep them for review or remove them before import.
+
+There is no published JSON Schema yet. Treat `gongctl profile validate` as the
+machine check and this document as the human grammar. A generated schema or
+`profile schema` command is a backlog item for less technical RevOps handoff.
 
 Review checklist:
 

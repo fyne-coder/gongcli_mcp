@@ -151,7 +151,7 @@ customer-managed endpoint for multiple approved users or MCP hosts:
 
 ```bash
 docker run --rm \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
   -e GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
   -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
@@ -175,6 +175,11 @@ places include Docker secrets, mounted secret files, systemd environment files,
 Kubernetes Secrets, or a company secret manager.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
 JSON-RPC traffic.
+
+The example binds the host port to `127.0.0.1` so only a local customer proxy,
+gateway, or tunnel can reach it. Do not change this to `-p 8080:8080` unless
+the host firewall, private network, and customer auth boundary are already in
+place and approved for a temporary lab bridge.
 
 Unauthenticated HTTP is blocked by default. It is only for explicit local
 development with the native binary, not for shared Docker pilots:

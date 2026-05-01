@@ -99,7 +99,9 @@ func (a *app) supportBundle(ctx context.Context, args []string) error {
 		Files:                               supportBundleFiles(*includeEnv),
 		ContainsRawCustomerData:             false,
 		ContainsCustomerOperationalMetadata: true,
+		Sensitivity:                         "customer_operational_metadata",
 		RedactionPolicy:                     "metadata_only_no_payloads_no_transcripts_no_direct_customer_content_identifiers_no_secrets_no_paths",
+		SharePolicy:                         "Share under the customer's support policy; this bundle is not public-safe.",
 	})
 }
 
@@ -249,6 +251,7 @@ func supportRedactionPolicy() supportRedactionPolicyJSON {
 	return supportRedactionPolicyJSON{
 		Mode:                                "metadata_only",
 		ContainsCustomerOperationalMetadata: true,
+		Sensitivity:                         "customer_operational_metadata",
 		ExcludedByDefault: []string{
 			"Gong credentials and MCP bearer tokens",
 			"raw Gong API payloads",
@@ -290,7 +293,9 @@ type supportBundleResponse struct {
 	Files                               []string                   `json:"files"`
 	ContainsRawCustomerData             bool                       `json:"contains_raw_customer_data"`
 	ContainsCustomerOperationalMetadata bool                       `json:"contains_customer_operational_metadata"`
+	Sensitivity                         string                     `json:"sensitivity"`
 	RedactionPolicy                     string                     `json:"redaction_policy"`
+	SharePolicy                         string                     `json:"share_policy"`
 }
 
 type supportOutputDirectoryInfo struct {
@@ -380,6 +385,7 @@ type supportMCPTool struct {
 type supportRedactionPolicyJSON struct {
 	Mode                                string   `json:"mode"`
 	ContainsCustomerOperationalMetadata bool     `json:"contains_customer_operational_metadata"`
+	Sensitivity                         string   `json:"sensitivity"`
 	ExcludedByDefault                   []string `json:"excluded_by_default"`
 	SupportPolicy                       string   `json:"support_policy"`
 }

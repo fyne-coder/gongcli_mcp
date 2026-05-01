@@ -60,17 +60,18 @@ Use prompts shaped like these:
 These prompts are in-bounds because they stay on reviewed cached metadata,
 bounded scorecard configuration, and backlog prioritization.
 
-## Sample Evidence-Backed Prompts
+## Analyst Expansion Prompts
 
 The prompts in the previous section are deliberately thin so they fit the
 strict pilot allowlist. Real business work usually needs more structure: a
 specific time window, prospect-side filtering, a required output shape, and an
 explicit separation between evidence-backed findings and hypotheses.
 
-The four templates below are paste-ready for an analyst session where the
-operator has widened the MCP tool surface beyond the strict pilot allowlist.
-They go beyond what the pilot allowlist exposes by design, and each one names
-the additional tools and opt-in flags it requires. See
+The four templates below are not strict-pilot prompts. Use them only in an
+approved analyst expansion where the operator has widened the MCP tool surface
+beyond the strict business-user allowlist. They go beyond what the pilot
+allowlist exposes by design, and each one names the additional tools and opt-in
+flags it requires. See
 [mcp-data-exposure.md](mcp-data-exposure.md#default-posture-and-optional-wider-surface)
 for how to enable that wider posture intentionally.
 
@@ -283,6 +284,9 @@ with the same approved set.
 - `summarize_call_facts`
 - `summarize_calls_by_lifecycle`
 - `rank_transcript_backlog`
+
+Optional after reviewer approval:
+
 - `list_scorecards`
 - `get_scorecard`
 
@@ -293,8 +297,9 @@ Why this allowlist:
 - It stays on cached metadata and scorecard configuration rather than exact
   records, raw transcript content, or directed CRM value lookup.
 - `list_scorecards` and `get_scorecard` may expose stable scorecard,
-  workspace, or question IDs as configuration metadata. Reviewers must approve
-  that exposure before enabling scorecard inventory workflows.
+  workspace, question text, or question IDs as configuration metadata. Enable
+  them only when the pilot checklist includes "coaching configuration exposure
+  approved."
 - It keeps business users away from tools that can expose tenant-specific schema
   details, exact calls, or sensitive search pivots.
 
@@ -356,6 +361,17 @@ names or transcript wording.
   answer as directional rather than authoritative.
 - Missing data should be reported as a pilot limitation, not silently filled in
   by inference.
+
+Status interpretation:
+
+- Cache stale: stop and ask the pilot operator to refresh the reviewed cache.
+- Profile stale or inactive: lifecycle and attribution answers are directional
+  only.
+- Transcript coverage low: do not draw quote-based conclusions.
+- Tool unavailable: the tool is not approved for this pilot lane.
+- Unexpected sensitive output: stop the session, do not paste the output
+  elsewhere, and notify the pilot operator or security contact with the prompt,
+  approximate time, and tool if the host exposes it.
 
 ## Acceptable-Use Boundaries
 

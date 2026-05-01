@@ -391,7 +391,7 @@ func readBearerTokenFile(path string) (string, error) {
 
 func httpHandler(server *mcp.Server, cfg httpConfig, accessLog io.Writer) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", originMiddleware(accessLogMiddleware(authMiddleware(server, cfg), cfg, accessLog), cfg))
+	mux.Handle("/mcp", accessLogMiddleware(originMiddleware(authMiddleware(server, cfg), cfg), cfg, accessLog))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -403,7 +403,15 @@ func httpHandler(server *mcp.Server, cfg httpConfig, accessLog io.Writer) http.H
 		if r.Method == http.MethodHead {
 			return
 		}
-		_, _ = fmt.Fprintf(w, `{"status":"ok","service":"gongmcp","version":%q}`+"\n", version.DisplayVersion())
+		_ = json.NewEncoder(w).Encode(struct {
+			Status  string `json:"status"`
+			Service string `json:"service"`
+			Version string `json:"version"`
+		}{
+			Status:  "ok",
+			Service: "gongmcp",
+			Version: version.DisplayVersion(),
+		})
 	})
 	return mux
 }
@@ -420,8 +428,21 @@ func originMiddleware(next http.Handler, cfg httpConfig) http.Handler {
 			http.Error(w, "invalid origin", http.StatusForbidden)
 			return
 		}
+		setCORSHeaders(w, normalized)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func setCORSHeaders(w http.ResponseWriter, origin string) {
+	w.Header().Add("Vary", "Origin")
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id")
+	w.Header().Set("Access-Control-Max-Age", "600")
 }
 
 func originAllowed(origin string, cfg httpConfig) bool {

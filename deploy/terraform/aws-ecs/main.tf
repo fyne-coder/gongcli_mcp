@@ -23,6 +23,7 @@ locals {
 resource "aws_cloudwatch_log_group" "gongmcp" {
   name              = "/gongctl/${var.name}/gongmcp"
   retention_in_days = var.log_retention_days
+  kms_key_id        = var.cloudwatch_log_kms_key_id == "" ? null : var.cloudwatch_log_kms_key_id
 }
 
 resource "aws_ecs_cluster" "this" {
@@ -77,10 +78,11 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description = "ALB egress to private service targets"
+    from_port   = 8080
+    to_port     = 8080
+    protocol    = "tcp"
+    cidr_blocks = var.alb_egress_cidrs
   }
 }
 
@@ -96,11 +98,15 @@ resource "aws_security_group" "service" {
     security_groups = [aws_security_group.alb.id]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  dynamic "egress" {
+    for_each = var.service_egress_cidrs
+    content {
+      description = "Explicit customer-approved service egress"
+      from_port   = 0
+      to_port     = 0
+      protocol    = "-1"
+      cidr_blocks = [egress.value]
+    }
   }
 }
 
@@ -110,6 +116,22 @@ resource "aws_lb" "this" {
   internal           = var.internal_alb
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.alb_subnet_ids
+
+  dynamic "access_logs" {
+    for_each = var.alb_access_logs_bucket == "" ? [] : [var.alb_access_logs_bucket]
+    content {
+      bucket  = access_logs.value
+      prefix  = var.alb_access_logs_prefix
+      enabled = true
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.internal_alb || var.acknowledge_no_sso_gateway
+      error_message = "Externally reachable static-bearer ALB examples require acknowledge_no_sso_gateway=true and a customer-approved gateway/SSO/WAF plan."
+    }
+  }
 }
 
 resource "aws_lb_target_group" "this" {

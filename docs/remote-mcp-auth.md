@@ -28,9 +28,24 @@ Current boundary:
 - read-only SQLite access
 - non-local bind guardrails
 
+Allowed browser origins also receive narrow CORS headers for `/mcp`: allowed
+origin reflection, `POST, OPTIONS`, and the `Authorization`, `Content-Type`,
+`MCP-Protocol-Version`, and `Mcp-Session-Id` request headers. CORS is not an
+auth layer; the customer gateway and bearer/OAuth boundary still own access
+control.
+
 It does not currently implement native OAuth 2.1, Protected Resource Metadata,
 dynamic client registration, per-user RBAC, tenant routing, or a browser-facing
 consent application.
+
+## Deployment Decision Table
+
+| Lane | Use for | Auth boundary | Status |
+| --- | --- | --- | --- |
+| Local stdio | One operator or desktop MCP host | Local OS/user account | Supported now |
+| Private bearer bridge | curl, MCP Inspector, internal service-to-service, gateway integration tests | Static bearer plus private network/proxy | Supported now for pilots |
+| End-user remote MCP | ChatGPT/Claude-style shared user access | Customer HTTPS plus OAuth/MCP broker | Required for production remote use |
+| Native OAuth in `gongmcp` | Direct OAuth resource-server deployment | `gongmcp` validates issuer/audience/scopes | Not implemented yet |
 
 ## Remote MCP Auth Decision
 

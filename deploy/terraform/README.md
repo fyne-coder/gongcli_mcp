@@ -1,7 +1,8 @@
 # Terraform Examples
 
 These are non-production starter examples for customer-hosted `gongmcp` HTTP
-pilots. They are not reusable production modules or reference architectures.
+pilots. They are lab-bridge snippets, not reusable production modules or
+enterprise gateway reference architectures.
 Copy the closest example into the customer's infrastructure repo, wire it to
 existing networking, storage, DNS, TLS, secret management, logging,
 identity-aware gateway/SSO, WAF or equivalent controls, rate limits, token
@@ -16,6 +17,11 @@ The examples assume:
 - `gongmcp` receives no Gong API credentials
 - HTTP mode uses bearer auth and an explicit tool allowlist
 - public or cross-user access terminates TLS at customer-managed infrastructure
+
+For end-user remote MCP, put these starters behind a customer-owned HTTPS and
+OAuth/SSO boundary such as API Gateway, CloudFront plus WAF, ALB auth,
+Cloudflare Access, or an equivalent broker. The static bearer token is the
+internal hop from that boundary to `gongmcp`; it is not the end-user auth model.
 
 ## Examples
 
@@ -40,6 +46,9 @@ Before applying any example, decide:
 - which HTTPS endpoint users paste into ChatGPT, Claude, or another remote MCP
   client
 - where MCP access logs are stored and how raw payload logging is disabled
+- whether a public/static-bearer lab bridge has been explicitly approved; the
+  AWS starter requires `acknowledge_no_sso_gateway=true` before creating an
+  externally reachable ALB without an in-module SSO gateway
 
 ## Validation
 

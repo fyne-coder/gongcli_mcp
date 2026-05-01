@@ -38,8 +38,15 @@ variable "file_share_name" {
 
 variable "bearer_token" {
   type        = string
-  description = "Internal bearer token for gongmcp HTTP mode."
+  description = "Lab-only internal bearer token for gongmcp HTTP mode. Prefer bearer_token_key_vault_secret_id so the token does not pass through Terraform state."
   sensitive   = true
+  default     = ""
+}
+
+variable "bearer_token_key_vault_secret_id" {
+  type        = string
+  description = "Preferred Key Vault secret ID containing the internal bearer token. The Container App uses its system-assigned identity to read it."
+  default     = ""
 }
 
 variable "tool_allowlist" {
