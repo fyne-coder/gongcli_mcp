@@ -31,7 +31,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
-	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when unset; required for HTTP")
+	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
 	authMode := flags.String("auth-mode", "", "HTTP auth mode: none or bearer; defaults to GONGMCP_AUTH_MODE or bearer")
@@ -45,6 +46,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
+	flagSet := map[string]bool{}
+	flags.Visit(func(flag *flag.Flag) {
+		flagSet[flag.Name] = true
+	})
 	if flags.NArg() != 0 {
 		fmt.Fprintf(stderr, "unexpected arguments: %s\n", strings.Join(flags.Args(), " "))
 		return 2
@@ -64,9 +69,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	allowlist, err := parseToolAllowlist(*toolAllowlist, os.Getenv("GONGMCP_TOOL_ALLOWLIST"))
+	allowlist, err := resolveToolAllowlist(toolSelection{
+		AllowlistFlag:    *toolAllowlist,
+		AllowlistFlagSet: flagSet["tool-allowlist"],
+		PresetFlag:       *toolPreset,
+		PresetFlagSet:    flagSet["tool-preset"],
+		AllowlistEnv:     os.Getenv("GONGMCP_TOOL_ALLOWLIST"),
+		PresetEnv:        os.Getenv("GONGMCP_TOOL_PRESET"),
+	})
 	if err != nil {
-		fmt.Fprintf(stderr, "invalid tool allowlist: %v\n", err)
+		fmt.Fprintf(stderr, "invalid tool selection: %v\n", err)
 		return 2
 	}
 
@@ -160,7 +172,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func validateGovernanceAllowlist(allowlist []string) error {
 	if len(allowlist) == 0 {
-		return fmt.Errorf("AI governance requires an explicit MCP tool allowlist")
+		return fmt.Errorf("AI governance requires an explicit MCP tool preset or allowlist")
 	}
 	safe := map[string]struct{}{
 		"search_calls":                              {},
@@ -180,6 +192,46 @@ func validateGovernanceAllowlist(allowlist []string) error {
 		}
 	}
 	return nil
+}
+
+type toolSelection struct {
+	AllowlistFlag    string
+	AllowlistFlagSet bool
+	PresetFlag       string
+	PresetFlagSet    bool
+	AllowlistEnv     string
+	PresetEnv        string
+}
+
+func resolveToolAllowlist(selection toolSelection) ([]string, error) {
+	flagAllowlist := strings.TrimSpace(selection.AllowlistFlag)
+	flagPreset := strings.TrimSpace(selection.PresetFlag)
+	if flagAllowlist != "" && flagPreset != "" {
+		return nil, fmt.Errorf("--tool-allowlist cannot be combined with --tool-preset")
+	}
+	if flagAllowlist != "" {
+		return parseToolAllowlist(flagAllowlist, "")
+	}
+	if flagPreset != "" {
+		return expandToolPreset(flagPreset)
+	}
+
+	envAllowlist := strings.TrimSpace(selection.AllowlistEnv)
+	envPreset := strings.TrimSpace(selection.PresetEnv)
+	if envAllowlist != "" && envPreset != "" {
+		return nil, fmt.Errorf("set only one of GONGMCP_TOOL_ALLOWLIST or GONGMCP_TOOL_PRESET")
+	}
+	if envAllowlist != "" {
+		return parseToolAllowlist(envAllowlist, "")
+	}
+	if envPreset != "" {
+		return expandToolPreset(envPreset)
+	}
+
+	if selection.AllowlistFlagSet || selection.PresetFlagSet {
+		return nil, fmt.Errorf("empty tool selection")
+	}
+	return nil, nil
 }
 
 func parseToolAllowlist(flagValue, envValue string) ([]string, error) {
@@ -218,6 +270,84 @@ func parseToolAllowlist(flagValue, envValue string) ([]string, error) {
 	return names, nil
 }
 
+func expandToolPreset(name string) ([]string, error) {
+	switch normalizedToolPresetName(name) {
+	case "business-pilot", "strict-business-pilot":
+		return copyStrings([]string{
+			"get_sync_status",
+			"summarize_call_facts",
+			"summarize_calls_by_lifecycle",
+			"rank_transcript_backlog",
+		}), nil
+	case "operator-smoke":
+		return copyStrings([]string{
+			"get_sync_status",
+			"search_calls",
+			"search_transcript_segments",
+			"rank_transcript_backlog",
+		}), nil
+	case "analyst", "analyst-expansion":
+		return copyStrings([]string{
+			"get_sync_status",
+			"list_crm_object_types",
+			"list_crm_fields",
+			"get_business_profile",
+			"list_business_concepts",
+			"list_unmapped_crm_fields",
+			"analyze_late_stage_crm_signals",
+			"opportunities_missing_transcripts",
+			"search_transcripts_by_crm_context",
+			"opportunity_call_summary",
+			"crm_field_population_matrix",
+			"list_lifecycle_buckets",
+			"summarize_calls_by_lifecycle",
+			"prioritize_transcripts_by_lifecycle",
+			"compare_lifecycle_crm_fields",
+			"summarize_call_facts",
+			"rank_transcript_backlog",
+			"search_transcript_segments",
+			"search_transcripts_by_call_facts",
+			"search_transcript_quotes_with_attribution",
+		}), nil
+	case "governance-search":
+		return copyStrings([]string{
+			"search_calls",
+			"get_call",
+			"search_transcripts_by_crm_context",
+			"search_calls_by_lifecycle",
+			"prioritize_transcripts_by_lifecycle",
+			"rank_transcript_backlog",
+			"search_transcript_segments",
+			"search_transcripts_by_call_facts",
+			"search_transcript_quotes_with_attribution",
+			"missing_transcripts",
+		}), nil
+	case "all-readonly", "all-tools", "all":
+		return toolCatalogNames(), nil
+	default:
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-pilot, strict-business-pilot, operator-smoke, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
+	}
+}
+
+func normalizedToolPresetName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func toolCatalogNames() []string {
+	catalog := mcp.ToolCatalog()
+	names := make([]string, 0, len(catalog))
+	for _, tool := range catalog {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func copyStrings(values []string) []string {
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
 type getenvFunc func(string) string
 
 type httpConfig struct {
@@ -243,7 +373,7 @@ func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag
 		return httpConfig{}, nil
 	}
 	if len(allowlist) == 0 {
-		return httpConfig{}, fmt.Errorf("HTTP mode requires --tool-allowlist or GONGMCP_TOOL_ALLOWLIST")
+		return httpConfig{}, fmt.Errorf("HTTP mode requires --tool-preset, --tool-allowlist, GONGMCP_TOOL_PRESET, or GONGMCP_TOOL_ALLOWLIST")
 	}
 
 	authModeSource := firstNonEmpty(authModeFlag, getenv("GONGMCP_AUTH_MODE"))

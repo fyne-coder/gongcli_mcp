@@ -19,15 +19,18 @@ local database files. Those workflows stay with the pilot operator.
 - Business users interact with a host application connected to `gongmcp`.
 - `gongmcp` reads a reviewed SQLite cache only; it does not call Gong live.
 - `gongmcp` can enforce a reviewed server-side tool subset through
-  `--tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`. If those are not set, the
-  full read-only catalog remains visible to the connected host.
+  `--tool-preset business-pilot`, `GONGMCP_TOOL_PRESET=business-pilot`, or a
+  custom allowlist. If no preset or allowlist is set, the full read-only catalog
+  remains visible to stdio hosts.
 - Results reflect the last approved sync and profile state, not current tenant
   state.
 - Outputs must stay aggregate-first, metadata-oriented, and bounded.
 - Business users must not request or receive Gong credentials, raw API access,
   transcript files, raw cached JSON, or direct filesystem/database access.
-- The default business-user tool profile is `strict-business-pilot` from
+- The default business-user tool preset is `business-pilot` from
   [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
+  Wider presets such as `analyst`, `governance-search`, and `all-readonly`
+  require operator/sponsor approval and are not the business-user default.
 
 For the first-session handoff, use
 [Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).
@@ -40,7 +43,7 @@ For the first-session handoff, use
   validates profile state, and exposes only the approved MCP tool set through
   `gongmcp` allowlisting plus any host-side policy needed for the pilot.
 - Security or RevOps reviewer: confirms acceptable-use boundaries, storage
-  location, retention, and tool allowlist before business access starts.
+  location, retention, and tool preset/allowlist before business access starts.
 - Business user: asks approved business questions through the host application
   and escalates anything outside scope instead of trying to bypass controls.
 

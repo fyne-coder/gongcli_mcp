@@ -11,7 +11,10 @@ Current fixed boundaries:
 
 - MCP reads a local SQLite cache only.
 - MCP does not call Gong live.
-- `gongmcp --tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool surface; HTTP mode requires an explicit allowlist. When neither is set, the full read-only catalog remains available only for stdio.
+- `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
+  `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool
+  surface; HTTP mode requires an explicit preset or allowlist. When neither is
+  set, the full read-only catalog remains available only for stdio.
 - `gongmcp --ai-governance-config` and `GONGMCP_AI_GOVERNANCE_CONFIG` can
   suppress calls linked to private restricted-customer name/alias matches before
   MCP output reaches an LLM. The preferred blocklist path is
@@ -68,12 +71,13 @@ The following tools deserve the most review before enabling them in a model-faci
 ## Practical Usage Guidance
 
 - Use aggregate tools first for readiness, coverage, and prioritization questions.
-- In company deployments, set a server-side tool allowlist instead of relying on host prompts alone.
+- In company deployments, set a server-side tool preset or allowlist instead
+  of relying on host prompts alone.
 - For customer-specific AI restrictions, run `gongctl governance audit` with the
   private config before MCP use, then start `gongmcp` with the same config.
   Prefer `gongctl governance export-filtered-db` and point MCP at the filtered
   copy whenever a blocklist exists. Raw-DB governance mode requires an explicit
-  tool allowlist and refuses unsupported aggregate/config tools instead of
+  tool preset or allowlist and refuses unsupported aggregate/config tools instead of
   returning unfiltered counts or metadata. `search_crm_field_values` is
   intentionally unavailable in raw-DB governance mode because direct CRM value
   lookup can reveal whether configured customer-name variants are present in
@@ -93,12 +97,13 @@ where deeper, identifier-bearing questions matter.
 
 What the conservative defaults give you:
 
-- In stdio mode, `gongmcp` exposes the full read-only catalog when no allowlist
-  is set, but most identifier-bearing fields are blanked, snippet tools redact
-  call IDs and speaker IDs, and CRM-value lookups require explicit opt-in flags.
-- Pilot deployments are expected to layer `--tool-allowlist` or
-  `GONGMCP_TOOL_ALLOWLIST` on top so business users see only the approved
-  subset rather than the full catalog.
+- In stdio mode, `gongmcp` exposes the full read-only catalog when no preset or
+  allowlist is set, but most identifier-bearing fields are blanked, snippet
+  tools redact call IDs and speaker IDs, and CRM-value lookups require explicit
+  opt-in flags.
+- Pilot deployments are expected to layer `--tool-preset business-pilot` or a
+  custom allowlist on top so business users see only the approved subset rather
+  than the full catalog.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes
@@ -115,8 +120,11 @@ When opening up the surface is the right call:
 
 How to open up the surface intentionally:
 
-- In stdio mode, skip `--tool-allowlist` so the full read-only catalog is
-  visible to the connected host. HTTP mode requires an explicit allowlist.
+- In stdio mode, skip `--tool-preset` and `--tool-allowlist`, or use
+  `--tool-preset all-readonly`, so the full read-only catalog is visible to the
+  connected host. HTTP mode requires an explicit preset or allowlist; use
+  `--tool-preset all-readonly` only for trusted admin/analyst sessions or
+  fully reviewed filtered-DB deployments.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.
@@ -134,8 +142,9 @@ How to open up the surface intentionally:
 
 The trade-off is unchanged from the rest of this document: more useful answers
 flow with more sensitive data. Pick a posture per deployment rather than per
-prompt, and prefer to scope it through `--tool-allowlist` plus opt-in defaults
-rather than through ad-hoc host policy alone.
+prompt, and prefer to scope it through a named `--tool-preset` or custom
+`--tool-allowlist` plus opt-in defaults rather than through ad-hoc host policy
+alone.
 
 ## MCP Call Volume And Limits
 
@@ -174,9 +183,12 @@ Practical recommendations:
   `rank_transcript_backlog`, `summarize_call_facts`,
   `analyze_late_stage_crm_signals`) before reaching for identifier-bearing or
   snippet-bearing tools.
-- Use `--tool-allowlist` to remove tools the host should not be reaching for
-  reflexively in a given deployment lane. A narrow allowlist is usually a
-  better limit than relying on the agent to ration its own tool calls.
+- Use `--tool-preset business-pilot`, `--tool-preset analyst`, or a custom
+  `--tool-allowlist` to remove tools the host should not be reaching for
+  reflexively in a given deployment lane. A narrow preset or allowlist is
+  usually a better limit than relying on the agent to ration its own tool calls.
+- Use `--tool-preset governance-search` only with raw-DB AI governance mode;
+  for a physically filtered DB, choose the normal deployment preset instead.
 - Avoid agent loops that call `search_transcript_segments` followed by
   `get_call` for every hit; the combined output is large in both context tokens
   and wall-clock time.
@@ -184,8 +196,8 @@ Practical recommendations:
   `gongctl sync` runs in the background, cap the sync cadence separately so the
   daily Gong call budget is not consumed by per-session refreshes.
 
-For company pilots, an explicit allowlist plus a reviewed sync cadence is
-usually the right pair of limits.
+For company pilots, an explicit preset or allowlist plus a reviewed sync cadence
+is usually the right pair of limits.
 
 ## Residual Risks
 

@@ -199,8 +199,9 @@ Pass criteria:
 - `gongmcp` starts without requesting Gong credentials
 - the data mount is read-only
 - the runtime works without network access
-- direct `tools/list` shows only the configured allowlist when
-  `--tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST` is set
+- direct `tools/list` shows only the configured preset or allowlist when
+  `--tool-preset`, `GONGMCP_TOOL_PRESET`, `--tool-allowlist`, or
+  `GONGMCP_TOOL_ALLOWLIST` is set
 
 If you expose MCP through a host app, point that host at the same read-only
 database path and expose only the approved tool set. Keep the `gongmcp`
@@ -213,7 +214,7 @@ allowlist:
 
 ```bash
 GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
-GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+GONGMCP_TOOL_PRESET=business-pilot \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db <data-root>/cache/gong.db
 ```
 

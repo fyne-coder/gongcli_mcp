@@ -23,7 +23,7 @@ Current boundary:
 - Streamable HTTP-style POST `/mcp` for private pilots
 - GET `/mcp` returns 405 because server-sent streaming is not implemented yet
 - static bearer-token validation for HTTP mode
-- required HTTP tool allowlist
+- required HTTP tool preset or allowlist
 - Origin validation for HTTP requests
 - read-only SQLite access
 - non-local bind guardrails
@@ -77,7 +77,7 @@ client, confirm the endpoint provides:
   by the target MCP client
 - scoped access tokens with issuer, audience, expiry, and scope validation
 - tool-level authorization mapping, even if the first pilot maps all approved
-  users to the same read-only tool allowlist
+  users to the same read-only tool preset
 - no Gong credentials in the MCP client or OAuth broker
 
 Protocol references:
@@ -99,7 +99,7 @@ participants.
 ```bash
 GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
 GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
-GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+GONGMCP_TOOL_PRESET=business-pilot \
   gongmcp \
     --http 127.0.0.1:8080 \
     --auth-mode bearer \
@@ -141,7 +141,7 @@ The broker owns:
 `gongmcp` owns:
 
 - MCP tool catalog
-- tool allowlist enforcement
+- tool preset/allowlist enforcement
 - read-only SQLite queries
 - result-size limits
 
@@ -170,7 +170,8 @@ Recommended customer implementation:
 2. Broker authenticates users through JumpCloud.
 3. Broker enforces group membership such as `gong-mcp-users`.
 4. Broker issues MCP-compatible access tokens for `https://gong-mcp.example.com/mcp`.
-5. Broker maps approved scopes to the internal `gongmcp` tool allowlist.
+5. Broker maps approved scopes to the internal `gongmcp` tool preset or
+   allowlist.
 6. Broker forwards only approved MCP requests to `gongmcp`.
 
 Minimum scopes to define for a first read-only pilot:
@@ -209,7 +210,7 @@ Checklist:
 2. Confirm the MCP endpoint is reachable at `https://.../mcp`.
 3. Confirm the endpoint advertises or otherwise supports the auth flow required
    by the target ChatGPT connector path.
-4. Keep the initial tool allowlist narrow.
+4. Keep the initial tool preset narrow, usually `business-pilot`.
 5. Add the remote MCP server in ChatGPT Apps/Connectors developer mode.
 6. Test with `get_sync_status` before enabling transcript or CRM-value search
    tools.

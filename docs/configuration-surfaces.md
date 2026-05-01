@@ -24,6 +24,7 @@ Claude Desktop JSON, and wrapper scripts:
 - `--auth-mode`
 - `--bearer-token-file`
 - `--allow-open-network`
+- `--tool-preset` / `GONGMCP_TOOL_PRESET`
 - `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST`
 - `--ai-governance-config`
 - `--allow-unmatched-ai-governance`
@@ -45,8 +46,8 @@ transport:
   # allow_open_network: false
 
 tools:
-  mode: all
-  # mode: allowlist
+  preset: business-pilot
+  # preset: all-readonly
   # allowlist:
   #   - get_sync_status
   #   - summarize_calls_by_lifecycle
@@ -62,9 +63,11 @@ Recommended contract:
 - `gongmcp --config PATH` loads this file.
 - Flags and env vars can override YAML for local debugging and container
   platform integration.
-- `tools.mode: all` is allowed for stdio and for filtered DB deployments.
-- HTTP must still have an explicit tool policy, but that policy can be
-  `mode: all` or `mode: allowlist` in YAML.
+- Built-in presets are the fast path for common deployments:
+  `business-pilot`, `operator-smoke`, `analyst`, `governance-search`, and
+  `all-readonly`.
+- HTTP must still have an explicit tool policy, but that policy can be a named
+  preset such as `business-pilot` or `all-readonly`, or a custom allowlist.
 - Remote add-by-URL clients such as Claude's UI require an HTTPS `/mcp`
   endpoint. The YAML should describe the internal `gongmcp` HTTP listener, while
   DNS, TLS, and external auth remain proxy/gateway configuration.

@@ -33,8 +33,9 @@ Required outcomes:
 3. Data refresh is repeatable through a documented config/runbook, with clear
    cache freshness and readiness signals. (shipped via `sync run --config` plus
    the operator sync runbook)
-4. `gongmcp` supports a tool allowlist so a company can expose only approved MCP
-   tools. (shipped via `--tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST`)
+4. `gongmcp` supports tool presets and custom allowlists so a company can
+   expose only approved MCP tools. (shipped via `--tool-preset`,
+   `GONGMCP_TOOL_PRESET`, `--tool-allowlist`, and `GONGMCP_TOOL_ALLOWLIST`)
 5. High-risk CLI commands have a restricted/company mode that blocks or requires
    explicit override for raw API, transcript export/sync, raw cached JSON, and
    extended CRM context. (shipped via `GONGCTL_RESTRICTED` and

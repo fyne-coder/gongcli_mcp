@@ -13,6 +13,7 @@ Options:
   --data-dir PATH        Host directory to mount read-only. Defaults to DB directory.
   --server-name NAME     Claude MCP server name. Default: gong.
   --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0.
+  --tool-preset NAME     Optional named tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly.
   --tool-allowlist LIST  Optional comma-separated MCP tool allowlist.
   --config PATH          Claude config path. Defaults to macOS Claude Desktop config.
   --install              Merge into Claude config with a timestamped backup.
@@ -20,8 +21,8 @@ Options:
   -h, --help             Show this help.
 
 Examples:
-  scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong-mcp-governed.db"
-  scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong-mcp-governed.db" --install
+  scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong-mcp-governed.db" --tool-preset business-pilot
+  scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong-mcp-governed.db" --tool-preset all-readonly --install
 USAGE
 }
 
@@ -32,10 +33,35 @@ abs_path() {
   esac
 }
 
+preset_allowlist() {
+  case "$1" in
+    business-pilot|strict-business-pilot)
+      printf '%s\n' 'get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog'
+      ;;
+    operator-smoke)
+      printf '%s\n' 'get_sync_status,search_calls,search_transcript_segments,rank_transcript_backlog'
+      ;;
+    analyst|analyst-expansion)
+      printf '%s\n' 'get_sync_status,list_crm_object_types,list_crm_fields,get_business_profile,list_business_concepts,list_unmapped_crm_fields,analyze_late_stage_crm_signals,opportunities_missing_transcripts,search_transcripts_by_crm_context,opportunity_call_summary,crm_field_population_matrix,list_lifecycle_buckets,summarize_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,compare_lifecycle_crm_fields,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution'
+      ;;
+    governance-search)
+      printf '%s\n' 'search_calls,get_call,search_transcripts_by_crm_context,search_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution,missing_transcripts'
+      ;;
+    all-readonly|all-tools|all)
+      printf '%s\n' 'get_sync_status,search_calls,get_call,list_crm_object_types,list_crm_fields,list_crm_integrations,list_cached_crm_schema_objects,list_cached_crm_schema_fields,list_gong_settings,list_scorecards,get_scorecard,get_business_profile,list_business_concepts,list_unmapped_crm_fields,search_crm_field_values,analyze_late_stage_crm_signals,opportunities_missing_transcripts,search_transcripts_by_crm_context,opportunity_call_summary,crm_field_population_matrix,list_lifecycle_buckets,summarize_calls_by_lifecycle,search_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,compare_lifecycle_crm_fields,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution,missing_transcripts'
+      ;;
+    *)
+      echo "unknown tool preset: $1" >&2
+      exit 2
+      ;;
+  esac
+}
+
 DB_PATH=""
 DATA_DIR=""
 SERVER_NAME="gong"
 IMAGE="ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0"
+TOOL_PRESET=""
 TOOL_ALLOWLIST=""
 CONFIG_PATH="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
 INSTALL=0
@@ -56,6 +82,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --image)
       IMAGE="${2:?--image requires a value}"
+      shift 2
+      ;;
+    --tool-preset)
+      TOOL_PRESET="${2:?--tool-preset requires a preset name}"
       shift 2
       ;;
     --tool-allowlist)
@@ -95,6 +125,16 @@ fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "jq is required to generate and merge Claude Desktop JSON" >&2
   exit 1
+fi
+
+if [[ -n "$TOOL_PRESET" && -n "$TOOL_ALLOWLIST" ]]; then
+  echo "--tool-preset and --tool-allowlist are mutually exclusive" >&2
+  exit 2
+fi
+if [[ -n "$TOOL_PRESET" ]]; then
+  # Emit the expanded allowlist so generated Claude configs stay safe with
+  # older pinned images that do not yet understand GONGMCP_TOOL_PRESET.
+  TOOL_ALLOWLIST="$(preset_allowlist "$TOOL_PRESET")"
 fi
 
 DB_PATH="$(abs_path "$DB_PATH")"

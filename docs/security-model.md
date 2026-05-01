@@ -20,8 +20,8 @@ The current design is intentionally local-first:
 
 Current enforcement limits are important: `gongctl` now has a
 restricted/company mode for high-risk CLI commands, and `gongmcp` can enforce a
-server-side tool allowlist. Business-user deployments still need approved host,
-filesystem, network, token, and operator-process controls because allowlisting
+server-side tool preset or allowlist. Business-user deployments still need
+approved host, filesystem, network, token, and operator-process controls because allowlisting
 and bearer auth narrow access but do not make returned Gong-derived data
 non-sensitive.
 
@@ -84,7 +84,7 @@ Implementation controls on the MCP side:
 - `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB.
 - Profile-aware reads refuse stale-cache rebuilds instead of mutating SQLite from MCP.
 - HTTP mode exposes `/mcp` plus unauthenticated `/healthz`, defaults to bearer
-  auth, requires an explicit tool allowlist, and blocks non-local binds unless
+  auth, requires an explicit tool preset or allowlist, and blocks non-local binds unless
   `--allow-open-network` is set. `--auth-mode none` requires
   `--dev-allow-no-auth-localhost` and is limited to localhost development.
 - HTTP mode validates the `Origin` header when present. Non-local HTTP binds
@@ -167,6 +167,6 @@ data-owner approval records.
 - Some MCP tools still expose sensitive metadata such as call titles, call IDs, object IDs, scorecard IDs, workspace IDs, and question text.
 - Transcript snippet tools and explicit CRM value lookups can still reveal sensitive content in bounded excerpts.
 - The repo documents safe storage patterns, but it does not currently add encryption-at-rest, host-level DLP, remote revocation, centralized audit logging, OIDC, or per-user MCP RBAC.
-- The MCP binary enforces a tool allowlist when configured, but MCP output still
+- The MCP binary enforces a tool preset or allowlist when configured, but MCP output still
   inherits the sensitivity of the cached dataset and the approved host.
 - Docker hardening helps only if the host itself is trusted; Docker socket or host compromise bypasses container-level isolation.

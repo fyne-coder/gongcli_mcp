@@ -153,7 +153,7 @@ customer-managed endpoint for multiple approved users or MCP hosts:
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
-  -e GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+  -e GONGMCP_TOOL_PRESET=business-pilot \
   -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
   -v /srv/gongctl/gong.db:/data/gong.db:ro \
   -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \
@@ -167,7 +167,7 @@ docker run --rm \
 HTTP mode does not need Gong credentials and still opens SQLite read-only. It is
 a private-pilot request/response endpoint over one operator-owned cache, not a
 tenant router or hosted review application. HTTP mode always requires an explicit
-tool allowlist, including loopback binds behind a proxy. Non-local binds also
+tool preset or allowlist, including loopback binds behind a proxy. Non-local binds also
 require `--allow-open-network`, an explicit Origin allowlist, and TLS
 termination at a trusted company proxy/gateway. The customer's IT/platform
 owner manages bearer tokens outside the repo, image, and SQLite cache. Suitable
@@ -178,8 +178,8 @@ JSON-RPC traffic.
 
 Use the named tool profiles in
 [Customer implementation checklist](implementation-checklist.md#named-tool-profiles)
-when deciding `GONGMCP_TOOL_ALLOWLIST`. The example above uses
-`strict-business-pilot`.
+when deciding `GONGMCP_TOOL_PRESET` or `GONGMCP_TOOL_ALLOWLIST`. The example
+above uses `business-pilot`.
 
 The example binds the host port to `127.0.0.1` so only a local customer proxy,
 gateway, or tunnel can reach it. Do not change this to `-p 8080:8080` unless
@@ -190,7 +190,7 @@ Unauthenticated HTTP is blocked by default. It is only for explicit local
 development with the native binary, not for shared Docker pilots:
 
 ```bash
-GONGMCP_TOOL_ALLOWLIST=get_sync_status \
+GONGMCP_TOOL_PRESET=operator-smoke \
   gongmcp --http 127.0.0.1:8080 --auth-mode none --dev-allow-no-auth-localhost --db /srv/gongctl/gong.db
 ```
 
@@ -248,5 +248,5 @@ the MCP host config. The expected operational contract is:
 - stdio MCP host configs must use the MCP-only target once published, with no
   Gong credentials, `--network none`, and a read-only SQLite mount
 - HTTP MCP host configs must use the MCP-only target with no Gong credentials,
-  an explicit tool allowlist, a read-only SQLite mount, and a TLS/private-network
+  an explicit tool preset or allowlist, a read-only SQLite mount, and a TLS/private-network
   boundary managed outside the container

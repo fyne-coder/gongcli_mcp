@@ -41,7 +41,7 @@
 `cmd/gongmcp` is a read-only MCP server over the SQLite cache. Stdio remains
 the default local/Desktop transport. A minimal HTTP `/mcp` request/response
 transport is available for private company pilots when the operator supplies
-bearer auth, an explicit tool allowlist, and a trusted TLS/proxy boundary. It
+bearer auth, an explicit tool preset or allowlist, and a trusted TLS/proxy boundary. It
 requires `--db PATH` and does not call Gong directly.
 
 Implemented tools are boring and auditable:

@@ -73,7 +73,7 @@ Operator-supplied case notes may add sanitized details such as:
 - runtime mode: local CLI, Docker CLI, stdio MCP, or HTTP MCP
 - exact command family and flags used, with secrets and local paths redacted
 - error category, exit code, and timestamp
-- restricted-mode status, tool allowlist status, bearer-auth mode, and
+- restricted-mode status, tool preset/allowlist status, bearer-auth mode, and
   governance-config enabled yes/no status
 - sanitized config shape with customer identifiers, aliases, URLs, and secrets
   removed

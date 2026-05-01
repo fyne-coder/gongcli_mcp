@@ -9,12 +9,14 @@ Rules:
 - read from the SQLite store surfaces; do not call Gong directly
 - keep tools read-only
 - require `--db` at the `cmd/gongmcp` boundary
-- support MCP tool allowlisting through `gongmcp --tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`; when unset, stdio serves the full read-only catalog
-- require an explicit allowlist for all HTTP deployments
+- support MCP tool presets and allowlisting through `gongmcp --tool-preset`,
+  `GONGMCP_TOOL_PRESET`, `--tool-allowlist`, or `GONGMCP_TOOL_ALLOWLIST`; when
+  unset, stdio serves the full read-only catalog
+- require an explicit preset or allowlist for all HTTP deployments
 - support private AI governance suppression through `--ai-governance-config` or
   `GONGMCP_AI_GOVERNANCE_CONFIG`; do not expose configured restricted names in
   MCP output, do not expose filtered-match counts, and require an explicit
-  governance-compatible tool allowlist
+  governance-compatible tool preset or allowlist
 - keep browser/session auth separate from agent-client auth
 - do not expose raw Gong API passthrough, arbitrary SQL, profile import, raw cached call JSON, or full transcript dumps
 - return transcript snippets only, not full transcript bodies

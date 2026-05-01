@@ -374,8 +374,9 @@ gongmcp --db ~/gongctl-data/gong-mcp-governed.db
 ```
 
 Raw-DB governance remains available as a fallback; when it is enabled,
-`gongmcp` requires an explicit governance-compatible `--tool-allowlist` or
-`GONGMCP_TOOL_ALLOWLIST`, and unsupported aggregate/config tools are refused.
+`gongmcp` requires an explicit governance-compatible `--tool-preset`,
+`--tool-allowlist`, `GONGMCP_TOOL_PRESET`, or `GONGMCP_TOOL_ALLOWLIST`, and
+unsupported aggregate/config tools are refused.
 
 ## Local MCP (stdio)
 
@@ -383,10 +384,11 @@ Raw-DB governance remains available as a fallback; when it is enabled,
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
 
 By default, `gongmcp` exposes the full read-only MCP catalog to any connected
-host. Company pilots should narrow that surface with `gongmcp --tool-allowlist`
-or `GONGMCP_TOOL_ALLOWLIST`, then layer host and filesystem controls around the
+host. Company pilots should narrow that surface with `gongmcp --tool-preset`
+or `--tool-allowlist`, then layer host and filesystem controls around the
 approved business-user subset. Trusted single-user analyst workstations may
-intentionally skip the allowlist and turn on per-tool opt-ins
+use `--tool-preset all-readonly` or intentionally skip the allowlist in stdio
+mode and turn on per-tool opt-ins
 (`include_call_ids`, `include_speaker_ids`, `include_value_snippets`) for
 deeper, identifier-bearing questions; see
 [docs/mcp-data-exposure.md](docs/mcp-data-exposure.md) for the trade-off and
@@ -401,22 +403,22 @@ can expose the same read-only MCP tools over a minimal HTTP `/mcp` endpoint:
 ```bash
 GONGMCP_BEARER_TOKEN="<customer-managed-token>" \
 GONGMCP_ALLOWED_ORIGINS="https://approved-client.example.com" \
-GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+GONGMCP_TOOL_PRESET=business-pilot \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 
 HTTP mode is a request/response JSON-RPC bridge over one operator-owned SQLite
 cache. Put it behind TLS termination at a trusted company proxy/gateway before
 non-local use. It is not a hosted SaaS layer, tenant router, browser app, or
-full streaming MCP service. Every HTTP mode requires an explicit tool allowlist,
-including loopback binds behind a proxy; the preferred shape is a loopback bind
-behind the TLS gateway. Any non-loopback `--http` bind also requires
+full streaming MCP service. Every HTTP mode requires an explicit tool preset or
+allowlist, including loopback binds behind a proxy; the preferred shape is a
+loopback bind behind the TLS gateway. Any non-loopback `--http` bind also requires
 `--allow-open-network`. Unauthenticated HTTP is blocked by default and is
 available only for explicit localhost development with
 `--dev-allow-no-auth-localhost`:
 
 ```bash
-GONGMCP_TOOL_ALLOWLIST=get_sync_status \
+GONGMCP_TOOL_PRESET=operator-smoke \
   gongmcp --http 127.0.0.1:8080 --auth-mode none --dev-allow-no-auth-localhost --db /srv/gongctl/gong.db
 ```
 

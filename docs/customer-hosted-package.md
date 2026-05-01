@@ -14,7 +14,7 @@ of the package supports deployment, security review, support, and operations.
 | Terraform examples | Non-production starters in [`deploy/terraform`](../deploy/terraform/README.md) |
 | Environment-variable config | [Configuration surfaces](configuration-surfaces.md), `.env.example`, [Docker deployment](docker.md) |
 | Read-only mode by default | [Security model](security-model.md), [Enterprise deployment](enterprise-deployment.md) |
-| Tool allowlist | [MCP data exposure](mcp-data-exposure.md), [Enterprise deployment](enterprise-deployment.md) |
+| Tool preset/allowlist | [MCP data exposure](mcp-data-exposure.md), [Enterprise deployment](enterprise-deployment.md) |
 | OAuth/SSO broker requirements | [Remote MCP auth and connector setup](remote-mcp-auth.md) |
 | ChatGPT connector setup guide | [Remote MCP auth and connector setup](remote-mcp-auth.md#chatgpt-connector-setup) |
 | Implementation worksheet | [Customer implementation checklist](implementation-checklist.md) |
@@ -63,7 +63,8 @@ Default enterprise posture:
 4. Configure Gong credentials for the operator sync job only.
 5. Run a bounded sync and validate readiness.
 6. Optional: export a physically filtered MCP database for AI-governed use.
-7. Start `gongmcp` with a read-only cache mount and approved tool allowlist.
+7. Start `gongmcp` with a read-only cache mount and approved tool preset or
+   allowlist.
 8. Connect Claude Desktop locally, or expose HTTPS `/mcp` through the customer
    OAuth broker for ChatGPT/remote clients.
 9. Run `get_sync_status` and one bounded search smoke.

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -58,6 +59,39 @@ func TestRunToolAllowlistEnvFiltersCatalog(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, `"get_sync_status"`) || strings.Contains(got, `"search_calls"`) {
 		t.Fatalf("stdout=%q did not reflect allowlist", got)
+	}
+}
+
+func TestRunToolPresetEnvFiltersCatalog(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	store, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	t.Setenv("GONGMCP_TOOL_PRESET", "business-pilot")
+	stdin := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	}, "\n") + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"--db", dbPath}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	for _, name := range []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"} {
+		if !strings.Contains(got, `"`+name+`"`) {
+			t.Fatalf("stdout=%q missing preset tool %q", got, name)
+		}
+	}
+	if strings.Contains(got, `"search_calls"`) {
+		t.Fatalf("stdout=%q included non-business-pilot tool", got)
 	}
 }
 
@@ -196,6 +230,124 @@ lists:
 	if got := stderr.String(); !strings.Contains(got, `tool "search_crm_field_values" is not supported while AI governance filtering is active`) {
 		t.Fatalf("stderr=%q missing governance allowlist rejection", got)
 	}
+}
+
+func TestResolveToolAllowlistPresets(t *testing.T) {
+	tests := []struct {
+		name string
+		in   toolSelection
+		want []string
+	}{
+		{
+			name: "business preset",
+			in:   toolSelection{PresetEnv: "business-pilot"},
+			want: []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"},
+		},
+		{
+			name: "legacy strict business alias",
+			in:   toolSelection{PresetEnv: "strict-business-pilot"},
+			want: []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"},
+		},
+		{
+			name: "operator smoke preset",
+			in:   toolSelection{PresetEnv: "operator-smoke"},
+			want: []string{"get_sync_status", "search_calls", "search_transcript_segments", "rank_transcript_backlog"},
+		},
+		{
+			name: "all readonly expands to catalog",
+			in:   toolSelection{PresetEnv: "all-readonly"},
+			want: toolCatalogNames(),
+		},
+		{
+			name: "governance search preset",
+			in:   toolSelection{PresetEnv: "governance-search"},
+			want: []string{"search_calls", "get_call", "search_transcripts_by_crm_context", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "rank_transcript_backlog", "search_transcript_segments", "search_transcripts_by_call_facts", "search_transcript_quotes_with_attribution", "missing_transcripts"},
+		},
+		{
+			name: "flag preset overrides env allowlist",
+			in:   toolSelection{PresetFlag: "business-pilot", PresetFlagSet: true, AllowlistEnv: "search_calls"},
+			want: []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"},
+		},
+		{
+			name: "flag allowlist overrides env preset",
+			in:   toolSelection{AllowlistFlag: "get_sync_status", AllowlistFlagSet: true, PresetEnv: "all-readonly"},
+			want: []string{"get_sync_status"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveToolAllowlist(tt.in)
+			if err != nil {
+				t.Fatalf("resolveToolAllowlist returned error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("resolveToolAllowlist=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPresetGovernanceCompatibilityAndAnalystScope(t *testing.T) {
+	governancePreset, err := expandToolPreset("governance-search")
+	if err != nil {
+		t.Fatalf("expandToolPreset returned error: %v", err)
+	}
+	if err := validateGovernanceAllowlist(governancePreset); err != nil {
+		t.Fatalf("governance-search preset rejected by governance validator: %v", err)
+	}
+
+	analyst, err := expandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("expandToolPreset returned error: %v", err)
+	}
+	for _, denied := range []string{"search_crm_field_values", "list_gong_settings", "get_call", "search_calls", "search_calls_by_lifecycle", "missing_transcripts"} {
+		if containsString(analyst, denied) {
+			t.Fatalf("analyst preset includes admin/config-heavy tool %q", denied)
+		}
+	}
+	if !containsString(analyst, "search_transcript_quotes_with_attribution") {
+		t.Fatalf("analyst preset missing bounded evidence tool")
+	}
+}
+
+func TestResolveToolAllowlistRejectsAmbiguousSelection(t *testing.T) {
+	tests := []struct {
+		name string
+		in   toolSelection
+	}{
+		{
+			name: "both flags",
+			in:   toolSelection{AllowlistFlag: "get_sync_status", AllowlistFlagSet: true, PresetFlag: "business-pilot", PresetFlagSet: true},
+		},
+		{
+			name: "both env vars",
+			in:   toolSelection{AllowlistEnv: "get_sync_status", PresetEnv: "business-pilot"},
+		},
+		{
+			name: "unknown preset",
+			in:   toolSelection{PresetEnv: "not-a-preset"},
+		},
+		{
+			name: "empty explicit flag",
+			in:   toolSelection{PresetFlagSet: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := resolveToolAllowlist(tt.in); err == nil {
+				t.Fatal("resolveToolAllowlist returned nil error")
+			}
+		})
+	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunToolAllowlistFlagOverridesEnvAndRejectsUnknownTools(t *testing.T) {

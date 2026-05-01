@@ -10,7 +10,7 @@ can answer a narrow set of business questions without giving business users
 Prove that a business user can get useful, bounded answers from a reviewed local
 cache through a narrow MCP tool set, while operator-owned sync and profile
 workflows remain separate. Enforce the approved tool set with
-`gongmcp --tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`, and layer host policy
+`gongmcp --tool-preset business-pilot` or a reviewed custom allowlist, and layer host policy
 on top if the deployment needs stricter prompts or routing.
 
 This is now a software-enforced pilot lane for the first risk gates: `gongmcp`

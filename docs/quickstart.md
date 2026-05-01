@@ -257,7 +257,7 @@ printf '%s\n' 'replace-with-a-long-random-local-test-token' > "$HOME/gongctl-dat
 docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
-  -e GONGMCP_TOOL_ALLOWLIST=get_sync_status,search_calls,search_transcript_segments,rank_transcript_backlog \
+  -e GONGMCP_TOOL_PRESET=operator-smoke \
   -e GONGMCP_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 \
   -v "$HOME/gongctl-data:/data:ro" \
   -v "$HOME/gongctl-data/gongmcp-token:/run/secrets/gongmcp_token:ro" \
@@ -270,12 +270,12 @@ docker run --rm \
 
 The container binds internally to `0.0.0.0`, but Docker publishes it only on
 `127.0.0.1`. Non-local/private-pilot HTTP should use bearer auth, an explicit
-tool allowlist, an explicit Origin allowlist, and TLS termination at a trusted
+tool preset or allowlist, an explicit Origin allowlist, and TLS termination at a trusted
 company proxy or gateway.
 
-The allowlist above is the `operator-smoke` profile from
+The preset above is `operator-smoke` from
 [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
-It is for install validation only. Use `strict-business-pilot` before giving
+It is for install validation only. Use `business-pilot` before giving
 business users access.
 
 Some desktop MCP clients still launch local stdio processes from their config

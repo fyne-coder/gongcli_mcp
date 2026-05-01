@@ -96,7 +96,8 @@ Use when a company wants approved users or MCP hosts to connect to one
 customer-managed endpoint instead of launching a local subprocess/container on
 each workstation.
 
-- Run `gongmcp --http ADDR --auth-mode bearer --tool-allowlist ... --db PATH`.
+- Run `gongmcp --http ADDR --auth-mode bearer --tool-preset business-pilot --db PATH`
+  or use a reviewed custom `--tool-allowlist`.
 - Expose `/mcp` to approved clients through TLS termination at a trusted
   company proxy/gateway or equivalent private-network boundary. Use `/healthz`
   for infrastructure health checks; do not use MCP JSON-RPC as the health
@@ -113,7 +114,7 @@ The initial HTTP mode is intentionally small: POST JSON-RPC requests to `/mcp`;
 GET streaming/SSE, user management, OIDC, tenant routing, and hosted transcript
 review are not implemented here. Non-local HTTP binds require
 `--allow-open-network` so operators make that deployment decision deliberately.
-Every HTTP mode requires an explicit tool allowlist, including loopback binds
+Every HTTP mode requires an explicit tool preset or allowlist, including loopback binds
 behind a proxy/gateway.
 
 ## Storage Classes And Protection
@@ -153,7 +154,7 @@ Storage-specific guidance:
 - `gongmcp` reads SQLite only and should not receive Gong credentials.
 - For containerized stdio MCP, prefer `docker run --network none` with a
   read-only data mount.
-- For HTTP MCP, require bearer auth, an explicit tool allowlist, and TLS
+- For HTTP MCP, require bearer auth, an explicit tool preset or allowlist, and TLS
   termination at a trusted proxy/gateway for shared access.
 - For customer-specific AI-use restrictions, mount a private AI governance
   config, run `gongctl governance audit`, and start `gongmcp` with

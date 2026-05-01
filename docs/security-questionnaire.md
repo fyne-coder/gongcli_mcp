@@ -36,7 +36,7 @@ with customer-specific deployment facts before submitting to a security team.
 | Question | Example answer |
 | --- | --- |
 | How is write access controlled? | Only operator-owned `gongctl` sync jobs write to the cache. Business-user MCP runtimes mount the cache read-only. |
-| How is tool access controlled? | HTTP MCP requires an explicit tool allowlist. Stdio MCP can also use an allowlist for business-user deployments. |
+| How is tool access controlled? | HTTP MCP requires an explicit tool preset or allowlist. Stdio MCP can also use a preset or allowlist for business-user deployments. |
 | Can users call raw Gong APIs through MCP? | No. MCP has no live Gong API passthrough and no write tools. |
 | Can users export raw transcripts through MCP? | No raw transcript dump tool is exposed by MCP. Some search tools can return bounded snippets depending on the approved tool surface and opt-in flags. |
 
@@ -66,7 +66,7 @@ with customer-specific deployment facts before submitting to a security team.
 | --- | --- |
 | Which AI provider receives MCP results? | Customer-specific: `[ChatGPT Enterprise / Claude / internal model gateway / other]`. |
 | Is provider approval required? | Yes. MCP results can contain Gong-derived metadata or snippets depending on the tools enabled, so downstream AI provider use requires customer approval. |
-| Can the model call all tools? | Only the tools exposed by the MCP host and `gongmcp` allowlist. Start with status and aggregate tools before search/snippet tools. |
+| Can the model call all tools? | Only the tools exposed by the MCP host and `gongmcp` preset/allowlist. `all-readonly` is available for trusted admin/analyst or fully reviewed filtered-DB deployments; start business users with status and aggregate tools. |
 
 ## Operations
 

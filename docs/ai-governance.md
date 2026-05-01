@@ -109,16 +109,21 @@ separate settings/schema/profile metadata scan before MCP use.
 Raw-DB governance is a fallback when a filtered DB has not been generated. Start
 `gongmcp` with the same private config:
 
-AI governance mode requires an explicit governance-compatible
-`--tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`. Unsupported aggregate/config
-tools are refused while the filter is active. Directed CRM value lookup through
+AI governance mode requires an explicit governance-compatible `--tool-preset`,
+`GONGMCP_TOOL_PRESET`, `--tool-allowlist`, or `GONGMCP_TOOL_ALLOWLIST`. Use
+`GONGMCP_TOOL_PRESET=governance-search` for the built-in raw-DB fallback.
+Unsupported aggregate/config tools are refused while the filter is active. The
+broader `business-pilot`, `analyst`, and `all-readonly` presets are not
+governance-compatible on a raw DB because they include aggregate/config/status
+tools that cannot prove suppressed calls were removed from their counts.
+Directed CRM value lookup through
 `search_crm_field_values` is also refused in governance mode because it can
 answer whether a restricted customer name or legal-name variant is present in
 cached CRM fields.
 
 ```bash
 GONGMCP_AI_GOVERNANCE_CONFIG=/srv/gongctl/private/ai-governance.yaml \
-GONGMCP_TOOL_ALLOWLIST=search_calls,search_transcript_segments,rank_transcript_backlog,get_call \
+GONGMCP_TOOL_PRESET=governance-search \
   gongmcp --db /srv/gongctl/gong.db
 ```
 
@@ -127,7 +132,7 @@ HTTP private pilots use the same config variable:
 ```bash
 GONGMCP_AI_GOVERNANCE_CONFIG=/srv/gongctl/private/ai-governance.yaml \
 GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
-GONGMCP_TOOL_ALLOWLIST=search_calls,search_transcript_segments,rank_transcript_backlog,get_call \
+GONGMCP_TOOL_PRESET=governance-search \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 
