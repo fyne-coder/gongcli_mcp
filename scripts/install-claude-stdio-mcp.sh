@@ -12,7 +12,7 @@ Options:
   --db PATH              Host SQLite DB path. Required.
   --data-dir PATH        Host directory to mount read-only. Defaults to DB directory.
   --server-name NAME     Claude MCP server name. Default: gong.
-  --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0.
+  --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.1.
   --tool-preset NAME     Optional named tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly.
   --tool-allowlist LIST  Optional comma-separated MCP tool allowlist.
   --config PATH          Claude config path. Defaults to macOS Claude Desktop config.
@@ -60,7 +60,7 @@ preset_allowlist() {
 DB_PATH=""
 DATA_DIR=""
 SERVER_NAME="gong"
-IMAGE="ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.0"
+IMAGE="ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.1"
 TOOL_PRESET=""
 TOOL_ALLOWLIST=""
 CONFIG_PATH="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"

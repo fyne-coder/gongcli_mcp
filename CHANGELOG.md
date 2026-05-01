@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.3.1 - 2026-05-01
+
+- Fixed the GHCR image publishing workflow by updating the pinned Trivy action
+  to a currently resolvable release.
+- Updated release-facing docs and helper defaults to point at `v0.3.1`.
+
 ## 0.3.0 - 2026-05-01
 
 - Added a customer-hosted Data Boundary Statement, support-access runbook, and
