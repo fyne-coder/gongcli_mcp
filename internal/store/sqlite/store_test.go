@@ -2317,6 +2317,80 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 	}
 }
 
+func TestExportGovernanceFilteredDBReadsCommittedWALWithoutMutatingSource(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source-wal.db")
+	outputPath := filepath.Join(dir, "governed-wal.db")
+	store, err := Open(ctx, sourcePath)
+	if err != nil {
+		t.Fatalf("Open source returned error: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.db.ExecContext(ctx, `PRAGMA journal_mode=WAL`); err != nil {
+		t.Fatalf("enable WAL returned error: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `PRAGMA wal_autocheckpoint=0`); err != nil {
+		t.Fatalf("disable WAL autocheckpoint returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-governance-wal-blocked",
+		"title":    "Blocked WAL export call",
+		"started":  "2026-04-20T14:00:00Z",
+		"duration": 1200,
+	})); err != nil {
+		t.Fatalf("UpsertCall blocked returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-governance-wal-allowed",
+		"title":    "Allowed WAL export call",
+		"started":  "2026-04-21T14:00:00Z",
+		"duration": 900,
+	})); err != nil {
+		t.Fatalf("UpsertCall allowed returned error: %v", err)
+	}
+	if stat, err := os.Stat(sourcePath + "-wal"); err != nil {
+		t.Fatalf("expected WAL file before export: %v", err)
+	} else if stat.Size() == 0 {
+		t.Fatal("expected WAL file to contain committed content before export")
+	}
+	sourceStatBefore, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("stat source before export: %v", err)
+	}
+
+	plan, err := ExportGovernanceFilteredDB(ctx, sourcePath, outputPath, []string{"call-governance-wal-blocked"}, false)
+	if err != nil {
+		t.Fatalf("ExportGovernanceFilteredDB returned error: %v", err)
+	}
+	if plan.DeletedCalls != 1 || plan.RemainingSuppressedCandidates != 0 {
+		t.Fatalf("unexpected export plan: %+v", plan)
+	}
+	sourceStatAfter, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("stat source after export: %v", err)
+	}
+	if sourceStatBefore.Size() != sourceStatAfter.Size() || !sourceStatBefore.ModTime().Equal(sourceStatAfter.ModTime()) {
+		t.Fatalf("source main DB changed during read-only export: before size=%d mtime=%s after size=%d mtime=%s",
+			sourceStatBefore.Size(), sourceStatBefore.ModTime(), sourceStatAfter.Size(), sourceStatAfter.ModTime())
+	}
+
+	filtered, err := OpenReadOnly(ctx, outputPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly filtered returned error: %v", err)
+	}
+	defer filtered.Close()
+	inventory, err := filtered.CacheInventory(ctx)
+	if err != nil {
+		t.Fatalf("CacheInventory filtered returned error: %v", err)
+	}
+	if inventory.Summary.TotalCalls != 1 {
+		t.Fatalf("filtered DB did not include exactly the committed allowed WAL row: %+v", inventory.Summary)
+	}
+}
+
 func TestGovernanceSuppressedCallIDTableRegistryCoversSchema(t *testing.T) {
 	t.Parallel()
 

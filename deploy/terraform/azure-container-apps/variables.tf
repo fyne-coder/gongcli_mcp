@@ -45,7 +45,13 @@ variable "bearer_token" {
 
 variable "bearer_token_key_vault_secret_id" {
   type        = string
-  description = "Preferred Key Vault secret ID containing the internal bearer token. The Container App uses its system-assigned identity to read it."
+  description = "Preferred Key Vault secret ID containing the internal bearer token. Requires user_assigned_identity_id for a pre-authorized managed identity."
+  default     = ""
+}
+
+variable "user_assigned_identity_id" {
+  type        = string
+  description = "Existing user-assigned managed identity resource ID. Required for Key Vault-backed bearer tokens; grant it Key Vault Secrets User before applying."
   default     = ""
 }
 

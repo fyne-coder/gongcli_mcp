@@ -119,7 +119,9 @@ sales-vs-post-sales lifecycle separation and attribution mapping remain generic
 or partial until a reviewed tenant profile is imported.
 
 If lifecycle separation or attribution readiness is partial, generate and review
-a tenant business profile:
+a tenant business profile. For better RevOps results, sync CRM schema and
+settings before discovery as shown in [Business Profiles](profiles.md#flow);
+the quick path below is only a starter.
 
 ```bash
 docker run --rm \
@@ -271,6 +273,11 @@ The container binds internally to `0.0.0.0`, but Docker publishes it only on
 tool allowlist, an explicit Origin allowlist, and TLS termination at a trusted
 company proxy or gateway.
 
+The allowlist above is the `operator-smoke` profile from
+[Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
+It is for install validation only. Use `strict-business-pilot` before giving
+business users access.
+
 Some desktop MCP clients still launch local stdio processes from their config
 file. For those clients, use a bridge such as `mcp-remote`:
 
@@ -384,7 +391,13 @@ Generate a sanitized local support bundle if you need to share deployment
 evidence with support:
 
 ```bash
-gongctl support bundle --db "$HOME/gongctl-data/gong-mcp-governed.db" --out "$HOME/gongctl-data/support-bundle"
+mkdir -p "$HOME/gongctl-data/support-bundle"
+
+docker run --rm \
+  -v "$HOME/gongctl-data:/data:ro" \
+  -v "$HOME/gongctl-data/support-bundle:/support" \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0 \
+  support bundle --db /data/gong-mcp-governed.db --out /support
 ```
 
 This command opens the SQLite cache read-only, does not need Gong credentials,

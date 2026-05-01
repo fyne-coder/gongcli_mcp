@@ -18,13 +18,6 @@ provider "google" {
   zone    = var.zone
 }
 
-resource "google_compute_disk" "gong_data" {
-  name = "${var.name}-gong-data"
-  type = var.disk_type
-  size = var.disk_size_gb
-  zone = var.zone
-}
-
 resource "google_compute_instance" "gongmcp" {
   name         = "${var.name}-gongmcp"
   machine_type = var.machine_type
@@ -39,7 +32,7 @@ resource "google_compute_instance" "gongmcp" {
   }
 
   attached_disk {
-    source      = google_compute_disk.gong_data.id
+    source      = var.gong_data_disk_self_link
     device_name = "gong-data"
     mode        = "READ_ONLY"
   }

@@ -26,6 +26,11 @@ local database files. Those workflows stay with the pilot operator.
 - Outputs must stay aggregate-first, metadata-oriented, and bounded.
 - Business users must not request or receive Gong credentials, raw API access,
   transcript files, raw cached JSON, or direct filesystem/database access.
+- The default business-user tool profile is `strict-business-pilot` from
+  [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
+
+For the first-session handoff, use
+[Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).
 
 ## Participant Roles
 
@@ -48,8 +53,6 @@ Use prompts shaped like these:
 - "Where is transcript coverage weakest by lifecycle or call type?"
 - "Which lifecycle buckets or business segments have the largest missing
   transcript backlog?"
-- "What scorecards are available in the reviewed cache, and what questions do
-  they contain?"
 - "Show a metadata-only rollup of calls by month, duration bucket, transcript
   status, or forecast category."
 - "Ask the operator to compare separate reviewed `sync status` snapshots when a
@@ -57,8 +60,13 @@ Use prompts shaped like these:
 - "What business-ready signals are blocked because the cache, profile, or
   transcript coverage is incomplete?"
 
-These prompts are in-bounds because they stay on reviewed cached metadata,
-bounded scorecard configuration, and backlog prioritization.
+These prompts are in-bounds because they stay on reviewed cached metadata and
+backlog prioritization.
+
+Scorecard inventory is optional, not part of the default strict pilot lane. Add
+`list_scorecards` and `get_scorecard` only after the customer approves exposure
+of coaching configuration, scorecard question text, and stable scorecard
+metadata.
 
 ## Analyst Expansion Prompts
 

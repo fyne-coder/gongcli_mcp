@@ -220,6 +220,36 @@ For Responses API testing, OpenAI's remote MCP tool uses a `server_url` and may
 also need an OAuth `authorization` value. The customer application owns OAuth
 client registration and token acquisition.
 
+Minimal API smoke shape:
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+access_token = "ACCESS_TOKEN_FROM_CUSTOMER_BROKER"
+
+response = client.responses.create(
+    model="MODEL_APPROVED_BY_CUSTOMER",
+    input=(
+        "Use get_sync_status. Tell me whether the cache, profile, and "
+        "transcript coverage are ready for strict business-pilot prompts."
+    ),
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "gongmcp",
+            "server_url": "https://gong-mcp.example.com/mcp",
+            "authorization": f"Bearer {access_token}",
+            "allowed_tools": ["get_sync_status"],
+        }
+    ],
+)
+```
+
+Common failures to check first are an unreachable `server_url`, invalid or
+missing authorization, and `allowed_tools` names that do not match the MCP tool
+catalog.
+
 ## Claude Remote Setup
 
 Claude Desktop local stdio setup can use `scripts/install-claude-stdio-mcp.sh`.

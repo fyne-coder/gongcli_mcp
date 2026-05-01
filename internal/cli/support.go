@@ -272,10 +272,14 @@ func supportEnvironmentPresence() supportEnvironmentPresenceJSON {
 		"GONG_BASE_URL",
 		"GONGCTL_RESTRICTED",
 		"GONGCTL_ALLOW_SENSITIVE_EXPORT",
+		"GONGMCP_HTTP_ADDR",
+		"GONGMCP_AUTH_MODE",
 		"GONGMCP_TOOL_ALLOWLIST",
+		"GONGMCP_ALLOWED_ORIGINS",
 		"GONGMCP_AI_GOVERNANCE_CONFIG",
 		"GONGMCP_BEARER_TOKEN",
 		"GONGMCP_BEARER_TOKEN_FILE",
+		"GONGMCP_ALLOW_OPEN_NETWORK",
 	}
 	values := make(map[string]bool, len(keys))
 	for _, key := range keys {

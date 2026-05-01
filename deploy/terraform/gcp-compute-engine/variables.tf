@@ -25,6 +25,11 @@ variable "gongmcp_image" {
   default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0"
 }
 
+variable "gong_data_disk_self_link" {
+  type        = string
+  description = "Self-link of an existing persistent disk that already contains /gong.db. This starter does not create, sync, or promote the cache."
+}
+
 variable "network" {
   type        = string
   description = "VPC network name."
@@ -73,16 +78,4 @@ variable "machine_type" {
   type        = string
   description = "Compute Engine machine type."
   default     = "e2-small"
-}
-
-variable "disk_type" {
-  type        = string
-  description = "Data disk type for the read-only SQLite cache."
-  default     = "pd-balanced"
-}
-
-variable "disk_size_gb" {
-  type        = number
-  description = "Data disk size."
-  default     = 20
 }

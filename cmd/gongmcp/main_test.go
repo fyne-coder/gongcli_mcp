@@ -506,6 +506,9 @@ func TestHTTPHandlerExposesUnauthenticatedHealthzOnly(t *testing.T) {
 	if !strings.Contains(accessLog.String(), `auth_mode="bearer"`) {
 		t.Fatalf("access log missing auth mode: %s", accessLog.String())
 	}
+	if !strings.Contains(accessLog.String(), `decision="auth_missing"`) {
+		t.Fatalf("access log missing auth rejection decision: %s", accessLog.String())
+	}
 	if strings.Contains(accessLog.String(), `{}`) {
 		t.Fatalf("access log leaked request payload: %s", accessLog.String())
 	}
@@ -548,6 +551,15 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 		t.Fatalf("preflight allow headers=%q", got)
 	}
 
+	badPreflight := httptest.NewRequest(http.MethodOptions, "/mcp", nil)
+	badPreflight.Header.Set("Origin", "https://chatgpt.example.com")
+	badPreflight.Header.Set("Access-Control-Request-Method", "GET")
+	badPreflightRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(badPreflightRecorder, badPreflight)
+	if badPreflightRecorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("bad preflight status=%d body=%q", badPreflightRecorder.Code, badPreflightRecorder.Body.String())
+	}
+
 	allowed := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
 	allowed.Header.Set("Origin", "https://chatgpt.example.com")
 	allowed.Header.Set("Authorization", "Bearer expected-token")
@@ -568,6 +580,11 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 	logOutput := accessLog.String()
 	if !strings.Contains(logOutput, "status=204") || !strings.Contains(logOutput, "status=200") || !strings.Contains(logOutput, "status=403") {
 		t.Fatalf("access log did not record preflight, success, and origin rejection: %s", logOutput)
+	}
+	for _, decision := range []string{`decision="cors_preflight_ok"`, `decision="cors_preflight_denied"`, `decision="origin_denied"`} {
+		if !strings.Contains(logOutput, decision) {
+			t.Fatalf("access log missing %s: %s", decision, logOutput)
+		}
 	}
 }
 

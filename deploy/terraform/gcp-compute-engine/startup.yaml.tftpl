@@ -13,6 +13,7 @@ write_files:
       Restart=always
       ExecStartPre=-/usr/bin/docker rm -f gongmcp
       ExecStartPre=/usr/bin/test -s ${bearer_token_file_path}
+      ExecStartPre=/usr/bin/test -s /mnt/disks/gong-data/gong.db
       ExecStart=/usr/bin/docker run --rm --name gongmcp \
         -p 127.0.0.1:8080:8080 \
         -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
@@ -35,5 +36,6 @@ runcmd:
   - mkdir -p /etc/gongmcp
   - test -s ${bearer_token_file_path} || echo "Write the bearer token to ${bearer_token_file_path} with customer secret tooling before starting gongmcp." >&2
   - mount -o ro /dev/disk/by-id/google-gong-data /mnt/disks/gong-data
+  - test -s /mnt/disks/gong-data/gong.db || echo "Attach a promoted data disk containing /gong.db before starting gongmcp." >&2
   - systemctl daemon-reload
   - systemctl enable --now gongmcp.service

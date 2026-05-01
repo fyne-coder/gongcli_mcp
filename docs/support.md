@@ -35,7 +35,13 @@ the customer or operator.
 Generate the current bundle locally from the customer-owned SQLite cache:
 
 ```bash
-gongctl support bundle --db "$HOME/gongctl-data/gong-mcp-governed.db" --out "$HOME/gongctl-data/support-bundle"
+mkdir -p "$HOME/gongctl-data/support-bundle"
+
+docker run --rm \
+  -v "$HOME/gongctl-data:/data:ro" \
+  -v "$HOME/gongctl-data/support-bundle:/support" \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0 \
+  support bundle --db /data/gong-mcp-governed.db --out /support
 ```
 
 Add `--include-env` only when support needs environment-variable presence

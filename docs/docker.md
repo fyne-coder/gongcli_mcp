@@ -176,6 +176,11 @@ Kubernetes Secrets, or a company secret manager.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
 JSON-RPC traffic.
 
+Use the named tool profiles in
+[Customer implementation checklist](implementation-checklist.md#named-tool-profiles)
+when deciding `GONGMCP_TOOL_ALLOWLIST`. The example above uses
+`strict-business-pilot`.
+
 The example binds the host port to `127.0.0.1` so only a local customer proxy,
 gateway, or tunnel can reach it. Do not change this to `-p 8080:8080` unless
 the host firewall, private network, and customer auth boundary are already in

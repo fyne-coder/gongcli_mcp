@@ -15,15 +15,16 @@ of the package supports deployment, security review, support, and operations.
 | Environment-variable config | [Configuration surfaces](configuration-surfaces.md), `.env.example`, [Docker deployment](docker.md) |
 | Read-only mode by default | [Security model](security-model.md), [Enterprise deployment](enterprise-deployment.md) |
 | Tool allowlist | [MCP data exposure](mcp-data-exposure.md), [Enterprise deployment](enterprise-deployment.md) |
-| OAuth/SSO setup guide | [Remote MCP auth and connector setup](remote-mcp-auth.md) |
+| OAuth/SSO broker requirements | [Remote MCP auth and connector setup](remote-mcp-auth.md) |
 | ChatGPT connector setup guide | [Remote MCP auth and connector setup](remote-mcp-auth.md#chatgpt-connector-setup) |
+| Implementation worksheet | [Customer implementation checklist](implementation-checklist.md) |
 | Data-flow diagram | This document |
 | Threat model | [Security model](security-model.md) |
 | Audit-log schema | [Support](support.md#audit-log-schema-expectations) |
 | No-sensitive-telemetry statement | [Data Boundary Statement](data-boundary-statement.md#no-sensitive-telemetry-statement) |
 | Support-access policy | [Support](support.md) |
 | Upgrade and rollback instructions | [Release versioning](release.md), [Enterprise deployment](enterprise-deployment.md#backup-retention-and-decommissioning) |
-| Smoke-test script | `scripts/docker-smoke.sh`, [Docker deployment](docker.md) |
+| Smoke-test scripts | `scripts/docker-smoke.sh`, `scripts/smoke-http-mcp.sh`, [Docker deployment](docker.md), [Customer implementation checklist](implementation-checklist.md#smoke-tests) |
 | Example security questionnaire answers | [Security questionnaire](security-questionnaire.md) |
 
 ## Data-Flow Diagram
@@ -67,6 +68,16 @@ Default enterprise posture:
    OAuth broker for ChatGPT/remote clients.
 9. Run `get_sync_status` and one bounded search smoke.
 10. Generate a sanitized support bundle if deployment evidence is needed.
+
+## Audience Start Points
+
+| Audience | Start here | Do not own |
+| --- | --- | --- |
+| IT/security installer | [Customer implementation checklist](implementation-checklist.md), [Docker deployment](docker.md), [Remote MCP auth](remote-mcp-auth.md) | Gong business-profile decisions |
+| Sync operator | [Quickstart](quickstart.md), [Operator sync runbook](runbooks/operator-sync.md) | end-user OAuth or model workspace policy |
+| RevOps/admin | [Business profiles](profiles.md), [Customer implementation checklist](implementation-checklist.md#revops-profile-signoff) | container secrets or TLS |
+| Business user | [Business user guide](business-user-guide.md), [Customer implementation checklist](implementation-checklist.md#business-user-first-10-minutes) | `gongctl`, credentials, profile import, raw data |
+| Security reviewer | [Data Boundary Statement](data-boundary-statement.md), [Security model](security-model.md), [Support](support.md) | day-to-day prompt writing |
 
 ## What Is Intentionally Out Of Scope
 

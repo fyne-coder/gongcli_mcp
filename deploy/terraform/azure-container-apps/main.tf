@@ -32,14 +32,15 @@ resource "azurerm_container_app" "gongmcp" {
   revision_mode                = "Single"
 
   identity {
-    type = "SystemAssigned"
+    type         = var.user_assigned_identity_id == "" ? "SystemAssigned" : "UserAssigned"
+    identity_ids = var.user_assigned_identity_id == "" ? null : [var.user_assigned_identity_id]
   }
 
   secret {
     name                = "gongmcp-bearer-token"
     value               = var.bearer_token_key_vault_secret_id == "" ? var.bearer_token : null
     key_vault_secret_id = var.bearer_token_key_vault_secret_id == "" ? null : var.bearer_token_key_vault_secret_id
-    identity            = var.bearer_token_key_vault_secret_id == "" ? null : "system"
+    identity            = var.bearer_token_key_vault_secret_id == "" ? null : var.user_assigned_identity_id
   }
 
   ingress {
@@ -100,8 +101,13 @@ resource "azurerm_container_app" "gongmcp" {
 
   lifecycle {
     precondition {
-      condition     = var.bearer_token != "" || var.bearer_token_key_vault_secret_id != ""
-      error_message = "Set bearer_token_key_vault_secret_id for Key Vault-backed secrets, or bearer_token for a lab-only Terraform-state-managed secret."
+      condition     = (var.bearer_token != "") != (var.bearer_token_key_vault_secret_id != "")
+      error_message = "Set exactly one token source: bearer_token_key_vault_secret_id for Key Vault-backed secrets, or bearer_token for a lab-only Terraform-state-managed secret."
+    }
+
+    precondition {
+      condition     = var.bearer_token_key_vault_secret_id == "" || var.user_assigned_identity_id != ""
+      error_message = "Key Vault-backed secrets require user_assigned_identity_id for a pre-authorized managed identity with Key Vault Secrets User access."
     }
   }
 }

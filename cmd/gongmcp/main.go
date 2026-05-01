@@ -425,11 +425,19 @@ func originMiddleware(next http.Handler, cfg httpConfig) http.Handler {
 		}
 		normalized, err := normalizeOrigin(origin)
 		if err != nil || !originAllowed(normalized, cfg) {
+			setAccessDecision(r, "origin_denied")
 			http.Error(w, "invalid origin", http.StatusForbidden)
 			return
 		}
 		setCORSHeaders(w, normalized)
 		if r.Method == http.MethodOptions {
+			if !validPreflightRequest(r) {
+				setAccessDecision(r, "cors_preflight_denied")
+				w.Header().Set("Allow", "POST, OPTIONS")
+				http.Error(w, "invalid preflight", http.StatusMethodNotAllowed)
+				return
+			}
+			setAccessDecision(r, "cors_preflight_ok")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -443,6 +451,28 @@ func setCORSHeaders(w http.ResponseWriter, origin string) {
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id")
 	w.Header().Set("Access-Control-Max-Age", "600")
+}
+
+func validPreflightRequest(r *http.Request) bool {
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Access-Control-Request-Method")), http.MethodPost) {
+		return false
+	}
+	allowedHeaders := map[string]struct{}{
+		"authorization":        {},
+		"content-type":         {},
+		"mcp-protocol-version": {},
+		"mcp-session-id":       {},
+	}
+	for _, header := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
+		normalized := strings.ToLower(strings.TrimSpace(header))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := allowedHeaders[normalized]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func originAllowed(origin string, cfg httpConfig) bool {
@@ -479,6 +509,8 @@ func accessLogMiddleware(next http.Handler, cfg httpConfig, out io.Writer) http.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		requestID := fmt.Sprintf("%d", start.UnixNano())
+		decision := &accessDecision{Reason: "ok"}
+		r = r.WithContext(context.WithValue(r.Context(), accessDecisionContextKey{}, decision))
 		var body bytes.Buffer
 		if r.Body != nil {
 			r.Body = io.NopCloser(io.TeeReader(r.Body, &body))
@@ -486,16 +518,29 @@ func accessLogMiddleware(next http.Handler, cfg httpConfig, out io.Writer) http.
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r)
 		method, toolName := mcpHTTPAccessInfo(body.Bytes())
-		fmt.Fprintf(out, "mcp_http_access request_id=%s method=%q tool=%q status=%d duration_ms=%d remote_addr=%q auth_mode=%q\n",
+		fmt.Fprintf(out, "mcp_http_access request_id=%s method=%q tool=%q status=%d decision=%q duration_ms=%d remote_addr=%q auth_mode=%q\n",
 			requestID,
 			method,
 			toolName,
 			recorder.status,
+			decision.Reason,
 			time.Since(start).Milliseconds(),
 			r.RemoteAddr,
 			cfg.AuthMode,
 		)
 	})
+}
+
+type accessDecision struct {
+	Reason string
+}
+
+type accessDecisionContextKey struct{}
+
+func setAccessDecision(r *http.Request, reason string) {
+	if decision, ok := r.Context().Value(accessDecisionContextKey{}).(*accessDecision); ok && decision != nil {
+		decision.Reason = reason
+	}
 }
 
 func mcpHTTPAccessInfo(payload []byte) (string, string) {
@@ -525,12 +570,14 @@ func authMiddleware(next http.Handler, cfg httpConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Fields(r.Header.Get("Authorization"))
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			setAccessDecision(r, "auth_missing")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="gongmcp"`)
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)
 			return
 		}
 		token := parts[1]
 		if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.BearerToken)) != 1 {
+			setAccessDecision(r, "auth_invalid")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="gongmcp"`)
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return

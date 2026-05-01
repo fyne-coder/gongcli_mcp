@@ -48,6 +48,10 @@ reviewed profile is imported.
    - at least two negative examples that should not match
    - RevOps or process-owner signoff
 
+   Use the worksheet in
+   [Customer implementation checklist](implementation-checklist.md#revops-profile-signoff)
+   when handing profile review to RevOps or a non-developer process owner.
+
 5. Validate and import:
 
    ```bash
@@ -80,6 +84,30 @@ outside git, re-import it if a new profile is wrong, and use
 `--lifecycle-source builtin` for CLI analysis while investigating. Native
 `profile import --activate=false`, `profile activate`, `profile history`, and
 `profile diff` are backlog items, not current commands.
+
+Suggested profile file naming:
+
+```text
+~/gongctl-data/profiles/customer-profile.reviewed-20260501.yaml
+~/gongctl-data/profiles/customer-profile.candidate-20260515.yaml
+```
+
+Manual rollback:
+
+```bash
+gongctl profile import \
+  --db ~/gongctl-data/gong.db \
+  --profile ~/gongctl-data/profiles/customer-profile.reviewed-20260501.yaml
+
+gongctl sync status --db ~/gongctl-data/gong.db
+gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle --lifecycle-source profile
+```
+
+Investigation mode while a profile is suspect:
+
+```bash
+gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle --lifecycle-source builtin
+```
 
 ## YAML Shape
 
@@ -169,6 +197,17 @@ core lifecycle buckets without reviewer evidence.
 There is no published JSON Schema yet. Treat `gongctl profile validate` as the
 machine check and this document as the human grammar. A generated schema or
 `profile schema` command is a backlog item for less technical RevOps handoff.
+
+Common validation failures:
+
+| Failure | What to fix |
+| --- | --- |
+| Missing lifecycle core bucket | Add `open`, `closed_won`, `closed_lost`, `post_sales`, or `unknown`. |
+| Unknown field alias in a rule | Add the alias under `fields`, or use the correct existing alias. |
+| Field alias points to unknown object | Add the object alias under `objects`, or correct the field's `object`. |
+| Unsupported rule operator | Use one of the operators in [Rule Grammar](#rule-grammar). |
+| Regex too broad or invalid | Replace with exact `equals`/`in` rules unless regex is truly needed. |
+| `post_sales` catches active pipeline | Add negative examples and tighten customer-success/renewal/support values. |
 
 Review checklist:
 
