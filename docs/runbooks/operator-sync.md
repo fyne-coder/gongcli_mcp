@@ -44,7 +44,8 @@ host or volume ACLs, for example owner-only access on single-user pilots.
 - Use metadata-only logs. Do not log transcript bodies or secret values.
 - Do not give business users Gong credentials, writable storage, or transcript
   export commands.
-- For containerized MCP, require a read-only mount and `--network none`.
+- For containerized stdio MCP, require a read-only mount and `--network none`.
+  HTTP MCP should expose only the MCP port through the approved proxy path.
 
 ## Preflight
 
@@ -205,6 +206,53 @@ If you expose MCP through a host app, point that host at the same read-only
 database path and expose only the approved tool set. Keep the `gongmcp`
 allowlist and host-side tool policy aligned so wrapper configuration does not
 accidentally broaden the business-user surface.
+
+For shared private-pilot HTTP access, run `gongmcp` behind TLS termination at a
+trusted company proxy/gateway and require bearer auth plus an explicit
+allowlist:
+
+```bash
+GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
+GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+  gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db <data-root>/cache/gong.db
+```
+
+The token is owned by IT/platform operations and should live in a secret file,
+systemd environment file, Docker/Kubernetes secret, or company secret manager.
+Do not store it in the repo, images, SQLite, docs, or shared logs. If HTTP binds
+to a non-local address, `--allow-open-network` is required and the deployment
+must still use TLS termination or an equivalent trusted network boundary.
+
+If the deployment has customer-specific AI-use restrictions, run a local audit
+before exposing MCP:
+
+```bash
+gongctl governance audit \
+  --db <data-root>/cache/gong.db \
+  --config <private-config-root>/ai-governance.yaml
+```
+
+Default to a physically filtered MCP DB when a blocklist exists:
+
+```bash
+gongctl governance export-filtered-db \
+  --db <data-root>/cache/gong.db \
+  --config <private-config-root>/ai-governance.yaml \
+  --out <data-root>/cache/gong-mcp-governed.db \
+  --overwrite
+```
+
+Then point MCP at the filtered DB:
+
+```bash
+gongmcp --db <data-root>/cache/gong-mcp-governed.db
+```
+
+Raw-DB governance remains a fallback: start `gongmcp` with the same private
+config through `GONGMCP_AI_GOVERNANCE_CONFIG` or `--ai-governance-config`.
+Restart `gongmcp` after cache refreshes or governance-config changes. This is
+mandatory because `gongmcp` fingerprints the cache and config, then fails
+closed if either changes while the process is running.
 
 ## Scheduled Refresh Ownership
 

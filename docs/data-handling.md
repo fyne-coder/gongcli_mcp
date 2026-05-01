@@ -13,6 +13,40 @@ Never commit:
 - Real customer payload fixtures
 - Exported JSONL/CSV from customer Gong accounts
 
+## AI And Subprocessor Review
+
+Treat transcript text, speaker identifiers, call titles, participant metadata,
+CRM context, scorecard answers, tracker hits, and bounded snippets as customer
+data. Redaction, aliases, and pseudonymized speaker references reduce exposure
+but do not make the data anonymous by default.
+
+Before using `gongctl` outputs with an AI provider or hosted model workflow
+such as OpenAI, Anthropic, a cloud MCP host, or an internal AI gateway, confirm
+the company's approved operating model:
+
+- the customer or company has authorized this category of transcript and CRM
+  processing
+- the AI provider is covered by the relevant DPA, vendor review, or
+  subprocessor approval path
+- the agreement covers the actual data flow: prompts, tool results, logs,
+  traces, files, support bundles, and any stored conversation history
+- retention, training-use, regional processing, access logging, incident
+  response, and deletion terms match the company's policy
+- support and debugging workflows use sanitized bundles by default, with
+  time-limited audited access for raw customer data only when approved
+
+For processor/subprocessor review, separate the business customer/controller
+from end prospects or call participants. The usual approval question is whether
+the business customer has authorized the vendor and downstream AI recipients for
+this processing path; do not assume every end participant receives a separate
+tool-specific notice from this project.
+
+If the company hosts, operates, debugs, or sends transcript/CRM/prompt data
+through its own accounts, it may be acting as a processor or vendor for the
+customer. If the workflow stays inside the customer's controlled environment
+and approved AI accounts, the compliance and subprocessor boundary is usually
+cleaner, but the data still needs the same minimization and retention controls.
+
 ## Local Export Policy
 
 Default raw export locations should be outside the source repo. If local testing needs files inside the checkout, use ignored directories such as `exports/` or `transcripts/`.

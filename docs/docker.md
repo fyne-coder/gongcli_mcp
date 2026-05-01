@@ -1,11 +1,14 @@
 # Docker Deployment
 
-`gongctl` can run as a local container for two current use cases:
+`gongctl` can run as a local container for three current use cases:
 
 - one-shot CLI sync, search, and analysis commands
 - read-only stdio MCP over a mounted SQLite cache
+- read-only HTTP MCP private pilots over a mounted SQLite cache
 
-The container does not turn `gongmcp` into an HTTP service. MCP remains a stdio process that reads SQLite only. Keep credentials and customer data outside the image.
+HTTP mode is explicit via `gongmcp --http ...`; the default MCP path remains
+stdio. In both modes, `gongmcp` reads SQLite only. Keep credentials and customer
+data outside the image.
 
 ## Build
 
@@ -25,6 +28,24 @@ Or use Compose:
 ```bash
 GONGCTL_DATA_DIR="$HOME/gongctl-data" docker compose build
 ```
+
+## Published Images
+
+Release images are published to GHCR as two separate packages:
+
+- `ghcr.io/fyne-coder/gongcli_mcp/gongctl` for operator CLI sync, search, and analysis jobs
+- `ghcr.io/fyne-coder/gongcli_mcp/gongmcp` for read-only stdio MCP hosts and
+  private HTTP MCP pilots
+
+Use immutable version tags or digest-pinned references in company deployments:
+
+```bash
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0
+```
+
+The `gongctl` image includes both binaries, but business-user MCP hosts should
+use the `gongmcp` package so the writable CLI is not present in that runtime.
 
 ## Data And Credentials
 
@@ -106,13 +127,13 @@ Point an MCP host at `docker run` with stdin kept open:
         "run",
         "--rm",
         "-i",
-	        "--network",
-	        "none",
-	        "-v",
-	        "/Users/YOU/gongctl-data:/data:ro",
-	        "gongctl:mcp-local",
-	        "--db",
-	        "/data/gong.db"
+        "--network",
+        "none",
+        "-v",
+        "/Users/YOU/gongctl-data:/data:ro",
+        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0",
+        "--db",
+        "/data/gong.db"
       ]
     }
   }
@@ -122,6 +143,85 @@ Point an MCP host at `docker run` with stdin kept open:
 Replace `/Users/YOU/gongctl-data` with the absolute host path that contains `gong.db`.
 
 The MCP container does not need Gong API credentials because it only reads the SQLite cache. Use `gongctl sync ...` commands to refresh that cache.
+
+## HTTP MCP For Private Pilots
+
+The same MCP-only image can expose `/mcp` over HTTP when a company wants one
+customer-managed endpoint for multiple approved users or MCP hosts:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
+  -e GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+  -v /srv/gongctl/gong.db:/data/gong.db:ro \
+  -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 \
+  --http 0.0.0.0:8080 \
+  --auth-mode bearer \
+  --allow-open-network \
+  --db /data/gong.db
+```
+
+HTTP mode does not need Gong credentials and still opens SQLite read-only. It is
+a private-pilot request/response endpoint over one operator-owned cache, not a
+tenant router or hosted review application. HTTP mode always requires an explicit
+tool allowlist, including loopback binds behind a proxy. Non-local binds also
+require `--allow-open-network` and should sit behind TLS termination at a
+trusted company proxy/gateway. The customer's IT/platform owner manages bearer
+tokens outside the repo, image, and SQLite cache. Suitable places include
+Docker secrets, mounted secret files, systemd environment files, Kubernetes
+Secrets, or a company secret manager.
+
+Unauthenticated HTTP is for localhost development or explicit private-network
+pilots only:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8080:8080 \
+  -e GONGMCP_TOOL_ALLOWLIST=get_sync_status \
+  -v /srv/gongctl/gong.db:/data/gong.db:ro \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 \
+  --http 127.0.0.1:8080 \
+  --auth-mode none \
+  --db /data/gong.db
+```
+
+Binding HTTP to a non-local address fails unless `--allow-open-network` is set.
+Use that override only behind an approved TLS/private-network boundary during a
+temporary pilot.
+
+For remote clients that require HTTPS/OAuth, put this HTTP service behind a
+customer-managed gateway or broker. See
+[Remote MCP auth and connector setup](remote-mcp-auth.md) for ChatGPT, Claude
+remote add-by-URL, JumpCloud, Cognito, and other IdP patterns.
+
+## Claude Add-By-URL Requires HTTPS
+
+Claude's UI flow for adding a remote MCP server validates the URL and requires
+`https://`. A local endpoint such as `http://127.0.0.1:8080/mcp` is still useful
+for curl, MCP Inspector, and desktop JSON bridge testing, but it is not the
+right onboarding path for users who add MCP servers through Claude's UI.
+
+For that flow, deploy `gongmcp` behind a company-managed HTTPS endpoint:
+
+```text
+Claude UI -> https://gong-mcp.example.com/mcp -> TLS/proxy/gateway -> gongmcp http://127.0.0.1:8080/mcp
+```
+
+A minimal reverse-proxy shape looks like:
+
+```text
+gong-mcp.example.com {
+  reverse_proxy 127.0.0.1:8080
+}
+```
+
+Keep bearer token values out of Git and out of image layers. Store them in a
+secret manager or mounted secret file, pass only the HTTPS `/mcp` URL to users,
+and use the UI's authentication/token flow if enabled by the MCP host. For a
+quick local demo, a temporary HTTPS tunnel can prove reachability, but it should
+not be treated as a production deployment for customer data.
 
 ## Publishing Shape
 
@@ -133,8 +233,12 @@ the MCP host config. The expected operational contract is:
 - the company controls the image tag and rollout
 - each tenant/user controls credentials and local or mounted data
 - SQLite/transcript/profile paths are mounted volumes, not image contents
-- MCP stays read-only until an explicit remote-auth design exists
+- MCP stays read-only; HTTP mode is a private-pilot transport, not a tenant
+  management layer
 - shared hosts should avoid long-lived plain environment variables where possible; Docker socket access can expose container environment through inspection
 - production rollouts should pin immutable digests and can add image signing outside this repo's local-development defaults
-- MCP host configs must use the MCP-only target once published, with no Gong
-  credentials, `--network none`, and a read-only SQLite mount
+- stdio MCP host configs must use the MCP-only target once published, with no
+  Gong credentials, `--network none`, and a read-only SQLite mount
+- HTTP MCP host configs must use the MCP-only target with no Gong credentials,
+  an explicit tool allowlist, a read-only SQLite mount, and a TLS/private-network
+  boundary managed outside the container

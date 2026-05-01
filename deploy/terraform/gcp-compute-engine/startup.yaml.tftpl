@@ -1,0 +1,38 @@
+#cloud-config
+
+write_files:
+  - path: /etc/systemd/system/gongmcp.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=gongmcp read-only HTTP MCP
+      After=docker.service
+      Requires=docker.service
+
+      [Service]
+      Restart=always
+      ExecStartPre=-/usr/bin/docker rm -f gongmcp
+      ExecStartPre=/usr/bin/test -s ${bearer_token_file_path}
+      ExecStart=/usr/bin/docker run --rm --name gongmcp \
+        -p 127.0.0.1:8080:8080 \
+        -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
+        -e GONGMCP_TOOL_ALLOWLIST=${tool_allowlist} \
+        -v /mnt/disks/gong-data:/data:ro \
+        -v ${bearer_token_file_path}:/run/secrets/gongmcp_token:ro \
+        ${image} \
+        --http 0.0.0.0:8080 \
+        --auth-mode bearer \
+        --allow-open-network \
+        --db ${db_path}
+      ExecStop=/usr/bin/docker stop gongmcp
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - mkdir -p /mnt/disks/gong-data
+  - mkdir -p /etc/gongmcp
+  - test -s ${bearer_token_file_path} || echo "Write the bearer token to ${bearer_token_file_path} with customer secret tooling before starting gongmcp." >&2
+  - mount -o ro /dev/disk/by-id/google-gong-data /mnt/disks/gong-data
+  - systemctl daemon-reload
+  - systemctl enable --now gongmcp.service

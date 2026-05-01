@@ -2,14 +2,26 @@
 
 ## Scope
 
-This document describes the data exposure contract for the local `gongmcp` stdio server as implemented in `internal/mcp/server.go` on 2026-04-29.
+This document describes the data exposure contract for the read-only `gongmcp`
+server as implemented in `internal/mcp/server.go`. Stdio remains the default
+local transport; HTTP `/mcp` is a private-pilot request/response transport over
+the same read-only tool layer.
 
 Current fixed boundaries:
 
 - MCP reads a local SQLite cache only.
 - MCP does not call Gong live.
-- `gongmcp --tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool surface; when neither is set, the full read-only catalog remains available.
+- `gongmcp --tool-allowlist` and `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool surface; HTTP mode requires an explicit allowlist. When neither is set, the full read-only catalog remains available only for stdio.
+- `gongmcp --ai-governance-config` and `GONGMCP_AI_GOVERNANCE_CONFIG` can
+  suppress calls linked to private restricted-customer name/alias matches before
+  MCP output reaches an LLM. The preferred blocklist path is
+  `gongctl governance export-filtered-db`, which scans call titles, raw call
+  metadata including participant emails, embedded CRM values, and transcript
+  segment text, then points MCP at the physically filtered copy. The real list
+  must stay outside the public repo.
 - MCP does not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or full transcript dumps.
+- HTTP mode can require bearer tokens, but bearer auth is an access gate, not
+  tenant separation or data anonymization.
 
 ## Exposure Levels
 
@@ -57,6 +69,15 @@ The following tools deserve the most review before enabling them in a model-faci
 
 - Use aggregate tools first for readiness, coverage, and prioritization questions.
 - In company deployments, set a server-side tool allowlist instead of relying on host prompts alone.
+- For customer-specific AI restrictions, run `gongctl governance audit` with the
+  private config before MCP use, then start `gongmcp` with the same config.
+  Prefer `gongctl governance export-filtered-db` and point MCP at the filtered
+  copy whenever a blocklist exists. Raw-DB governance mode requires an explicit
+  tool allowlist and refuses unsupported aggregate/config tools instead of
+  returning unfiltered counts or metadata. `search_crm_field_values` is
+  intentionally unavailable in raw-DB governance mode because direct CRM value
+  lookup can reveal whether configured customer-name variants are present in
+  the cache.
 - Treat config and profile tools as sensitive even when they do not include transcript text.
 - Reserve record-reference tools for operator workflows that actually need exact calls.
 - Reserve snippet and CRM-value lookup tools for narrowly scoped investigations with explicit user intent.
@@ -72,9 +93,9 @@ where deeper, identifier-bearing questions matter.
 
 What the conservative defaults give you:
 
-- `gongmcp` exposes the full read-only catalog when no allowlist is set, but
-  most identifier-bearing fields are blanked, snippet tools redact call IDs and
-  speaker IDs, and CRM-value lookups require explicit opt-in flags.
+- In stdio mode, `gongmcp` exposes the full read-only catalog when no allowlist
+  is set, but most identifier-bearing fields are blanked, snippet tools redact
+  call IDs and speaker IDs, and CRM-value lookups require explicit opt-in flags.
 - Pilot deployments are expected to layer `--tool-allowlist` or
   `GONGMCP_TOOL_ALLOWLIST` on top so business users see only the approved
   subset rather than the full catalog.
@@ -94,8 +115,8 @@ When opening up the surface is the right call:
 
 How to open up the surface intentionally:
 
-- Skip `--tool-allowlist` so the full read-only catalog is visible to the
-  connected host.
+- In stdio mode, skip `--tool-allowlist` so the full read-only catalog is
+  visible to the connected host. HTTP mode requires an explicit allowlist.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.
@@ -169,6 +190,9 @@ usually the right pair of limits.
 ## Residual Risks
 
 - Tool minimization reduces exposure, but it does not anonymize all tenant metadata.
-- The MCP server has no built-in authentication, tenant separation, or approval gate; the trust boundary is the local machine and the connected host app.
+- Stdio MCP has no built-in authentication; the trust boundary is the local
+  machine and the connected host app.
+- HTTP MCP can require bearer tokens, but it does not provide per-user identity,
+  tenant separation, or an approval workflow.
 - Redacted outputs can still be re-identifiable when combined with operator knowledge, timestamps, or external CRM context.
 - Bounded snippets are still customer data and should be handled like restricted tenant content.

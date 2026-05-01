@@ -2,7 +2,15 @@
 
 ## Scope
 
-This document covers the enterprise-pilot security posture of the local `gongctl` CLI and the local `gongmcp` stdio server as implemented in this worktree on 2026-04-29.
+This document covers the enterprise-pilot security posture of the local
+`gongctl` CLI and the read-only `gongmcp` MCP server. `gongmcp` supports stdio
+for local/Desktop hosts and HTTP `/mcp` for private company pilots.
+
+For customer-hosted security review, pair this with
+[Data Boundary Statement](data-boundary-statement.md) and
+[Support](support.md). The broader review package and example questionnaire
+answers live in [Customer-hosted package](customer-hosted-package.md) and
+[Security questionnaire](security-questionnaire.md).
 
 The current design is intentionally local-first:
 
@@ -13,8 +21,9 @@ The current design is intentionally local-first:
 Current enforcement limits are important: `gongctl` now has a
 restricted/company mode for high-risk CLI commands, and `gongmcp` can enforce a
 server-side tool allowlist. Business-user deployments still need approved host,
-filesystem, and operator-process controls because allowlisting narrows tools but
-does not make returned Gong-derived data non-sensitive.
+filesystem, network, token, and operator-process controls because allowlisting
+and bearer auth narrow access but do not make returned Gong-derived data
+non-sensitive.
 
 ## Trust Boundaries
 
@@ -23,7 +32,7 @@ does not make returned Gong-derived data non-sensitive.
 | Gong API boundary | `internal/gong`, `internal/auth`, `gongctl sync ...`, `gongctl calls ...`, `gongctl api raw ...` | Live Gong API responses, credentials in process memory | HTTPS to Gong, documented rate limiting, operator-supplied credentials |
 | Local operator boundary | shell, `.env`, exported env vars, CLI stdout/stderr, local files | Full tenant data when the operator runs live or export commands | User/workstation access control, keep secrets out of git, keep outputs outside the repo |
 | Local data-store boundary | SQLite cache, transcript JSON files, tenant profile YAML | Cached call metadata, CRM context, transcript snippets/full transcripts, settings inventory, profile state | External data directory, read-only mount for MCP, repo ignores local data as a safety net |
-| MCP boundary | `gongmcp`, `internal/mcp`, connected host app/model | Read-only SQLite query results only | SQLite opened read-only, no live Gong credentials required, no raw API passthrough, no write tools |
+| MCP boundary | `gongmcp`, `internal/mcp`, connected host app/model | Read-only SQLite query results only | SQLite opened read-only, no live Gong credentials required, no raw API passthrough, no write tools, optional bearer auth for HTTP |
 | Public source boundary | repo source, docs, tests, examples | Sanitized code and docs only | No live tenant names, transcripts, IDs, secrets, or private local paths in tracked files |
 
 ## Credential Flow
@@ -31,19 +40,24 @@ does not make returned Gong-derived data non-sensitive.
 1. The operator provides Gong credentials through exported environment variables or an ignored `.env` file.
 2. `gongctl` reads those credentials and uses them only for live API calls.
 3. Sync commands write cached results to a local SQLite database and optional local transcript/profile files.
-4. `gongmcp` starts later with `--db PATH`, opens that SQLite file read-only, and serves stdio MCP requests without Gong credentials.
+4. `gongmcp` starts later with `--db PATH`, opens that SQLite file read-only, and serves stdio or HTTP MCP requests without Gong credentials.
 
 Operational implications:
 
 - `gongmcp` should not be given Gong API secrets.
-- Docker MCP runs should use a read-only data mount and `--network none`.
+- Stdio Docker MCP runs should use a read-only data mount and `--network none`;
+  HTTP MCP runs need only the MCP port exposed through the approved proxy path.
 - Shared hosts should avoid long-lived plaintext environment variables when possible because container inspection can expose them.
+- HTTP MCP bearer tokens are customer-managed deployment secrets. Prefer mounted
+  secret files or platform secret managers over raw command-line flags.
 
 ## Data Classification
 
 | Class | Examples in this repo shape | Default surfaces | Handling expectation |
 | --- | --- | --- | --- |
 | Restricted secrets | Gong access key, Gong access key secret, future OAuth secrets or refresh tokens | CLI environment only | Never commit, never place in docs, keep out of MCP |
+| MCP access secrets | HTTP bearer token for `gongmcp` private-pilot mode | MCP process environment or mounted secret file | Customer-managed; never commit, never bake into images, rotate on access changes |
+| AI governance config | Restricted customer names and aliases for MCP filtering against cached CRM account/customer identity fields | Private operator config path or mounted config volume | Never commit real lists, never bake into images, audit before MCP use |
 | Restricted tenant content | raw call JSON, transcript JSON/text, embedded CRM field values, profile discovery evidence | local SQLite, local transcript/profile files, selected CLI commands | Keep outside git and outside shared logs; only operator-controlled local storage |
 | Sensitive tenant metadata | call titles, call IDs, object IDs, scorecard IDs, workspace IDs, tracker names, question text, lifecycle/profile concepts | selected CLI commands and selected MCP tools | Treat as customer data even when not full transcript content |
 | Reduced business metadata | counts, coverage, lifecycle summaries, field population rates, readiness flags | safe CLI summaries and many MCP tools | Prefer for model-facing analysis and pilot review materials |
@@ -69,6 +83,13 @@ Implementation controls on the MCP side:
 - `gongmcp` opens SQLite through `sqlite.OpenReadOnly(...)`.
 - `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB.
 - Profile-aware reads refuse stale-cache rebuilds instead of mutating SQLite from MCP.
+- HTTP mode exposes only `/mcp`, supports `--auth-mode none|bearer`, requires
+  an explicit tool allowlist, and blocks non-local binds unless
+  `--allow-open-network` is set.
+- AI governance mode suppresses configured customer-name/alias matches from
+  supported MCP record/snippet tools and fails closed for unsupported aggregate
+  tools while the filter is active. It does not return filtered-call counts over
+  MCP because those counts could become a match oracle.
 
 Implementation controls on the CLI side:
 
@@ -137,7 +158,7 @@ data-owner approval records.
 - Read-only MCP prevents new writes, but it does not prevent exfiltration of already cached data.
 - Some MCP tools still expose sensitive metadata such as call titles, call IDs, object IDs, scorecard IDs, workspace IDs, and question text.
 - Transcript snippet tools and explicit CRM value lookups can still reveal sensitive content in bounded excerpts.
-- The repo documents safe storage patterns, but it does not currently add encryption-at-rest, host-level DLP, remote revocation, centralized audit logging, or MCP-side authentication/RBAC.
+- The repo documents safe storage patterns, but it does not currently add encryption-at-rest, host-level DLP, remote revocation, centralized audit logging, OIDC, or per-user MCP RBAC.
 - The MCP binary enforces a tool allowlist when configured, but MCP output still
   inherits the sensitivity of the cached dataset and the approved host.
 - Docker hardening helps only if the host itself is trusted; Docker socket or host compromise bypasses container-level isolation.

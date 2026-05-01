@@ -7,7 +7,8 @@ This document defines the current enterprise pilot deployment shape for
 
 - `gongctl` is the writable operator tool that authenticates to Gong and
   refreshes local cache state.
-- `gongmcp` is a read-only stdio MCP server over an existing SQLite cache.
+- `gongmcp` is a read-only MCP server over an existing SQLite cache. It supports
+  local stdio and a minimal HTTP `/mcp` private-pilot mode.
 - Business users should consume only the approved MCP tool set through host or
   wrapper policy. They do not run live syncs, handle Gong credentials, or write
   to SQLite.
@@ -16,10 +17,19 @@ This is a pilot-candidate operating model, not a hosted service design.
 Customer identity, raw transcripts, secrets, and tenant-specific filesystem
 details should stay outside shared docs and outside the source repo.
 
+Security-review readers should also use
+[Data Boundary Statement](data-boundary-statement.md) for the customer-hosted
+data boundary and [Support](support.md) for sanitized diagnostic-bundle and
+support-access policy. The complete customer-hosted review packet is indexed in
+[Customer-hosted package](customer-hosted-package.md). Remote HTTPS/OAuth and
+ChatGPT connector setup are covered in
+[Remote MCP auth and connector setup](remote-mcp-auth.md).
+
 Current limitations still matter for deployment approval: `gongmcp` can narrow
-its tool surface with an allowlist, and `gongctl` now has a restricted company
-mode for high-risk CLI commands, but neither control replaces operator
-ownership of storage, host policy, and process access.
+its tool surface with an allowlist and can require bearer tokens for HTTP mode,
+and `gongctl` now has a restricted company mode for high-risk CLI commands, but
+neither control replaces operator ownership of storage, host policy, and
+process access.
 
 ## Roles And Ownership
 
@@ -75,10 +85,31 @@ product boundary.
 Use when business-user access must be separated from the writable sync runtime.
 
 - Build and publish the Docker `mcp` target, not the default full CLI image.
-- `gongmcp` runs with `--network none` when containerized.
+- Stdio `gongmcp` runs with `--network none` when containerized.
 - Mount the SQLite cache read-only.
 - Do not provide Gong credentials to the MCP process.
 - Refresh happens upstream through operator-owned `gongctl` jobs only.
+
+### 4. Private HTTP MCP pilot
+
+Use when a company wants approved users or MCP hosts to connect to one
+customer-managed endpoint instead of launching a local subprocess/container on
+each workstation.
+
+- Run `gongmcp --http ADDR --auth-mode bearer --tool-allowlist ... --db PATH`.
+- Expose only `/mcp` to approved clients through TLS termination at a trusted
+  company proxy/gateway or equivalent private-network boundary.
+- Keep `gongctl` sync jobs separate from this read-only process.
+- Store bearer tokens outside Git, SQLite, images, docs, and shared logs.
+- Treat `--auth-mode none --allow-open-network` as temporary private-pilot
+  scaffolding only, never as an internet-facing posture.
+
+The initial HTTP mode is intentionally small: POST JSON-RPC requests to `/mcp`;
+GET streaming/SSE, user management, OIDC, tenant routing, and hosted transcript
+review are not implemented here. Non-local HTTP binds require
+`--allow-open-network` so operators make that deployment decision deliberately.
+Every HTTP mode requires an explicit tool allowlist, including loopback binds
+behind a proxy/gateway.
 
 ## Storage Classes And Protection
 
@@ -115,10 +146,62 @@ Storage-specific guidance:
 - `gongctl` needs network access to Gong and valid credentials for `auth check`
   and `sync ...` commands.
 - `gongmcp` reads SQLite only and should not receive Gong credentials.
-- For containerized MCP, prefer `docker run --network none` with a read-only
-  data mount.
+- For containerized stdio MCP, prefer `docker run --network none` with a
+  read-only data mount.
+- For HTTP MCP, require bearer auth, an explicit tool allowlist, and TLS
+  termination at a trusted proxy/gateway for shared access.
+- For customer-specific AI-use restrictions, mount a private AI governance
+  config, run `gongctl governance audit`, and start `gongmcp` with
+  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
+  Restart is mandatory after cache/config changes because `gongmcp`
+  fingerprints both and fails closed if either changes while running.
 - For shared environments, separate the writable sync runtime from the
   business-user MCP runtime even if both read the same protected data root.
+
+## HTTP MCP Token Ownership
+
+Bearer tokens are deployment secrets owned by the customer IT/platform owner.
+The repo supports supplying them through:
+
+- `GONGMCP_BEARER_TOKEN`
+- `GONGMCP_BEARER_TOKEN_FILE`
+- `--bearer-token`
+- `--bearer-token-file`
+
+Prefer a secret file or managed secret store over long-lived shell history or
+shared `.env` files. Rotate tokens when a pilot participant leaves, when logs or
+configs are exposed, or before widening access. For production-grade enterprise
+access, put a company-managed gateway or OIDC layer in front of the service
+rather than treating a shared static token as durable identity.
+
+For remote MCP clients that expect OAuth, separate human SSO from MCP-compatible
+authorization. A customer IdP such as JumpCloud, Cognito, Okta, Entra, or
+Cloudflare Access can handle login, but a broker or future native OAuth layer
+must still expose MCP-compatible metadata, PKCE-capable authorization, scoped
+tokens, and token validation. See
+[Remote MCP auth and connector setup](remote-mcp-auth.md).
+
+## AI Provider Boundary
+
+When an MCP host or downstream analyst sends tool results to an AI provider, the
+recipient sees whatever `gongmcp` returned: aggregate metadata, configuration,
+record references, snippets, or opt-in attribution depending on the tool
+surface. That provider path should be reviewed separately from Gong API access.
+
+Deployment approval should answer these questions before business-user access:
+
+- Which model host receives prompts and MCP tool results?
+- Is that host approved for Gong-derived transcript and CRM data?
+- Are OpenAI or any other model providers covered by the customer's DPA,
+  vendor review, and subprocessor approval process?
+- Are model logs, traces, file uploads, and support access disabled, minimized,
+  or retained according to policy?
+- Is the pilot using a customer-managed AI account/gateway or a vendor-managed
+  account, and who owns deletion and incident response?
+
+For the cleanest enterprise posture, keep the cache and MCP host inside the
+customer's approved environment, use a reviewed AI account or gateway, and send
+the minimum tool output needed for the question.
 
 ## Restricted CLI Mode
 
@@ -273,17 +356,19 @@ This repo currently documents a conservative deployment shape:
 
 - local or company-managed writable sync
 - local or company-managed read-only stdio MCP
+- private-pilot HTTP MCP with bearer-token support
 - no live Gong API access from MCP
-- no shared hosted control plane in this repo
+- no shared hosted control plane or tenant/user-management layer in this repo
 
 If the company needs multi-tenant hosting, remote auth, browser-facing APIs, or
 centralized transcript review workflows, those belong in a separate application
-layer rather than widening `gongmcp`.
+layer around or in front of `gongmcp`, not in the read-only cache adapter itself.
 
 The conservative defaults documented here are not the only supported posture.
-A trusted single-user analyst workstation can skip the tool allowlist and
-enable per-tool opt-ins to surface exact identifiers, bounded snippets, and
-attribution joined to Account/Opportunity context for deeper questions. See
+A trusted single-user analyst workstation using stdio can skip the tool
+allowlist and enable per-tool opt-ins to surface exact identifiers, bounded
+snippets, and attribution joined to Account/Opportunity context for deeper
+questions. See
 [mcp-data-exposure.md](mcp-data-exposure.md) for the trade-off framing and
 [mcp-data-exposure.md#mcp-call-volume-and-limits](mcp-data-exposure.md#mcp-call-volume-and-limits)
 for the per-call cost model and recommended limits.

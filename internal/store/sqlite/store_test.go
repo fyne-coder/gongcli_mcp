@@ -2149,6 +2149,167 @@ func TestCachePurgeBeforePlansAndDeletesCacheRows(t *testing.T) {
 	}
 }
 
+func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	outputPath := filepath.Join(dir, "governed.db")
+	store, err := Open(ctx, sourcePath)
+	if err != nil {
+		t.Fatalf("Open source returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-governance-export-blocked",
+		"title":    "Blocked export call",
+		"started":  "2026-04-20T14:00:00Z",
+		"duration": 1800,
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Account",
+					"id":   "acct-governance-export-blocked",
+					"name": "Blocked Export Corp",
+					"fields": []map[string]any{
+						{"name": "Name", "label": "Name", "value": "Blocked Export Corp"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall blocked returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+		"callId": "call-governance-export-blocked",
+		"transcript": []any{
+			map[string]any{
+				"speakerId": "speaker-blocked",
+				"sentences": []map[string]any{
+					{"start": 0, "end": 1000, "text": "blocked export transcript needle"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertTranscript blocked returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-governance-export-allowed",
+		"title":    "Allowed export call",
+		"started":  "2026-04-24T14:00:00Z",
+		"duration": 900,
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Account",
+					"id":   "acct-governance-export-allowed",
+					"name": "Allowed Export Corp",
+					"fields": []map[string]any{
+						{"name": "Name", "label": "Name", "value": "Allowed Export Corp"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall allowed returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":      "call-governance-export-email",
+		"title":   "Allowed account with restricted email domain",
+		"started": "2026-04-24T15:00:00Z",
+		"parties": []any{
+			map[string]any{"speakerId": "buyer-email", "emailAddress": "buyer@blockedexport.example"},
+		},
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Account",
+					"id":   "acct-governance-export-email",
+					"name": "Allowed Email Corp",
+					"fields": []map[string]any{
+						{"name": "Name", "label": "Name", "value": "Allowed Email Corp"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall email returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
+		"id":       "call-governance-export-mentioned",
+		"title":    "Allowed account mentions restricted company",
+		"started":  "2026-04-25T14:00:00Z",
+		"duration": 600,
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Account",
+					"id":   "acct-governance-export-mentioned",
+					"name": "Allowed Mention Corp",
+					"fields": []map[string]any{
+						{"name": "Name", "label": "Name", "value": "Allowed Mention Corp"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall mentioned returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+		"callId": "call-governance-export-mentioned",
+		"transcript": []any{
+			map[string]any{
+				"speakerId": "speaker-mentioned",
+				"sentences": []map[string]any{
+					{"start": 0, "end": 1000, "text": "the team compared this to Blocked Export Corp"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertTranscript mentioned returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close source returned error: %v", err)
+	}
+
+	plan, err := ExportGovernanceFilteredDB(ctx, sourcePath, outputPath, []string{"call-governance-export-blocked", "call-governance-export-mentioned", "call-governance-export-email"}, false)
+	if err != nil {
+		t.Fatalf("ExportGovernanceFilteredDB returned error: %v", err)
+	}
+	if plan.DeletedCalls != 3 || plan.DeletedTranscripts != 2 || plan.DeletedTranscriptSegments != 2 || plan.RemainingSuppressedCandidates != 0 {
+		t.Fatalf("unexpected export plan: %+v", plan)
+	}
+
+	filtered, err := OpenReadOnly(ctx, outputPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly filtered returned error: %v", err)
+	}
+	defer filtered.Close()
+	inventory, err := filtered.CacheInventory(ctx)
+	if err != nil {
+		t.Fatalf("CacheInventory filtered returned error: %v", err)
+	}
+	if inventory.Summary.TotalCalls != 1 || inventory.Summary.TotalTranscripts != 0 || inventory.Summary.TotalEmbeddedCRMContextCalls != 1 {
+		t.Fatalf("unexpected filtered summary: %+v", inventory.Summary)
+	}
+	results, err := filtered.SearchTranscriptSegments(ctx, "blocked", 10)
+	if err != nil {
+		t.Fatalf("SearchTranscriptSegments filtered returned error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("filtered DB still returned blocked transcript results: %+v", results)
+	}
+	candidates, err := filtered.GovernanceNameCandidates(ctx)
+	if err != nil {
+		t.Fatalf("GovernanceNameCandidates filtered returned error: %v", err)
+	}
+	for _, candidate := range candidates {
+		if strings.Contains(candidate.Value, "Blocked Export Corp") || candidate.CallID == "call-governance-export-blocked" {
+			t.Fatalf("filtered DB retained blocked governance candidate: %+v", candidate)
+		}
+	}
+}
+
 func TestProfileImportAndProfileAwareFacts(t *testing.T) {
 	t.Parallel()
 

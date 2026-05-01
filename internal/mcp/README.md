@@ -1,13 +1,20 @@
 # MCP Adapter Boundary
 
-`internal/mcp` implements the local read-only stdio MCP adapter over SQLite.
+`internal/mcp` implements the read-only MCP request handling over SQLite. Stdio
+is the default transport; HTTP mode is a minimal private-pilot transport wrapper
+around the same request handler.
 
 Rules:
 
 - read from the SQLite store surfaces; do not call Gong directly
 - keep tools read-only
 - require `--db` at the `cmd/gongmcp` boundary
-- support optional MCP tool allowlisting through `gongmcp --tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`; when unset, serve the full read-only catalog
+- support MCP tool allowlisting through `gongmcp --tool-allowlist` or `GONGMCP_TOOL_ALLOWLIST`; when unset, stdio serves the full read-only catalog
+- require an explicit allowlist for all HTTP deployments
+- support private AI governance suppression through `--ai-governance-config` or
+  `GONGMCP_AI_GOVERNANCE_CONFIG`; do not expose configured restricted names in
+  MCP output, do not expose filtered-match counts, and require an explicit
+  governance-compatible tool allowlist
 - keep browser/session auth separate from agent-client auth
 - do not expose raw Gong API passthrough, arbitrary SQL, profile import, raw cached call JSON, or full transcript dumps
 - return transcript snippets only, not full transcript bodies

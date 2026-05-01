@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -278,6 +280,169 @@ func TestAllowlistedServerRejectsNonAllowedToolCallsWithGenericError(t *testing.
 	}
 	if got := payload["error"]; got != "tool is not available" {
 		t.Fatalf("error=%q want generic hidden-tool message", got)
+	}
+}
+
+func TestGovernanceSuppressionHidesSearchCallsAndNames(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-blocked",
+		"title":    "Restricted synthetic account call",
+		"started":  "2026-04-24T12:00:00Z",
+		"duration": 1200,
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-governance-blocked",
+				"name":       "NoAI Synthetic Corp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "NoAI Synthetic Corp"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert blocked call: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-allowed",
+		"title":    "Allowed synthetic account call",
+		"started":  "2026-04-25T12:00:00Z",
+		"duration": 1200,
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-governance-allowed",
+				"name":       "Allowed Synthetic Corp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Allowed Synthetic Corp"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert allowed call: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-governance-blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "search",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_calls",
+			"arguments": map[string]any{
+				"limit": 20,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("search_calls returned error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call-governance-blocked") || strings.Contains(text, "NoAI Synthetic Corp") {
+		t.Fatalf("governance response leaked blocked data: %s", text)
+	}
+	if !strings.Contains(text, "call-governance-allowed") {
+		t.Fatalf("governance response missing allowed call: %s", text)
+	}
+	if strings.Contains(text, "filtered_call_count") {
+		t.Fatalf("governance response exposed filtered count oracle: %s", text)
+	}
+}
+
+func TestGovernanceSuppressionFailsClosedForAggregateTool(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-id"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "aggregate",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name":      "summarize_call_facts",
+			"arguments": map[string]any{},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected aggregate to fail closed while governance active")
+	}
+	if strings.Contains(envelope.Result.Content[0].Text, "NoAI Synthetic Corp") {
+		t.Fatalf("aggregate error leaked restricted name: %s", envelope.Result.Content[0].Text)
+	}
+}
+
+func TestGovernanceSuppressionHidesLifecycleSearchCalls(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-lifecycle-blocked",
+		"title":    "Blocked lifecycle call",
+		"started":  "2026-04-26T12:00:00Z",
+		"duration": 1200,
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-governance-lifecycle-blocked",
+				"name":       "NoAI Lifecycle Corp",
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "NoAI Lifecycle Corp"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert blocked lifecycle call: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-governance-lifecycle-blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "lifecycle",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_calls_by_lifecycle",
+			"arguments": map[string]any{
+				"limit": 20,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("search_calls_by_lifecycle returned error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call-governance-lifecycle-blocked") || strings.Contains(text, "NoAI Lifecycle Corp") {
+		t.Fatalf("lifecycle search leaked governed data: %s", text)
 	}
 }
 
@@ -1728,6 +1893,75 @@ func TestWriteFrameRejectsOversizedResponseEnvelope(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "response frame exceeds maximum") {
 		t.Fatalf("error=%q want response frame exceeds maximum", err)
+	}
+}
+
+func TestServeHTTPHandlesInitializeAndNotifications(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content-type=%q want application/json", got)
+	}
+	if !strings.Contains(recorder.Body.String(), `"protocolVersion":"2025-11-25"`) {
+		t.Fatalf("body=%q missing initialize result", recorder.Body.String())
+	}
+
+	notification := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`))
+	notificationRecorder := httptest.NewRecorder()
+	server.ServeHTTP(notificationRecorder, notification)
+	if notificationRecorder.Code != http.StatusAccepted {
+		t.Fatalf("notification status=%d body=%q", notificationRecorder.Code, notificationRecorder.Body.String())
+	}
+	if notificationRecorder.Body.Len() != 0 {
+		t.Fatalf("notification body=%q want empty", notificationRecorder.Body.String())
+	}
+}
+
+func TestServeHTTPRejectsUnsupportedMethodPathAndOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "gongmcp", "test")
+
+	notFound := httptest.NewRecorder()
+	server.ServeHTTP(notFound, httptest.NewRequest(http.MethodPost, "/not-mcp", strings.NewReader(`{}`)))
+	if notFound.Code != http.StatusNotFound {
+		t.Fatalf("not-found status=%d want 404", notFound.Code)
+	}
+
+	get := httptest.NewRecorder()
+	server.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	if get.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get status=%d want 405", get.Code)
+	}
+
+	oversized := httptest.NewRecorder()
+	server.ServeHTTP(oversized, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(strings.Repeat("x", maxFrameBytes+1))))
+	if oversized.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized status=%d want 413", oversized.Code)
+	}
+}
+
+func TestServeHTTPReturnsJSONRPCParseErrorForInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "gongmcp", "test")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{invalid`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":-32700`) {
+		t.Fatalf("body=%q missing parse error envelope", recorder.Body.String())
 	}
 }
 

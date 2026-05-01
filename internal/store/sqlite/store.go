@@ -397,6 +397,7 @@ type TranscriptCRMSearchResult struct {
 }
 
 type TranscriptCallFactsSearchResult struct {
+	CallID          string `json:"-"`
 	StartedAt       string `json:"started_at"`
 	CallDate        string `json:"call_date"`
 	CallMonth       string `json:"call_month"`
@@ -2382,7 +2383,8 @@ func (s *Store) SearchTranscriptSegmentsByCallFacts(ctx context.Context, params 
 	}
 
 	query := `
-SELECT cf.started_at,
+SELECT cf.call_id,
+       cf.started_at,
        cf.call_date,
        cf.call_month,
        cf.duration_seconds,
@@ -2424,6 +2426,7 @@ SELECT cf.started_at,
 	for rows.Next() {
 		var row TranscriptCallFactsSearchResult
 		if err := rows.Scan(
+			&row.CallID,
 			&row.StartedAt,
 			&row.CallDate,
 			&row.CallMonth,

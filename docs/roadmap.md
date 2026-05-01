@@ -8,7 +8,8 @@ hardening as one broad "production ready" milestone. The product boundary stays:
 
 - Local CLI for Gong auth, sync, search, analysis, transcript fetch/export, and
   SQLite-backed status checks.
-- Read-only local stdio MCP server over SQLite.
+- Read-only local stdio MCP server over SQLite, plus private-pilot HTTP `/mcp`
+  mode for customer-managed deployments.
 - Docker packaging for local/company-managed CLI and MCP use.
 - Version source in `VERSION`, changelog entries, and SemVer-style tags.
 - Public-safe docs for local data handling, Docker, release flow, and readiness.

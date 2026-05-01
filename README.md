@@ -4,18 +4,59 @@
 
 This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 
+## Positioning
+
+`gongctl` complements Gong rather than replacing it. Gong remains the system of
+record for calls, transcripts, trackers, scorecards, and Gong-native AI
+workflows. `gongctl` gives operators and analysts a local, queryable evidence
+workbench for questions that are awkward to answer directly in Gong:
+
+- prototype ad-hoc analyses before turning them into durable Gong trackers,
+  scorecards, themes, or Gong AI prompts
+- join cached transcript evidence to call facts, lifecycle buckets, scorecard
+  configuration, and selected CRM context under operator control
+- inspect coverage gaps before trusting AI summaries or coaching conclusions
+- keep an open-source/local-first path where every company uses its own Gong
+  credentials and controls where cached data lives
+
+The intended flow is: sync an approved local cache, test the business question
+with bounded evidence, convert the useful pattern into Gong-native
+configuration or a governed analysis workflow, then use Gong AI with a clearer
+question, better tracker/theme inputs, and known coverage limits.
+
 ## Status
 
-Bootstrap scaffold, not a production release yet.
+Early public release. `v0.2.0` is enterprise-pilot ready for operator-managed
+local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
+requires signed/provenance-backed release artifacts, stable deprecation policy,
+and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
 
 For company evaluation, start with the enterprise pilot packet:
 
+- [Quickstart](docs/quickstart.md)
+- [Customer-hosted package](docs/customer-hosted-package.md)
+- [Data Boundary Statement](docs/data-boundary-statement.md)
+- [Support model](docs/support.md)
 - [Enterprise deployment](docs/enterprise-deployment.md)
 - [Security model](docs/security-model.md)
+- [Remote MCP auth and connector setup](docs/remote-mcp-auth.md)
+- [Security questionnaire](docs/security-questionnaire.md)
 - [MCP data exposure](docs/mcp-data-exposure.md)
 - [Operator sync runbook](docs/runbooks/operator-sync.md)
+- [Configuration surfaces](docs/configuration-surfaces.md)
 - [Business-user guide](docs/business-user-guide.md)
 - [Pilot plan](docs/pilot-plan.md)
+
+For support intake, generate the local/offline diagnostic bundle before
+sharing logs or payloads:
+
+```bash
+gongctl support bundle --db "$HOME/gongctl-data/gong-mcp-governed.db" --out "$HOME/gongctl-data/support-bundle"
+```
+
+The command opens SQLite read-only, does not need Gong credentials, and does
+not make network calls. See [Support model](docs/support.md) for what the
+bundle includes and excludes.
 
 Current pilot hardening in this worktree includes a restricted/company CLI mode
 for high-risk commands. Enable it with `GONGCTL_RESTRICTED=1` or
@@ -60,6 +101,21 @@ GoReleaser and Docker builds inject `version`, `commit`, and `date` into both `g
 
 ## Run With Docker
 
+For the fastest end-to-end path, use the [Quickstart](docs/quickstart.md).
+
+Use the published GHCR images after a release is published:
+
+```bash
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.2.0 sync status --db /data/gong.db
+```
+
+For read-only MCP, use the MCP-only image:
+
+```bash
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 --db /data/gong.db
+```
+
 Build the local image:
 
 ```bash
@@ -77,6 +133,13 @@ Run the read-only stdio MCP server from the MCP-only image:
 ```bash
 docker build --target mcp -t gongctl:mcp-local .
 docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" gongctl:mcp-local --db /data/gong.db
+```
+
+Generate or install a Claude Desktop stdio MCP config entry:
+
+```bash
+scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong.db"
+scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong.db" --install
 ```
 
 Run the real-data Docker smoke after credentials are configured:
@@ -143,6 +206,11 @@ GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-
 
 ## Public Quickstart Shape
 
+Use [docs/quickstart.md](docs/quickstart.md) for the copy/paste Docker path
+from credentials to local MCP host config. The public path stays local:
+authenticate, sync a local SQLite cache, inspect readiness, search bounded
+snippets, and optionally expose the cache through the read-only MCP server.
+
 ```bash
 gongctl auth check
 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business
@@ -155,8 +223,6 @@ gongctl mcp tools
 gongmcp --db ~/gongctl-data/gong.db
 gongctl diagnose
 ```
-
-The public path stays local: authenticate, sync a local SQLite cache, inspect readiness, search bounded snippets, and optionally expose the cache through the read-only MCP server.
 
 For repeatable operator refreshes, stage the approved steps in YAML and dry-run
 them before the scheduled job uses the same file:
@@ -291,7 +357,26 @@ Rules:
 
 For non-client-specific business prompt examples, see [docs/public-readiness.md](docs/public-readiness.md). Public examples should avoid tenant field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs.
 
-## Local MCP
+## AI Governance Exclusions
+
+For companies with customer-specific AI-use restrictions, keep the real
+restricted-customer list in a private YAML file outside Git and load it with
+`gongmcp --ai-governance-config PATH` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
+`gongctl governance audit --db PATH --config PATH` verifies deterministic
+name/alias matches before MCP use. See
+[docs/ai-governance.md](docs/ai-governance.md); the tracked example config uses
+synthetic names only. For MCP/LLM use, default to a physically filtered MCP DB:
+
+```bash
+gongctl governance export-filtered-db --db ~/gongctl-data/gong.db --config ~/gongctl-data/ai-governance.yaml --out ~/gongctl-data/gong-mcp-governed.db
+gongmcp --db ~/gongctl-data/gong-mcp-governed.db
+```
+
+Raw-DB governance remains available as a fallback; when it is enabled,
+`gongmcp` requires an explicit governance-compatible `--tool-allowlist` or
+`GONGMCP_TOOL_ALLOWLIST`, and unsupported aggregate/config tools are refused.
+
+## Local MCP (stdio)
 
 `gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
@@ -306,6 +391,38 @@ deeper, identifier-bearing questions; see
 [docs/mcp-data-exposure.md](docs/mcp-data-exposure.md) for the trade-off and
 [docs/mcp-data-exposure.md#mcp-call-volume-and-limits](docs/mcp-data-exposure.md#mcp-call-volume-and-limits)
 for how to keep MCP traffic from overwhelming the host context window.
+
+## Private HTTP MCP Pilot
+
+For shared private pilots where users should not run Docker locally, `gongmcp`
+can expose the same read-only MCP tools over a minimal HTTP `/mcp` endpoint:
+
+```bash
+GONGMCP_BEARER_TOKEN="<customer-managed-token>" \
+GONGMCP_TOOL_ALLOWLIST=get_sync_status,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog \
+  gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
+```
+
+HTTP mode is a request/response JSON-RPC bridge over one operator-owned SQLite
+cache. Put it behind TLS termination at a trusted company proxy/gateway before
+non-local use. It is not a hosted SaaS layer, tenant router, browser app, or
+full streaming MCP service. Every HTTP mode requires an explicit tool allowlist,
+including loopback binds behind a proxy; the preferred shape is a loopback bind
+behind the TLS gateway. Any non-loopback `--http` bind also requires
+`--allow-open-network`. Unauthenticated HTTP is allowed only for localhost
+development or explicit private-network pilots:
+
+```bash
+GONGMCP_TOOL_ALLOWLIST=get_sync_status \
+  gongmcp --http 127.0.0.1:8080 --auth-mode none --db /srv/gongctl/gong.db
+```
+
+Binding HTTP to a non-local address requires `--allow-open-network`; use that
+override only behind an approved TLS/private-network boundary. Bearer tokens
+are owned by the customer/operator and should come from an environment
+variable, secret file, systemd environment file, Docker secret, Kubernetes
+Secret, or company secret manager. Do not commit MCP bearer tokens to Git,
+SQLite, docs, images, or shared logs.
 
 Tools:
 

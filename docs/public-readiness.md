@@ -129,3 +129,20 @@ The local MCP server is aggregate-first:
 - does not expose profile import or mutation
 
 Use `gongctl mcp tools` and `gongctl mcp tool-info NAME` to inspect available read-only tools before connecting a host application.
+
+## Public Git And GHCR Checklist
+
+Before making the repository or a release broadly consumable:
+
+1. Run `make secret-scan`, `go test -count=1 ./...`, `go vet ./...`, `make sbom`,
+   and `make checksums`.
+2. Confirm `git ls-files` does not include `.env`, SQLite databases, transcript
+   files, JSONL exports, tenant profile YAML, local logs, or checkpoint files.
+3. Confirm examples use synthetic data, role labels, fake object IDs, and
+   portable paths such as `$HOME/gongctl-data` or `$PULSARIS_DB`.
+4. Publish both GHCR packages from the same tag:
+   `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z` and
+   `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`.
+5. For MCP consumption, document the MCP-only image, no Gong credentials, and a
+   read-only SQLite mount. Use `--network none` for stdio MCP; HTTP MCP needs an
+   explicit allowlist and the approved proxy/TLS path.

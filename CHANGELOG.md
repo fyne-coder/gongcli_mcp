@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Added a customer-hosted Data Boundary Statement, support-access runbook, and
+  `gongctl support bundle` metadata-only diagnostic command for sanitized
+  support intake without raw transcripts, payloads, secrets, local paths, or
+  customer-content identifiers.
+- Added a customer-hosted package index, remote MCP OAuth/SSO and ChatGPT
+  connector setup guide, Terraform starter examples for AWS/Azure/GCP, and
+  example security-questionnaire answers.
+- Added `docs/quickstart.md` with a Docker-first path from Gong credentials to
+  local SQLite cache and read-only MCP host configuration, plus links to deeper
+  deployment, governance, security, and release docs.
+- Added `docs/configuration-surfaces.md` to inventory existing YAML configs and
+  rank the next YAML candidates, led by `gongmcp --config PATH` for MCP runtime
+  policy.
+- Added auth-ready HTTP MCP private-pilot mode for `gongmcp`, with bearer-token
+  support, HTTP allowlist and non-local bind guardrails, request timeouts, and docs
+  that separate stdio, private HTTP, and future hosted/OIDC service boundaries.
+- Added private AI governance config support for deterministic customer-name
+  exclusion from MCP output, plus a local `gongctl governance audit` command and
+  synthetic-only docs/examples.
+- Added `gongctl governance export-filtered-db` to create a physically filtered
+  MCP SQLite copy that removes blocklisted call-dependent rows before LLM/MCP
+  use. The export scans call titles, raw call metadata including participant
+  emails, embedded CRM values, and transcript segment text.
+- Added a GHCR publishing workflow for separate `gongctl` and MCP-only
+  `gongmcp` images, plus release/docs updates for public Git and container
+  consumption.
 - Refreshed enterprise pilot docs with a "Default Posture And Optional Wider
   Surface" section and an "MCP Call Volume And Limits" section in
   `docs/mcp-data-exposure.md` so single-user analyst workflows have a

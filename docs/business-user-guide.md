@@ -217,6 +217,44 @@ Output discipline: do not turn missing transcript coverage into a forecast
 recommendation by itself; treat it as a refresh request to the operator and a
 deal-desk review trigger.
 
+## Ad-Hoc Analysis And Gong AI Loop
+
+Use `gongctl` as the analysis lab and Gong as the production conversation
+intelligence system.
+
+The local workflow is useful when the business question is not yet clean enough
+for Gong-native configuration:
+
+- the team is still discovering which prospect questions, objections, or buying
+  signals recur often enough to deserve a tracker, theme, scorecard, or Gong AI
+  prompt
+- the analyst needs exact evidence counts, quote samples, transcript coverage,
+  and CRM/lifecycle slices before trusting an AI summary
+- the question cuts across Gong surfaces, such as transcript snippets plus
+  lifecycle state plus scorecard configuration
+- the answer needs to separate evidence-backed findings from hypotheses before
+  it becomes a stakeholder-facing summary
+
+Recommended loop:
+
+1. Start with `get_sync_status` and coverage checks so the model knows what the
+   cache can and cannot support.
+2. Run a narrow ad-hoc analysis with bounded transcript or attribution tools,
+   using a defined date window, lifecycle bucket, segment, and output shape.
+3. Save the useful pattern as a candidate business definition: signal name,
+   positive examples, negative examples, required quote evidence, and any CRM
+   or lifecycle filters.
+4. Convert that candidate into the right Gong-native artifact: tracker,
+   scorecard question, call category, theme, or Gong AI prompt.
+5. Use Gong AI against the improved native setup, then compare its output
+   against the local evidence counts and quote samples before treating it as
+   reliable.
+
+This prevents a common failure mode: asking Gong AI a broad question before the
+underlying trackers, scorecards, themes, or coverage expectations are clear.
+`gongctl` should produce the evidence and definitions that make the Gong-native
+AI question sharper.
+
 ## Disallowed Prompts
 
 Do not use prompts like these:

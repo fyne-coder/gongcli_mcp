@@ -1,0 +1,98 @@
+name: publish-images
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          version="$(sed 's/^v//' VERSION)"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Metadata for gongctl
+        id: meta-gongctl
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/gongctl
+          tags: |
+            type=semver,pattern={{raw}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=v${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-
+
+      - name: Build and publish gongctl image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta-gongctl.outputs.tags }}
+          labels: ${{ steps.meta-gongctl.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.release.outputs.date }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata for gongmcp
+        id: meta-gongmcp
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/gongmcp
+          tags: |
+            type=semver,pattern={{raw}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=v${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,prefix=sha-
+
+      - name: Build and publish gongmcp image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: mcp
+          push: true
+          tags: ${{ steps.meta-gongmcp.outputs.tags }}
+          labels: ${{ steps.meta-gongmcp.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.release.outputs.date }}
+          provenance: true
+          sbom: true

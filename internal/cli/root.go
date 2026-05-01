@@ -68,8 +68,12 @@ func (a *app) run(ctx context.Context, args []string) error {
 		return a.cache(ctx, args[1:])
 	case "calls":
 		return a.calls(ctx, args[1:])
+	case "governance":
+		return a.governance(ctx, args[1:])
 	case "search":
 		return a.search(ctx, args[1:])
+	case "support":
+		return a.support(ctx, args[1:])
 	case "sync":
 		return a.sync(ctx, args[1:])
 	case "mcp":
@@ -108,6 +112,9 @@ func (a *app) usage() {
   gongctl profile validate --db gong.db --profile gongctl-profile.yaml
   gongctl profile import --db gong.db --profile gongctl-profile.yaml
   gongctl profile show --db gong.db [--format json|yaml]
+  gongctl governance audit --db gong.db --config ai-governance.yaml [--json]
+  gongctl governance export-filtered-db --db gong.db --config ai-governance.yaml --out governed.db [--overwrite]
+  gongctl support bundle --db gong.db --out support-bundle [--include-env]
   gongctl sync run --config company-sync.yaml [--dry-run]
   gongctl sync calls --db gong.db --from YYYY-MM-DD --to YYYY-MM-DD --preset business|minimal|all [--max-pages N] [--allow-sensitive-export]
   gongctl sync users --db gong.db [--max-pages N]

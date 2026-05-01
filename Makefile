@@ -1,9 +1,10 @@
 VERSION ?= $(shell cat VERSION)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+IMAGE_BASE ?= ghcr.io/fyne-coder/gongcli_mcp
 LDFLAGS := -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$(VERSION) -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$(COMMIT) -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$(DATE)
 
-.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-smoke clean
+.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-build-ghcr docker-build-ghcr-mcp docker-smoke clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gongctl ./cmd/gongctl
@@ -33,6 +34,12 @@ docker-build:
 
 docker-build-mcp:
 	docker build --target mcp --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t gongctl:mcp-local .
+
+docker-build-ghcr:
+	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t $(IMAGE_BASE)/gongctl:v$(VERSION) -t $(IMAGE_BASE)/gongctl:$(VERSION) .
+
+docker-build-ghcr-mcp:
+	docker build --target mcp --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t $(IMAGE_BASE)/gongmcp:v$(VERSION) -t $(IMAGE_BASE)/gongmcp:$(VERSION) .
 
 docker-smoke: docker-build docker-build-mcp
 	./scripts/docker-smoke.sh

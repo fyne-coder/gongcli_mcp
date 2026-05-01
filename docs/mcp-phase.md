@@ -38,7 +38,11 @@
 
 ## Phase 2: Read-Only Local MCP
 
-`cmd/gongmcp` is a local stdio MCP server over the SQLite cache. It requires `--db PATH` and does not call Gong directly.
+`cmd/gongmcp` is a read-only MCP server over the SQLite cache. Stdio remains
+the default local/Desktop transport. A minimal HTTP `/mcp` request/response
+transport is available for private company pilots when the operator supplies
+bearer auth, an explicit tool allowlist, and a trusted TLS/proxy boundary. It
+requires `--db PATH` and does not call Gong directly.
 
 Implemented tools are boring and auditable:
 
@@ -96,9 +100,11 @@ Guardrails:
 - `rank_transcript_backlog` and `prioritize_transcripts_by_lifecycle` favor External and Conference-style customer conversations and redact call IDs/titles in model-facing MCP output
 - Opportunity aggregate tools redact opportunity IDs/names, owner IDs, amounts, close dates, and latest call IDs in model-facing MCP output; use CLI/operator workflows for exact local follow-up.
 
-## Phase 3: Remote MCP
+## Phase 3: Hosted/Managed Remote MCP
 
-Only after local MCP is stable:
+Phase 2 already includes the current private HTTP pilot. This phase is future
+work for a hosted or centrally managed remote MCP layer with user and tenant
+management. Only after the local/private-pilot MCP shape is stable:
 
 - decide auth boundary explicitly
 - keep browser/session auth separate from agent-client auth

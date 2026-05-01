@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -21,6 +22,9 @@ import (
 const protocolVersion = "2025-11-25"
 const maxFrameBytes = 1 << 20
 const maxToolResultBytes = maxFrameBytes - 4096
+const httpToolCallTimeout = 60 * time.Second
+
+var errHTTPPayloadTooLarge = fmt.Errorf("request body exceeds maximum %d bytes", maxFrameBytes)
 
 const (
 	maxSearchResults        = 100
@@ -84,11 +88,13 @@ type Store interface {
 }
 
 type Server struct {
-	store            Store
-	name             string
-	version          string
-	tools            []tool
-	allowedToolNames map[string]struct{}
+	store             Store
+	name              string
+	version           string
+	tools             []tool
+	allowedToolNames  map[string]struct{}
+	suppressedCallIDs map[string]struct{}
+	governanceCheck   func(context.Context) error
 }
 
 type ServerOption func(*Server)
@@ -428,6 +434,26 @@ func WithToolAllowlist(names []string) ServerOption {
 		}
 		s.tools = filtered
 		s.allowedToolNames = allowset
+	}
+}
+
+func WithSuppressedCallIDs(callIDs []string) ServerOption {
+	return func(s *Server) {
+		if len(callIDs) == 0 {
+			return
+		}
+		s.suppressedCallIDs = make(map[string]struct{}, len(callIDs))
+		for _, callID := range callIDs {
+			if trimmed := strings.TrimSpace(callID); trimmed != "" {
+				s.suppressedCallIDs[trimmed] = struct{}{}
+			}
+		}
+	}
+}
+
+func WithGovernanceCheck(check func(context.Context) error) ServerOption {
+	return func(s *Server) {
+		s.governanceCheck = check
 	}
 }
 
@@ -838,6 +864,56 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 }
 
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/mcp" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "streaming GET is not implemented by this MCP server", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	payload, err := readHTTPPayload(r.Body)
+	if err != nil {
+		if errors.Is(err, errHTTPPayloadTooLarge) {
+			http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "read request body", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), httpToolCallTimeout)
+	defer cancel()
+
+	resp := s.handlePayload(ctx, payload)
+	if resp == nil {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	body, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, "encode response", http.StatusInternalServerError)
+		return
+	}
+	if len(body) > maxFrameBytes {
+		http.Error(w, fmt.Sprintf("response frame exceeds maximum %d bytes", maxFrameBytes), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
 func (s *Server) Handle(ctx context.Context, req Request) *response {
 	switch req.Method {
 	case "initialize":
@@ -860,6 +936,17 @@ func (s *Server) Handle(ctx context.Context, req Request) *response {
 	default:
 		return s.err(req.ID, -32601, "method not found")
 	}
+}
+
+func readHTTPPayload(r io.Reader) ([]byte, error) {
+	payload, err := io.ReadAll(io.LimitReader(r, maxFrameBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > maxFrameBytes {
+		return nil, errHTTPPayloadTooLarge
+	}
+	return payload, nil
 }
 
 func (s *Server) handlePayload(ctx context.Context, payload []byte) *response {
@@ -912,6 +999,11 @@ func (s *Server) isToolAllowed(name string) bool {
 }
 
 func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolCallResult, error) {
+	if s.governanceCheck != nil {
+		if err := s.governanceCheck(ctx); err != nil {
+			return toolCallResult{}, err
+		}
+	}
 	switch params.Name {
 	case "get_sync_status":
 		return s.getSyncStatus(ctx, params.Arguments)
@@ -1009,20 +1101,28 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 	}
 
 	summaries := make([]searchCallSummary, 0, len(rows))
+	filtered := 0
 	for _, rawCall := range rows {
 		summary, err := summarizeCall(rawCall)
 		if err != nil {
 			return toolCallResult{}, err
 		}
+		if s.isSuppressedCall(summary.CallID) {
+			filtered++
+			continue
+		}
 		summaries = append(summaries, summary)
 	}
-	return newToolResult(summaries)
+	return s.newGovernedToolResult(summaries, filtered)
 }
 
 func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
 	var args getCallArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
+	}
+	if s.isSuppressedCall(args.CallID) {
+		return toolCallResult{}, fmt.Errorf("call %q not found", args.CallID)
 	}
 
 	detail, err := s.store.GetCallDetail(ctx, args.CallID)
@@ -1208,20 +1308,30 @@ func (s *Server) searchCRMFieldValues(ctx context.Context, raw json.RawMessage) 
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	for idx := range rows {
+	filtered := 0
+	out := rows[:0]
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
 		if !args.IncludeCallIDs {
-			rows[idx].CallID = ""
+			row.CallID = ""
 		}
-		rows[idx].ObjectID = ""
-		rows[idx].ObjectName = ""
+		row.ObjectID = ""
+		row.ObjectName = ""
 		if !args.IncludeValueSnippets {
-			rows[idx].Title = ""
+			row.Title = ""
 		}
+		out = append(out, row)
 	}
-	return newToolResult(rows)
+	return s.newGovernedToolResult(out, filtered)
 }
 
 func (s *Server) analyzeLateStageCRMSignals(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("analyze_late_stage_crm_signals")
+	}
 	var args analyzeLateStageCRMSignalsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1241,6 +1351,9 @@ func (s *Server) analyzeLateStageCRMSignals(ctx context.Context, raw json.RawMes
 }
 
 func (s *Server) opportunitiesMissingTranscripts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("opportunities_missing_transcripts")
+	}
 	var args opportunitiesMissingTranscriptsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1271,7 +1384,16 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(mcpTranscriptCRMSearchResults(rows))
+	filtered := 0
+	out := rows[:0]
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedToolResult(mcpTranscriptCRMSearchResults(out), filtered)
 }
 
 func mcpOpportunityMissingTranscriptSummaries(rows []sqlite.OpportunityMissingTranscriptSummary) []sqlite.OpportunityMissingTranscriptSummary {
@@ -1313,6 +1435,9 @@ func mcpTranscriptCRMSearchResults(rows []sqlite.TranscriptCRMSearchResult) []sq
 }
 
 func (s *Server) opportunityCallSummary(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("opportunity_call_summary")
+	}
 	var args opportunityCallSummaryArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1329,6 +1454,9 @@ func (s *Server) opportunityCallSummary(ctx context.Context, raw json.RawMessage
 }
 
 func (s *Server) crmFieldPopulationMatrix(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("crm_field_population_matrix")
+	}
 	var args crmFieldPopulationMatrixArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1359,6 +1487,9 @@ func (s *Server) listLifecycleBuckets(ctx context.Context, raw json.RawMessage) 
 }
 
 func (s *Server) summarizeCallsByLifecycle(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("summarize_calls_by_lifecycle")
+	}
 	var args summarizeCallsByLifecycleArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1389,7 +1520,16 @@ func (s *Server) searchCallsByLifecycle(ctx context.Context, raw json.RawMessage
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newLifecycleToolResult(rows, info, args.LifecycleSource)
+	filtered := 0
+	out := rows[:0]
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedLifecycleToolResult(out, info, args.LifecycleSource, filtered)
 }
 
 func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1406,7 +1546,16 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newLifecycleToolResult(mcpTranscriptPriorities(rows), info, args.LifecycleSource)
+	filtered := 0
+	out := rows[:0]
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedLifecycleToolResult(mcpTranscriptPriorities(out), info, args.LifecycleSource, filtered)
 }
 
 func mcpTranscriptPriorities(rows []sqlite.LifecycleTranscriptPriority) []sqlite.LifecycleTranscriptPriority {
@@ -1445,6 +1594,9 @@ func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 }
 
 func (s *Server) compareLifecycleCRMFields(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("compare_lifecycle_crm_fields")
+	}
 	var args compareLifecycleCRMFieldsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1463,6 +1615,9 @@ func (s *Server) compareLifecycleCRMFields(ctx context.Context, raw json.RawMess
 }
 
 func (s *Server) summarizeCallFacts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError("summarize_call_facts")
+	}
 	var args summarizeCallFactsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
@@ -1525,7 +1680,16 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newLifecycleToolResult(mcpTranscriptPriorities(rows), info, args.LifecycleSource)
+	filtered := 0
+	out := rows[:0]
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedLifecycleToolResult(mcpTranscriptPriorities(out), info, args.LifecycleSource, filtered)
 }
 
 func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1540,7 +1704,12 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 	}
 
 	snippets := make([]transcriptSnippet, 0, len(results))
+	filtered := 0
 	for _, row := range results {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
 		callID := row.CallID
 		if !args.IncludeCallIDs {
 			callID = ""
@@ -1558,7 +1727,7 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 			Snippet:      row.Snippet,
 		})
 	}
-	return newToolResult(snippets)
+	return s.newGovernedToolResult(snippets, filtered)
 }
 
 func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1580,7 +1749,16 @@ func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawM
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(results)
+	filtered := 0
+	out := results[:0]
+	for _, row := range results {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedToolResult(out, filtered)
 }
 
 func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1605,7 +1783,16 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(mcpTranscriptAttributionResults(results, args))
+	filtered := 0
+	out := results[:0]
+	for _, row := range results {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedToolResult(mcpTranscriptAttributionResults(out, args), filtered)
 }
 
 func mcpTranscriptAttributionResults(rows []sqlite.TranscriptAttributionSearchResult, args searchTranscriptQuotesWithAttributionArgs) []sqlite.TranscriptAttributionSearchResult {
@@ -1641,7 +1828,16 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(rows)
+	filtered := 0
+	out := rows[:0]
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			filtered++
+			continue
+		}
+		out = append(out, row)
+	}
+	return s.newGovernedToolResult(out, filtered)
 }
 
 func (s *Server) ok(id any, result any) *response {
@@ -1782,6 +1978,10 @@ func newToolResult(value any) (toolCallResult, error) {
 	}, nil
 }
 
+func (s *Server) newGovernedToolResult(value any, _ int) (toolCallResult, error) {
+	return newToolResult(value)
+}
+
 func newLifecycleToolResult(results any, info *sqlite.ProfileQueryInfo, requested string) (toolCallResult, error) {
 	if info == nil || (info.Profile == nil && strings.TrimSpace(requested) == "") {
 		return newToolResult(results)
@@ -1792,6 +1992,37 @@ func newLifecycleToolResult(results any, info *sqlite.ProfileQueryInfo, requeste
 		"unavailable_concepts": info.UnavailableConcepts,
 		"results":              results,
 	})
+}
+
+func (s *Server) newGovernedLifecycleToolResult(results any, info *sqlite.ProfileQueryInfo, requested string, _ int) (toolCallResult, error) {
+	if len(s.suppressedCallIDs) == 0 {
+		return newLifecycleToolResult(results, info, requested)
+	}
+	envelope := map[string]any{
+		"results": results,
+	}
+	if info != nil && (info.Profile != nil || strings.TrimSpace(requested) != "") {
+		envelope["lifecycle_source"] = info.LifecycleSource
+		envelope["profile"] = mcpBusinessProfile(info.Profile)
+		envelope["unavailable_concepts"] = info.UnavailableConcepts
+	}
+	return newToolResult(envelope)
+}
+
+func (s *Server) isSuppressedCall(callID string) bool {
+	if len(s.suppressedCallIDs) == 0 {
+		return false
+	}
+	_, ok := s.suppressedCallIDs[strings.TrimSpace(callID)]
+	return ok
+}
+
+func (s *Server) governanceActive() bool {
+	return len(s.suppressedCallIDs) > 0
+}
+
+func governanceFilteredAggregateError(toolName string) error {
+	return fmt.Errorf("%s is unavailable while AI governance filtering is active because this aggregate has not been recomputed over the filtered call set", toolName)
 }
 
 func mcpBusinessProfile(profile *sqlite.BusinessProfile) *sqlite.BusinessProfile {

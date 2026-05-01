@@ -2,6 +2,14 @@
 
 Business profiles make the SQLite read model portable across Gong tenants with different CRM object names, field names, lifecycle stages, and sales or post-sales methodologies.
 
+Profiles are optional for ingestion and basic MCP use. Without one, `gongctl`
+still syncs calls, transcripts, users, settings, and CRM context; transcript
+search, sync status, basic summaries, and generic CRM inspection still work. The
+tradeoff is interpretation quality: lifecycle separation, sales-vs-post-sales
+splits, attribution readiness, and tenant-specific methodology concepts use
+builtin compatibility behavior or report partial/unavailable readiness until a
+reviewed profile is imported.
+
 ## Flow
 
 1. Sync calls with CRM context:
@@ -29,7 +37,7 @@ Business profiles make the SQLite read model portable across Gong tenants with d
 
    The discovered YAML includes evidence values from the local cached CRM data to help humans review mappings. Keep `--out -` stdout output out of shared logs and CI artifacts when using a real customer cache.
 
-4. Review and edit the YAML. Keep it outside git when it describes a real customer tenant. The reviewer should confirm lifecycle buckets, post-sales signals, attribution fields, and methodology concepts before using the profile for sales-vs-post-sales or attribution claims.
+4. Review and edit the YAML. Keep it outside git when it describes a real customer tenant. The reviewer should confirm lifecycle buckets, post-sales signals, attribution fields, and methodology concepts before using the profile for sales-vs-post-sales or attribution claims. A synthetic, import-shape example lives at [docs/examples/business-profile.example.yaml](examples/business-profile.example.yaml).
 
 5. Validate and import:
 
@@ -96,6 +104,44 @@ methodology:
 ```
 
 The required MCP lifecycle core is `open`, `closed_won`, `closed_lost`, `post_sales`, and `unknown`. A partial profile may import with warnings, but profile-aware tools report unavailable concepts explicitly instead of silently substituting a missing mapping.
+
+## YAML Fields
+
+- `version`: Profile schema version. Use `1`.
+- `name`: Human-readable profile name shown in profile metadata.
+- `objects`: Local aliases for tenant CRM object types. The alias is the stable
+  concept `gongctl` uses, such as `deal` or `account`; `object_types` lists the
+  actual CRM object names seen in the Gong cache, such as `Opportunity`,
+  `Deal`, `Account`, or `Company`.
+- `fields`: Local aliases for CRM fields. Each field concept points at one
+  object alias plus one or more real CRM field names. For example,
+  `deal_stage` may map to `StageName` in one tenant and `DealPhase__c` in
+  another.
+- `lifecycle`: Rules that map cached CRM field values into the required
+  lifecycle buckets: `open`, `closed_won`, `closed_lost`, `post_sales`, and
+  `unknown`. Buckets with lower `order` evaluate first. Rules can reference a
+  field concept with `field`, or a raw object/field pair with `object` plus
+  `field_name`.
+- `methodology`: Optional concepts used for business-specific analysis, such as
+  pain, next steps, risk, MEDDICC fields, implementation criteria, or renewal
+  signals. Concepts can include plain-language `aliases`, CRM `fields`, tracker
+  IDs, or scorecard question IDs.
+- `confidence` and `evidence`: Optional discovery metadata. `profile discover`
+  may include these to explain why it picked an object, field, or lifecycle
+  value. Operators can keep them for review or remove them before import.
+
+Review checklist:
+
+- Confirm the CRM object names match the tenant's actual Gong CRM context.
+- Confirm `deal_stage` points to the real pipeline stage field, not a created
+  date, owner, type, or unrelated status field.
+- Confirm `post_sales` rules identify real customers, renewals, support,
+  success, or implementation conversations rather than active new-logo deals.
+- Confirm `closed_won` and `closed_lost` values match the tenant's exact CRM
+  stage names.
+- Remove or edit noisy `evidence.values` before sharing the profile with anyone
+  who should not see tenant CRM values.
+- Run `profile validate` after every edit.
 
 ## Rule Grammar
 
