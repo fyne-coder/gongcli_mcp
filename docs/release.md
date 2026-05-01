@@ -64,6 +64,10 @@ from protected `vX.Y.Z` tag pushes.
 
 - Publish immutable version tags and prefer digest-pinned Docker references in
   company MCP host configs.
+- GitHub Actions in this repo are pinned to commit SHAs with the upstream tag
+  noted in comments. When bumping an action, resolve the tag SHA with
+  `git ls-remote --tags https://github.com/OWNER/REPO.git refs/tags/TAG`,
+  update the workflow, and review the upstream changelog before merging.
 - Publish the full `gongctl` image and the MCP-only `gongmcp` image as separate
   GHCR packages. Business-user MCP host configs should point at the MCP-only
   package.
@@ -79,6 +83,25 @@ from protected `vX.Y.Z` tag pushes.
   comment cleanup are scheduled),
   govulncheck, Go module inventory, checksums, and Docker builds;
   signing/provenance can be layered on top by the publishing environment.
+
+Digest verification commands:
+
+```bash
+docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z
+docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z
+```
+
+Record and deploy the returned `sha256:` digest:
+
+```bash
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp@sha256:REPLACE_WITH_DIGEST
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongmcp@sha256:REPLACE_WITH_DIGEST --list-tool-presets
+```
+
+For environments that require signatures, add keyless signing in the customer
+or publisher release pipeline and verify the signed digest before promotion.
+Digest pinning is the minimum supported customer-hosted verification path in
+this repo.
 
 ## Upgrade And Rollback
 

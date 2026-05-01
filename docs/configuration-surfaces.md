@@ -23,6 +23,7 @@ Claude Desktop JSON, and wrapper scripts:
 - `--stdio`
 - `--auth-mode`
 - `--bearer-token-file`
+- `--bearer-token-previous-file`
 - `--allow-open-network`
 - `--tool-preset` / `GONGMCP_TOOL_PRESET`
 - `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST`
@@ -43,6 +44,7 @@ transport:
   # addr: 127.0.0.1:8080
   # auth_mode: bearer
   # bearer_token_file: /run/secrets/gongmcp_token
+  # bearer_token_previous_file: /run/secrets/gongmcp_token_previous
   # allow_open_network: false
 
 tools:
@@ -74,7 +76,8 @@ Recommended contract:
 - Raw-DB AI governance still validates that only governance-compatible tools are
   exposed.
 - Bearer token values should not be stored in YAML; store only
-  `bearer_token_file` or use the deployment secret manager.
+  `bearer_token_file`/`bearer_token_previous_file` or use the deployment
+  secret manager.
 
 ## Strong Candidate: Operator Workspace Config
 

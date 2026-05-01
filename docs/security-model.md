@@ -56,7 +56,7 @@ Operational implications:
 | Class | Examples in this repo shape | Default surfaces | Handling expectation |
 | --- | --- | --- | --- |
 | Restricted secrets | Gong access key, Gong access key secret, future OAuth secrets or refresh tokens | CLI environment only | Never commit, never place in docs, keep out of MCP |
-| MCP access secrets | HTTP bearer token for `gongmcp` private-pilot mode | MCP process environment or mounted secret file | Customer-managed; never commit, never bake into images, rotate on access changes |
+| MCP access secrets | HTTP bearer token for `gongmcp` private-pilot mode | MCP process environment or mounted current/previous secret files | Customer-managed; never commit, never bake into images, rotate on access changes |
 | AI governance config | Restricted customer names and aliases for MCP filtering against cached CRM account/customer identity fields | Private operator config path or mounted config volume | Never commit real lists, never bake into images, audit before MCP use |
 | Restricted tenant content | raw call JSON, transcript JSON/text, embedded CRM field values, profile discovery evidence | local SQLite, local transcript/profile files, selected CLI commands | Keep outside git and outside shared logs; only operator-controlled local storage |
 | Sensitive tenant metadata | call titles, call IDs, object IDs, scorecard IDs, workspace IDs, tracker names, question text, lifecycle/profile concepts | selected CLI commands and selected MCP tools | Treat as customer data even when not full transcript content |

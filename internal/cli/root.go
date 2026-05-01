@@ -110,8 +110,12 @@ func (a *app) usage() {
   gongctl cache purge --db gong.db --older-than YYYY-MM-DD [--dry-run|--confirm]
   gongctl profile discover --db gong.db --out gongctl-profile.yaml
   gongctl profile validate --db gong.db --profile gongctl-profile.yaml
-  gongctl profile import --db gong.db --profile gongctl-profile.yaml
+  gongctl profile import --db gong.db --profile gongctl-profile.yaml [--activate=false]
   gongctl profile show --db gong.db [--format json|yaml]
+  gongctl profile history --db gong.db
+  gongctl profile activate --db gong.db (--id ID|--canonical-sha SHA)
+  gongctl profile diff --db gong.db --from active --to gongctl-profile.yaml
+  gongctl profile schema
   gongctl governance audit --db gong.db --config ai-governance.yaml [--json]
   gongctl governance export-filtered-db --db gong.db --config ai-governance.yaml --out governed.db [--overwrite]
   gongctl support bundle --db gong.db --out support-bundle [--include-env]

@@ -280,6 +280,7 @@ func supportEnvironmentPresence() supportEnvironmentPresenceJSON {
 		"GONGMCP_AI_GOVERNANCE_CONFIG",
 		"GONGMCP_BEARER_TOKEN",
 		"GONGMCP_BEARER_TOKEN_FILE",
+		"GONGMCP_BEARER_TOKEN_PREVIOUS_FILE",
 		"GONGMCP_ALLOW_OPEN_NETWORK",
 	}
 	values := make(map[string]bool, len(keys))

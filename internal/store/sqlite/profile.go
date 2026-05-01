@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os/user"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 
 	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 )
@@ -29,6 +31,7 @@ type ProfileImportParams struct {
 	Profile         *profilepkg.Profile
 	Findings        []profilepkg.Finding
 	ImportedBy      string
+	StageOnly       bool
 }
 
 type ProfileImportResult struct {
@@ -56,6 +59,24 @@ type BusinessProfile struct {
 	MethodologyConcepts []BusinessConcept    `json:"methodology_concepts"`
 	Warnings            []profilepkg.Finding `json:"warnings,omitempty"`
 	UnavailableConcepts []string             `json:"unavailable_concepts,omitempty"`
+}
+
+type ProfileHistoryEntry struct {
+	ProfileID       int64  `json:"profile_id"`
+	Name            string `json:"name,omitempty"`
+	Version         int    `json:"version"`
+	SourcePath      string `json:"source_path,omitempty"`
+	SourceSHA256    string `json:"source_sha256"`
+	CanonicalSHA256 string `json:"canonical_sha256"`
+	ImportedAt      string `json:"imported_at"`
+	ImportedBy      string `json:"imported_by,omitempty"`
+	IsActive        bool   `json:"is_active"`
+	WarningCount    int64  `json:"warning_count"`
+}
+
+type StoredProfileDocument struct {
+	Meta    ProfileHistoryEntry `json:"meta"`
+	Profile *profilepkg.Profile `json:"profile"`
 }
 
 type BusinessConcept struct {
@@ -217,25 +238,33 @@ SELECT id, source_path, source_sha256, imported_at, imported_by, raw_yaml, is_ac
 	switch {
 	case err == nil:
 		sourceChanged := existing.SourceSHA256 != params.SourceSHA256 || existing.SourcePath != params.SourcePath || !bytes.Equal(existing.RawYAML, params.RawYAML)
-		activationChanged := existing.IsActive != 1
+		activationChanged := !params.StageOnly && existing.IsActive != 1
 		if !sourceChanged && !activationChanged {
 			if err := tx.Commit(); err != nil {
 				return nil, err
 			}
-			if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
-				return nil, err
+			if !params.StageOnly {
+				if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+					return nil, err
+				}
 			}
 			return &ProfileImportResult{ProfileID: existing.ID, Imported: false, Activated: false, SourceSHA256: params.SourceSHA256, CanonicalSHA256: params.CanonicalSHA256}, nil
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = 0 WHERE id <> ?`, existing.ID); err != nil {
-			return nil, err
+		if !params.StageOnly {
+			if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = 0 WHERE id <> ?`, existing.ID); err != nil {
+				return nil, err
+			}
 		}
 		if sourceChanged {
+			activeValue := existing.IsActive
+			if !params.StageOnly {
+				activeValue = 1
+			}
 			if _, err := tx.ExecContext(ctx, `
 UPDATE profile_meta
-   SET source_path = ?, source_sha256 = ?, imported_at = ?, imported_by = ?, raw_yaml = ?, is_active = 1
+   SET source_path = ?, source_sha256 = ?, imported_at = ?, imported_by = ?, raw_yaml = ?, is_active = ?
  WHERE id = ?`,
-				params.SourcePath, params.SourceSHA256, now, importedBy, params.RawYAML, existing.ID); err != nil {
+				params.SourcePath, params.SourceSHA256, now, importedBy, params.RawYAML, activeValue, existing.ID); err != nil {
 				return nil, err
 			}
 			if err := replaceProfileWarnings(ctx, tx, existing.ID, params.Findings); err != nil {
@@ -249,8 +278,10 @@ UPDATE profile_meta
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
-			return nil, err
+		if !params.StageOnly {
+			if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+				return nil, err
+			}
 		}
 		return &ProfileImportResult{ProfileID: existing.ID, Imported: false, Activated: activationChanged, SourceSHA256: params.SourceSHA256, CanonicalSHA256: params.CanonicalSHA256}, nil
 	case errors.Is(err, sql.ErrNoRows):
@@ -258,12 +289,14 @@ UPDATE profile_meta
 		return nil, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = 0`); err != nil {
-		return nil, err
+	if !params.StageOnly {
+		if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = 0`); err != nil {
+			return nil, err
+		}
 	}
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO profile_meta(name, version, source_path, source_sha256, canonical_sha256, imported_at, imported_by, is_active, raw_yaml, canonical_json)
-VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		params.Profile.Name,
 		params.Profile.Version,
 		params.SourcePath,
@@ -271,6 +304,7 @@ VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 		params.CanonicalSHA256,
 		now,
 		importedBy,
+		boolToInt(!params.StageOnly),
 		params.RawYAML,
 		params.CanonicalJSON,
 	)
@@ -290,10 +324,162 @@ VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	if !params.StageOnly {
+		if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return &ProfileImportResult{ProfileID: profileID, Imported: true, Activated: !params.StageOnly, SourceSHA256: params.SourceSHA256, CanonicalSHA256: params.CanonicalSHA256}, nil
+}
+
+func (s *Store) ListProfiles(ctx context.Context) ([]ProfileHistoryEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.id, p.name, p.version, p.source_path, p.source_sha256, p.canonical_sha256,
+       p.imported_at, p.imported_by, p.is_active, COUNT(w.profile_id)
+  FROM profile_meta p
+  LEFT JOIN profile_validation_warning w ON w.profile_id = p.id
+ GROUP BY p.id, p.name, p.version, p.source_path, p.source_sha256, p.canonical_sha256,
+          p.imported_at, p.imported_by, p.is_active
+ ORDER BY p.imported_at DESC, p.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ProfileHistoryEntry{}
+	for rows.Next() {
+		var row ProfileHistoryEntry
+		var active int
+		if err := rows.Scan(&row.ProfileID, &row.Name, &row.Version, &row.SourcePath, &row.SourceSHA256, &row.CanonicalSHA256, &row.ImportedAt, &row.ImportedBy, &active, &row.WarningCount); err != nil {
+			return nil, err
+		}
+		row.IsActive = active == 1
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ProfileDocument(ctx context.Context, ref string) (*StoredProfileDocument, error) {
+	where, args, err := profileRefWhere(ref)
+	if err != nil {
+		return nil, err
+	}
+	if isProfileHashPrefixRef(ref) {
+		var matches int64
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM profile_meta p WHERE `+where, args...).Scan(&matches); err != nil {
+			return nil, err
+		}
+		if matches > 1 {
+			return nil, fmt.Errorf("profile canonical_sha256 prefix %q matches %d profiles; use a longer prefix or profile id", cleanProfileRef(ref), matches)
+		}
+	}
+	query := `
+SELECT p.id, p.name, p.version, p.source_path, p.source_sha256, p.canonical_sha256,
+       p.imported_at, p.imported_by, p.is_active, p.canonical_json, COUNT(w.profile_id)
+  FROM profile_meta p
+  LEFT JOIN profile_validation_warning w ON w.profile_id = p.id
+ WHERE ` + where + `
+ GROUP BY p.id, p.name, p.version, p.source_path, p.source_sha256, p.canonical_sha256,
+          p.imported_at, p.imported_by, p.is_active, p.canonical_json
+ ORDER BY p.id DESC
+ LIMIT 1`
+	var meta ProfileHistoryEntry
+	var active int
+	var canonical []byte
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&meta.ProfileID, &meta.Name, &meta.Version, &meta.SourcePath, &meta.SourceSHA256, &meta.CanonicalSHA256, &meta.ImportedAt, &meta.ImportedBy, &active, &canonical, &meta.WarningCount); err != nil {
+		return nil, err
+	}
+	meta.IsActive = active == 1
+	var p profilepkg.Profile
+	if err := json.Unmarshal(canonical, &p); err != nil {
+		return nil, err
+	}
+	return &StoredProfileDocument{Meta: meta, Profile: &p}, nil
+}
+
+func (s *Store) ActivateProfile(ctx context.Context, ref string) (*ProfileImportResult, error) {
+	doc, err := s.ProfileDocument(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = 0 WHERE id <> ?`, doc.Meta.ProfileID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = 1 WHERE id = ?`, doc.Meta.ProfileID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
 		return nil, err
 	}
-	return &ProfileImportResult{ProfileID: profileID, Imported: true, Activated: true, SourceSHA256: params.SourceSHA256, CanonicalSHA256: params.CanonicalSHA256}, nil
+	return &ProfileImportResult{
+		ProfileID:       doc.Meta.ProfileID,
+		Imported:        false,
+		Activated:       !doc.Meta.IsActive,
+		SourceSHA256:    doc.Meta.SourceSHA256,
+		CanonicalSHA256: doc.Meta.CanonicalSHA256,
+	}, nil
+}
+
+func profileRefWhere(ref string) (string, []any, error) {
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" || strings.EqualFold(trimmed, "active") {
+		return "p.is_active = ?", []any{1}, nil
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "sha:") {
+		prefix := strings.TrimSpace(trimmed[4:])
+		if err := validateProfileHashPrefix(prefix); err != nil {
+			return "", nil, err
+		}
+		return "p.canonical_sha256 LIKE ?", []any{strings.ToLower(prefix) + "%"}, nil
+	}
+	if id, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return "p.id = ?", []any{id}, nil
+	}
+	if err := validateProfileHashPrefix(trimmed); err != nil {
+		return "", nil, err
+	}
+	return "p.canonical_sha256 LIKE ?", []any{strings.ToLower(trimmed) + "%"}, nil
+}
+
+func isProfileHashPrefixRef(ref string) bool {
+	trimmed := cleanProfileRef(ref)
+	if trimmed == "" || strings.EqualFold(trimmed, "active") {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), "sha:") {
+		return true
+	}
+	if _, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return false
+	}
+	return len(trimmed) >= 12
+}
+
+func cleanProfileRef(ref string) string {
+	trimmed := strings.TrimSpace(ref)
+	if strings.HasPrefix(strings.ToLower(trimmed), "sha:") {
+		return strings.TrimSpace(trimmed[4:])
+	}
+	return trimmed
+}
+
+func validateProfileHashPrefix(prefix string) error {
+	if len(prefix) < 12 || len(prefix) > 64 {
+		return fmt.Errorf("profile canonical_sha256 prefix must be 12 to 64 hex characters")
+	}
+	for _, r := range prefix {
+		if !unicode.Is(unicode.ASCII_Hex_Digit, r) {
+			return fmt.Errorf("profile canonical_sha256 prefix must contain only hex characters")
+		}
+	}
+	return nil
 }
 
 func (s *Store) ActiveBusinessProfile(ctx context.Context) (*BusinessProfile, error) {

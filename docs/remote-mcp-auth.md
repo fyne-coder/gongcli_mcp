@@ -106,6 +106,17 @@ GONGMCP_TOOL_PRESET=business-pilot \
     --db /srv/gongctl/gong-mcp-governed.db
 ```
 
+During token rotation, `gongmcp` can accept both the current and previous
+mounted token files:
+
+```bash
+GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token_current \
+GONGMCP_BEARER_TOKEN_PREVIOUS_FILE=/run/secrets/gongmcp_token_previous \
+GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
+GONGMCP_TOOL_PRESET=business-pilot \
+  gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong-mcp-governed.db
+```
+
 Put TLS, DNS, and network access in front of that loopback service using a
 customer gateway. This is not enough for ChatGPT's app-style OAuth flow, but it
 is useful for curl, MCP Inspector, internal gateway testing, and controlled

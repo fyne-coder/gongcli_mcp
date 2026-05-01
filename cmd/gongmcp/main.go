@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"flag"
@@ -33,17 +34,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
 	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
 	authMode := flags.String("auth-mode", "", "HTTP auth mode: none or bearer; defaults to GONGMCP_AUTH_MODE or bearer")
 	bearerToken := flags.String("bearer-token", "", "Bearer token for HTTP auth; defaults to GONGMCP_BEARER_TOKEN")
 	bearerTokenFile := flags.String("bearer-token-file", "", "Path to bearer token file; defaults to GONGMCP_BEARER_TOKEN_FILE")
-	allowOpenNetwork := flags.Bool("allow-open-network", false, "Allow non-local HTTP bind addresses; defaults to GONGMCP_ALLOW_OPEN_NETWORK=1")
+	bearerTokenPreviousFile := flags.String("bearer-token-previous-file", "", "Optional previous bearer token file accepted during rotation; defaults to GONGMCP_BEARER_TOKEN_PREVIOUS_FILE")
+	allowOpenNetwork := flags.Bool("allow-open-network", false, "Allow non-local HTTP bind addresses; can also be enabled with GONGMCP_ALLOW_OPEN_NETWORK=1")
 	devAllowNoAuthLocalhost := flags.Bool("dev-allow-no-auth-localhost", false, "Allow unauthenticated HTTP only on localhost for local development")
 	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
 	if err := flags.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
 		return 2
 	}
 	flagSet := map[string]bool{}
@@ -53,6 +59,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if flags.NArg() != 0 {
 		fmt.Fprintf(stderr, "unexpected arguments: %s\n", strings.Join(flags.Args(), " "))
 		return 2
+	}
+	if *listToolPresets {
+		if err := writeToolPresetCatalog(stdout); err != nil {
+			fmt.Fprintf(stderr, "list tool presets: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	db := strings.TrimSpace(*dbPath)
@@ -137,7 +150,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), serverOptions...)
 
-	httpConfig, err := resolveHTTPConfig(*httpAddr, *forceStdio, *authMode, *bearerToken, *bearerTokenFile, *allowOpenNetwork, *devAllowNoAuthLocalhost, *allowedOrigins, allowlist, os.Getenv)
+	httpConfig, err := resolveHTTPConfig(*httpAddr, *forceStdio, *authMode, *bearerToken, *bearerTokenFile, *bearerTokenPreviousFile, *allowOpenNetwork, *devAllowNoAuthLocalhost, *allowedOrigins, allowlist, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid http config: %v\n", err)
 		return 2
@@ -155,7 +168,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			WriteTimeout:      90 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
-		fmt.Fprintf(stderr, "serving mcp over http on %s path=/mcp auth_mode=%s\n", httpConfig.Addr, httpConfig.AuthMode)
+		fmt.Fprintf(stderr, "serving mcp over http on %s path=/mcp auth_mode=%s bearer_token_count=%d\n", httpConfig.Addr, httpConfig.AuthMode, len(httpConfig.BearerTokens))
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(stderr, "serve http mcp: %v\n", err)
 			return 1
@@ -329,6 +342,79 @@ func expandToolPreset(name string) ([]string, error) {
 	}
 }
 
+type toolPresetInfo struct {
+	Name        string   `json:"name"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Purpose     string   `json:"purpose"`
+	Tools       []string `json:"tools"`
+	ToolCount   int      `json:"tool_count"`
+	Recommended string   `json:"recommended_for"`
+}
+
+func toolPresetCatalog() []toolPresetInfo {
+	defs := []struct {
+		name        string
+		aliases     []string
+		purpose     string
+		recommended string
+	}{
+		{
+			name:        "business-pilot",
+			aliases:     []string{"strict-business-pilot"},
+			purpose:     "Narrow status and aggregate tools for first business-user pilots.",
+			recommended: "business users after operator setup",
+		},
+		{
+			name:        "operator-smoke",
+			purpose:     "Minimal search/status set for deployment smoke tests.",
+			recommended: "IT and platform operators validating connectivity",
+		},
+		{
+			name:        "analyst",
+			aliases:     []string{"analyst-expansion"},
+			purpose:     "Broader bounded evidence and profile-aware analysis without admin/config-heavy tools.",
+			recommended: "approved analysts on governed or reviewed caches",
+		},
+		{
+			name:        "governance-search",
+			purpose:     "Raw-DB AI-governance-compatible search tools only.",
+			recommended: "operator testing with GONGMCP_AI_GOVERNANCE_CONFIG",
+		},
+		{
+			name:        "all-readonly",
+			aliases:     []string{"all", "all-tools"},
+			purpose:     "Full read-only MCP catalog.",
+			recommended: "trusted admin/analyst sessions or fully reviewed filtered DB deployments",
+		},
+	}
+	out := make([]toolPresetInfo, 0, len(defs))
+	for _, def := range defs {
+		tools, err := expandToolPreset(def.name)
+		if err != nil {
+			continue
+		}
+		out = append(out, toolPresetInfo{
+			Name:        def.name,
+			Aliases:     copyStrings(def.aliases),
+			Purpose:     def.purpose,
+			Tools:       tools,
+			ToolCount:   len(tools),
+			Recommended: def.recommended,
+		})
+	}
+	return out
+}
+
+func writeToolPresetCatalog(w io.Writer) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(struct {
+		Presets []toolPresetInfo `json:"presets"`
+	}{
+		Presets: toolPresetCatalog(),
+	})
+}
+
 func normalizedToolPresetName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
@@ -354,13 +440,13 @@ type httpConfig struct {
 	Enabled            bool
 	Addr               string
 	AuthMode           string
-	BearerToken        string
+	BearerTokens       []string
 	OpenNetworkWarning bool
 	LocalBind          bool
 	AllowedOrigins     map[string]struct{}
 }
 
-func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag, tokenFileFlag string, allowOpenNetworkFlag, devAllowNoAuthLocalhost bool, allowedOriginsFlag string, allowlist []string, getenv getenvFunc) (httpConfig, error) {
+func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag, tokenFileFlag, previousTokenFileFlag string, allowOpenNetworkFlag, devAllowNoAuthLocalhost bool, allowedOriginsFlag string, allowlist []string, getenv getenvFunc) (httpConfig, error) {
 	if forceStdio {
 		if strings.TrimSpace(addrFlag) != "" {
 			return httpConfig{}, fmt.Errorf("--stdio cannot be combined with --http")
@@ -414,9 +500,9 @@ func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag
 		return httpConfig{}, fmt.Errorf("non-local HTTP address %q requires --allowed-origins or GONGMCP_ALLOWED_ORIGINS for Origin validation", addr)
 	}
 
-	token := ""
+	tokens := []string(nil)
 	if authMode == "bearer" {
-		token, err = resolveBearerToken(tokenFlag, tokenFileFlag, getenv)
+		tokens, err = resolveBearerTokens(tokenFlag, tokenFileFlag, previousTokenFileFlag, getenv)
 		if err != nil {
 			return httpConfig{}, err
 		}
@@ -426,7 +512,7 @@ func resolveHTTPConfig(addrFlag string, forceStdio bool, authModeFlag, tokenFlag
 		Enabled:            true,
 		Addr:               addr,
 		AuthMode:           authMode,
-		BearerToken:        token,
+		BearerTokens:       tokens,
 		OpenNetworkWarning: !localBind,
 		LocalBind:          localBind,
 		AllowedOrigins:     allowedOrigins,
@@ -473,31 +559,50 @@ func normalizeOrigin(origin string) (string, error) {
 	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
 }
 
-func resolveBearerToken(tokenFlag, tokenFileFlag string, getenv getenvFunc) (string, error) {
+func resolveBearerTokens(tokenFlag, tokenFileFlag, previousTokenFileFlag string, getenv getenvFunc) ([]string, error) {
 	token := strings.TrimSpace(tokenFlag)
 	tokenFile := strings.TrimSpace(tokenFileFlag)
+	previousTokenFile := strings.TrimSpace(previousTokenFileFlag)
 	if token != "" && tokenFile != "" {
-		return "", fmt.Errorf("set either bearer token or bearer token file, not both")
-	}
-	if token != "" {
-		return token, nil
+		return nil, fmt.Errorf("set either bearer token or bearer token file, not both")
 	}
 	if tokenFile != "" {
-		return readBearerTokenFile(tokenFile)
-	}
-
-	token = strings.TrimSpace(getenv("GONGMCP_BEARER_TOKEN"))
-	tokenFile = strings.TrimSpace(getenv("GONGMCP_BEARER_TOKEN_FILE"))
-	if token != "" && tokenFile != "" {
-		return "", fmt.Errorf("set either bearer token or bearer token file, not both")
-	}
-	if tokenFile != "" {
-		return readBearerTokenFile(tokenFile)
+		read, err := readBearerTokenFile(tokenFile)
+		if err != nil {
+			return nil, err
+		}
+		token = read
+	} else if token == "" {
+		token = strings.TrimSpace(getenv("GONGMCP_BEARER_TOKEN"))
+		tokenFile = strings.TrimSpace(getenv("GONGMCP_BEARER_TOKEN_FILE"))
+		if token != "" && tokenFile != "" {
+			return nil, fmt.Errorf("set either bearer token or bearer token file, not both")
+		}
+		if tokenFile != "" {
+			read, err := readBearerTokenFile(tokenFile)
+			if err != nil {
+				return nil, err
+			}
+			token = read
+		}
 	}
 	if token == "" {
-		return "", fmt.Errorf("auth-mode=bearer requires bearer token or bearer token file")
+		return nil, fmt.Errorf("auth-mode=bearer requires bearer token or bearer token file")
 	}
-	return token, nil
+	tokens := []string{token}
+	if previousTokenFile == "" {
+		previousTokenFile = strings.TrimSpace(getenv("GONGMCP_BEARER_TOKEN_PREVIOUS_FILE"))
+	}
+	if previousTokenFile != "" {
+		previous, err := readBearerTokenFile(previousTokenFile)
+		if err != nil {
+			return nil, err
+		}
+		if previous != token {
+			tokens = append(tokens, previous)
+		}
+	}
+	return tokens, nil
 }
 
 func bearerTokenSourceConfigured(tokenFlag, tokenFileFlag string, getenv getenvFunc) bool {
@@ -648,7 +753,7 @@ func accessLogMiddleware(next http.Handler, cfg httpConfig, out io.Writer) http.
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r)
 		method, toolName := mcpHTTPAccessInfo(body.Bytes())
-		fmt.Fprintf(out, "mcp_http_access request_id=%s method=%q tool=%q status=%d decision=%q duration_ms=%d remote_addr=%q auth_mode=%q\n",
+		fmt.Fprintf(out, "mcp_http_access request_id=%s method=%q tool=%q status=%d decision=%q duration_ms=%d remote_addr=%q auth_mode=%q token_slot=%q\n",
 			requestID,
 			method,
 			toolName,
@@ -657,12 +762,14 @@ func accessLogMiddleware(next http.Handler, cfg httpConfig, out io.Writer) http.
 			time.Since(start).Milliseconds(),
 			r.RemoteAddr,
 			cfg.AuthMode,
+			decision.TokenSlot,
 		)
 	})
 }
 
 type accessDecision struct {
-	Reason string
+	Reason    string
+	TokenSlot string
 }
 
 type accessDecisionContextKey struct{}
@@ -670,6 +777,12 @@ type accessDecisionContextKey struct{}
 func setAccessDecision(r *http.Request, reason string) {
 	if decision, ok := r.Context().Value(accessDecisionContextKey{}).(*accessDecision); ok && decision != nil {
 		decision.Reason = reason
+	}
+}
+
+func setAccessTokenSlot(r *http.Request, slot string) {
+	if decision, ok := r.Context().Value(accessDecisionContextKey{}).(*accessDecision); ok && decision != nil {
+		decision.TokenSlot = slot
 	}
 }
 
@@ -706,14 +819,35 @@ func authMiddleware(next http.Handler, cfg httpConfig) http.Handler {
 			return
 		}
 		token := parts[1]
-		if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.BearerToken)) != 1 {
+		slot, ok := bearerTokenSlot(token, cfg.BearerTokens)
+		if !ok {
 			setAccessDecision(r, "auth_invalid")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="gongmcp"`)
 			http.Error(w, "invalid bearer token", http.StatusUnauthorized)
 			return
 		}
+		setAccessTokenSlot(r, slot)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func validBearerToken(token string, expected []string) bool {
+	_, ok := bearerTokenSlot(token, expected)
+	return ok
+}
+
+func bearerTokenSlot(token string, expected []string) (string, bool) {
+	tokenSum := sha256.Sum256([]byte(token))
+	for idx, value := range expected {
+		valueSum := sha256.Sum256([]byte(value))
+		if subtle.ConstantTimeCompare(tokenSum[:], valueSum[:]) == 1 {
+			if idx == 0 {
+				return "current", true
+			}
+			return "previous", true
+		}
+	}
+	return "", false
 }
 
 func firstNonEmpty(values ...string) string {

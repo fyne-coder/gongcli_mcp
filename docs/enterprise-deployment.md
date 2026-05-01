@@ -173,12 +173,30 @@ The repo supports supplying them through:
 - `GONGMCP_BEARER_TOKEN_FILE`
 - `--bearer-token`
 - `--bearer-token-file`
+- `GONGMCP_BEARER_TOKEN_PREVIOUS_FILE`
+- `--bearer-token-previous-file`
 
 Prefer a secret file or managed secret store over long-lived shell history or
 shared `.env` files. Rotate tokens when a pilot participant leaves, when logs or
 configs are exposed, or before widening access. For production-grade enterprise
 access, put a company-managed gateway or OIDC layer in front of the service
 rather than treating a shared static token as durable identity.
+
+Current/previous-token private-bridge rotation:
+
+1. Write the new token to the current token file and the old token to a
+   previous-token file.
+2. Restart `gongmcp` with `--bearer-token-file CURRENT` and
+   `--bearer-token-previous-file PREVIOUS`, or the equivalent environment
+   variables.
+3. Move approved clients to the new token.
+4. Watch payload-free access logs for `token_slot="previous"` on successful
+   requests.
+5. Remove the previous-token file and restart `gongmcp` after no approved
+   clients are using the previous token.
+
+Zero downtime requires rolling or redundant `gongmcp` instances behind the
+customer gateway. A single-instance restart interrupts in-flight requests.
 
 For remote MCP clients that expect OAuth, separate human SSO from MCP-compatible
 authorization. A customer IdP such as JumpCloud, Cognito, Okta, Entra, or

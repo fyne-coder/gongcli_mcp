@@ -21,7 +21,8 @@ Use this worksheet before giving business users access to `gongmcp`.
 - Image reference pinned by tag and, for production, digest.
 - Tool preset: `business-pilot`, `operator-smoke`, `analyst`,
   `governance-search`, or `all-readonly`.
-- Bearer token location and rotation plan.
+- Bearer token location and rotation plan. Private bridge deployments can mount
+  current and previous token files during rotation.
 - Allowed browser origins.
 - HTTPS/auth boundary owner: local stdio, private bearer bridge, or customer
   OAuth/MCP broker.
@@ -33,6 +34,13 @@ Use this worksheet before giving business users access to `gongmcp`.
 Use these names in tickets, deployment manifests, and reviews so business and
 IT teams do not compare raw comma-separated lists by eye. `gongmcp` accepts
 them with `--tool-preset NAME` or `GONGMCP_TOOL_PRESET=NAME`.
+
+Operators can print the current built-in list from the exact binary they will
+deploy:
+
+```bash
+gongmcp --list-tool-presets
+```
 
 | Profile | Tools | Use |
 | --- | --- | --- |

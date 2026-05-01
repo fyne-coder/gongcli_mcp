@@ -100,16 +100,19 @@ Required outcomes:
 5. A tested feedback loop for adding MCP tools without widening the default data
    exposure surface.
 
-Review-driven hardening backlog before `main`/1.0:
+Review-driven hardening shipped for the customer-hosted pilot:
 
-- Token rotation for private HTTP bridge mode: support current/previous bearer
-  tokens or equivalent gateway-managed rotation without downtime.
-- Release workflow hardening: pin GitHub Actions to commit SHAs or document an
-  enforced trusted-actions policy, then add image-signing or digest-verification
-  instructions for customers.
-- Profile operations: add staged import/activation/history/diff or equivalent
-  rollback ergonomics for RevOps-admin profile changes.
-- Profile schema: publish JSON Schema or a generated `profile schema` command.
+- Tool preset discovery via `gongmcp --list-tool-presets`.
+- Token rotation for private HTTP bridge mode through current and previous
+  bearer token files.
+- Release workflow hardening with commit-SHA-pinned GitHub Actions and
+  customer digest-verification instructions.
+- Profile operations for staged import, activation, history, diff, and generated
+  schema output.
+
+Remaining 1.0 backlog:
+
+- Optional image signing in the publisher or customer release pipeline.
 - Native remote OAuth: implement Protected Resource Metadata, issuer/audience
   validation, scopes, and per-user audit only after the private bridge boundary
   stays stable.

@@ -17,7 +17,7 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
@@ -28,7 +28,7 @@ jobs:
           echo "Manual image publishing must run from the default branch." >&2
           exit 1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -39,7 +39,7 @@ jobs:
           go vet ./...
           make secret-scan
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Docker smoke build
         shell: bash
@@ -50,7 +50,7 @@ jobs:
           docker run --rm --entrypoint /bin/sh gongmcp:release-smoke -c 'test -x /usr/local/bin/gongmcp'
 
       - name: Scan gongctl image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: gongctl:release-smoke
           format: table
@@ -60,7 +60,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan gongmcp image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
         with:
           image-ref: gongmcp:release-smoke
           format: table
@@ -69,7 +69,7 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -88,7 +88,7 @@ jobs:
 
       - name: Metadata for gongctl
         id: meta-gongctl
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE_BASE }}/gongctl
           tags: |
@@ -99,7 +99,7 @@ jobs:
             type=sha,prefix=sha-
 
       - name: Build and publish gongctl image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           push: true
@@ -114,7 +114,7 @@ jobs:
 
       - name: Metadata for gongmcp
         id: meta-gongmcp
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.IMAGE_BASE }}/gongmcp
           tags: |
@@ -125,7 +125,7 @@ jobs:
             type=sha,prefix=sha-
 
       - name: Build and publish gongmcp image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           target: mcp

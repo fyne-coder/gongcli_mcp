@@ -79,11 +79,10 @@ Do not expose profile-aware MCP answers to business users until:
 - unavailable concepts have either been accepted or fixed
 - transcript coverage is sufficient for the intended prompts
 
-Rollback is currently explicit rather than staged: keep the prior reviewed YAML
-outside git, re-import it if a new profile is wrong, and use
-`--lifecycle-source builtin` for CLI analysis while investigating. Native
-`profile import --activate=false`, `profile activate`, `profile history`, and
-`profile diff` are backlog items, not current commands.
+Rollback is now staged rather than overwrite-only. Keep reviewed YAML outside
+git, import candidate profiles without activation, compare them, and activate
+only after RevOps signoff. Use `--lifecycle-source builtin` for CLI analysis
+while investigating a suspect active profile.
 
 Suggested profile file naming:
 
@@ -92,12 +91,30 @@ Suggested profile file naming:
 ~/gongctl-data/profiles/customer-profile.candidate-20260515.yaml
 ```
 
-Manual rollback:
+Staged review and activation:
 
 ```bash
 gongctl profile import \
   --db ~/gongctl-data/gong.db \
-  --profile ~/gongctl-data/profiles/customer-profile.reviewed-20260501.yaml
+  --profile ~/gongctl-data/profiles/customer-profile.candidate-20260515.yaml \
+  --activate=false
+
+gongctl profile history --db ~/gongctl-data/gong.db
+
+gongctl profile diff \
+  --db ~/gongctl-data/gong.db \
+  --from active \
+  --to ~/gongctl-data/profiles/customer-profile.candidate-20260515.yaml
+
+gongctl profile activate --db ~/gongctl-data/gong.db --id PROFILE_ID
+gongctl sync status --db ~/gongctl-data/gong.db
+```
+
+Manual rollback:
+
+```bash
+gongctl profile history --db ~/gongctl-data/gong.db
+gongctl profile activate --db ~/gongctl-data/gong.db --id PRIOR_PROFILE_ID
 
 gongctl sync status --db ~/gongctl-data/gong.db
 gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle --lifecycle-source profile
@@ -194,9 +211,10 @@ core lifecycle buckets without reviewer evidence.
   may include these to explain why it picked an object, field, or lifecycle
   value. Operators can keep them for review or remove them before import.
 
-There is no published JSON Schema yet. Treat `gongctl profile validate` as the
-machine check and this document as the human grammar. A generated schema or
-`profile schema` command is a backlog item for less technical RevOps handoff.
+`gongctl profile schema` prints a generated JSON Schema for less technical
+RevOps handoff and editor validation. `gongctl profile validate` remains the
+authoritative machine check because it also validates mappings against the
+current tenant cache inventory.
 
 Common validation failures:
 

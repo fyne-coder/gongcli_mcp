@@ -35,6 +35,19 @@ func TestRunRequiresDBFlag(t *testing.T) {
 	}
 }
 
+func TestRunHelpExitsZero(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"--help"}, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "-list-tool-presets") {
+		t.Fatalf("help output missing list-tool-presets: %s", stderr.String())
+	}
+}
+
 func TestRunToolAllowlistEnvFiltersCatalog(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gong.db")
 	store, err := sqlite.Open(context.Background(), dbPath)
@@ -92,6 +105,44 @@ func TestRunToolPresetEnvFiltersCatalog(t *testing.T) {
 	}
 	if strings.Contains(got, `"search_calls"`) {
 		t.Fatalf("stdout=%q included non-business-pilot tool", got)
+	}
+}
+
+func TestRunListToolPresetsDoesNotRequireDB(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"--list-tool-presets"}, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q want empty", stderr.String())
+	}
+	var resp struct {
+		Presets []struct {
+			Name        string   `json:"name"`
+			Aliases     []string `json:"aliases"`
+			Purpose     string   `json:"purpose"`
+			Tools       []string `json:"tools"`
+			ToolCount   int      `json:"tool_count"`
+			Recommended string   `json:"recommended_for"`
+		} `json:"presets"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+	seen := map[string]struct{}{}
+	for _, preset := range resp.Presets {
+		seen[preset.Name] = struct{}{}
+		if preset.Purpose == "" || preset.Recommended == "" || preset.ToolCount != len(preset.Tools) || len(preset.Tools) == 0 {
+			t.Fatalf("incomplete preset entry: %+v", preset)
+		}
+	}
+	for _, name := range []string{"business-pilot", "operator-smoke", "analyst", "governance-search", "all-readonly"} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("missing preset %q in %s", name, stdout.String())
+		}
 	}
 }
 
@@ -405,26 +456,26 @@ func TestRunToolAllowlistFlagPrecedenceOverEnv(t *testing.T) {
 func TestResolveHTTPConfigRequiresBearerByDefaultAndNoAuthDevLocalhost(t *testing.T) {
 	getenv := func(string) string { return "" }
 
-	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", false, false, "", []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", "", false, false, "", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed auth-mode=none without dev localhost override")
 	}
-	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", true, true, "https://app.example.com", []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "none", "", "", "", true, true, "https://app.example.com", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local no-auth HTTP")
 	}
-	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "", "", false, false, "https://app.example.com", []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "", "", "", false, false, "https://app.example.com", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local bind without explicit override")
 	}
 
-	cfg, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", true, false, "https://app.example.com", nil, getenv)
+	cfg, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", "", true, false, "https://app.example.com", nil, getenv)
 	if err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local bind without tool allowlist")
 	}
 
-	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", true, false, "", []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", "", true, false, "", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local HTTP without allowed origins")
 	}
 
-	cfg, err = resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", true, false, "https://app.example.com", []string{"get_sync_status"}, getenv)
+	cfg, err = resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", "", true, false, "https://app.example.com", []string{"get_sync_status"}, getenv)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig returned error with override and allowlist: %v", err)
 	}
@@ -432,14 +483,14 @@ func TestResolveHTTPConfigRequiresBearerByDefaultAndNoAuthDevLocalhost(t *testin
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", false, true, "", nil, getenv); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", "", false, true, "", nil, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed HTTP without tool allowlist")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, false, "", []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", "", false, false, "", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed default bearer mode without token")
 	}
 
-	local, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", false, true, "", []string{"get_sync_status"}, getenv)
+	local, err := resolveHTTPConfig("127.0.0.1:0", false, "none", "", "", "", false, true, "", []string{"get_sync_status"}, getenv)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig rejected explicit local dev no-auth with allowlist: %v", err)
 	}
@@ -449,13 +500,13 @@ func TestResolveHTTPConfigRequiresBearerByDefaultAndNoAuthDevLocalhost(t *testin
 }
 
 func TestResolveHTTPConfigRejectsUnknownAuthMode(t *testing.T) {
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "basic", "", "", false, false, "", []string{"get_sync_status"}, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "basic", "", "", "", false, false, "", []string{"get_sync_status"}, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed unknown auth mode")
 	}
 }
 
 func TestResolveHTTPConfigCanForceStdioWithHTTPAddrEnv(t *testing.T) {
-	cfg, err := resolveHTTPConfig("", true, "", "", "", false, false, "", nil, func(key string) string {
+	cfg, err := resolveHTTPConfig("", true, "", "", "", "", false, false, "", nil, func(key string) string {
 		if key == "GONGMCP_HTTP_ADDR" {
 			return "127.0.0.1:0"
 		}
@@ -468,7 +519,7 @@ func TestResolveHTTPConfigCanForceStdioWithHTTPAddrEnv(t *testing.T) {
 		t.Fatalf("force stdio should disable HTTP config: %+v", cfg)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", true, "", "", "", false, false, "", nil, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", true, "", "", "", "", false, false, "", nil, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed --stdio with --http")
 	}
 }
@@ -477,6 +528,10 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenPath, []byte(" file-token \n"), 0o600); err != nil {
 		t.Fatalf("write token file: %v", err)
+	}
+	previousTokenPath := filepath.Join(t.TempDir(), "previous-token")
+	if err := os.WriteFile(previousTokenPath, []byte(" previous-token \n"), 0o600); err != nil {
+		t.Fatalf("write previous token file: %v", err)
 	}
 
 	getenv := func(key string) string {
@@ -488,21 +543,21 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 		}
 	}
 	allowlist := []string{"get_sync_status"}
-	cfg, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, false, "", allowlist, getenv)
+	cfg, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", "", false, false, "", allowlist, getenv)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig returned error: %v", err)
 	}
-	if cfg.AuthMode != "bearer" || cfg.BearerToken != "file-token" {
+	if cfg.AuthMode != "bearer" || len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != "file-token" {
 		t.Fatalf("unexpected bearer config: %+v", cfg)
 	}
 
 	envFile := getenv
-	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "flag-token", "", false, false, "", allowlist, envFile)
+	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "flag-token", "", "", false, false, "", allowlist, envFile)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig did not let bearer token flag override env file: %v", err)
 	}
-	if cfg.BearerToken != "flag-token" {
-		t.Fatalf("bearer token=%q want flag-token", cfg.BearerToken)
+	if len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != "flag-token" {
+		t.Fatalf("bearer tokens=%v want flag-token", cfg.BearerTokens)
 	}
 
 	envToken := func(key string) string {
@@ -511,24 +566,24 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 		}
 		return ""
 	}
-	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "", tokenPath, false, false, "", allowlist, envToken)
+	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "", tokenPath, "", false, false, "", allowlist, envToken)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig did not let bearer token file flag override env token: %v", err)
 	}
-	if cfg.BearerToken != "file-token" {
-		t.Fatalf("bearer token=%q want file-token", cfg.BearerToken)
+	if len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != "file-token" {
+		t.Fatalf("bearer tokens=%v want file-token", cfg.BearerTokens)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "flag-token", tokenPath, false, false, "", allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "flag-token", tokenPath, "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed both raw token and token file")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", "", "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed bearer mode without token")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", filepath.Join(t.TempDir(), "missing-token"), false, false, "", allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", filepath.Join(t.TempDir(), "missing-token"), "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed unreadable token file")
 	}
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", false, false, "", allowlist, func(key string) string {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", "", false, false, "", allowlist, func(key string) string {
 		switch key {
 		case "GONGMCP_BEARER_TOKEN":
 			return "env-token"
@@ -540,16 +595,24 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	}); err == nil {
 		t.Fatal("resolveHTTPConfig allowed both env raw token and env token file")
 	}
+
+	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", tokenPath, previousTokenPath, false, false, "", allowlist, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("resolveHTTPConfig rejected previous token file: %v", err)
+	}
+	if !reflect.DeepEqual(cfg.BearerTokens, []string{"file-token", "previous-token"}) {
+		t.Fatalf("bearer tokens=%v want current and previous", cfg.BearerTokens)
+	}
 }
 
 func TestAuthMiddlewareRequiresBearerToken(t *testing.T) {
 	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), httpConfig{
-		Enabled:     true,
-		Addr:        "127.0.0.1:0",
-		AuthMode:    "bearer",
-		BearerToken: "expected-token",
+		Enabled:      true,
+		Addr:         "127.0.0.1:0",
+		AuthMode:     "bearer",
+		BearerTokens: []string{"expected-token", "previous-token"},
 	})
 
 	for _, tc := range []struct {
@@ -560,6 +623,7 @@ func TestAuthMiddlewareRequiresBearerToken(t *testing.T) {
 		{name: "missing", want: http.StatusUnauthorized},
 		{name: "wrong", header: "Bearer wrong-token", want: http.StatusUnauthorized},
 		{name: "ok", header: "Bearer expected-token", want: http.StatusNoContent},
+		{name: "previous", header: "Bearer previous-token", want: http.StatusNoContent},
 		{name: "lowercase-scheme", header: "bearer expected-token", want: http.StatusNoContent},
 		{name: "extra-fields", header: "Bearer expected-token extra", want: http.StatusUnauthorized},
 	} {
@@ -587,10 +651,10 @@ func TestBearerHTTPStackProtectsMCPRequests(t *testing.T) {
 
 	server := mcp.NewServer(store, "gongmcp", "test")
 	handler := authMiddleware(server, httpConfig{
-		Enabled:     true,
-		Addr:        "127.0.0.1:0",
-		AuthMode:    "bearer",
-		BearerToken: "expected-token",
+		Enabled:      true,
+		Addr:         "127.0.0.1:0",
+		AuthMode:     "bearer",
+		BearerTokens: []string{"expected-token", "previous-token"},
 	})
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
 
@@ -624,10 +688,10 @@ func TestHTTPHandlerExposesUnauthenticatedHealthzOnly(t *testing.T) {
 	server := mcp.NewServer(store, "gongmcp", "test")
 	var accessLog bytes.Buffer
 	handler := httpHandler(server, httpConfig{
-		Enabled:     true,
-		Addr:        "127.0.0.1:0",
-		AuthMode:    "bearer",
-		BearerToken: "expected-token",
+		Enabled:      true,
+		Addr:         "127.0.0.1:0",
+		AuthMode:     "bearer",
+		BearerTokens: []string{"expected-token", "previous-token"},
 	}, &accessLog)
 
 	health := httptest.NewRecorder()
@@ -677,10 +741,10 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 	server := mcp.NewServer(store, "gongmcp", "test")
 	var accessLog bytes.Buffer
 	handler := httpHandler(server, httpConfig{
-		Enabled:     true,
-		Addr:        "0.0.0.0:8080",
-		AuthMode:    "bearer",
-		BearerToken: "expected-token",
+		Enabled:      true,
+		Addr:         "0.0.0.0:8080",
+		AuthMode:     "bearer",
+		BearerTokens: []string{"expected-token", "previous-token"},
 		AllowedOrigins: map[string]struct{}{
 			"https://chatgpt.example.com": {},
 		},
@@ -721,6 +785,15 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 		t.Fatalf("allowed status=%d body=%q", allowedRecorder.Code, allowedRecorder.Body.String())
 	}
 
+	previous := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	previous.Header.Set("Origin", "https://chatgpt.example.com")
+	previous.Header.Set("Authorization", "Bearer previous-token")
+	previousRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(previousRecorder, previous)
+	if previousRecorder.Code != http.StatusOK {
+		t.Fatalf("previous status=%d body=%q", previousRecorder.Code, previousRecorder.Body.String())
+	}
+
 	blocked := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
 	blocked.Header.Set("Origin", "https://attacker.example.com")
 	blocked.Header.Set("Authorization", "Bearer expected-token")
@@ -732,6 +805,11 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 	logOutput := accessLog.String()
 	if !strings.Contains(logOutput, "status=204") || !strings.Contains(logOutput, "status=200") || !strings.Contains(logOutput, "status=403") {
 		t.Fatalf("access log did not record preflight, success, and origin rejection: %s", logOutput)
+	}
+	for _, slot := range []string{`token_slot="current"`, `token_slot="previous"`} {
+		if !strings.Contains(logOutput, slot) {
+			t.Fatalf("access log missing %s: %s", slot, logOutput)
+		}
 	}
 	for _, decision := range []string{`decision="cors_preflight_ok"`, `decision="cors_preflight_denied"`, `decision="origin_denied"`} {
 		if !strings.Contains(logOutput, decision) {

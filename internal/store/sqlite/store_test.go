@@ -2695,6 +2695,35 @@ methodology:
 	}
 }
 
+func TestProfileDocumentRejectsInvalidAndAmbiguousCanonicalSHARefs(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if _, err := store.DB().ExecContext(ctx, `
+INSERT INTO profile_meta(name, version, source_sha256, canonical_sha256, imported_at, imported_by, is_active, raw_yaml, canonical_json)
+VALUES
+  ('Profile A', 1, 'source-a', 'abcdefabcdef1111111111111111111111111111111111111111111111111111', '2026-05-01T00:00:00Z', 'test', 1, 'version: 1', '{"version":1,"name":"Profile A","lifecycle":{"open":{},"closed_won":{},"closed_lost":{},"post_sales":{},"unknown":{}}}'),
+  ('Profile B', 1, 'source-b', 'abcdefabcdef2222222222222222222222222222222222222222222222222222', '2026-05-01T00:00:01Z', 'test', 0, 'version: 1', '{"version":1,"name":"Profile B","lifecycle":{"open":{},"closed_won":{},"closed_lost":{},"post_sales":{},"unknown":{}}}')
+`); err != nil {
+		t.Fatalf("insert profile_meta fixtures: %v", err)
+	}
+
+	if _, err := store.ProfileDocument(ctx, "abcdefabcdef"); err == nil || !strings.Contains(err.Error(), "matches 2 profiles") {
+		t.Fatalf("ambiguous prefix error=%v, want matches 2 profiles", err)
+	}
+	if _, err := store.ProfileDocument(ctx, "abcdefabcdef_%"); err == nil || !strings.Contains(err.Error(), "only hex") {
+		t.Fatalf("wildcard prefix error=%v, want hex validation", err)
+	}
+	doc, err := store.ProfileDocument(ctx, "sha:abcdefabcdef1111")
+	if err != nil {
+		t.Fatalf("ProfileDocument with sha prefix returned error: %v", err)
+	}
+	if doc.Meta.Name != "Profile A" {
+		t.Fatalf("doc=%+v want Profile A", doc.Meta)
+	}
+}
+
 func TestProfileReadModelCachesAndInvalidates(t *testing.T) {
 	t.Parallel()
 

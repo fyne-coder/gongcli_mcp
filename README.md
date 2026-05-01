@@ -47,6 +47,22 @@ For company evaluation, start with the enterprise pilot packet:
 - [Business-user guide](docs/business-user-guide.md)
 - [Pilot plan](docs/pilot-plan.md)
 
+Fast paths for evaluation and deployment:
+
+```bash
+gongmcp --list-tool-presets
+gongctl profile schema
+```
+
+Use `business-pilot` for first business-user access and `all-readonly` only for
+trusted admin/analyst sessions or a fully reviewed filtered DB.
+
+- Deployment worksheet: [Customer implementation checklist](docs/implementation-checklist.md)
+- Local/container start: [Quickstart](docs/quickstart.md)
+- HTTPS/auth boundary: [Remote MCP auth and connector setup](docs/remote-mcp-auth.md)
+- Image digest verification: [Release process](docs/release.md)
+- RevOps profile setup: [Business profiles](docs/profiles.md)
+
 For support intake, generate the local/offline diagnostic bundle before
 sharing logs or payloads:
 
@@ -113,7 +129,7 @@ docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gon
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 --db /data/gong.db
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
@@ -220,7 +236,7 @@ gongctl sync status --db ~/gongctl-data/gong.db
 gongctl analyze coverage --db ~/gongctl-data/gong.db
 gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
 gongctl mcp tools
-gongmcp --db ~/gongctl-data/gong.db
+gongmcp --db ~/gongctl-data/gong.db --tool-preset business-pilot
 gongctl diagnose
 ```
 
@@ -370,7 +386,7 @@ synthetic names only. For MCP/LLM use, default to a physically filtered MCP DB:
 
 ```bash
 gongctl governance export-filtered-db --db ~/gongctl-data/gong.db --config ~/gongctl-data/ai-governance.yaml --out ~/gongctl-data/gong-mcp-governed.db
-gongmcp --db ~/gongctl-data/gong-mcp-governed.db
+gongmcp --db ~/gongctl-data/gong-mcp-governed.db --tool-preset business-pilot
 ```
 
 Raw-DB governance remains available as a fallback; when it is enabled,
