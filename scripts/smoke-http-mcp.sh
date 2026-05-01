@@ -91,12 +91,25 @@ if data.get("status") != "ok" or data.get("service") != "gongmcp":
 PY
 
 echo "== allowed preflight =="
-status="$(curl -sS -o "$tmpdir/preflight.out" -w "%{http_code}" -X OPTIONS "$mcp_url" \
+status="$(curl -sS -D "$tmpdir/preflight.headers" -o "$tmpdir/preflight.out" -w "%{http_code}" -X OPTIONS "$mcp_url" \
   -H "Origin: $origin" \
   -H "Access-Control-Request-Method: POST" \
   -H "Access-Control-Request-Headers: authorization,content-type")"
 if [[ "$status" != "204" ]]; then
   echo "allowed preflight returned HTTP $status" >&2
+  exit 1
+fi
+tr -d '\r' < "$tmpdir/preflight.headers" > "$tmpdir/preflight.headers.clean"
+if ! grep -Fxq "Access-Control-Allow-Origin: $origin" "$tmpdir/preflight.headers.clean"; then
+  echo "allowed preflight did not reflect approved origin" >&2
+  exit 1
+fi
+if ! grep -Fq "Access-Control-Allow-Methods: POST, OPTIONS" "$tmpdir/preflight.headers.clean"; then
+  echo "allowed preflight did not advertise POST, OPTIONS" >&2
+  exit 1
+fi
+if ! grep -Fq "Access-Control-Allow-Headers: Authorization, Content-Type" "$tmpdir/preflight.headers.clean"; then
+  echo "allowed preflight did not advertise required request headers" >&2
   exit 1
 fi
 
