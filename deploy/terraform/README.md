@@ -33,6 +33,50 @@ internal hop from that boundary to `gongmcp`; it is not the end-user auth model.
 | `azure-container-apps` | Azure Container App with Azure Files-mounted cache | Azure customer already uses Container Apps and Azure Files |
 | `gcp-compute-engine` | Compute Engine VM running the MCP-only container with a mounted disk | GCP customer wants the simplest POSIX filesystem path for SQLite |
 
+## Starter Diagrams
+
+These diagrams show what each starter creates or expects. They intentionally
+leave the customer-owned OAuth/SSO gateway, WAF policy, DNS, rate limits,
+logging policy, and sync/promote job as integration points rather than claiming
+to provide a production reference architecture.
+
+### AWS ECS Starter
+
+```mermaid
+flowchart LR
+  Client["Approved MCP client"] -->|"HTTPS /mcp"| Gateway["Customer gateway / SSO / WAF\nrecommended outside starter"]
+  Gateway -->|"HTTPS"| ALB["AWS ALB\nTLS termination"]
+  ALB -->|"HTTP to task"| ECS["ECS Fargate service\ngongmcp MCP-only image"]
+  EFS["EFS access point\nread-only gong.db mount"] --> ECS
+  Secret["AWS Secrets Manager\nbearer token"] --> ECS
+  ECS --> Logs["CloudWatch Logs\npayload-free access logs"]
+  Sync["Separate gongctl sync/promote job"] -->|"populates reviewed cache"| EFS
+```
+
+### Azure Container Apps Starter
+
+```mermaid
+flowchart LR
+  Client["Approved MCP client"] -->|"HTTPS /mcp"| Gateway["Customer gateway / SSO / WAF\nrecommended outside starter"]
+  Gateway -->|"HTTPS"| ACA["Azure Container App\ngongmcp MCP-only image"]
+  Files["Azure Files share\nread-only gong.db mount"] --> ACA
+  KV["Azure Key Vault\nbearer token secret"] -->|"managed identity reads"| ACA
+  ACA --> Monitor["Azure Monitor / logs\npayload-free access logs"]
+  Sync["Separate gongctl sync/promote job"] -->|"populates reviewed cache"| Files
+```
+
+### GCP Compute Engine Starter
+
+```mermaid
+flowchart LR
+  Client["Approved MCP client"] -->|"HTTPS /mcp"| Gateway["Customer HTTPS/auth boundary\nCloud Load Balancer, IAP, proxy, or broker"]
+  Gateway -->|"internal HTTP + bearer"| VM["Compute Engine VM\nDocker runs gongmcp MCP-only image"]
+  Disk["Existing promoted persistent disk\n/gong.db mounted read-only to container"] --> VM
+  Token["Mounted bearer-token file\nprovisioned outside Terraform starter"] --> VM
+  VM --> Logs["Cloud Logging or customer log sink\npayload-free access logs"]
+  Sync["Separate gongctl sync/promote job"] -->|"creates promoted disk contents"| Disk
+```
+
 ## Required Customer Decisions
 
 Before applying any example, decide:

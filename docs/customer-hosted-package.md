@@ -19,6 +19,7 @@ of the package supports deployment, security review, support, and operations.
 | ChatGPT connector setup guide | [Remote MCP auth and connector setup](remote-mcp-auth.md#chatgpt-connector-setup) |
 | Implementation worksheet | [Customer implementation checklist](implementation-checklist.md) |
 | Data-flow diagram | This document |
+| Deployment diagrams | [Enterprise deployment](enterprise-deployment.md#supported-deployment-modes), [`deploy/terraform`](../deploy/terraform/README.md#starter-diagrams) |
 | Threat model | [Security model](security-model.md) |
 | Audit-log schema | [Support](support.md#audit-log-schema-expectations) |
 | No-sensitive-telemetry statement | [Data Boundary Statement](data-boundary-statement.md#no-sensitive-telemetry-statement) |

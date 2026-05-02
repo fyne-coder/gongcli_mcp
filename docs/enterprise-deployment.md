@@ -57,10 +57,23 @@ process access.
 
 ## Supported Deployment Modes
 
+Use these diagrams as deployment-shape references. They show ownership and data
+movement, not complete cloud networking or production identity design.
+
 ### 1. Admin workstation pilot
 
 Use when one operator runs syncs on a managed workstation and optionally exposes
 local MCP to a small reviewed pilot.
+
+```mermaid
+flowchart LR
+  Gong["Gong API"] -->|"HTTPS with operator credentials"| Gongctl["gongctl on managed workstation"]
+  Gongctl -->|"writes"| Data["Protected local data root\nSQLite, transcripts, profile YAML"]
+  Data -->|"read-only path"| MCP["local gongmcp stdio"]
+  MCP -->|"stdin/stdout MCP"| Host["Desktop MCP host\nClaude Desktop, Cursor, or similar"]
+  Operator["IT / RevOps operator"] --> Gongctl
+  Operator --> Host
+```
 
 - `gongctl` runs with network access and operator-managed credentials.
 - SQLite, transcript files, and profile YAML stay on protected local storage
@@ -73,6 +86,17 @@ local MCP to a small reviewed pilot.
 Use when the company wants a repeatable managed runtime without changing the
 product boundary.
 
+```mermaid
+flowchart LR
+  Gong["Gong API"] -->|"HTTPS with sync credentials"| Sync["gongctl sync job\ncontainer or VM"]
+  Secrets["Customer secret store\nGong credentials"] --> Sync
+  Sync -->|"writes / promotes"| Data["Protected shared data root\nSQLite, transcripts, profiles"]
+  Data -->|"read-only mount"| MCP["gongmcp read-only runtime\ncontainer or VM"]
+  Host["Approved MCP host"] -->|"stdio or private HTTP"| MCP
+  Ops["IT / platform owner"] --> Sync
+  Ops --> MCP
+```
+
 - Run `gongctl` in Docker or on a managed host for writable sync jobs.
 - Mount a protected external data directory for the SQLite cache, transcript
   output, profiles, and backups.
@@ -83,6 +107,15 @@ product boundary.
 ### 3. MCP-only consumer host
 
 Use when business-user access must be separated from the writable sync runtime.
+
+```mermaid
+flowchart LR
+  Upstream["Operator-owned gongctl sync"] -->|"promotes reviewed cache"| Data["Read-only MCP data path\ngong.db or governed DB"]
+  Data -->|"read-only Docker mount"| MCP["MCP-only gongmcp image\n--network none"]
+  MCP -->|"stdin/stdout MCP"| Host["Business-user desktop MCP host"]
+  Host -->|"tool results"| Model["Approved AI/model environment"]
+  NoCreds["No Gong credentials\nNo network"] -.-> MCP
+```
 
 - Build and publish the Docker `mcp` target, not the default full CLI image.
 - Stdio `gongmcp` runs with `--network none` when containerized.
@@ -95,6 +128,17 @@ Use when business-user access must be separated from the writable sync runtime.
 Use when a company wants approved users or MCP hosts to connect to one
 customer-managed endpoint instead of launching a local subprocess/container on
 each workstation.
+
+```mermaid
+flowchart LR
+  Client["Approved remote MCP client\nChatGPT, Claude URL flow, or internal client"] -->|"HTTPS /mcp"| Edge["Customer HTTPS/auth boundary\nSSO/OAuth broker, gateway, proxy, WAF"]
+  Edge -->|"internal HTTP + bearer token"| MCP["gongmcp private HTTP\n/mcp and /healthz"]
+  Data["Read-only SQLite cache\ngong.db or governed DB"] -->|"read-only mount"| MCP
+  Sync["Separate gongctl sync job"] -->|"refreshes / promotes cache"| Data
+  Secrets["Customer secret store\nbearer current/previous token"] --> Edge
+  Secrets --> MCP
+  MCP --> Logs["Payload-free access logs"]
+```
 
 - Run `gongmcp --http ADDR --auth-mode bearer --tool-preset business-pilot --db PATH`
   or use a reviewed custom `--tool-allowlist`.
