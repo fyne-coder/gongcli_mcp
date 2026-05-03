@@ -84,6 +84,9 @@ type Store interface {
 	SearchTranscriptSegments(ctx context.Context, query string, limit int) ([]sqlite.TranscriptSearchResult, error)
 	SearchTranscriptSegmentsByCallFacts(ctx context.Context, params sqlite.TranscriptCallFactsSearchParams) ([]sqlite.TranscriptCallFactsSearchResult, error)
 	SearchTranscriptQuotesWithAttribution(ctx context.Context, params sqlite.TranscriptAttributionSearchParams) ([]sqlite.TranscriptAttributionSearchResult, error)
+	SearchBusinessAnalysisCalls(ctx context.Context, params sqlite.BusinessAnalysisCallSearchParams) (*sqlite.BusinessAnalysisCallSearchResult, error)
+	SearchBusinessAnalysisEvidence(ctx context.Context, params sqlite.BusinessAnalysisEvidenceSearchParams) ([]sqlite.BusinessAnalysisEvidenceRow, error)
+	SummarizeBusinessAnalysisDimension(ctx context.Context, params sqlite.BusinessAnalysisDimensionSummaryParams) ([]sqlite.BusinessAnalysisDimensionRow, error)
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
 }
 
@@ -458,7 +461,7 @@ func WithGovernanceCheck(check func(context.Context) error) ServerOption {
 }
 
 func defaultTools() []tool {
-	return []tool{
+	tools := []tool{
 		{
 			Name:        "get_sync_status",
 			Description: "Return cached sync run metadata and local SQLite record counts.",
@@ -807,6 +810,7 @@ func defaultTools() []tool {
 			),
 		},
 	}
+	return append(tools, businessAnalysisTools()...)
 }
 
 func ToolCatalog() []ToolInfo {
@@ -1003,6 +1007,9 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 		if err := s.governanceCheck(ctx); err != nil {
 			return toolCallResult{}, err
 		}
+	}
+	if isBusinessAnalysisTool(params.Name) {
+		return s.executeBusinessAnalysisTool(ctx, params)
 	}
 	switch params.Name {
 	case "get_sync_status":

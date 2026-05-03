@@ -116,6 +116,334 @@ func TestToolsListOnlyReturnsAllowlistedTools(t *testing.T) {
 	}
 }
 
+func TestBusinessAnalysisToolSetIsExposedWithSafeSchemas(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "tools",
+		Method:  "tools/list",
+	}))
+
+	var listed struct {
+		Result toolsListResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &listed); err != nil {
+		t.Fatalf("unmarshal tools/list response: %v", err)
+	}
+
+	byName := make(map[string]tool, len(listed.Result.Tools))
+	for _, item := range listed.Result.Tools {
+		byName[item.Name] = item
+	}
+	var missing []string
+	for _, name := range businessAnalysisToolNames() {
+		item, ok := byName[name]
+		if !ok {
+			missing = append(missing, name)
+			continue
+		}
+		assertBusinessAnalysisSchemaIsSafe(t, item)
+	}
+	if len(missing) > 0 {
+		t.Fatalf("missing business-analysis tools: %v", missing)
+	}
+}
+
+func TestBusinessAnalysisCohortNormalizesTitleQueryAndBoundsResults(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "cohort",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "build_call_cohort",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query":       "  Business Discovery  ",
+					"from_date":         "2026-01-01",
+					"to_date":           "2026-04-01",
+					"transcript_status": "present",
+				},
+				"limit": 10000,
+			},
+		}),
+	}))
+
+	result := decodeBusinessAnalysisResult(t, responses[0])
+	if got := nestedString(result, "normalized_filter", "title_query"); !strings.EqualFold(got, "business discovery") {
+		t.Fatalf("normalized title_query=%q want trimmed business discovery in %+v", got, result)
+	}
+	if cohortID := stringField(result, "cohort_id"); cohortID == "" {
+		t.Fatalf("missing deterministic cohort_id in %+v", result)
+	}
+	if count := intField(result, "count"); count == 0 {
+		t.Fatalf("missing non-zero filtered cohort count in %+v", result)
+	}
+	normalizedLimit := intField(result, "limit")
+	if normalizedLimit == 0 {
+		normalizedLimit = intField(mapField(t, result, "normalized_filter"), "limit")
+	}
+	if normalizedLimit <= 0 || normalizedLimit > 100 {
+		t.Fatalf("limit=%d want normalized bounded limit <= 100 in %+v", normalizedLimit, result)
+	}
+	if count := intField(result, "count"); count > normalizedLimit {
+		t.Fatalf("count=%d exceeded normalized limit=%d in %+v", count, normalizedLimit, result)
+	}
+	if _, ok := result["coverage_summary"]; !ok {
+		t.Fatalf("missing coverage_summary in %+v", result)
+	}
+	if _, ok := result["warnings"]; !ok {
+		t.Fatalf("missing warning flags in %+v", result)
+	}
+	if strings.Contains(mustJSONText(t, result["warnings"]), "title_query_not_yet_enforced") {
+		t.Fatalf("title_query should be enforced, got warnings: %+v", result["warnings"])
+	}
+}
+
+func TestBusinessAnalysisToolsRedactDefaultsAndReportLimitations(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server,
+		requestFrame(Request{
+			JSONRPC: "2.0",
+			ID:      "quotes",
+			Method:  "tools/call",
+			Params: mustJSON(t, map[string]any{
+				"name": "extract_theme_quotes",
+				"arguments": map[string]any{
+					"filter": map[string]any{
+						"title_query": "business discovery",
+						"from_date":   "2026-01-01",
+						"to_date":     "2026-04-01",
+					},
+					"theme_query": "manual process",
+					"limit":       25,
+				},
+			}),
+		})+
+			requestFrame(Request{
+				JSONRPC: "2.0",
+				ID:      "outcomes",
+				Method:  "tools/call",
+				Params: mustJSON(t, map[string]any{
+					"name": "compare_theme_outcomes",
+					"arguments": map[string]any{
+						"filter": map[string]any{
+							"title_query": "business discovery",
+							"from_date":   "2026-01-01",
+							"to_date":     "2026-04-01",
+						},
+						"theme_query": "manual process",
+						"limit":       10,
+					},
+				}),
+			}))
+
+	quotes := decodeBusinessAnalysisResult(t, responses[0])
+	rows := namedOrResultsArrayField(t, quotes, "quotes")
+	if len(rows) == 0 {
+		t.Fatalf("expected bounded quote evidence rows in %+v", quotes)
+	}
+	if len(rows) > 25 {
+		t.Fatalf("quote row count=%d exceeded requested limit", len(rows))
+	}
+	firstQuote := rows[0].(map[string]any)
+	for _, leaked := range []string{"call_id", "call_title", "title", "account_name", "opportunity_name", "speaker_id"} {
+		if value, ok := firstQuote[leaked]; ok && value != "" {
+			t.Fatalf("quote result leaked %s by default: %+v", leaked, firstQuote)
+		}
+	}
+	if excerpt := stringField(firstQuote, "excerpt"); excerpt == "" || strings.Contains(excerpt, "raw transcript") {
+		t.Fatalf("missing bounded safe quote excerpt: %+v", firstQuote)
+	}
+
+	outcomes := decodeBusinessAnalysisResult(t, responses[1])
+	limitations := strings.ToLower(mustJSONText(t, outcomes["limitations"]))
+	if !strings.Contains(limitations, "attribution") || !strings.Contains(limitations, "missing") {
+		t.Fatalf("outcome result did not report missing attribution limitations: %+v", outcomes)
+	}
+	if _, ok := outcomes["coverage_summary"]; !ok {
+		t.Fatalf("outcome result missing coverage_summary: %+v", outcomes)
+	}
+}
+
+func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	for _, toolName := range []string{
+		"search_transcripts_by_filters",
+		"discover_themes_in_cohort",
+		"extract_theme_quotes",
+		"build_theme_brief",
+	} {
+		responses := runServer(t, server, requestFrame(Request{
+			JSONRPC: "2.0",
+			ID:      toolName,
+			Method:  "tools/call",
+			Params: mustJSON(t, map[string]any{
+				"name": toolName,
+				"arguments": map[string]any{
+					"filter": map[string]any{
+						"title_query": "business discovery",
+						"from_date":   "2026-01-01",
+						"to_date":     "2026-04-01",
+					},
+				},
+			}),
+		}))
+
+		var envelope struct {
+			Result toolCallResult `json:"result"`
+		}
+		if err := json.Unmarshal(responses[0], &envelope); err != nil {
+			t.Fatalf("unmarshal %s response: %v", toolName, err)
+		}
+		if !envelope.Result.IsError {
+			t.Fatalf("%s returned transcript evidence without a query: %+v", toolName, envelope.Result)
+		}
+		if !strings.Contains(envelope.Result.Content[0].Text, "requires") {
+			t.Fatalf("%s error did not explain missing query: %+v", toolName, envelope.Result)
+		}
+	}
+}
+
+func TestBusinessAnalysisGovernanceFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call_business_discovery_001"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "business-analysis-governance",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "build_call_cohort",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query": "business discovery",
+					"from_date":   "2026-01-01",
+					"to_date":     "2026-04-01",
+				},
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal governance response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected business-analysis tool to fail closed while governance active")
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_business_discovery_001") || strings.Contains(text, "Discovery Account") {
+		t.Fatalf("business-analysis governance error leaked suppressed data: %s", text)
+	}
+}
+
+func TestBusinessAnalysisRepresentativeJSONRPCCalls(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist(businessAnalysisToolNames()))
+	frames := requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "initialize",
+		Params: mustJSON(t, map[string]any{
+			"protocolVersion": "2025-11-25",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "codex-smoke", "version": "0"},
+		}),
+	}) + requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/list",
+		Params:  mustJSON(t, map[string]any{}),
+	}) + requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      3,
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcripts_by_filters",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query": "business discovery",
+					"from_date":   "2026-01-01",
+					"to_date":     "2026-04-01",
+				},
+				"query": "pain point",
+				"limit": 5,
+			},
+		}),
+	}) + requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      4,
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "build_theme_brief",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query": "business discovery",
+					"from_date":   "2026-01-01",
+					"to_date":     "2026-04-01",
+				},
+				"theme_query": "manual process",
+				"limit":       5,
+			},
+		}),
+	}) + requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      5,
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "explain_analysis_limitations",
+			"arguments": map[string]any{
+				"filter": map[string]any{"title_query": "business discovery"},
+			},
+		}),
+	})
+	responses := runServer(t, server, frames)
+	if len(responses) != 5 {
+		t.Fatalf("response count=%d want 5", len(responses))
+	}
+	for idx, raw := range responses[2:] {
+		result := decodeBusinessAnalysisResult(t, raw)
+		if _, ok := result["normalized_filter"]; !ok {
+			t.Fatalf("response %d missing normalized_filter: %+v", idx+3, result)
+		}
+	}
+}
+
 func TestInitializeAdvertisesClaudeDesktopProtocolVersion(t *testing.T) {
 	t.Parallel()
 
@@ -1151,7 +1479,7 @@ func TestCRMToolsReturnAggregates(t *testing.T) {
 }
 
 func expectedToolNames() []string {
-	return []string{
+	base := []string{
 		"get_sync_status",
 		"search_calls",
 		"get_call",
@@ -1183,6 +1511,42 @@ func expectedToolNames() []string {
 		"search_transcripts_by_call_facts",
 		"search_transcript_quotes_with_attribution",
 		"missing_transcripts",
+	}
+	return append(base, businessAnalysisToolNames()...)
+}
+
+func businessAnalysisToolNames() []string {
+	return []string{
+		"build_call_cohort",
+		"inspect_call_cohort",
+		"list_call_cohorts",
+		"compare_call_cohorts",
+		"search_calls_by_filters",
+		"summarize_calls_by_filters",
+		"search_transcripts_by_filters",
+		"discover_themes_in_cohort",
+		"summarize_themes_by_dimension",
+		"compare_themes_over_time",
+		"compare_themes_by_segment",
+		"extract_theme_quotes",
+		"search_quotes_in_cohort",
+		"rank_quotes_for_sales_use",
+		"build_quote_pack",
+		"compare_theme_outcomes",
+		"summarize_pipeline_progression_by_theme",
+		"summarize_loss_reasons_by_theme",
+		"compare_won_lost_theme_patterns",
+		"summarize_themes_by_persona",
+		"summarize_themes_by_industry",
+		"rank_personas_by_insight_quality",
+		"diagnose_attribution_coverage",
+		"generate_sales_hooks_from_themes",
+		"generate_outreach_sequence_inputs",
+		"recommend_target_personas_and_industries",
+		"build_theme_brief",
+		"score_cohort_evidence_quality",
+		"explain_analysis_limitations",
+		"suggest_filter_refinements",
 	}
 }
 
@@ -2044,6 +2408,268 @@ func openSeededStore(t *testing.T) *sqlite.Store {
 	}
 
 	return store
+}
+
+func assertBusinessAnalysisSchemaIsSafe(t *testing.T, item tool) {
+	t.Helper()
+
+	if got := item.InputSchema["additionalProperties"]; got != false {
+		t.Fatalf("%s schema additionalProperties=%v want false", item.Name, got)
+	}
+	raw := strings.ToLower(mustJSONText(t, item.InputSchema))
+	for _, unsafe := range []string{"sql", "table_name", "column_name", "raw_identifier"} {
+		if strings.Contains(raw, unsafe) {
+			t.Fatalf("%s schema exposes unsafe surface %q: %s", item.Name, unsafe, raw)
+		}
+	}
+
+	filterRequired := map[string]bool{
+		"build_call_cohort":                        true,
+		"search_calls_by_filters":                  true,
+		"summarize_calls_by_filters":               true,
+		"search_transcripts_by_filters":            true,
+		"extract_theme_quotes":                     true,
+		"compare_theme_outcomes":                   true,
+		"build_theme_brief":                        true,
+		"score_cohort_evidence_quality":            true,
+		"explain_analysis_limitations":             true,
+		"suggest_filter_refinements":               true,
+		"diagnose_attribution_coverage":            true,
+		"generate_sales_hooks_from_themes":         true,
+		"generate_outreach_sequence_inputs":        true,
+		"recommend_target_personas_and_industries": true,
+	}
+	if !filterRequired[item.Name] {
+		return
+	}
+	props := schemaProperties(t, item.InputSchema)
+	filter, ok := props["filter"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s schema missing filter object in %+v", item.Name, item.InputSchema)
+	}
+	filterProps := schemaProperties(t, filter)
+	for _, field := range []string{
+		"title_query",
+		"query",
+		"from_date",
+		"to_date",
+		"quarter",
+		"lifecycle_bucket",
+		"scope",
+		"system",
+		"direction",
+		"transcript_status",
+		"industry",
+		"account_query",
+		"opportunity_stage",
+		"crm_object_type",
+		"crm_object_id",
+		"participant_title_query",
+		"limit",
+	} {
+		if _, ok := filterProps[field]; !ok {
+			t.Fatalf("%s filter schema missing %s in %+v", item.Name, field, filterProps)
+		}
+	}
+}
+
+func schemaProperties(t *testing.T, schema map[string]any) map[string]any {
+	t.Helper()
+
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema missing properties: %+v", schema)
+	}
+	return props
+}
+
+func decodeBusinessAnalysisResult(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+		Error  *responseError `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("unmarshal JSON-RPC response: %v", err)
+	}
+	if envelope.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %+v", envelope.Error)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	if len(envelope.Result.Content) != 1 {
+		t.Fatalf("content count=%d want 1", len(envelope.Result.Content))
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &result); err != nil {
+		t.Fatalf("unmarshal business-analysis result %q: %v", envelope.Result.Content[0].Text, err)
+	}
+	return result
+}
+
+func mapField(t *testing.T, values map[string]any, key string) map[string]any {
+	t.Helper()
+
+	item, ok := values[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s is not an object in %+v", key, values)
+	}
+	return item
+}
+
+func arrayField(t *testing.T, values map[string]any, key string) []any {
+	t.Helper()
+
+	item, ok := values[key].([]any)
+	if !ok {
+		t.Fatalf("%s is not an array in %+v", key, values)
+	}
+	return item
+}
+
+func namedOrResultsArrayField(t *testing.T, values map[string]any, key string) []any {
+	t.Helper()
+
+	if item, ok := values[key].([]any); ok {
+		return item
+	}
+	return arrayField(t, values, "results")
+}
+
+func stringField(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return value
+}
+
+func nestedString(values map[string]any, objectKey, stringKey string) string {
+	object, _ := values[objectKey].(map[string]any)
+	value, _ := object[stringKey].(string)
+	return value
+}
+
+func intField(values map[string]any, key string) int {
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func mustJSONText(t *testing.T, value any) string {
+	t.Helper()
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal JSON text: %v", err)
+	}
+	return string(raw)
+}
+
+func seedBusinessAnalysisMCPFixtures(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	for _, raw := range []json.RawMessage{
+		mustJSON(t, map[string]any{
+			"id":        "call_business_discovery_001",
+			"title":     "Business Discovery - operations workflow",
+			"started":   "2026-02-18T15:00:00Z",
+			"duration":  1800,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"context": []any{
+				map[string]any{
+					"objectType": "Account",
+					"id":         "acct_business_discovery_001",
+					"fields": []any{
+						map[string]any{"name": "Name", "value": "Discovery Account"},
+						map[string]any{"name": "Industry", "value": "Manufacturing"},
+					},
+				},
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp_business_discovery_001",
+					"fields": []any{
+						map[string]any{"name": "Name", "value": "Discovery Opportunity"},
+						map[string]any{"name": "StageName", "value": "Discovery"},
+					},
+				},
+			},
+		}),
+		mustJSON(t, map[string]any{
+			"id":        "call_business_discovery_002",
+			"title":     "Business Discovery - finance workflow",
+			"started":   "2026-03-05T15:00:00Z",
+			"duration":  1200,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"context": []any{
+				map[string]any{
+					"objectType": "Account",
+					"id":         "acct_business_discovery_002",
+					"fields": []any{
+						map[string]any{"name": "Industry", "value": "Financial Services"},
+					},
+				},
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp_business_discovery_002",
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Evaluation"},
+					},
+				},
+			},
+		}),
+		mustJSON(t, map[string]any{
+			"id":        "call_other_001",
+			"title":     "Implementation handoff",
+			"started":   "2026-03-06T15:00:00Z",
+			"duration":  900,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		}),
+	} {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert business-analysis call: %v", err)
+		}
+	}
+
+	for _, item := range []struct {
+		callID string
+		text   string
+	}{
+		{callID: "call_business_discovery_001", text: "The pain point is that manual process steps slow the team every week."},
+		{callID: "call_business_discovery_002", text: "A manual process creates a reporting bottleneck for finance."},
+		{callID: "call_other_001", text: "This implementation call should not match the business discovery title filter."},
+	} {
+		if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": item.callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "buyer",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2500, "text": item.text},
+							},
+						},
+					},
+				},
+			},
+		})); err != nil {
+			t.Fatalf("upsert business-analysis transcript: %v", err)
+		}
+	}
 }
 
 func seedLateStageMCPCall(t *testing.T, store *sqlite.Store) {

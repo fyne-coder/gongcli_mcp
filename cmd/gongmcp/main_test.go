@@ -144,6 +144,50 @@ func TestRunListToolPresetsDoesNotRequireDB(t *testing.T) {
 			t.Fatalf("missing preset %q in %s", name, stdout.String())
 		}
 	}
+	for _, preset := range resp.Presets {
+		if preset.Name != "analyst" && preset.Name != "all-readonly" {
+			continue
+		}
+		for _, name := range businessAnalysisToolNamesForMainTest() {
+			if !containsString(preset.Tools, name) {
+				t.Fatalf("%s preset missing business-analysis tool %q", preset.Name, name)
+			}
+		}
+	}
+}
+
+func TestRunAnalystPresetExposesBusinessAnalysisToolsOverJSONRPC(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	store, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	stdin := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	}, "\n") + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := run([]string{"--stdio", "--db", dbPath, "--tool-preset", "analyst"}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	for _, name := range businessAnalysisToolNamesForMainTest() {
+		if !strings.Contains(got, `"`+name+`"`) {
+			t.Fatalf("analyst tools/list output missing %q in %s", name, got)
+		}
+	}
+	for _, name := range []string{"search_calls", "get_call", "list_gong_settings"} {
+		if strings.Contains(got, `"`+name+`"`) {
+			t.Fatalf("analyst tools/list output included admin/config-heavy tool %q in %s", name, got)
+		}
+	}
 }
 
 func TestRunStdioFlagOverridesHTTPAddrEnv(t *testing.T) {
@@ -359,6 +403,20 @@ func TestPresetGovernanceCompatibilityAndAnalystScope(t *testing.T) {
 	if !containsString(analyst, "search_transcript_quotes_with_attribution") {
 		t.Fatalf("analyst preset missing bounded evidence tool")
 	}
+	for _, name := range businessAnalysisToolNamesForMainTest() {
+		if !containsString(analyst, name) {
+			t.Fatalf("analyst preset missing business-analysis tool %q", name)
+		}
+	}
+	allReadonly, err := expandToolPreset("all-readonly")
+	if err != nil {
+		t.Fatalf("expandToolPreset returned error: %v", err)
+	}
+	for _, name := range businessAnalysisToolNamesForMainTest() {
+		if !containsString(allReadonly, name) {
+			t.Fatalf("all-readonly preset missing business-analysis tool %q", name)
+		}
+	}
 }
 
 func TestResolveToolAllowlistRejectsAmbiguousSelection(t *testing.T) {
@@ -399,6 +457,41 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func businessAnalysisToolNamesForMainTest() []string {
+	return []string{
+		"build_call_cohort",
+		"inspect_call_cohort",
+		"list_call_cohorts",
+		"compare_call_cohorts",
+		"search_calls_by_filters",
+		"summarize_calls_by_filters",
+		"search_transcripts_by_filters",
+		"discover_themes_in_cohort",
+		"summarize_themes_by_dimension",
+		"compare_themes_over_time",
+		"compare_themes_by_segment",
+		"extract_theme_quotes",
+		"search_quotes_in_cohort",
+		"rank_quotes_for_sales_use",
+		"build_quote_pack",
+		"compare_theme_outcomes",
+		"summarize_pipeline_progression_by_theme",
+		"summarize_loss_reasons_by_theme",
+		"compare_won_lost_theme_patterns",
+		"summarize_themes_by_persona",
+		"summarize_themes_by_industry",
+		"rank_personas_by_insight_quality",
+		"diagnose_attribution_coverage",
+		"generate_sales_hooks_from_themes",
+		"generate_outreach_sequence_inputs",
+		"recommend_target_personas_and_industries",
+		"build_theme_brief",
+		"score_cohort_evidence_quality",
+		"explain_analysis_limitations",
+		"suggest_filter_refinements",
+	}
 }
 
 func TestRunToolAllowlistFlagOverridesEnvAndRejectsUnknownTools(t *testing.T) {

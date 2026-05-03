@@ -66,6 +66,202 @@ Use prompts shaped like these:
 These prompts are in-bounds because they stay on reviewed cached metadata and
 backlog prioritization.
 
+## Analyst Cohort Workflow
+
+The full analyst MCP surface is for approved analyst sessions, not the default
+business-pilot lane. Use it when the analyst needs to define a reproducible set
+of calls, inspect coverage, analyze themes, extract bounded evidence, and then
+ask the host model to synthesize the final business answer.
+
+Recommended flow:
+
+1. Filter: define a narrow `call_filter` with a time window and at least one
+   business constraint such as `title_query`, `quarter`, `industry`,
+   `participant_title_query`, `opportunity_stage`, or `transcript_status`.
+2. Cohort: call `build_call_cohort` and keep the echoed normalized filter. The
+   normalized filter is the durable handle; `cohort_id` is a deterministic
+   label/debug handle and is not resolved from persisted server state.
+3. Inspect: call `inspect_call_cohort` before analysis. Check call count,
+   transcript coverage, persona/industry coverage, CRM outcome coverage, and
+   warning flags.
+4. Analyze: use theme, persona, industry, segment, time, and outcome tools only
+   after the cohort is specific enough to support the question.
+5. Quotes: use quote tools for bounded evidence packs. Provide `theme_query`,
+   `query`, or `filter.query`; excerpt tools intentionally reject blank search
+   terms so they cannot dump arbitrary transcript text.
+6. Limitations: finish every analyst answer with
+   `score_cohort_evidence_quality`, `diagnose_attribution_coverage`,
+   `explain_analysis_limitations`, or `suggest_filter_refinements` as
+   appropriate.
+
+The MCP server does not run an LLM for these tools. Synthesis tools return
+structured inputs for ChatGPT, Claude, or another reviewed host to finish the
+business narrative; they should not be treated as hidden model conclusions from
+inside `gongmcp`.
+
+### ChatGPT Usage
+
+Use the remote HTTPS MCP connector path documented in
+[Remote MCP auth and connector setup](remote-mcp-auth.md) when ChatGPT is the
+host. The operator should expose a reviewed `/mcp` endpoint with an approved
+tool preset or allowlist and should verify `initialize`, `tools/list`, and at
+least one `tools/call` before business use.
+
+Starter prompt:
+
+```text
+Use the Gong MCP tools against the reviewed cache only. Start by building a
+cohort for business discovery calls in Q1 2026, inspect coverage, then analyze
+persona, industry, theme, quote, pipeline-outcome, and attribution limitations.
+Do not infer missing CRM outcomes, titles, or industries. End with what the
+cache can prove, what is directional, and what needs operator refresh.
+```
+
+If ChatGPT reports that a tool is unavailable, treat that as a preset or
+allowlist issue. Do not ask the model to work around the missing tool by
+guessing from earlier output.
+
+### Claude Usage
+
+For local Claude Desktop, use stdio MCP over a read-only SQLite mount or local
+database path. For Claude remote add-by-URL, use the same remote `/mcp` OAuth
+or bearer-gateway path as other remote clients. The business contract is the
+same either way: reviewed cache, approved preset, bounded result sizes, and no
+live Gong pull from the host.
+
+Starter prompt:
+
+```text
+Use Gong MCP as a read-only evidence workbench. Follow this sequence exactly:
+filter, build_call_cohort, inspect_call_cohort, theme/persona/industry analysis,
+quote pack, pipeline outcome caveats, and final limitations. Reuse the
+normalized filter echoed by the tool for every follow-up. Treat cohort_id as a
+deterministic label only, not as stored state. Keep identifiers redacted unless
+the enabled tool policy explicitly returns them.
+```
+
+### Analyst Tool List
+
+These are the full analyst cohort tools in the built-in `analyst` and
+`all-readonly` presets. The operator must confirm that the deployed binary
+exposes them in `tools/list` before relying on the examples.
+
+| Group | Tools | Use |
+| --- | --- | --- |
+| Cohort | `build_call_cohort`, `inspect_call_cohort`, `list_call_cohorts`, `compare_call_cohorts` | Create reproducible call sets, inspect coverage, confirm stateless cohort behavior, and compare slices |
+| Generic filter/search | `search_calls_by_filters`, `summarize_calls_by_filters`, `search_transcripts_by_filters` | Find bounded calls, metadata summaries, and snippets from an allowlisted `call_filter` |
+| Themes | `discover_themes_in_cohort`, `summarize_themes_by_dimension`, `compare_themes_over_time`, `compare_themes_by_segment` | Surface deterministic cache-derived theme signals by quarter, persona, industry, or segment |
+| Quotes/evidence | `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | Pull bounded representative excerpts and package evidence for sales or marketing review |
+| Outcome/pipeline | `compare_theme_outcomes`, `summarize_pipeline_progression_by_theme`, `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns` | Compare theme presence to cached CRM progression and outcome fields where coverage exists |
+| Persona/industry | `summarize_themes_by_persona`, `summarize_themes_by_industry`, `rank_personas_by_insight_quality`, `diagnose_attribution_coverage` | Report persona/industry patterns and expose missing title, industry, or attribution coverage |
+| Sales/marketing synthesis | `generate_sales_hooks_from_themes`, `generate_outreach_sequence_inputs`, `recommend_target_personas_and_industries`, `build_theme_brief` | Produce structured inputs for a host model or analyst to turn into collateral, outreach, and briefs |
+| Coverage/quality | `score_cohort_evidence_quality`, `explain_analysis_limitations`, `suggest_filter_refinements` | Grade whether the cohort can support the requested answer and recommend safer filters |
+
+### `call_filter` Fields
+
+The analyst tools use only these allowlisted filter fields:
+`title_query`, `query`, `from_date`, `to_date`, `quarter`,
+`lifecycle_bucket`, `scope`, `system`, `direction`, `transcript_status`,
+`industry`, `account_query`, `opportunity_stage`, `crm_object_type`,
+`crm_object_id`, `participant_title_query`, and `limit`.
+
+Use `limit` deliberately. Broad unfiltered scans are not appropriate for
+ChatGPT or Claude sessions because every tool result becomes model context.
+
+### Example: Business Discovery Title Filtering
+
+```text
+Build a cohort where title_query is "business discovery", quarter is Q1 2026,
+and transcript_status is present. Inspect the cohort before analysis. Then
+summarize the top themes, representative transcript excerpts, persona coverage, industry
+coverage, pipeline outcome coverage, and limitations. Do not infer account
+industry, participant title, opportunity stage, loss reason, or won/lost status
+when the coverage tools say those fields are missing. Only call excerpts
+buyer-side or customer-side when speaker-role attribution is present.
+```
+
+Expected tool sequence:
+
+- `build_call_cohort`
+- `inspect_call_cohort`
+- `discover_themes_in_cohort`
+- `summarize_themes_by_persona`
+- `summarize_themes_by_industry`
+- `build_quote_pack`
+- `diagnose_attribution_coverage`
+- `explain_analysis_limitations`
+
+### Example: Cross-Quarter Persona And Industry Themes
+
+```text
+Compare business discovery themes across Q1 2026 and Q2 2026. Segment the
+answer by participant title and account industry where cached attribution is
+present. Report missing-title and missing-industry rates before ranking any
+persona or industry.
+```
+
+Expected tool sequence:
+
+- `build_call_cohort` for each quarter
+- `compare_call_cohorts`
+- `compare_themes_over_time`
+- `summarize_themes_by_persona`
+- `summarize_themes_by_industry`
+- `rank_personas_by_insight_quality`
+- `diagnose_attribution_coverage`
+
+### Example: Top Quotes
+
+```text
+For the business discovery cohort, find representative quote candidates for
+the manual-process theme. Return bounded snippets, theme labels, and the
+available attribution fields so the analyst or host model can rank usefulness
+for sales enablement. Only label a snippet customer-side when speaker-role
+attribution is present. Do not request full transcripts.
+```
+
+Expected tool sequence:
+
+- `search_quotes_in_cohort`
+- `extract_theme_quotes`
+- `rank_quotes_for_sales_use`
+- `build_quote_pack`
+- `score_cohort_evidence_quality`
+
+### Example: Pipeline Outcomes
+
+```text
+For the business discovery cohort, compare themes against downstream pipeline
+progression. Separate closed-won, closed-lost, open, and unknown only when the
+cache has those fields. If opportunity outcome or loss reason is missing, say
+so directly and avoid causal claims.
+```
+
+Expected tool sequence:
+
+- `compare_theme_outcomes`
+- `summarize_pipeline_progression_by_theme`
+- `summarize_loss_reasons_by_theme`
+- `compare_won_lost_theme_patterns`
+- `explain_analysis_limitations`
+
+### Example: Attribution Gaps
+
+```text
+For the same cohort, diagnose whether the cache can support persona, industry,
+account, opportunity, stage, loss-reason, and won/lost analysis. Recommend
+filter refinements or operator sync/profile work before writing the final
+business summary.
+```
+
+Expected tool sequence:
+
+- `inspect_call_cohort`
+- `diagnose_attribution_coverage`
+- `score_cohort_evidence_quality`
+- `suggest_filter_refinements`
+- `explain_analysis_limitations`
+
 Scorecard inventory is optional, not part of the default strict pilot lane. Add
 `list_scorecards` and `get_scorecard` only after the customer approves exposure
 of coaching configuration, scorecard question text, and stable scorecard

@@ -58,6 +58,46 @@ gongmcp --list-tool-presets
 Do not expose `operator-smoke`, `analyst`, `governance-search`, or
 `all-readonly` as the default business-user tool surface.
 
+### Analyst Cohort Preset Guidance
+
+Use `analyst` only after the sponsor approves the wider evidence workflow:
+filter -> cohort -> inspect -> analyze -> quotes -> limitations. The built-in
+analyst cohort surface includes these tools:
+
+- Cohort: `build_call_cohort`, `inspect_call_cohort`, `list_call_cohorts`,
+  `compare_call_cohorts`
+- Generic filter/search: `search_calls_by_filters`,
+  `summarize_calls_by_filters`, `search_transcripts_by_filters`
+- Themes: `discover_themes_in_cohort`, `summarize_themes_by_dimension`,
+  `compare_themes_over_time`, `compare_themes_by_segment`
+- Quotes/evidence: `extract_theme_quotes`, `search_quotes_in_cohort`,
+  `rank_quotes_for_sales_use`, `build_quote_pack`
+- Outcome/pipeline: `compare_theme_outcomes`,
+  `summarize_pipeline_progression_by_theme`,
+  `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns`
+- Persona/industry: `summarize_themes_by_persona`,
+  `summarize_themes_by_industry`, `rank_personas_by_insight_quality`,
+  `diagnose_attribution_coverage`
+- Sales/marketing synthesis: `generate_sales_hooks_from_themes`,
+  `generate_outreach_sequence_inputs`,
+  `recommend_target_personas_and_industries`, `build_theme_brief`
+- Coverage/quality: `score_cohort_evidence_quality`,
+  `explain_analysis_limitations`, `suggest_filter_refinements`
+
+Before enabling the preset for ChatGPT, Claude, or another host, run:
+
+```bash
+gongmcp --list-tool-presets
+```
+
+Then verify that the selected deployment actually returns the expected tools in
+`tools/list`. If a tool is missing, stop and check the deployed binary version,
+image tag, preset, and allowlist before testing analyst prompts.
+
+Use `all-readonly` only when the analyst also needs every other read-only
+operator/admin tool. For most approved business analysis, prefer `analyst` plus
+safe per-tool defaults over `all-readonly`.
+
 ## Smoke Tests
 
 Run these before user access:
@@ -129,6 +169,101 @@ Inspector, or custom clients, also verify the OAuth path end to end:
 - a ChatGPT-style `tools/call` with `_meta` succeeds
 
 Local Claude Desktop stdio MCP does not use this remote OAuth path.
+
+### Analyst JSON-RPC Smoke Commands
+
+Run this smoke against a reviewed synthetic or customer-approved local cache.
+Use a read-only DB path outside the source checkout.
+
+```bash
+DB="$HOME/gongctl-data/gong-mcp-governed.db"
+
+printf '%s\n' \
+'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"analyst-smoke","version":"0"}}}' \
+'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+| gongmcp --db "$DB" --tool-preset analyst
+```
+
+After `tools/list` shows the analyst tools, run representative calls:
+
+```bash
+printf '%s\n' \
+'{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"build_call_cohort","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25}}}}' \
+'{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"inspect_call_cohort","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25}}}}' \
+'{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"discover_themes_in_cohort","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25},"query":"pain point","limit":10}}}' \
+'{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"summarize_themes_by_persona","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25},"theme_query":"manual process","limit":10}}}' \
+'{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_themes_by_industry","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25},"theme_query":"manual process","limit":10}}}' \
+'{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"build_quote_pack","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25},"theme_query":"manual process","limit":5}}}' \
+'{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"summarize_pipeline_progression_by_theme","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25},"theme_query":"manual process","limit":10}}}' \
+'{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"diagnose_attribution_coverage","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25}}}}' \
+'{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"explain_analysis_limitations","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25}}}}' \
+| gongmcp --db "$DB" --tool-preset analyst
+```
+
+Expected:
+
+- `tools/list` includes every requested analyst cohort tool before the
+  representative tool calls are run.
+- `build_call_cohort` returns a deterministic `cohort_id`, normalized filter,
+  count, coverage summary, and warning flags.
+- Theme, quote, persona, industry, and pipeline tools return bounded outputs
+  and coverage metadata.
+- Limitation tools clearly identify missing transcript, title, industry,
+  opportunity, loss-reason, or won/lost coverage instead of inferring it.
+
+For an HTTP MCP bridge, use the same JSON-RPC payloads through `/mcp` with the
+approved origin and bearer/OAuth boundary:
+
+```bash
+curl -fsS https://gong-mcp.example.com/mcp \
+  -H "Origin: https://approved-client.example.com" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_call_cohort","arguments":{"filter":{"title_query":"business discovery","quarter":"2026-Q1","transcript_status":"present","limit":25}}}}'
+```
+
+### Analyst Host Examples
+
+Business discovery title filtering:
+
+```text
+Build and inspect a Q1 2026 cohort where title_query is "business discovery"
+and transcript_status is present. Then identify top themes, representative
+quotes, persona and industry coverage, pipeline progression coverage, and
+limitations.
+```
+
+Cross-quarter persona and industry themes:
+
+```text
+Compare business discovery cohorts for 2026-Q1 and 2026-Q2. Segment theme
+signals by participant title and account industry only where attribution
+coverage is present. Report missing-title and missing-industry rates first.
+```
+
+Top quotes:
+
+```text
+For the business discovery cohort, build a quote pack for the manual-process
+theme with at most five bounded snippets. Rank each quote for sales use and
+include why it is useful.
+```
+
+Pipeline outcomes:
+
+```text
+Compare manual-process and integration-risk themes against cached opportunity
+stage, progression, won/lost status, and loss reason. If those fields are
+missing or sparse, report the coverage gap and avoid causal language.
+```
+
+Attribution gaps:
+
+```text
+Diagnose whether this cohort can support persona, industry, opportunity-stage,
+loss-reason, and won/lost analysis. Suggest safer filter refinements or
+operator refresh/profile work before writing the final summary.
+```
 
 ## Business User First 10 Minutes
 

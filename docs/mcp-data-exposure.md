@@ -57,6 +57,49 @@ Current fixed boundaries:
 | `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; truncates object and field-name lists | Still exposes call ID/title plus CRM object IDs and field names for one call |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
 
+## Analyst Cohort Tool Exposure
+
+The full analyst cohort surface in `executor_tasks.md` is intended for trusted
+analyst sessions after sponsor/operator approval. These tools must remain
+read-only, bounded, and filter-driven. They must not accept raw SQL, arbitrary
+table names, arbitrary column names, unbounded result sizes, or live Gong API
+credentials.
+
+Required filter contract:
+
+- Accept a `call_filter` with allowlisted fields only:
+  `title_query`, `query`, `from_date`, `to_date`, `quarter`,
+  `lifecycle_bucket`, `scope`, `system`, `direction`, `transcript_status`,
+  `industry`, `account_query`, `opportunity_stage`, `crm_object_type`,
+  `crm_object_id`, `participant_title_query`, and `limit`.
+- Echo the normalized filter in every cohort response so a host can reproduce
+  the same call set after process restart.
+- Treat `cohort_id` as a deterministic convenience handle, not as the only
+  durable state. Hosts should carry the echoed normalized filter between calls;
+  the server does not keep a restart-safe cohort registry.
+- Require `query`, `theme_query`, or `filter.query` before any analyst tool
+  returns transcript excerpts or quote candidates. Blank excerpt requests fail
+  closed instead of sampling arbitrary transcript text.
+- Return coverage, warning, and limitation metadata when attribution,
+  transcript, persona, industry, opportunity, loss-reason, or won/lost fields
+  are missing.
+- Use a physically governance-filtered DB for analyst sessions when customer
+  exclusions apply. Raw-DB AI governance mode intentionally fails closed for
+  these aggregate cohort tools because their counts and slices are not
+  recomputed over a filtered call set.
+
+| Tools | Intended preset | Default exposure | Required protections | Residual risk |
+| --- | --- | --- | --- | --- |
+| `build_call_cohort`, `inspect_call_cohort`, `list_call_cohorts`, `compare_call_cohorts` | `analyst`, `all-readonly` | Aggregate + limited cohort metadata | Filter allowlist, deterministic cohort id, echoed normalized filter, counts, coverage summary, warning flags | Small cohorts or narrow filters can still make records recognizable to the operator |
+| `search_calls_by_filters`, `summarize_calls_by_filters` | `analyst`, `all-readonly` | Aggregate or bounded record summaries | Bounded `limit`, no raw SQL, default identifier redaction unless a reviewed policy says otherwise | Call metadata can reveal business process or tenant terminology |
+| `search_transcripts_by_filters` | `analyst`, `all-readonly` | Snippet | Requires a search term, bounded excerpts, transcript-status filtering, no full transcript text, redacted provenance by default | Snippets are still customer data and can be identifying |
+| `discover_themes_in_cohort`, `summarize_themes_by_dimension`, `compare_themes_over_time`, `compare_themes_by_segment` | `analyst`, `all-readonly` | Aggregate + deterministic theme signals | Label outputs as cache-derived heuristic signals, include support counts and coverage, avoid LLM-style unsupported conclusions | Low-coverage themes can be overinterpreted by the host model |
+| `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | `analyst`, `all-readonly` | Snippet + optional evidence packaging | Requires a theme/search term, bounded quote count and length, safe attribution defaults, explicit opt-ins for names/titles/ids where policy supports them | Quote packs can carry sensitive customer language into the host model |
+| `compare_theme_outcomes`, `summarize_pipeline_progression_by_theme`, `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns` | `analyst`, `all-readonly` | Aggregate + CRM outcome coverage | Graceful degradation when stage, close status, loss reason, or opportunity linkage is absent; no causal claims from correlation alone | Pipeline labels and outcome rates can expose sensitive revenue context |
+| `summarize_themes_by_persona`, `summarize_themes_by_industry`, `rank_personas_by_insight_quality`, `diagnose_attribution_coverage` | `analyst`, `all-readonly` | Aggregate + attribution coverage | Report missing-title and missing-industry rates; never infer titles or industries from call names or snippets | Persona and industry slices may reveal go-to-market strategy |
+| `generate_sales_hooks_from_themes`, `generate_outreach_sequence_inputs`, `recommend_target_personas_and_industries`, `build_theme_brief` | `analyst`, `all-readonly` | Structured synthesis inputs | Return evidence-backed inputs for the host model; label hypotheses; include evidence counts and limitations | Host-generated copy can overstate cache-derived evidence if limitations are dropped |
+| `score_cohort_evidence_quality`, `explain_analysis_limitations`, `suggest_filter_refinements` | `analyst`, `all-readonly` | Aggregate + limitations | Always safe to call at the end of an analyst flow; recommend narrower filters and operator refreshes rather than filling missing data | Limitation summaries can still reveal where the tenant has weak process/data coverage |
+
 ## Highest-Risk MCP Tools
 
 The following tools deserve the most review before enabling them in a model-facing host:

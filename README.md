@@ -415,6 +415,17 @@ deeper, identifier-bearing questions; see
 [docs/mcp-data-exposure.md#mcp-call-volume-and-limits](docs/mcp-data-exposure.md#mcp-call-volume-and-limits)
 for how to keep MCP traffic from overwhelming the host context window.
 
+For approved analyst sessions, the full cohort workflow is documented
+in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),
+[MCP data exposure](docs/mcp-data-exposure.md#analyst-cohort-tool-exposure),
+and
+[Customer implementation checklist](docs/implementation-checklist.md#analyst-json-rpc-smoke-commands).
+That workflow is filter -> cohort -> inspect -> analyze -> quotes ->
+limitations, and it is intended for ChatGPT, Claude, or another reviewed MCP
+host after the operator confirms that `tools/list` exposes the requested
+cohort, theme, quote, pipeline, persona/industry, synthesis, and limitation
+tools under `analyst` or `all-readonly`.
+
 ## Private HTTP MCP Pilot
 
 For shared private pilots where users should not run Docker locally, `gongmcp`

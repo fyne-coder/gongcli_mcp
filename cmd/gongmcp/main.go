@@ -300,7 +300,7 @@ func expandToolPreset(name string) ([]string, error) {
 			"rank_transcript_backlog",
 		}), nil
 	case "analyst", "analyst-expansion":
-		return copyStrings([]string{
+		tools := []string{
 			"get_sync_status",
 			"list_crm_object_types",
 			"list_crm_fields",
@@ -321,7 +321,9 @@ func expandToolPreset(name string) ([]string, error) {
 			"search_transcript_segments",
 			"search_transcripts_by_call_facts",
 			"search_transcript_quotes_with_attribution",
-		}), nil
+		}
+		tools = append(tools, mcp.BusinessAnalysisToolNames()...)
+		return copyStrings(tools), nil
 	case "governance-search":
 		return copyStrings([]string{
 			"search_calls",

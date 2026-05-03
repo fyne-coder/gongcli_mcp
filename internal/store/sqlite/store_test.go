@@ -165,6 +165,164 @@ func TestUpsertCallContextObjectNameFallsBackToNameField(t *testing.T) {
 	}
 }
 
+func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	for _, raw := range []json.RawMessage{
+		mustNormalizeValue(t, map[string]any{
+			"id":        "call-ba-match",
+			"title":     "Business Discovery operations workflow",
+			"started":   "2026-02-18T15:00:00Z",
+			"duration":  1800,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"context": []any{
+				map[string]any{
+					"objectType": "Account",
+					"id":         "acct-ba-match",
+					"name":       "BA Match Account",
+					"fields": []any{
+						map[string]any{"name": "Industry", "value": "Manufacturing"},
+					},
+				},
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp-ba-match",
+					"name":       "BA Match Opportunity",
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Discovery"},
+						map[string]any{"name": "Type", "value": "New Business"},
+					},
+				},
+			},
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"id":        "call-ba-q2",
+			"title":     "Business Discovery finance workflow",
+			"started":   "2026-05-18T15:00:00Z",
+			"duration":  1200,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"id":        "call-ba-other",
+			"title":     "Implementation workflow",
+			"started":   "2026-02-20T15:00:00Z",
+			"duration":  900,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"id":        "call-ba-escape",
+			"title":     "Business Discovery escape workflow",
+			"started":   "2026-02-22T15:00:00Z",
+			"duration":  1100,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"context": []any{
+				map[string]any{
+					"objectType": "Account",
+					"id":         "acct-ba-escape",
+					"name":       "BA Escape Account",
+					"fields": []any{
+						map[string]any{"name": "Industry", "value": "Manufacturing"},
+					},
+				},
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp-ba-escape",
+					"name":       "BA Escape Opportunity",
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Evaluation"},
+					},
+				},
+			},
+		}),
+	} {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert business-analysis call: %v", err)
+		}
+	}
+	for _, item := range []struct {
+		callID string
+		text   string
+	}{
+		{"call-ba-match", "The manual process creates the core pain point for operations."},
+		{"call-ba-q2", "The manual process creates the finance pain point."},
+		{"call-ba-other", "The manual process appears in implementation but should not match the title filter."},
+		{"call-ba-escape", "The manual process is present but the required cohort term is absent."},
+	} {
+		if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": item.callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "buyer",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2500, "text": item.text},
+							},
+						},
+					},
+				},
+			},
+		})); err != nil {
+			t.Fatalf("upsert business-analysis transcript: %v", err)
+		}
+	}
+
+	filter := BusinessAnalysisFilter{
+		TitleQuery:       "business discovery",
+		Query:            "core",
+		Quarter:          "2026-Q1",
+		TranscriptStatus: "present",
+		Industry:         "manufacturing",
+	}
+	calls, err := store.SearchBusinessAnalysisCalls(ctx, BusinessAnalysisCallSearchParams{Filter: filter, Limit: 1000})
+	if err != nil {
+		t.Fatalf("SearchBusinessAnalysisCalls returned error: %v", err)
+	}
+	if calls.Summary.CallCount != 1 || len(calls.Rows) != 1 || calls.Rows[0].CallID != "call-ba-match" {
+		t.Fatalf("unexpected business-analysis calls: summary=%+v rows=%+v", calls.Summary, calls.Rows)
+	}
+	if calls.Filter.FromDate != "2026-01-01" || calls.Filter.ToDate != "2026-03-31" || calls.Filter.Limit > maxBusinessAnalysisLimit {
+		t.Fatalf("filter was not normalized/bounded: %+v", calls.Filter)
+	}
+
+	evidence, err := store.SearchBusinessAnalysisEvidence(ctx, BusinessAnalysisEvidenceSearchParams{
+		Filter: filter,
+		Query:  "manual process",
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatalf("SearchBusinessAnalysisEvidence returned error: %v", err)
+	}
+	if len(evidence) != 1 || evidence[0].CallID != "call-ba-match" || !strings.Contains(strings.ToLower(evidence[0].Snippet), "manual") {
+		t.Fatalf("evidence should intersect filter.query and query, got %+v", evidence)
+	}
+
+	summary, err := store.SummarizeBusinessAnalysisDimension(ctx, BusinessAnalysisDimensionSummaryParams{
+		Filter:     filter,
+		Dimension:  "opportunity_stage",
+		ThemeQuery: "manual process",
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("SummarizeBusinessAnalysisDimension returned error: %v", err)
+	}
+	if len(summary) != 1 || summary[0].Value != "Discovery" || summary[0].CallCount != 1 {
+		t.Fatalf("dimension summary should intersect filter.query and theme_query, got %+v", summary)
+	}
+}
+
 func TestInventoryUpsertsAndLists(t *testing.T) {
 	t.Parallel()
 
