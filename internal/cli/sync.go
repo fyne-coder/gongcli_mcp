@@ -369,7 +369,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -422,6 +422,13 @@ func openSQLiteStore(ctx context.Context, path string) (*sqlite.Store, error) {
 		return nil, errors.New("--db is required")
 	}
 	return sqlite.Open(ctx, path)
+}
+
+func openSQLiteReadOnlyStore(ctx context.Context, path string) (*sqlite.Store, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("--db is required")
+	}
+	return sqlite.OpenReadOnly(ctx, path)
 }
 
 func parseSyncCallsPreset(value string) (string, string, error) {

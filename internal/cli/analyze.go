@@ -51,7 +51,7 @@ func (a *app) analyzeCalls(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (a *app) analyzeCoverage(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func (a *app) analyzeTranscriptBacklog(ctx context.Context, args []string) error
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -199,7 +199,7 @@ func (a *app) analyzeCRMSchema(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func (a *app) analyzeSettings(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -272,7 +272,7 @@ func (a *app) analyzeScorecards(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -301,7 +301,7 @@ func (a *app) analyzeScorecard(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}

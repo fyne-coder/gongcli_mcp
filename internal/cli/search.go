@@ -40,7 +40,7 @@ func (a *app) searchTranscripts(ctx context.Context, args []string) error {
 		return fmt.Errorf("--query is required")
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func (a *app) searchCalls(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}

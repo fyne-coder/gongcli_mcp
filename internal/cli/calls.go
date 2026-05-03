@@ -198,7 +198,7 @@ func (a *app) callsShow(ctx context.Context, args []string) error {
 		return err
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}

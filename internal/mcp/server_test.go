@@ -54,7 +54,7 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 
-	want := expectedToolNames()
+	want := ToolCatalogNames()
 	if len(names) != len(want) {
 		t.Fatalf("tool count=%d want %d (%v)", len(names), len(want), names)
 	}
@@ -116,6 +116,52 @@ func TestToolsListOnlyReturnsAllowlistedTools(t *testing.T) {
 	}
 }
 
+func TestToolPresetCatalogAliasesAndGovernanceCompatibility(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"business-pilot",
+		"strict-business-pilot",
+		"operator-smoke",
+		"analyst",
+		"analyst-expansion",
+		"governance-search",
+		"all-readonly",
+		"all-tools",
+		"all",
+	} {
+		if tools, err := ExpandToolPreset(name); err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", name, err)
+		} else if len(tools) == 0 {
+			t.Fatalf("ExpandToolPreset(%q) returned no tools", name)
+		}
+	}
+
+	governanceTools, err := ExpandToolPreset("governance-search")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(governance-search) returned error: %v", err)
+	}
+	if err := ValidateGovernanceAllowlist(governanceTools); err != nil {
+		t.Fatalf("governance-search preset rejected by governance validator: %v", err)
+	}
+	if err := ValidateGovernanceAllowlist([]string{"search_crm_field_values"}); err == nil {
+		t.Fatal("governance validator accepted unsafe tool")
+	}
+
+	seen := map[string]ToolPresetInfo{}
+	for _, preset := range ToolPresetCatalog() {
+		seen[preset.Name] = preset
+		if preset.ToolCount != len(preset.Tools) {
+			t.Fatalf("preset %q tool_count=%d len(tools)=%d", preset.Name, preset.ToolCount, len(preset.Tools))
+		}
+	}
+	for _, name := range []string{"business-pilot", "operator-smoke", "analyst", "governance-search", "all-readonly"} {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("ToolPresetCatalog missing %q", name)
+		}
+	}
+}
+
 func TestBusinessAnalysisToolSetIsExposedWithSafeSchemas(t *testing.T) {
 	t.Parallel()
 
@@ -141,7 +187,7 @@ func TestBusinessAnalysisToolSetIsExposedWithSafeSchemas(t *testing.T) {
 		byName[item.Name] = item
 	}
 	var missing []string
-	for _, name := range businessAnalysisToolNames() {
+	for _, name := range BusinessAnalysisToolNames() {
 		item, ok := byName[name]
 		if !ok {
 			missing = append(missing, name)
@@ -374,7 +420,7 @@ func TestBusinessAnalysisRepresentativeJSONRPCCalls(t *testing.T) {
 	defer store.Close()
 	seedBusinessAnalysisMCPFixtures(t, store)
 
-	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist(businessAnalysisToolNames()))
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist(BusinessAnalysisToolNames()))
 	frames := requestFrame(Request{
 		JSONRPC: "2.0",
 		ID:      1,
@@ -1475,78 +1521,6 @@ func TestCRMToolsReturnAggregates(t *testing.T) {
 	}
 	if report.ObjectType != "Opportunity" || report.LateCalls == 0 || len(report.Signals) == 0 {
 		t.Fatalf("unexpected signal report: %+v", report)
-	}
-}
-
-func expectedToolNames() []string {
-	base := []string{
-		"get_sync_status",
-		"search_calls",
-		"get_call",
-		"list_crm_object_types",
-		"list_crm_fields",
-		"list_crm_integrations",
-		"list_cached_crm_schema_objects",
-		"list_cached_crm_schema_fields",
-		"list_gong_settings",
-		"list_scorecards",
-		"get_scorecard",
-		"get_business_profile",
-		"list_business_concepts",
-		"list_unmapped_crm_fields",
-		"search_crm_field_values",
-		"analyze_late_stage_crm_signals",
-		"opportunities_missing_transcripts",
-		"search_transcripts_by_crm_context",
-		"opportunity_call_summary",
-		"crm_field_population_matrix",
-		"list_lifecycle_buckets",
-		"summarize_calls_by_lifecycle",
-		"search_calls_by_lifecycle",
-		"prioritize_transcripts_by_lifecycle",
-		"compare_lifecycle_crm_fields",
-		"summarize_call_facts",
-		"rank_transcript_backlog",
-		"search_transcript_segments",
-		"search_transcripts_by_call_facts",
-		"search_transcript_quotes_with_attribution",
-		"missing_transcripts",
-	}
-	return append(base, businessAnalysisToolNames()...)
-}
-
-func businessAnalysisToolNames() []string {
-	return []string{
-		"build_call_cohort",
-		"inspect_call_cohort",
-		"list_call_cohorts",
-		"compare_call_cohorts",
-		"search_calls_by_filters",
-		"summarize_calls_by_filters",
-		"search_transcripts_by_filters",
-		"discover_themes_in_cohort",
-		"summarize_themes_by_dimension",
-		"compare_themes_over_time",
-		"compare_themes_by_segment",
-		"extract_theme_quotes",
-		"search_quotes_in_cohort",
-		"rank_quotes_for_sales_use",
-		"build_quote_pack",
-		"compare_theme_outcomes",
-		"summarize_pipeline_progression_by_theme",
-		"summarize_loss_reasons_by_theme",
-		"compare_won_lost_theme_patterns",
-		"summarize_themes_by_persona",
-		"summarize_themes_by_industry",
-		"rank_personas_by_insight_quality",
-		"diagnose_attribution_coverage",
-		"generate_sales_hooks_from_themes",
-		"generate_outreach_sequence_inputs",
-		"recommend_target_personas_and_industries",
-		"build_theme_brief",
-		"score_cohort_evidence_quality",
-		"explain_analysis_limitations",
-		"suggest_filter_refinements",
 	}
 }
 

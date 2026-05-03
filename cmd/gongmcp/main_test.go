@@ -70,8 +70,9 @@ func TestRunToolAllowlistEnvFiltersCatalog(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, `"get_sync_status"`) || strings.Contains(got, `"search_calls"`) {
-		t.Fatalf("stdout=%q did not reflect allowlist", got)
+	got := toolNamesFromToolsListOutput(t, stdout.Bytes())
+	if !containsString(got, "get_sync_status") || containsString(got, "search_calls") {
+		t.Fatalf("tools/list names=%v did not reflect allowlist", got)
 	}
 }
 
@@ -97,14 +98,14 @@ func TestRunToolPresetEnvFiltersCatalog(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
 	}
-	got := stdout.String()
+	got := toolNamesFromToolsListOutput(t, stdout.Bytes())
 	for _, name := range []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"} {
-		if !strings.Contains(got, `"`+name+`"`) {
-			t.Fatalf("stdout=%q missing preset tool %q", got, name)
+		if !containsString(got, name) {
+			t.Fatalf("tools/list names=%v missing preset tool %q", got, name)
 		}
 	}
-	if strings.Contains(got, `"search_calls"`) {
-		t.Fatalf("stdout=%q included non-business-pilot tool", got)
+	if containsString(got, "search_calls") {
+		t.Fatalf("tools/list names=%v included non-business-pilot tool", got)
 	}
 }
 
@@ -148,7 +149,7 @@ func TestRunListToolPresetsDoesNotRequireDB(t *testing.T) {
 		if preset.Name != "analyst" && preset.Name != "all-readonly" {
 			continue
 		}
-		for _, name := range businessAnalysisToolNamesForMainTest() {
+		for _, name := range mcp.BusinessAnalysisToolNames() {
 			if !containsString(preset.Tools, name) {
 				t.Fatalf("%s preset missing business-analysis tool %q", preset.Name, name)
 			}
@@ -177,15 +178,15 @@ func TestRunAnalystPresetExposesBusinessAnalysisToolsOverJSONRPC(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
 	}
-	got := stdout.String()
-	for _, name := range businessAnalysisToolNamesForMainTest() {
-		if !strings.Contains(got, `"`+name+`"`) {
-			t.Fatalf("analyst tools/list output missing %q in %s", name, got)
+	got := toolNamesFromToolsListOutput(t, stdout.Bytes())
+	for _, name := range mcp.BusinessAnalysisToolNames() {
+		if !containsString(got, name) {
+			t.Fatalf("analyst tools/list output missing %q in %v", name, got)
 		}
 	}
 	for _, name := range []string{"search_calls", "get_call", "list_gong_settings"} {
-		if strings.Contains(got, `"`+name+`"`) {
-			t.Fatalf("analyst tools/list output included admin/config-heavy tool %q in %s", name, got)
+		if containsString(got, name) {
+			t.Fatalf("analyst tools/list output included admin/config-heavy tool %q in %v", name, got)
 		}
 	}
 }
@@ -260,7 +261,7 @@ lists:
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := run([]string{"--stdio", "--db", dbPath, "--tool-allowlist", "search_calls", "--ai-governance-config", configPath}, stdin, &stdout, &stderr)
+	code := run([]string{"--stdio", "--db", dbPath, "--tool-preset", "governance-search", "--ai-governance-config", configPath}, stdin, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
 	}
@@ -351,7 +352,7 @@ func TestResolveToolAllowlistPresets(t *testing.T) {
 		{
 			name: "all readonly expands to catalog",
 			in:   toolSelection{PresetEnv: "all-readonly"},
-			want: toolCatalogNames(),
+			want: mcp.ToolCatalogNames(),
 		},
 		{
 			name: "governance search preset",
@@ -383,15 +384,15 @@ func TestResolveToolAllowlistPresets(t *testing.T) {
 }
 
 func TestPresetGovernanceCompatibilityAndAnalystScope(t *testing.T) {
-	governancePreset, err := expandToolPreset("governance-search")
+	governancePreset, err := mcp.ExpandToolPreset("governance-search")
 	if err != nil {
 		t.Fatalf("expandToolPreset returned error: %v", err)
 	}
-	if err := validateGovernanceAllowlist(governancePreset); err != nil {
+	if err := mcp.ValidateGovernanceAllowlist(governancePreset); err != nil {
 		t.Fatalf("governance-search preset rejected by governance validator: %v", err)
 	}
 
-	analyst, err := expandToolPreset("analyst")
+	analyst, err := mcp.ExpandToolPreset("analyst")
 	if err != nil {
 		t.Fatalf("expandToolPreset returned error: %v", err)
 	}
@@ -403,16 +404,16 @@ func TestPresetGovernanceCompatibilityAndAnalystScope(t *testing.T) {
 	if !containsString(analyst, "search_transcript_quotes_with_attribution") {
 		t.Fatalf("analyst preset missing bounded evidence tool")
 	}
-	for _, name := range businessAnalysisToolNamesForMainTest() {
+	for _, name := range mcp.BusinessAnalysisToolNames() {
 		if !containsString(analyst, name) {
 			t.Fatalf("analyst preset missing business-analysis tool %q", name)
 		}
 	}
-	allReadonly, err := expandToolPreset("all-readonly")
+	allReadonly, err := mcp.ExpandToolPreset("all-readonly")
 	if err != nil {
 		t.Fatalf("expandToolPreset returned error: %v", err)
 	}
-	for _, name := range businessAnalysisToolNamesForMainTest() {
+	for _, name := range mcp.BusinessAnalysisToolNames() {
 		if !containsString(allReadonly, name) {
 			t.Fatalf("all-readonly preset missing business-analysis tool %q", name)
 		}
@@ -459,39 +460,35 @@ func containsString(values []string, needle string) bool {
 	return false
 }
 
-func businessAnalysisToolNamesForMainTest() []string {
-	return []string{
-		"build_call_cohort",
-		"inspect_call_cohort",
-		"list_call_cohorts",
-		"compare_call_cohorts",
-		"search_calls_by_filters",
-		"summarize_calls_by_filters",
-		"search_transcripts_by_filters",
-		"discover_themes_in_cohort",
-		"summarize_themes_by_dimension",
-		"compare_themes_over_time",
-		"compare_themes_by_segment",
-		"extract_theme_quotes",
-		"search_quotes_in_cohort",
-		"rank_quotes_for_sales_use",
-		"build_quote_pack",
-		"compare_theme_outcomes",
-		"summarize_pipeline_progression_by_theme",
-		"summarize_loss_reasons_by_theme",
-		"compare_won_lost_theme_patterns",
-		"summarize_themes_by_persona",
-		"summarize_themes_by_industry",
-		"rank_personas_by_insight_quality",
-		"diagnose_attribution_coverage",
-		"generate_sales_hooks_from_themes",
-		"generate_outreach_sequence_inputs",
-		"recommend_target_personas_and_industries",
-		"build_theme_brief",
-		"score_cohort_evidence_quality",
-		"explain_analysis_limitations",
-		"suggest_filter_refinements",
+func toolNamesFromToolsListOutput(t *testing.T, raw []byte) []string {
+	t.Helper()
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	for {
+		var envelope struct {
+			Result struct {
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
+			} `json:"result"`
+		}
+		if err := decoder.Decode(&envelope); err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("decode JSON-RPC output: %v\n%s", err, string(raw))
+		}
+		if len(envelope.Result.Tools) == 0 {
+			continue
+		}
+		names := make([]string, 0, len(envelope.Result.Tools))
+		for _, tool := range envelope.Result.Tools {
+			names = append(names, tool.Name)
+		}
+		return names
 	}
+	t.Fatalf("tools/list response not found in JSON-RPC output:\n%s", string(raw))
+	return nil
 }
 
 func TestRunToolAllowlistFlagOverridesEnvAndRejectsUnknownTools(t *testing.T) {
@@ -541,8 +538,9 @@ func TestRunToolAllowlistFlagPrecedenceOverEnv(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
 	}
-	if got := stdout.String(); !strings.Contains(got, `"get_sync_status"`) || strings.Contains(got, `"search_calls"`) {
-		t.Fatalf("stdout=%q did not prefer flag allowlist", got)
+	got := toolNamesFromToolsListOutput(t, stdout.Bytes())
+	if !containsString(got, "get_sync_status") || containsString(got, "search_calls") {
+		t.Fatalf("tools/list names=%v did not prefer flag allowlist", got)
 	}
 }
 
