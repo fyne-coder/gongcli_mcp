@@ -187,39 +187,97 @@ func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T)
 	}
 }
 
-func TestSyncStatusMissingDBDoesNotCreateDatabase(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "missing.db")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	a := &app{out: &stdout, err: &stderr}
+func TestReadOnlyCommandsMissingDBDoNotCreateDatabase(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(ctx context.Context, a *app, dbPath string) error
+	}{
+		{
+			name: "sync status",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.sync(ctx, []string{"status", "--db", dbPath})
+			},
+		},
+		{
+			name: "search transcripts",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.search(ctx, []string{"transcripts", "--db", dbPath, "--query", "launch risk"})
+			},
+		},
+		{
+			name: "search calls",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.search(ctx, []string{"calls", "--db", dbPath})
+			},
+		},
+		{
+			name: "calls show json",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.calls(ctx, []string{"show", "--db", dbPath, "--call-id", "call-missing", "--json"})
+			},
+		},
+		{
+			name: "analyze calls",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"calls", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze coverage",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"coverage", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze transcript-backlog",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"transcript-backlog", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze crm-schema",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"crm-schema", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze settings",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"settings", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze scorecards",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"scorecards", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze scorecard",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"scorecard", "--db", dbPath, "--scorecard-id", "scorecard-missing"})
+			},
+		},
+	}
 
-	err := a.sync(context.Background(), []string{"status", "--db", dbPath})
-	if err == nil {
-		t.Fatal("sync status returned nil error, want missing DB failure")
-	}
-	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
-		t.Fatalf("missing db stat error=%v, want not exist", statErr)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout=%q want empty", stdout.String())
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "missing.db")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			a := &app{out: &stdout, err: &stderr}
 
-func TestAnalyzeCoverageMissingDBDoesNotCreateDatabase(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "missing.db")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	a := &app{out: &stdout, err: &stderr}
-
-	err := a.analyze(context.Background(), []string{"coverage", "--db", dbPath})
-	if err == nil {
-		t.Fatal("analyze coverage returned nil error, want missing DB failure")
-	}
-	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
-		t.Fatalf("missing db stat error=%v, want not exist", statErr)
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout=%q want empty", stdout.String())
+			err := tt.run(context.Background(), a, dbPath)
+			if err == nil {
+				t.Fatal("command returned nil error, want missing DB failure")
+			}
+			if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+				t.Fatalf("missing db stat error=%v, want not exist", statErr)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout=%q want empty", stdout.String())
+			}
+		})
 	}
 }
 
