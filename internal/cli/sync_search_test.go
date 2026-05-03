@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,6 +279,99 @@ func TestReadOnlyCommandsMissingDBDoNotCreateDatabase(t *testing.T) {
 			if stdout.Len() != 0 {
 				t.Fatalf("stdout=%q want empty", stdout.String())
 			}
+		})
+	}
+}
+
+func TestReadOnlyCommandsExistingDBDoNotMutateDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	seedReadOnlyCommandRegressionDB(t, dbPath)
+
+	tests := []struct {
+		name string
+		run  func(ctx context.Context, a *app, dbPath string) error
+	}{
+		{
+			name: "sync status",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.sync(ctx, []string{"status", "--db", dbPath})
+			},
+		},
+		{
+			name: "search transcripts",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.search(ctx, []string{"transcripts", "--db", dbPath, "--query", "external", "--limit", "5"})
+			},
+		},
+		{
+			name: "search calls",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.search(ctx, []string{"calls", "--db", dbPath, "--crm-object-type", "Opportunity", "--crm-object-id", "opp-readonly-001", "--limit", "5"})
+			},
+		},
+		{
+			name: "calls show json",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.calls(ctx, []string{"show", "--db", dbPath, "--call-id", "call-readonly-001", "--json"})
+			},
+		},
+		{
+			name: "analyze calls",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"calls", "--db", dbPath, "--group-by", "stage", "--limit", "5"})
+			},
+		},
+		{
+			name: "analyze coverage",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"coverage", "--db", dbPath})
+			},
+		},
+		{
+			name: "analyze transcript-backlog",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"transcript-backlog", "--db", dbPath, "--limit", "5"})
+			},
+		},
+		{
+			name: "analyze crm-schema",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"crm-schema", "--db", dbPath, "--integration-id", "crm-readonly-001", "--object-type", "Opportunity", "--limit", "5"})
+			},
+		},
+		{
+			name: "analyze settings",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"settings", "--db", dbPath, "--kind", "scorecards", "--limit", "5"})
+			},
+		},
+		{
+			name: "analyze scorecards",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"scorecards", "--db", dbPath, "--limit", "5"})
+			},
+		},
+		{
+			name: "analyze scorecard",
+			run: func(ctx context.Context, a *app, dbPath string) error {
+				return a.analyze(ctx, []string{"scorecard", "--db", dbPath, "--scorecard-id", "scorecard-readonly-001"})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := captureReadOnlyDBSnapshot(t, dbPath)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			a := &app{out: &stdout, err: &stderr}
+			if err := tt.run(context.Background(), a, dbPath); err != nil {
+				t.Fatalf("command returned error: %v; stderr=%q", err, stderr.String())
+			}
+
+			after := captureReadOnlyDBSnapshot(t, dbPath)
+			assertReadOnlyDBSnapshotUnchanged(t, before, after)
 		})
 	}
 }
@@ -994,6 +1089,193 @@ func openCLITestStore(t *testing.T, dbPath string) *sqlite.Store {
 		t.Fatalf("sqlite.Open returned error: %v", err)
 	}
 	return store
+}
+
+func seedReadOnlyCommandRegressionDB(t *testing.T, dbPath string) {
+	t.Helper()
+
+	ctx := context.Background()
+	store := openCLITestStore(t, dbPath)
+	defer store.Close()
+
+	if _, err := store.UpsertCall(ctx, mustMarshalJSON(t, map[string]any{
+		"id":       "call-readonly-001",
+		"title":    "Read-only regression call",
+		"started":  "2026-04-24T15:30:00Z",
+		"duration": 1800,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+		"parties": []map[string]any{{"id": "speaker-readonly-001"}},
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Opportunity",
+					"id":   "opp-readonly-001",
+					"name": "Read-only Expansion",
+					"fields": []map[string]any{
+						{"name": "StageName", "label": "Stage", "value": "Contract Signing"},
+						{"name": "Type", "label": "Type", "value": "New Business"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustMarshalJSON(t, map[string]any{
+		"callTranscripts": []map[string]any{
+			{
+				"callId": "call-readonly-001",
+				"transcript": []map[string]any{
+					{
+						"speakerId": "speaker-readonly-001",
+						"sentences": []map[string]any{
+							{"start": 1000, "end": 2000, "text": "Synthetic external expansion mention for read-only regression."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertTranscript returned error: %v", err)
+	}
+	if _, err := store.UpsertCRMIntegration(ctx, mustMarshalJSON(t, map[string]any{
+		"integrationId": "crm-readonly-001",
+		"name":          "Salesforce readonly",
+		"crmType":       "Salesforce",
+	})); err != nil {
+		t.Fatalf("UpsertCRMIntegration returned error: %v", err)
+	}
+	if _, err := store.UpsertCRMSchema(ctx, "crm-readonly-001", "Opportunity", mustMarshalJSON(t, map[string]any{
+		"objectTypeToSelectedFields": map[string]any{
+			"Opportunity": []map[string]any{
+				{"fieldName": "StageName", "label": "Stage", "fieldType": "picklist"},
+				{"fieldName": "Amount", "label": "Amount", "fieldType": "currency"},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCRMSchema returned error: %v", err)
+	}
+	if _, err := store.UpsertGongSetting(ctx, "scorecards", mustMarshalJSON(t, map[string]any{
+		"scorecardId":   "scorecard-readonly-001",
+		"scorecardName": "Read-only discovery quality",
+		"enabled":       true,
+		"reviewMethod":  "AUTOMATIC",
+		"questions": []map[string]any{
+			{
+				"questionId":   "question-readonly-001",
+				"questionText": "Did the rep confirm pain?",
+				"questionType": "SCALE",
+				"minRange":     1,
+				"maxRange":     5,
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertGongSetting returned error: %v", err)
+	}
+	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
+		Scope:   "calls",
+		SyncKey: "calls:readonly",
+		From:    "2026-04-20",
+		To:      "2026-04-24",
+	})
+	if err != nil {
+		t.Fatalf("StartSyncRun returned error: %v", err)
+	}
+	if err := store.FinishSyncRun(ctx, run.ID, sqlite.FinishSyncRunParams{
+		Status:         "success",
+		RecordsSeen:    1,
+		RecordsWritten: 1,
+	}); err != nil {
+		t.Fatalf("FinishSyncRun returned error: %v", err)
+	}
+}
+
+type readOnlyDBSnapshot struct {
+	userVersion int
+	fileSHA256  string
+	tableCounts map[string]int64
+}
+
+func captureReadOnlyDBSnapshot(t *testing.T, dbPath string) readOnlyDBSnapshot {
+	t.Helper()
+
+	body, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) returned error: %v", dbPath, err)
+	}
+	sum := sha256.Sum256(body)
+
+	ctx := context.Background()
+	store, err := sqlite.OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly returned error: %v", err)
+	}
+	defer store.Close()
+
+	var userVersion int
+	if err := store.DB().QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
+		t.Fatalf("query user_version: %v", err)
+	}
+
+	rows, err := store.DB().QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		t.Fatalf("query table names: %v", err)
+	}
+	defer rows.Close()
+
+	counts := map[string]int64{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		var count int64
+		query := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteSQLiteIdentifier(name))
+		if err := store.DB().QueryRowContext(ctx, query).Scan(&count); err != nil {
+			t.Fatalf("count table %q: %v", name, err)
+		}
+		counts[name] = count
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table names: %v", err)
+	}
+
+	return readOnlyDBSnapshot{
+		userVersion: userVersion,
+		fileSHA256:  fmt.Sprintf("%x", sum),
+		tableCounts: counts,
+	}
+}
+
+func assertReadOnlyDBSnapshotUnchanged(t *testing.T, before readOnlyDBSnapshot, after readOnlyDBSnapshot) {
+	t.Helper()
+
+	if after.userVersion != before.userVersion {
+		t.Fatalf("user_version changed: before=%d after=%d", before.userVersion, after.userVersion)
+	}
+	if after.fileSHA256 != before.fileSHA256 {
+		t.Fatalf("DB file sha256 changed: before=%s after=%s", before.fileSHA256, after.fileSHA256)
+	}
+	if len(after.tableCounts) != len(before.tableCounts) {
+		t.Fatalf("table set changed: before=%v after=%v", before.tableCounts, after.tableCounts)
+	}
+	for name, beforeCount := range before.tableCounts {
+		afterCount, ok := after.tableCounts[name]
+		if !ok {
+			t.Fatalf("table %q missing after command; before=%v after=%v", name, before.tableCounts, after.tableCounts)
+		}
+		if afterCount != beforeCount {
+			t.Fatalf("table %q count changed: before=%d after=%d", name, beforeCount, afterCount)
+		}
+	}
+}
+
+func quoteSQLiteIdentifier(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func setTestEnv(t *testing.T, baseURL string) {
