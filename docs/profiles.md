@@ -214,7 +214,9 @@ core lifecycle buckets without reviewer evidence.
 `gongctl profile schema` prints a generated JSON Schema for less technical
 RevOps handoff and editor validation. `gongctl profile validate` remains the
 authoritative machine check because it also validates mappings against the
-current tenant cache inventory.
+current tenant cache inventory. It writes a JSON report; automation that needs a
+semantic pass/fail gate should inspect the report's `valid` field before
+importing.
 
 Common validation failures:
 

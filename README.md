@@ -360,7 +360,12 @@ Rules:
   `--confirm` only after backup, retention, and legal-hold checks are complete.
 - `profile discover` generates an editable YAML profile from cached CRM inventory and includes confidence plus evidence for discovered mappings. Discovery is an English-biased starter and may include CRM evidence values in the YAML, so write real-tenant output to a local file outside git rather than shared logs.
 - Discovered profiles are starter drafts, not universal truth. A human should review tenant lifecycle, object, field, and methodology mappings before relying on profile-aware separation of sales and post-sales calls.
-- `profile validate` rejects malformed YAML, unsupported profile versions, unsupported rule operators, unsafe regex rules, missing required lifecycle buckets, and mapped fields that do not exist in cached CRM data.
+- `profile validate` reports malformed YAML, unsupported profile versions,
+  unsupported rule operators, unsafe regex rules, missing required lifecycle
+  buckets, and mapped fields that do not exist in cached CRM data. It writes a
+  JSON validation report; for semantic validity gates, inspect the report's
+  `valid` field. `profile import` is the command that refuses `valid:false`
+  profiles before writing.
 - `profile import` stores the active profile in SQLite in one transaction. Re-importing identical profile content is a no-op; changed source metadata for the same canonical profile updates metadata without changing profile meaning.
 - Profile-aware analysis uses a materialized SQLite read model keyed by active profile and canonical hash. Writable CLI sync/profile commands rebuild or warm it; read-only MCP requires that cache to be current and reports a stale-cache error instead of writing to SQLite.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.

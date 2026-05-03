@@ -20,7 +20,9 @@ For a faster source-first onboarding path, start with
 - `internal/store/sqlite`: local cache for calls, users, transcripts, CRM schema/settings inventory, search indexes, and sync state.
 - `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus SQLite.
 - `internal/transcripts`: transcript sync/search helpers on top of the Gong client plus SQLite.
-- `internal/mcp`: read-only local MCP adapter over SQLite.
+- `internal/mcp`: read-only local MCP adapter over SQLite. `catalog.go` owns
+  built-in presets and governance-compatible tool lists; `server.go` owns MCP
+  request handling and tool execution.
 
 ## Agent E CLI Surface
 
@@ -73,6 +75,8 @@ Runtime details that matter when debugging MCP:
 
 - stdio serves the full read-only catalog if no preset or allowlist is set
 - HTTP mode requires an explicit tool preset or allowlist
+- built-in presets are defined in `internal/mcp/catalog.go`, while
+  `cmd/gongmcp/main.go` resolves flag/env precedence
 - HTTP mode defaults to bearer auth; no-auth is localhost-development only
 - non-local HTTP binds require explicit open-network approval and Origin
   allowlisting
