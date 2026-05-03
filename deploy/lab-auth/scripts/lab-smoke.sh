@@ -70,6 +70,8 @@ OIDC_CLIENT_SECRET="$(remote_env OIDC_CLIENT_SECRET)"
 PILOT_PASSWORD="$(remote_env PILOT_PASSWORD)"
 BLOCKED_PASSWORD="$(remote_env BLOCKED_PASSWORD)"
 TEST_PASSWORD="$(remote_env TEST_PASSWORD)"
+GONGMCP_TOOL_PRESET="$(remote_env GONGMCP_TOOL_PRESET)"
+GONGMCP_TOOL_PRESET="${GONGMCP_TOOL_PRESET:-business-pilot}"
 
 wait_for_url "$LAB_PUBLIC_BASE_URL/healthz"
 wait_for_url "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration"
@@ -254,7 +256,7 @@ test_initialize_response="$(curl -fsS \
 echo "$test_initialize_response" | jq .
 echo "$test_initialize_response" | jq -e '.result.protocolVersion' >/dev/null
 
-echo "== business-pilot tools/list =="
+echo "== $GONGMCP_TOOL_PRESET tools/list =="
 tools_response="$(curl -fsS \
   -H "Authorization: Bearer $pilot_token" \
   -H "Origin: $LAB_PUBLIC_BASE_URL" \
@@ -263,10 +265,22 @@ tools_response="$(curl -fsS \
   "$LAB_PUBLIC_BASE_URL/mcp")"
 echo "$tools_response" | jq '.result.tools[].name'
 echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
-if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_segments")' >/dev/null; then
-  echo "unexpected non-business-pilot tool exposed: search_transcript_segments" >&2
-  exit 1
-fi
+case "$GONGMCP_TOOL_PRESET" in
+  business-pilot|strict-business-pilot)
+    if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_segments")' >/dev/null; then
+      echo "unexpected non-business-pilot tool exposed: search_transcript_segments" >&2
+      exit 1
+    fi
+    ;;
+  analyst|analyst-expansion|all-readonly|all|all-tools)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls_by_filters")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_theme_brief")' >/dev/null
+    ;;
+  *)
+    echo "warning: smoke did not apply preset-specific tool assertions for $GONGMCP_TOOL_PRESET" >&2
+    ;;
+esac
 
 echo "== ChatGPT-style tools/call _meta is accepted =="
 meta_status_response="$(curl -fsS \
