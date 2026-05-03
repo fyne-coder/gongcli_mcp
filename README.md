@@ -26,7 +26,7 @@ question, better tracker/theme inputs, and known coverage limits.
 
 ## Status
 
-Early public release. `v0.3.1` is enterprise-pilot ready for operator-managed
+Early public release. `v0.3.2` is enterprise-pilot ready for operator-managed
 local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
 requires signed/provenance-backed release artifacts, stable deprecation policy,
 and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
@@ -40,6 +40,7 @@ For company evaluation, start with the enterprise pilot packet:
 - [Enterprise deployment](docs/enterprise-deployment.md)
 - [Security model](docs/security-model.md)
 - [Remote MCP auth and connector setup](docs/remote-mcp-auth.md)
+- [Remote MCP OAuth troubleshooting](docs/runbooks/remote-mcp-oauth-troubleshooting.md)
 - [Security questionnaire](docs/security-questionnaire.md)
 - [MCP data exposure](docs/mcp-data-exposure.md)
 - [Operator sync runbook](docs/runbooks/operator-sync.md)
@@ -60,6 +61,7 @@ trusted admin/analyst sessions or a fully reviewed filtered DB.
 - Deployment worksheet: [Customer implementation checklist](docs/implementation-checklist.md)
 - Local/container start: [Quickstart](docs/quickstart.md)
 - HTTPS/auth boundary: [Remote MCP auth and connector setup](docs/remote-mcp-auth.md)
+- Remote connector failures: [Remote MCP OAuth troubleshooting](docs/runbooks/remote-mcp-oauth-troubleshooting.md)
 - Image digest verification: [Release process](docs/release.md)
 - RevOps profile setup: [Business profiles](docs/profiles.md)
 
@@ -122,14 +124,14 @@ For the fastest end-to-end path, use the [Quickstart](docs/quickstart.md).
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.1 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.1 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 sync status --db /data/gong.db
 ```
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.1 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:

@@ -1,0 +1,98 @@
+version: "3.8"
+
+services:
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - keycloak
+      - oauth2-proxy
+      - shim
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    restart: unless-stopped
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8080
+      - --hostname-strict=false
+      - --proxy-headers=xforwarded
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: ${LAB_PUBLIC_BASE_URL:?set LAB_PUBLIC_BASE_URL}
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+      - keycloak-data:/opt/keycloak/data
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.8.1
+    restart: unless-stopped
+    command:
+      - --http-address=0.0.0.0:4180
+      - --provider=keycloak-oidc
+      - --oidc-issuer-url=${LAB_PUBLIC_BASE_URL:?set LAB_PUBLIC_BASE_URL}/realms/gong-lab
+      - --client-id=gong-lab-proxy
+      - --client-secret=${OIDC_CLIENT_SECRET:?set OIDC_CLIENT_SECRET}
+      - --redirect-url=${LAB_PUBLIC_BASE_URL}/oauth2/callback
+      - --email-domain=*
+      - --allowed-group=/gong-mcp-users
+      - --upstream=http://shim:8090
+      - --reverse-proxy=true
+      - --set-xauthrequest=true
+      - --pass-authorization-header=true
+      - --pass-access-token=true
+      - --skip-jwt-bearer-tokens=true
+      - --cookie-secure=false
+      - --cookie-secret=${OAUTH2_PROXY_COOKIE_SECRET:?set OAUTH2_PROXY_COOKIE_SECRET}
+      - --cookie-samesite=lax
+    depends_on:
+      - keycloak
+      - shim
+
+  shim:
+    build:
+      context: ./shim
+    image: gongctl-lab-auth-shim:local
+    restart: unless-stopped
+    environment:
+      UPSTREAM_URL: http://gongmcp:8080
+      INTERNAL_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
+      PUBLIC_BASE_URL: ${LAB_PUBLIC_BASE_URL:?set LAB_PUBLIC_BASE_URL}
+      OIDC_ISSUER_URL: ${LAB_PUBLIC_BASE_URL}/realms/gong-lab
+      OIDC_CLIENT_ID: gong-lab-proxy
+      REQUIRED_GROUP: /gong-mcp-users
+      ALLOWED_EMAILS: pilot@example.com,test@fyne-llc.com
+      TRUST_PROXY_HEADERS: "1"
+    volumes:
+      - /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
+    depends_on:
+      - gongmcp
+
+  gongmcp:
+    image: gongctl:mcp-local
+    restart: unless-stopped
+    environment:
+      GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
+      GONGMCP_TOOL_PRESET: business-pilot
+      GONGMCP_ALLOWED_ORIGINS: ${LAB_PUBLIC_BASE_URL}
+    command:
+      - --http
+      - 0.0.0.0:8080
+      - --auth-mode
+      - bearer
+      - --allow-open-network
+      - --db
+      - /data/gong.db
+    volumes:
+      - /srv/gongctl/runtime/gong-mcp-governed.db:/data/gong.db:ro
+      - /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
+
+volumes:
+  keycloak-data:

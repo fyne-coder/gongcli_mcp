@@ -1,0 +1,35 @@
+:80 {
+	route /healthz {
+		reverse_proxy shim:8090
+	}
+
+	route /.well-known/oauth-protected-resource* {
+		reverse_proxy shim:8090
+	}
+
+	route /.well-known/oauth-authorization-server* {
+		reverse_proxy shim:8090
+	}
+
+	route /realms/* {
+		reverse_proxy keycloak:8080
+	}
+
+	route /resources/* {
+		reverse_proxy keycloak:8080
+	}
+
+	route /admin/* {
+		reverse_proxy keycloak:8080
+	}
+
+	route /oauth2/* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	route /mcp {
+		reverse_proxy shim:8090
+	}
+
+	respond "gongctl lab auth gateway" 200
+}

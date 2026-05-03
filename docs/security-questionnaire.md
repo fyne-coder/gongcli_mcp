@@ -29,7 +29,7 @@ with customer-specific deployment facts before submitting to a security team.
 | Where are Gong credentials stored? | In customer-managed secret storage, environment variables, or ignored local `.env` files for the writable `gongctl` process only. |
 | Does `gongmcp` need Gong credentials? | No. `gongmcp` reads an existing SQLite cache and should not receive Gong API credentials. |
 | How are MCP bearer tokens stored? | Customer-managed secret manager, mounted secret file, systemd environment file, Docker secret, Kubernetes Secret, or equivalent platform secret. Tokens must not be committed or baked into images. |
-| Is OAuth supported? | Native OAuth is not implemented in `gongmcp` yet. Production remote MCP should use a customer-managed OAuth broker/gateway in front of `gongmcp`, or a future native OAuth implementation. |
+| Is OAuth supported? | Native OAuth is not implemented in `gongmcp` yet. Production remote MCP should use a customer-managed OAuth broker/gateway in front of `gongmcp`, or a future native OAuth implementation. The lab-auth harness proves the gateway pattern with OAuth protected-resource metadata, Keycloak token validation, Cloudflare Tunnel HTTPS, dynamic-client-registration checks, and ChatGPT-style MCP tool-call compatibility. |
 
 ## Access Control
 
@@ -81,6 +81,9 @@ with customer-specific deployment facts before submitting to a security team.
 
 - Native OAuth 2.1 is not implemented in `gongmcp`.
 - Per-user MCP RBAC is not implemented in `gongmcp`.
+- Remote OAuth compatibility depends on the customer broker issuing MCP-valid
+  tokens with the expected issuer, audience/resource, scopes, and user/group
+  claims. IdP login alone is not a sufficient acceptance test.
 - This package is not a multi-tenant SaaS layer.
 - Customer cloud/IAM/TLS/logging controls are outside the repo and must be
   implemented by the customer deployment.

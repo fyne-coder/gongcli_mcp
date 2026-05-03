@@ -1955,12 +1955,28 @@ func decodeArgs(raw json.RawMessage, dst any) error {
 		payload = []byte("{}")
 	}
 
+	payload, err := stripMCPMeta(payload)
+	if err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
 		return err
 	}
 	return nil
+}
+
+func stripMCPMeta(payload []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		return nil, err
+	}
+	if _, ok := fields["_meta"]; !ok {
+		return payload, nil
+	}
+	delete(fields, "_meta")
+	return json.Marshal(fields)
 }
 
 func newToolResult(value any) (toolCallResult, error) {

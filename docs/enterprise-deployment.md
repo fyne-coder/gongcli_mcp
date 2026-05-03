@@ -246,7 +246,19 @@ For remote MCP clients that expect OAuth, separate human SSO from MCP-compatible
 authorization. A customer IdP such as JumpCloud, Cognito, Okta, Entra, or
 Cloudflare Access can handle login, but a broker or future native OAuth layer
 must still expose MCP-compatible metadata, PKCE-capable authorization, scoped
-tokens, and token validation. See
+tokens, and token validation. The proof point is not "the user can log in";
+the proof point is that a remote MCP client can complete discovery,
+registration, login, token exchange, authenticated `/mcp` initialize,
+`tools/list`, and at least one `tools/call`.
+
+For any IdP or broker, verify that access tokens include the issuer,
+audience/resource, expiry, approved scopes, user identity, and required
+group/role/email claims that the gateway validates. Also verify refresh or
+offline-token behavior for the target client. ChatGPT, Claude remote MCP, MCP
+Inspector, and custom clients can differ in dynamic-client-registration
+behavior, redirect URIs, requested scopes, and MCP extension fields such as
+`_meta`. Local Claude Desktop stdio MCP does not use this browser OAuth path.
+See
 [Remote MCP auth and connector setup](remote-mcp-auth.md).
 
 ## AI Provider Boundary

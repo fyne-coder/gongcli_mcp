@@ -245,6 +245,60 @@ func TestUnknownToolReturnsToolError(t *testing.T) {
 	}
 }
 
+func TestToolsCallIgnoresMCPMetaExtensionFields(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{
+		"get_sync_status",
+	}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "status",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_sync_status",
+			"arguments": map[string]any{
+				"_meta": map[string]any{
+					"openai/userAgent": "chatgpt-connector",
+				},
+			},
+			"_meta": map[string]any{
+				"progressToken": "chatgpt-status",
+			},
+		}),
+	}))
+
+	if len(responses) != 1 {
+		t.Fatalf("response count=%d want 1", len(responses))
+	}
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+		Error  *responseError `json:"error"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %+v", envelope.Error)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	if len(envelope.Result.Content) != 1 {
+		t.Fatalf("content count=%d want 1", len(envelope.Result.Content))
+	}
+	var status publicSyncStatus
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &status); err != nil {
+		t.Fatalf("unmarshal sync status payload: %v", err)
+	}
+	if status.TotalCalls == 0 {
+		t.Fatalf("TotalCalls=%d want seeded data", status.TotalCalls)
+	}
+}
+
 func TestAllowlistedServerRejectsNonAllowedToolCallsWithGenericError(t *testing.T) {
 	t.Parallel()
 

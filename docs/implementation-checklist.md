@@ -26,6 +26,9 @@ Use this worksheet before giving business users access to `gongmcp`.
 - Allowed browser origins.
 - HTTPS/auth boundary owner: local stdio, private bearer bridge, or customer
   OAuth/MCP broker.
+- For remote OAuth MCP: dynamic client registration or static client plan,
+  redirect URI policy, requested scopes, refresh/offline-token behavior,
+  token audience/resource, and user/group claim mapping.
 - Log destination and payload logging policy.
 - Support-bundle sharing policy.
 
@@ -111,6 +114,22 @@ coverage are ready for the approved pilot prompts. If not, name the operator
 handoff.
 ```
 
+For remote OAuth MCP clients such as ChatGPT, Claude remote add-by-URL, MCP
+Inspector, or custom clients, also verify the OAuth path end to end:
+
+- protected-resource metadata resolves for the `/mcp` resource
+- unauthenticated `/mcp` returns `401` with `WWW-Authenticate` and
+  `resource_metadata`
+- dynamic client registration works, or the documented static client path works
+- browser login completes
+- authorization-code token exchange returns an access token
+- decoded access token has expected issuer, audience/resource, expiry, scopes,
+  user identity, and group/role/email claims
+- authenticated `initialize`, `tools/list`, and `get_sync_status` succeed
+- a ChatGPT-style `tools/call` with `_meta` succeeds
+
+Local Claude Desktop stdio MCP does not use this remote OAuth path.
+
 ## Business User First 10 Minutes
 
 IT or the pilot operator should give the business user:
@@ -145,6 +164,7 @@ Common failures:
 | Cache stale | sync job has not refreshed the DB | ask operator to refresh/promote cache |
 | Profile stale or inactive | lifecycle/attribution is directional | ask RevOps/admin to validate/import profile |
 | Low transcript coverage | quote-based answers are not reliable | ask operator to run transcript backlog/refresh |
+| Connector setup succeeds but first tool call fails | remote MCP protocol compatibility issue | check server logs for `_meta`, schema, or result-size errors |
 
 ## RevOps Profile Signoff
 

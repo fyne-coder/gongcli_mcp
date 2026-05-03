@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.3.2 - 2026-05-02
+
+- Added a Proxmox/Cloudflare/Keycloak lab-auth deployment harness for remote
+  MCP OAuth rehearsal, including protected-resource metadata,
+  dynamic-client-registration checks, offline-token and audience/group claim
+  validation, OpenAI Responses API smoke testing, and ChatGPT manual connector
+  guidance.
+- Fixed MCP tool-call compatibility with clients that send reserved `_meta`
+  extension fields by stripping `_meta` before strict argument decoding while
+  preserving validation for real unknown fields.
+- Expanded remote MCP OAuth documentation and troubleshooting for ChatGPT,
+  Claude remote MCP, MCP Inspector, and custom clients, including token
+  exchange, audience/resource claims, refresh/offline behavior, group claims,
+  and first `tools/call` validation.
+
 ## 0.3.1 - 2026-05-01
 
 - Fixed the GHCR image publishing workflow by updating the pinned Trivy action

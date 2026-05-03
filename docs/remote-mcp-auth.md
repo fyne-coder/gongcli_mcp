@@ -75,10 +75,45 @@ client, confirm the endpoint provides:
 - PKCE support for public clients
 - dynamic client registration or a documented static-client fallback supported
   by the target MCP client
-- scoped access tokens with issuer, audience, expiry, and scope validation
+- scoped access tokens with issuer, audience/resource, expiry, and scope
+  validation
+- refresh-token or offline-token policy that matches the target client behavior
 - tool-level authorization mapping, even if the first pilot maps all approved
   users to the same read-only tool preset
+- user identity plus group, role, or email claims in the access token when the
+  gateway enforces per-user access
+- MCP protocol tolerance for extension fields such as `_meta`, while preserving
+  strict validation for real tool arguments
 - no Gong credentials in the MCP client or OAuth broker
+
+The complete interop path is:
+
+```text
+OAuth/MCP metadata discovery
+  -> dynamic or static client registration
+  -> browser login
+  -> authorization-code token exchange
+  -> access-token claims
+  -> authenticated /mcp initialize and tools/list
+  -> first tools/call
+```
+
+Do not mark a remote MCP deployment ready after browser login alone. A user can
+successfully authenticate and still fail because the token exchange, audience,
+group claim, refresh-token policy, or first tool-call payload is incompatible
+with the MCP gateway.
+
+These checks are provider-agnostic. Keycloak, Auth0, Okta, Entra, WorkOS,
+Cloudflare Access, Cognito, and JumpCloud-backed brokers expose different admin
+surfaces, but the MCP client still needs the same final properties: discoverable
+auth metadata, usable registration, a valid bearer token for the MCP resource,
+and tool calls accepted by the MCP server.
+
+Client behavior differs. ChatGPT developer-mode connectors, Claude remote
+add-by-URL, MCP Inspector, and custom clients can vary in redirect URI shape,
+requested scopes, refresh-token behavior, dynamic-client-registration support,
+and `_meta` contents. Claude Desktop local stdio MCP is different: it does not
+use this remote OAuth path.
 
 Protocol references:
 
@@ -262,11 +297,28 @@ Common failures to check first are an unreachable `server_url`, invalid or
 missing authorization, and `allowed_tools` names that do not match the MCP tool
 catalog.
 
+Remote-client OAuth failures that look like a generic connector error usually
+fall into one of these buckets:
+
+| Symptom | Likely cause | What to check |
+| --- | --- | --- |
+| Dynamic client registration rejected | IdP/broker registration policy blocked the MCP client | trusted hosts, redirect URI policy, allowed scopes, client auth method |
+| Browser login succeeds, token exchange fails | refresh/offline token policy or client grant policy is missing | `offline_access`, refresh-token grant, public/confidential client settings |
+| Authenticated `/mcp` gets 401 | token issuer, audience/resource, expiry, signature, or group claim is wrong | gateway/shim logs and decoded access token claims |
+| Tools import but first tool call fails | MCP JSON payload compatibility problem | `_meta` tolerance, argument schema, result size, tool allowlist |
+
+For the step-by-step incident runbook, see
+[Remote MCP OAuth troubleshooting](runbooks/remote-mcp-oauth-troubleshooting.md).
+
 ## Claude Remote Setup
 
 Claude Desktop local stdio setup can use `scripts/install-claude-stdio-mcp.sh`.
 Claude add-by-URL flows are remote-server flows and should receive an
 `https://.../mcp` endpoint from the customer's gateway.
+
+The OAuth checklist above applies to Claude remote MCP as well as ChatGPT. It
+does not apply to local Claude Desktop stdio MCP, where the trust boundary is
+the local host configuration and OS user account rather than browser OAuth.
 
 Use local stdio for quick desktop tests. Use remote HTTPS/OAuth only when the
 customer has decided who owns TLS, auth, logging, retention, and user access.
@@ -309,5 +361,5 @@ Likely scope:
   `gong_evidence.read_excerpt`, `account_timeline.read`, `brief.generate`, and
   `profiles.list`
 - structured audit log for MCP calls
-- interop tests with MCP Inspector, ChatGPT developer mode, and Claude remote
-  add-by-URL
+- interop tests with MCP Inspector, ChatGPT developer mode, Claude remote
+  add-by-URL, and MCP extension fields such as `_meta`
