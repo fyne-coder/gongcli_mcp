@@ -250,13 +250,13 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params Busin
 		return nil, errors.New("query is required for business-analysis evidence searches")
 	}
 
-	from, where, args, err := businessAnalysisCallFromWhere(filter, true)
+	_, where, args, err := businessAnalysisCallFromWhere(filter, true)
 	if err != nil {
 		return nil, err
 	}
 	selectSnippet := `substr(ts.text, 1, 400) AS snippet`
 	orderBy := `cf.started_at DESC, ts.call_id, ts.segment_index`
-	from = `
+	from := `
   FROM transcript_segments_fts
   JOIN transcript_segments ts
     ON ts.id = transcript_segments_fts.rowid
