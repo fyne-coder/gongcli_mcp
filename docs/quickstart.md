@@ -227,7 +227,8 @@ docker run --rm -i \
   --network none \
   -v "$HOME/gongctl-data:/data:ro" \
   ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 \
-  --db /data/gong.db
+  --db /data/gong.db \
+  --tool-preset business-pilot
 ```
 
 If you created a filtered database, use:
@@ -237,11 +238,20 @@ docker run --rm -i \
   --network none \
   -v "$HOME/gongctl-data:/data:ro" \
   ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 \
-  --db /data/gong-mcp-governed.db
+  --db /data/gong-mcp-governed.db \
+  --tool-preset business-pilot
 ```
 
 This is stdio MCP. It is local to the MCP host process and does not require
 Gong credentials because it only reads the SQLite cache.
+
+For local development and trusted admin analysis, omitting `--tool-preset` on
+stdio serves the full read-only catalog. Business-user deployments should start
+with `business-pilot`; inspect the built-in options with:
+
+```bash
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 --list-tool-presets
+```
 
 ## 7. Optional: Test HTTP MCP Locally
 
@@ -360,7 +370,9 @@ Example host config:
         "/Users/YOU/gongctl-data:/data:ro",
         "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2",
         "--db",
-        "/data/gong.db"
+        "/data/gong.db",
+        "--tool-preset",
+        "business-pilot"
       ]
     }
   }
@@ -368,7 +380,7 @@ Example host config:
 ```
 
 Replace `/Users/YOU/gongctl-data` with the absolute path on that machine. If
-you use a governed database, change the final value to
+you use a governed database, change the `/data/gong.db` argument to
 `/data/gong-mcp-governed.db`.
 
 Restart the MCP host after changing the config.

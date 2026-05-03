@@ -33,6 +33,7 @@ and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap
 
 For company evaluation, start with the enterprise pilot packet:
 
+- [Developer orientation](docs/developer-orientation.md)
 - [Quickstart](docs/quickstart.md)
 - [Customer-hosted package](docs/customer-hosted-package.md)
 - [Data Boundary Statement](docs/data-boundary-statement.md)
@@ -150,7 +151,7 @@ Run the read-only stdio MCP server from the MCP-only image:
 
 ```bash
 docker build --target mcp -t gongctl:mcp-local .
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" gongctl:mcp-local --db /data/gong.db
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" gongctl:mcp-local --db /data/gong.db --tool-preset business-pilot
 ```
 
 Generate or install a Claude Desktop stdio MCP config entry:
@@ -239,6 +240,7 @@ gongctl analyze coverage --db ~/gongctl-data/gong.db
 gongctl search transcripts --db ~/gongctl-data/gong.db --query "pricing objection" --limit 10
 gongctl mcp tools
 gongmcp --db ~/gongctl-data/gong.db --tool-preset business-pilot
+gongmcp --list-tool-presets
 gongctl diagnose
 ```
 

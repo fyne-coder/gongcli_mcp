@@ -10,6 +10,7 @@ of the package supports deployment, security review, support, and operations.
 
 | Need | Included artifact |
 | --- | --- |
+| Developer/agent source map | [Developer orientation](developer-orientation.md) |
 | Docker image or source-deployable package | [Docker deployment](docker.md), [Release versioning](release.md), `Dockerfile`, `.github/workflows/publish-images.yml` |
 | Terraform examples | Non-production starters in [`deploy/terraform`](../deploy/terraform/README.md) |
 | Environment-variable config | [Configuration surfaces](configuration-surfaces.md), `.env.example`, [Docker deployment](docker.md) |

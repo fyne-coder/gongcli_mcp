@@ -4,6 +4,9 @@
 
 `gongctl` is a conservative API wrapper. It should make Gong exports repeatable without becoming an analysis product or a data warehouse.
 
+For a faster source-first onboarding path, start with
+[Developer orientation](developer-orientation.md).
+
 ## Boundaries
 
 - `cmd/gongctl`: CLI parsing and user-facing behavior.
@@ -52,6 +55,12 @@ Behavioral rules:
 - `--db` is required for every SQLite-backed command.
 - Sync commands print concise summaries to `stderr`; status/search/show emit JSON to `stdout`.
 - `business` and `all` currently both request Gong `Extended` context; `minimal` requests no context.
+- Transcript sync defaults to `--limit 100` and `--batch-size 100`, selects
+  calls missing transcripts, writes transcript JSON files, and stores normalized
+  transcript segments in SQLite.
+- `sync run --config` resolves relative paths from the YAML file location, but
+  sensitive steps still require runtime authorization; the YAML file cannot
+  self-approve transcript download, business/all call sync, or party capture.
 - CRM-context call search only works for rows that were synced with stored context.
 - Business profiles are YAML source imported into SQLite runtime state. The rule grammar is closed and evaluated in Go; profiles cannot inject SQL or expressions.
 - Profile import is transactional and idempotent by canonical hash. Identical re-imports are no-ops; source-only changes update source metadata without changing profile meaning. MCP reads only the imported SQLite state.
@@ -59,6 +68,17 @@ Behavioral rules:
 ## MCP Boundary
 
 The CLI remains the first integration contract because it is easy to inspect, script, and run in customer-controlled environments. MCP reads from the proven SQLite cache instead of calling Gong directly.
+
+Runtime details that matter when debugging MCP:
+
+- stdio serves the full read-only catalog if no preset or allowlist is set
+- HTTP mode requires an explicit tool preset or allowlist
+- HTTP mode defaults to bearer auth; no-auth is localhost-development only
+- non-local HTTP binds require explicit open-network approval and Origin
+  allowlisting
+- `/healthz` is for infrastructure checks; `/mcp` is the MCP endpoint
+- MCP argument decoding rejects unknown fields except reserved `_meta`
+- request/response frames are capped at 1 MiB
 
 Implemented MCP tools:
 
