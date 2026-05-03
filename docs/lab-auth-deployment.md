@@ -182,6 +182,7 @@ Redeploy and verify the lab against the stable hostname:
 
 ```bash
 LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
+LAB_TOOL_PRESET=all-readonly \
   deploy/lab-auth/scripts/lab-up.sh
 LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
   deploy/lab-auth/scripts/lab-smoke.sh

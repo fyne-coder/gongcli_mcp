@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 LAB_VM="${LAB_VM:-root@192.168.1.205}"
 LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-http://192.168.1.205}"
 LAB_DB="${LAB_DB:-$HOME/gongctl-data/public-example-q1-2026/gong-example-q1-2026.db}"
+LAB_TOOL_PRESET="${LAB_TOOL_PRESET:-${GONGMCP_TOOL_PRESET:-business-pilot}}"
 REMOTE_ROOT="${REMOTE_ROOT:-/srv/gongctl}"
 REMOTE_SOURCE="$REMOTE_ROOT/source"
 REMOTE_LAB="$REMOTE_SOURCE/deploy/lab-auth"
@@ -37,6 +38,18 @@ read_remote_env() {
   local file="$1"
   local key="$2"
   awk -F= -v key="$key" '$1 == key {print substr($0, length(key) + 2)}' "$file" 2>/dev/null || true
+}
+
+set_env_value() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    awk -F= -v key="$key" -v value="$value" 'BEGIN {OFS = FS} $1 == key {$2 = value} {print}' "$file" >"$file.next"
+    mv "$file.next" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$file"
+  fi
 }
 
 require ssh
@@ -76,6 +89,7 @@ BLOCKED_PASSWORD=$(rand_b64 18)
 TEST_PASSWORD=test@fynellc
 EOF
 fi
+set_env_value "$tmpdir/.env" GONGMCP_TOOL_PRESET "$LAB_TOOL_PRESET"
 
 cookie_secret="$(read_remote_env "$tmpdir/.env" OAUTH2_PROXY_COOKIE_SECRET)"
 case "${#cookie_secret}" in

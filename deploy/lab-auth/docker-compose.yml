@@ -80,7 +80,7 @@ services:
     restart: unless-stopped
     environment:
       GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
-      GONGMCP_TOOL_PRESET: business-pilot
+      GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-pilot}
       GONGMCP_ALLOWED_ORIGINS: ${LAB_PUBLIC_BASE_URL}
     command:
       - --http
