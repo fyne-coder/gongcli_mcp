@@ -23,6 +23,7 @@ For a faster source-first onboarding path, start with
   `business-pilot` tools. It is not full query parity with SQLite yet:
   profile lifecycle source, governance-filtered views, analyst/all-readonly
   tools, support bundles, and cache inventory remain follow-ups.
+  [Postgres parity matrix](postgres-parity.md) tracks the full parity contract.
 - `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus the configured cache store.
 - `internal/transcripts`: transcript sync/search helpers on top of the store interface plus the Gong client.
 - `internal/mcp`: read-only MCP adapter over the store interface. `catalog.go` owns

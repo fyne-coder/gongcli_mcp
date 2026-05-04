@@ -133,7 +133,7 @@ flowchart LR
   `summarize_calls_by_lifecycle`, and `rank_transcript_backlog`) plus narrow
   operator smoke/search allowlists for `search_calls` and
   `search_transcript_segments`. Full analyst/all-readonly query parity is a
-  follow-up.
+  follow-up tracked in the [Postgres parity matrix](postgres-parity.md).
 - AI governance filtered DB export remains SQLite-only until a Postgres
   governed-view or governed-snapshot replacement is implemented.
 

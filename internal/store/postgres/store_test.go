@@ -90,19 +90,8 @@ func TestStoreSyntheticVerticalSlice(t *testing.T) {
 		t.Fatalf("unexpected transcript search results: %+v", segments)
 	}
 
-	readOnly, err := OpenReadOnly(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("OpenReadOnly returned error: %v", err)
-	}
-	defer readOnly.Close()
-	if _, err := readOnly.SyncStatusSummary(ctx); err != nil {
-		t.Fatalf("read-only SyncStatusSummary returned error: %v", err)
-	}
-	if _, err := readOnly.StartSyncRun(ctx, sqlite.StartSyncRunParams{Scope: "should-fail", SyncKey: "readonly"}); err == nil {
-		t.Fatal("read-only StartSyncRun unexpectedly succeeded")
-	}
-	if _, err := readOnly.UpsertCall(ctx, json.RawMessage(`{"id":"should-fail"}`)); err == nil {
-		t.Fatal("read-only UpsertCall unexpectedly succeeded")
+	if _, err := OpenReadOnly(ctx, databaseURL); err == nil {
+		t.Fatal("OpenReadOnly accepted writer-privileged URL")
 	}
 }
 
@@ -175,6 +164,240 @@ func TestBusinessPilotAggregatesMatchSQLite(t *testing.T) {
 		if got, want := factSummaryByValue(postgresFacts), factSummaryByValue(sqliteFacts); !equalFactSummaries(got, want) {
 			t.Fatalf("postgres facts group_by=%s got %+v want sqlite %+v", groupBy, got, want)
 		}
+	}
+}
+
+func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	var version int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM gongctl_schema_migrations`).Scan(&version); err != nil {
+		t.Fatalf("read migration version: %v", err)
+	}
+	if version < 2 {
+		t.Fatalf("postgres migration version=%d want at least 2", version)
+	}
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts"} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
+			t.Fatalf("check table %s: %v", table, err)
+		}
+		if !exists {
+			t.Fatalf("table %s does not exist", table)
+		}
+	}
+	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value"} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)`, index).Scan(&exists); err != nil {
+			t.Fatalf("check index %s: %v", index, err)
+		}
+		if !exists {
+			t.Fatalf("index %s does not exist", index)
+		}
+	}
+}
+
+func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-readmodel-001","title":"Renewal read model","started":"2026-02-12T15:00:00Z","duration":2400,"metaData":{"scope":"External","system":"Zoom","direction":"Conference","purpose":"Renewal review","calendarEventId":"cal-001"},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-readmodel","name":"Renewal Opportunity","fields":{"StageName":"Discovery & Demo (SQO)","Type":"Renewal","Forecast_Category_VP__c":"Pipeline","Primary_Lead_Source__c":"Customer Success"}},{"type":"Account","id":"acct-readmodel","name":"Renewal Account","fields":{"Account_Type__c":"Customer - Active","Industry":"Healthcare"}}]}}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-readmodel-001'`, 2)
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-readmodel-001'`, 6)
+
+	var callDate, callMonth, durationBucket, scope, system, direction, transcriptStatus, lifecycleBucket, lifecycleConfidence, opportunityID, opportunityType, accountIndustry string
+	var transcriptPresent bool
+	var opportunityCount, accountCount int64
+	if err := store.DB().QueryRowContext(ctx, `SELECT call_date, call_month, duration_bucket, scope, system, direction, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, opportunity_id, opportunity_type, account_industry, opportunity_count, account_count FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&callDate, &callMonth, &durationBucket, &scope, &system, &direction, &transcriptPresent, &transcriptStatus, &lifecycleBucket, &lifecycleConfidence, &opportunityID, &opportunityType, &accountIndustry, &opportunityCount, &accountCount); err != nil {
+		t.Fatalf("read call_facts: %v", err)
+	}
+	if callDate != "2026-02-12" || callMonth != "2026-02" || durationBucket != "30_45m" || scope != "External" || system != "Zoom" || direction != "Conference" {
+		t.Fatalf("unexpected call fact dimensions: date=%s month=%s duration=%s scope=%s system=%s direction=%s", callDate, callMonth, durationBucket, scope, system, direction)
+	}
+	if transcriptPresent || transcriptStatus != "missing" || lifecycleBucket != "renewal" || lifecycleConfidence != "high" || opportunityID != "opp-readmodel" || opportunityType != "Renewal" || accountIndustry != "Healthcare" || opportunityCount != 1 || accountCount != 1 {
+		t.Fatalf("unexpected CRM/lifecycle facts: present=%v status=%s bucket=%s confidence=%s opp=%s type=%s industry=%s opp_count=%d acct_count=%d", transcriptPresent, transcriptStatus, lifecycleBucket, lifecycleConfidence, opportunityID, opportunityType, accountIndustry, opportunityCount, accountCount)
+	}
+	coverage, err := store.CallFactsCoverage(ctx)
+	if err != nil {
+		t.Fatalf("CallFactsCoverage returned error: %v", err)
+	}
+	if coverage.PurposePopulatedCalls != 1 || coverage.CalendarCallCount != 1 {
+		t.Fatalf("coverage purpose/calendar counts = %d/%d, want 1/1", coverage.PurposePopulatedCalls, coverage.CalendarCallCount)
+	}
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-readmodel-001","title":"Renewal read model minimal","started":"2026-02-13T15:00:00Z","duration":600}`)); err != nil {
+		t.Fatalf("minimal UpsertCall returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-readmodel-001'`, 2)
+	if err := store.DB().QueryRowContext(ctx, `SELECT title, call_date, duration_bucket, opportunity_id, lifecycle_bucket FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&system, &callDate, &durationBucket, &opportunityID, &lifecycleBucket); err != nil {
+		t.Fatalf("read minimal refreshed facts: %v", err)
+	}
+	if system != "Renewal read model minimal" || callDate != "2026-02-13" || durationBucket != "5_15m" || opportunityID != "opp-readmodel" || lifecycleBucket != "renewal" {
+		t.Fatalf("minimal update facts not preserved/refreshed: title=%s date=%s duration=%s opp=%s bucket=%s", system, callDate, durationBucket, opportunityID, lifecycleBucket)
+	}
+
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-readmodel-001","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":3000,"text":"Renewal read model transcript."}]}]}`)); err != nil {
+		t.Fatalf("UpsertTranscript returned error: %v", err)
+	}
+	if err := store.DB().QueryRowContext(ctx, `SELECT transcript_present, transcript_status FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&transcriptPresent, &transcriptStatus); err != nil {
+		t.Fatalf("read transcript refreshed facts: %v", err)
+	}
+	if !transcriptPresent || transcriptStatus != "present" {
+		t.Fatalf("transcript facts not refreshed: present=%v status=%s", transcriptPresent, transcriptStatus)
+	}
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-readmodel-001","title":"Explicit empty context","started":"2026-02-14T15:00:00Z","duration":600,"context":[]}`)); err != nil {
+		t.Fatalf("empty context UpsertCall returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-readmodel-001'`, 0)
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-readmodel-001'`, 0)
+	if err := store.DB().QueryRowContext(ctx, `SELECT transcript_present, transcript_status, opportunity_id, lifecycle_bucket FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&transcriptPresent, &transcriptStatus, &opportunityID, &lifecycleBucket); err != nil {
+		t.Fatalf("read empty-context facts: %v", err)
+	}
+	if !transcriptPresent || transcriptStatus != "present" || opportunityID != "" || lifecycleBucket != "unknown" {
+		t.Fatalf("empty context facts not cleared/preserved correctly: present=%v status=%s opp=%s bucket=%s", transcriptPresent, transcriptStatus, opportunityID, lifecycleBucket)
+	}
+	summary, err := store.SyncStatusSummary(ctx)
+	if err != nil {
+		t.Fatalf("SyncStatusSummary returned error: %v", err)
+	}
+	if summary.TotalEmbeddedCRMContextCalls != 0 || summary.TotalEmbeddedCRMObjects != 0 || summary.TotalEmbeddedCRMFields != 0 {
+		t.Fatalf("empty context summary counts not cleared: calls=%d objects=%d fields=%d", summary.TotalEmbeddedCRMContextCalls, summary.TotalEmbeddedCRMObjects, summary.TotalEmbeddedCRMFields)
+	}
+}
+
+func TestPostgresBackfillReadModelFromExistingCoreRows(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	raw := `{"id":"pg-backfill-001","title":"Backfill renewal","started":"2026-02-12T15:00:00Z","duration":2400,"metaData":{"scope":"External","system":"Zoom","direction":"Conference"},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-backfill","fields":{"Type":"Renewal","StageName":"Discovery & Demo (SQO)"}}]}}`
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO calls(call_id, title, started_at, duration_seconds, context_present, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('pg-backfill-001', 'Backfill renewal', '2026-02-12T15:00:00Z', 2400, true, $1::jsonb, 'sha', '2026-02-12T15:00:00Z', '2026-02-12T15:00:00Z')`, raw); err != nil {
+		t.Fatalf("insert core call row: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO transcripts(call_id, raw_json, raw_sha256, segment_count, first_seen_at, updated_at) VALUES('pg-backfill-001', '{"callId":"pg-backfill-001","transcript":[]}'::jsonb, 'sha', 0, '2026-02-12T15:00:00Z', '2026-02-12T15:00:00Z')`); err != nil {
+		t.Fatalf("insert core transcript row: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_facts WHERE call_id = 'pg-backfill-001'`, 0)
+
+	tx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx returned error: %v", err)
+	}
+	if err := backfillReadModelTx(ctx, tx); err != nil {
+		tx.Rollback()
+		t.Fatalf("backfillReadModelTx returned error: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("backfill tx commit returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-backfill-001'`, 1)
+	var bucket, status string
+	if err := store.DB().QueryRowContext(ctx, `SELECT lifecycle_bucket, transcript_status FROM call_facts WHERE call_id = $1`, "pg-backfill-001").Scan(&bucket, &status); err != nil {
+		t.Fatalf("read backfilled facts: %v", err)
+	}
+	if bucket != "renewal" || status != "present" {
+		t.Fatalf("backfilled facts bucket/status=%s/%s want renewal/present", bucket, status)
+	}
+}
+
+func TestPostgresCallFactsSelectsFieldsFromSameCRMObject(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	raw := json.RawMessage(`{"id":"pg-multi-opp-001","title":"Multiple opportunities","started":"2026-02-12T15:00:00Z","duration":1800,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-a","fields":{"StageName":"Discovery & Demo (SQO)","Type":"Renewal"}},{"type":"Opportunity","id":"opp-b","fields":{"StageName":"Contract Review","Type":"New Business"}}]}}`)
+	if _, err := store.UpsertCall(ctx, raw); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	var opportunityID, opportunityStage, opportunityType string
+	if err := store.DB().QueryRowContext(ctx, `SELECT opportunity_id, opportunity_stage, opportunity_type FROM call_facts WHERE call_id = $1`, "pg-multi-opp-001").Scan(&opportunityID, &opportunityStage, &opportunityType); err != nil {
+		t.Fatalf("read call_facts returned error: %v", err)
+	}
+	if opportunityID != "opp-a" || opportunityStage != "Discovery & Demo (SQO)" || opportunityType != "Renewal" {
+		t.Fatalf("selected opportunity fields mixed across objects: id=%s stage=%s type=%s", opportunityID, opportunityStage, opportunityType)
+	}
+}
+
+func TestPostgresBusinessPilotMethodsReadMaterializedCallFacts(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO call_facts(call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, opportunity_count, account_count, updated_at)
+VALUES('direct-fact-001', 'Direct fact', '2026-03-01T15:00:00Z', '2026-03-01', '2026-03', 1800, '30_45m', 'Zoom', 'Conference', 'External', false, 'missing', 'renewal', 'high', 'direct materialized fact', 'Opportunity.Type', 1, 1, '2026-03-01T15:00:00Z')`); err != nil {
+		t.Fatalf("insert direct call_facts row: %v", err)
+	}
+
+	facts, err := store.SummarizeCallFacts(ctx, sqlite.CallFactsSummaryParams{GroupBy: "lifecycle", Limit: 10})
+	if err != nil {
+		t.Fatalf("SummarizeCallFacts returned error: %v", err)
+	}
+	if len(facts) != 1 || facts[0].GroupValue != "renewal" || facts[0].CallCount != 1 {
+		t.Fatalf("SummarizeCallFacts did not read direct materialized fact: %+v", facts)
+	}
+	lifecycle, err := store.SummarizeCallsByLifecycle(ctx, sqlite.LifecycleSummaryParams{Bucket: "renewal"})
+	if err != nil {
+		t.Fatalf("SummarizeCallsByLifecycle returned error: %v", err)
+	}
+	if len(lifecycle) != 1 || lifecycle[0].Bucket != "renewal" || lifecycle[0].MissingTranscriptCount != 1 {
+		t.Fatalf("SummarizeCallsByLifecycle did not read direct materialized fact: %+v", lifecycle)
+	}
+	backlog, err := store.PrioritizeTranscriptsByLifecycle(ctx, sqlite.LifecycleTranscriptPriorityParams{Bucket: "renewal", Limit: 10})
+	if err != nil {
+		t.Fatalf("PrioritizeTranscriptsByLifecycle returned error: %v", err)
+	}
+	if len(backlog) != 1 || backlog[0].CallID != "direct-fact-001" || backlog[0].Bucket != "renewal" {
+		t.Fatalf("PrioritizeTranscriptsByLifecycle did not read direct materialized fact: %+v", backlog)
 	}
 }
 
@@ -256,9 +479,20 @@ func TestPostgresPrioritizeTranscriptsByLifecycle(t *testing.T) {
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
+	}
+}
+
+func assertPostgresCount(t *testing.T, ctx context.Context, store *Store, query string, want int64) {
+	t.Helper()
+	var got int64
+	if err := store.DB().QueryRowContext(ctx, query).Scan(&got); err != nil {
+		t.Fatalf("count query failed: %v", err)
+	}
+	if got != want {
+		t.Fatalf("count query got %d want %d: %s", got, want, query)
 	}
 }
 

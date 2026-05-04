@@ -307,8 +307,8 @@ SELECT COUNT(*) AS total_calls,
        COALESCE(SUM(CASE WHEN scope = 'External' THEN 1 ELSE 0 END), 0) AS external_call_count,
        COALESCE(SUM(CASE WHEN scope = 'Internal' THEN 1 ELSE 0 END), 0) AS internal_call_count,
        COALESCE(SUM(CASE WHEN scope = 'Unknown' THEN 1 ELSE 0 END), 0) AS unknown_scope_call_count,
-       0 AS purpose_populated_calls,
-       0 AS calendar_call_count,
+       COALESCE(SUM(CASE WHEN TRIM(purpose) <> '' THEN 1 ELSE 0 END), 0) AS purpose_populated_calls,
+       COALESCE(SUM(CASE WHEN calendar_event_present THEN 1 ELSE 0 END), 0) AS calendar_call_count,
        COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds
   FROM facts`).Scan(&coverage.TotalCalls, &coverage.TranscriptCount, &coverage.MissingTranscriptCount, &coverage.OpportunityCallCount, &coverage.AccountCallCount, &coverage.ExternalCallCount, &coverage.InternalCallCount, &coverage.UnknownScopeCallCount, &coverage.PurposePopulatedCalls, &coverage.CalendarCallCount, &coverage.TotalDurationSeconds); err != nil {
 		return nil, err
@@ -331,6 +331,40 @@ func (s *Store) CallFactsCoverageWithSource(ctx context.Context, sourceArg strin
 }
 
 func postgresCallFactsSQL() string {
+	return `
+SELECT call_id,
+       title,
+       started_at,
+       call_date,
+       call_month,
+       duration_seconds,
+       system,
+       direction,
+       scope,
+       purpose,
+       calendar_event_present,
+       lifecycle_bucket,
+       lifecycle_confidence,
+       lifecycle_reason,
+       lifecycle_evidence_fields,
+       opportunity_count,
+       account_count,
+       transcript_present,
+       transcript_status,
+       account_id,
+       account_type,
+       account_industry,
+       account_revenue_range,
+       opportunity_id,
+       opportunity_stage,
+       opportunity_type,
+       opportunity_primary_lead_source,
+       opportunity_forecast_category,
+       duration_bucket
+  FROM call_facts`
+}
+
+func postgresLegacyCallFactsSQL() string {
 	return `
 WITH raw_objects AS (
 	SELECT c.call_id,

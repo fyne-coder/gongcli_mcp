@@ -74,6 +74,14 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.validateReadOnlyPrivileges(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `SET default_transaction_read_only = on`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable postgres read-only session mode: %w", err)
+	}
 	return store, nil
 }
 
@@ -118,6 +126,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply postgres migration %d: %w", idx+1, err)
 		}
+		if idx+1 == 2 {
+			if err := backfillReadModelTx(ctx, tx); err != nil {
+				return fmt.Errorf("backfill postgres read model: %w", err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO gongctl_schema_migrations(version, applied_at)
 VALUES($1, $2)
 ON CONFLICT(version) DO NOTHING`, idx+1, nowUTC()); err != nil {
@@ -132,11 +145,45 @@ func (s *Store) validateSchema(ctx context.Context) error {
 		return errors.New("postgres store is not open")
 	}
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sync_runs', 'sync_state', 'calls', 'users', 'transcripts', 'transcript_segments')`).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sync_runs', 'sync_state', 'calls', 'users', 'transcripts', 'transcript_segments', 'call_context_objects', 'call_context_fields', 'call_facts')`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 6 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/6 core tables", count)
+	if count != 9 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/9 core tables", count)
+	}
+	return nil
+}
+
+func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT table_name
+  FROM information_schema.tables
+ WHERE table_schema = current_schema()
+   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts')
+   AND (
+	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
+	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
+	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'DELETE') OR
+	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'TRUNCATE')
+   )
+ ORDER BY table_name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var writable []string
+	for rows.Next() {
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return err
+		}
+		writable = append(writable, table)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(writable) > 0 {
+		return fmt.Errorf("postgres read-only URL has write privileges on tables: %s", strings.Join(writable, ", "))
 	}
 	return nil
 }
@@ -260,7 +307,12 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*sqlite.Ca
 		return nil, err
 	}
 	now := nowUTC()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO calls(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO calls(
 	call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
 ON CONFLICT(call_id) DO UPDATE SET
@@ -285,6 +337,12 @@ ON CONFLICT(call_id) DO UPDATE SET
 		payload.HasContextBlock,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := refreshCallReadModelTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.callByID(ctx, payload.CallID)
@@ -376,6 +434,9 @@ VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`,
 		); err != nil {
 			return nil, err
 		}
+	}
+	if err := refreshCallFactsTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -502,7 +563,9 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		{`SELECT COUNT(*) FROM users`, &summary.TotalUsers},
 		{`SELECT COUNT(*) FROM transcripts`, &summary.TotalTranscripts},
 		{`SELECT COUNT(*) FROM transcript_segments`, &summary.TotalTranscriptSegments},
-		{`SELECT COUNT(*) FROM calls WHERE context_present`, &summary.TotalEmbeddedCRMContextCalls},
+		{`SELECT COUNT(DISTINCT call_id) FROM call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
+		{`SELECT COUNT(*) FROM call_context_objects`, &summary.TotalEmbeddedCRMObjects},
+		{`SELECT COUNT(*) FROM call_context_fields`, &summary.TotalEmbeddedCRMFields},
 		{`SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id WHERE t.call_id IS NULL`, &summary.MissingTranscripts},
 		{`SELECT COUNT(*) FROM sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
 		{`SELECT COUNT(*) FROM calls WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.CallsWithTitles},

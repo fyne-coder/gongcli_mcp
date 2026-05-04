@@ -158,7 +158,8 @@ The first Postgres vertical slice supports:
 It does not yet provide full SQLite query parity for governance filtered DB
 export, profile lifecycle source, analyst/all-readonly presets,
 business-analysis views, support bundles, cache inventory, or broader
-CRM/lifecycle-heavy MCP tools.
+CRM/lifecycle-heavy MCP tools. See the
+[Postgres parity matrix](postgres-parity.md) for the phased parity contract.
 
 Run the local synthetic smoke:
 
