@@ -23,6 +23,12 @@ For a faster source-first onboarding path, start with
 - `internal/mcp`: read-only local MCP adapter over SQLite. `catalog.go` owns
   built-in presets and governance-compatible tool lists; `server.go` owns MCP
   request handling and tool execution.
+- `internal/mcphttp`: optional HTTP transport policy for `gongmcp`, including
+  config resolution, bearer-token validation, Origin/CORS checks, `/healthz`,
+  and access logging. It wraps the same read-only `internal/mcp.Server`.
+- `scripts/install-claude-stdio-mcp.sh`: Claude Desktop stdio config generator
+  for the Dockerized `gongmcp` path. It validates preset names through the
+  `gongmcp --list-tool-presets` catalog and emits a read-only `/data` mount.
 
 ## Agent E CLI Surface
 
@@ -82,7 +88,9 @@ Runtime details that matter when debugging MCP:
 - HTTP mode defaults to bearer auth; no-auth is localhost-development only
 - non-local HTTP binds require explicit open-network approval and Origin
   allowlisting
-- `/healthz` is for infrastructure checks; `/mcp` is the MCP endpoint
+- `/healthz` is for infrastructure checks; `/mcp` is the MCP endpoint and is
+  POST-only. HTTP auth, Origin/CORS, health, and access-log behavior is owned
+  by `internal/mcphttp`, while MCP JSON-RPC handling stays in `internal/mcp`.
 - MCP argument decoding rejects unknown fields except reserved `_meta`
 - request/response frames are capped at 1 MiB
 - row limits come from `internal/mcp.LimitPolicy`; `tools/list` reflects the

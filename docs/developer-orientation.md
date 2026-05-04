@@ -33,11 +33,12 @@ changed.
 | SQLite cache | `internal/store/sqlite/` | schema, migrations, read/write store APIs, profile cache, governance export |
 | MCP catalog and presets | `internal/mcp/catalog.go` | built-in presets, preset aliases, governance-compatible tools |
 | MCP server | `internal/mcp/server.go`, `internal/mcp/business_analysis_tools.go` | tool definitions, handlers, schemas, redaction, frame limits, strict argument decoding |
-| MCP binary/runtime policy | `cmd/gongmcp/main.go` | stdio vs HTTP, auth, Origin validation, preset/allowlist resolution, governance mode |
+| MCP binary/runtime policy | `cmd/gongmcp/main.go`, `internal/mcphttp/server.go` | flag/env wiring, stdio vs HTTP, auth, Origin validation, access logging, governance mode |
 | Business profiles | `internal/profile/`, `internal/cli/profile.go` | YAML schema, validation, staged import, diff, activation |
 | AI governance exclusions | `internal/governance/`, `internal/cli/governance.go` | audit, suppressed calls, filtered DB export |
 | Support bundle | `internal/cli/support.go` | metadata-only support artifact contents |
-| Deployment examples | `compose.yaml`, `deploy/`, `scripts/` | Docker, lab auth, smoke tests, Terraform starters |
+| Claude Desktop installer | `scripts/install-claude-stdio-mcp.sh`, `internal/cli/install_claude_stdio_mcp_script_test.go` | generated Docker stdio MCP config, preset catalog lookup, path containment |
+| Deployment examples | `compose.yaml`, `deploy/`, `scripts/` | Docker, lab auth, HTTP MCP smoke tests, Terraform starters |
 | Container contents | `Dockerfile` | current image builds only `gongctl` and `gongmcp` |
 
 Useful entrypoint commands that do not need Gong credentials:
@@ -62,6 +63,9 @@ These are easy to miss if you only read the high-level docs.
 - `gongmcp --db PATH` checks that the DB file already exists before opening it.
   Schema migration is not a read-only MCP responsibility; use writable
   `gongctl` sync/profile/cache commands to create or migrate the cache first.
+- `cmd/gongmcp/main.go` owns flag/env parsing, SQLite open, governance setup,
+  and process lifecycle. HTTP auth, Origin/CORS checks, `/healthz`, and access
+  logging live in `internal/mcphttp`.
 - Several CLI inspection commands also open SQLite read-only:
   `sync status`, `search transcripts`, `search calls`, `calls show --json`,
   `analyze calls`, `analyze coverage`, `analyze transcript-backlog`,
@@ -82,6 +86,9 @@ These are easy to miss if you only read the high-level docs.
   proxy/gateway, not inside `gongmcp`.
 - HTTP exposes `/healthz` separately from `/mcp`; use `/healthz` for infra
   checks instead of probing MCP tool calls.
+- HTTP `/mcp` accepts POST only. CORS preflight is allowed through OPTIONS when
+  the requested method is POST and requested headers are from the narrow allow
+  list in `internal/mcphttp/server.go`.
 - MCP request/response frames are capped at 1 MiB. Tool results are capped just
   below that after MCP framing. Row-returning tools use `internal/mcp.LimitPolicy`;
   update schema generation, handler enforcement, `cmd/gongmcp` flags/env, and
@@ -121,6 +128,13 @@ These are easy to miss if you only read the high-level docs.
 - The support bundle opens SQLite read-only and writes metadata-only JSON files.
   It intentionally excludes raw Gong payloads, transcript text, CRM values,
   direct customer-content identifiers, secrets, and local paths.
+- `scripts/install-claude-stdio-mcp.sh` validates preset names against the
+  `gongmcp --list-tool-presets` JSON catalog. By default it inspects the
+  selected Docker image with `docker run --rm --network none --entrypoint
+  /usr/local/bin/gongmcp IMAGE --list-tool-presets`; tests use an explicit
+  `--preset-catalog-bin` helper instead. It canonicalizes `--db` and
+  `--data-dir`, rejects `..` and symlink escapes outside the read-only mount,
+  and emits `GONGMCP_TOOL_PRESET` unless `--compat-expanded-allowlist` is set.
 
 ## Practical Development Loops
 
@@ -162,7 +176,14 @@ Check remote/HTTP MCP policy without a host app:
 
 ```bash
 go run ./cmd/gongmcp --list-tool-presets
-go test -count=1 ./cmd/gongmcp -run 'TestResolveHTTPConfig|TestRunStdioFlagOverridesHTTPAddrEnv'
+go test -count=1 ./cmd/gongmcp ./internal/mcphttp -run 'TestRunStdioFlagOverridesHTTPAddrEnv|TestResolveHTTPConfig|TestHTTPHandler'
+```
+
+Check the Claude Desktop stdio installer without touching a real Claude config:
+
+```bash
+go test -count=1 ./internal/cli -run 'TestInstallClaudeStdioMCPScript'
+scripts/install-claude-stdio-mcp.sh --db "$HOME/gongctl-data/gong.db" --print
 ```
 
 Run broad local checks before publishing docs or code:
@@ -205,9 +226,39 @@ When changing a read-only CLI command, update all of these or explain why not:
 - `TestReadOnlyCommandsMissingDBDoNotCreateDatabase`
 - `TestReadOnlyCommandsExistingDBDoNotMutateDatabase`
 
+## Common Failure Modes
+
+Use this table before debugging from first principles.
+
+| Symptom | Likely Cause | First Check |
+| --- | --- | --- |
+| `gongmcp --db ...` exits with `db file not found` | MCP is read-only and will not create caches | Run `gongctl sync status --db PATH` or another writable sync/cache command first |
+| MCP startup fails with an old schema error | SQLite cache was created by an older binary | Run a writable `gongctl sync status --db PATH` or the relevant sync/profile command to migrate, then retry MCP |
+| HTTP MCP refuses to start | HTTP requires explicit preset/allowlist and bearer setup unless local no-auth dev is enabled | Re-run with `--tool-preset business-pilot`; for non-local binds also set `--allow-open-network` and `--allowed-origins` |
+| HTTP requests get `401` | Missing/invalid bearer token or weak token rejected by `internal/mcphttp` | Use a strong token or `--bearer-token-file` with `0600` permissions |
+| HTTP requests get `403 invalid origin` | Origin is absent from the configured allowlist for a non-local bind | Set `--allowed-origins` or `GONGMCP_ALLOWED_ORIGINS` to exact `scheme://host[:port]` values |
+| HTTP GET `/mcp` returns `405` | MCP endpoint is POST-only; streaming GET is not implemented | Use POST JSON-RPC or `/healthz` for health checks |
+| Claude Desktop installer prints `invalid preset catalog JSON` | Selected Docker image or explicit catalog binary did not return the expected preset schema | Check `gongmcp --list-tool-presets` from that image/binary |
+| Claude Desktop generated config points at `/data/...` unexpectedly | Installer maps the host DB path relative to the read-only Docker mount | Verify `--db` is inside `--data-dir`; symlinks outside the mount are rejected |
+| A profile appears valid but CI should fail on semantic invalidity | `profile validate` returns JSON and only exits nonzero for command/read/parse/runtime failures | Inspect the JSON `valid` field or use `profile import` for write-time rejection |
+
+## Where To Make Likely Changes
+
+| Change | Start Here | Tests To Run First |
+| --- | --- | --- |
+| Add or rename an MCP tool | `internal/mcp/server.go`, `internal/mcp/catalog.go`, `internal/mcp/server_test.go` | `go test -count=1 ./internal/mcp ./cmd/gongmcp` |
+| Change HTTP auth/CORS/health/access logs | `internal/mcphttp/server.go` | `go test -count=1 ./internal/mcphttp` |
+| Change `gongmcp` flags/env wiring | `cmd/gongmcp/main.go` | `go test -count=1 ./cmd/gongmcp ./internal/mcphttp` |
+| Change Claude Desktop Docker config generation | `scripts/install-claude-stdio-mcp.sh` | `go test -count=1 ./internal/cli -run 'TestInstallClaudeStdioMCPScript'` |
+| Add a sync command or cached entity | `internal/cli/sync.go`, `internal/syncsvc/`, `internal/store/sqlite/` | `go test -count=1 ./internal/cli ./internal/syncsvc ./internal/store/sqlite` |
+| Change transcript search/sync | `internal/transcripts/`, `internal/store/sqlite/store_transcripts.go`, `internal/mcp/server.go` | `go test -count=1 ./internal/transcripts ./internal/store/sqlite ./internal/mcp` |
+| Change profile validation/import semantics | `internal/profile/`, `internal/cli/profile.go`, `internal/store/sqlite/profile.go` | `go test -count=1 ./internal/profile ./internal/cli ./internal/store/sqlite` |
+| Change restricted/sensitive export gates | `internal/cli/root.go`, command implementation in `internal/cli/` | `go test -count=1 ./internal/cli -run 'TestRestricted|TestReadOnlyCommands'` |
+
 ## Documentation Rule
 
 Do not describe behavior from memory. For CLI behavior, read `internal/cli` or
-`cmd/gongmcp`. For MCP output behavior, read `internal/mcp/server.go` and the
-store method it calls. For cache behavior, read the migration and store method.
-Then include a practical command or prompt that a new operator can actually run.
+`cmd/gongmcp`. For HTTP transport behavior, read `internal/mcphttp`. For MCP
+output behavior, read `internal/mcp/server.go` and the store method it calls.
+For cache behavior, read the migration and store method. Then include a
+practical command or prompt that a new operator can actually run.
