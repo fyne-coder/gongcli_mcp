@@ -16,9 +16,9 @@ jobs:
       - run: go test -count=1 ./...
       - run: go vet ./...
       - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-      - run: $(go env GOPATH)/bin/staticcheck -checks=all,-U1000,-ST1000 ./...
+      - run: '"$(go env GOPATH)/bin/staticcheck" -checks=all,-U1000,-ST1000 ./...'
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
-      - run: $(go env GOPATH)/bin/govulncheck ./...
+      - run: '"$(go env GOPATH)/bin/govulncheck" ./...'
       - run: go build ./cmd/gongctl
       - run: go build ./cmd/gongmcp
       - run: make sbom
@@ -38,3 +38,18 @@ jobs:
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - run: docker build -t gongctl:ci .
       - run: docker build --target mcp -t gongctl:mcp-ci .
+
+  cloudflare-worker:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: deploy/remote-mcp-auth/cloudflare-worker
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24.x"
+          cache: npm
+          cache-dependency-path: deploy/remote-mcp-auth/cloudflare-worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
