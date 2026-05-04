@@ -37,7 +37,7 @@ services:
         condition: service_healthy
     environment:
       GONG_DATABASE_URL: postgres://gongmcp_reader:${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}@postgres:5432/gongctl?sslmode=disable
-      GONGMCP_TOOL_ALLOWLIST: get_sync_status,search_calls,search_transcript_segments
+      GONGMCP_TOOL_PRESET: business-pilot
     command: ["--stdio"]
     profiles: ["mcp"]
 

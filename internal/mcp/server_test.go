@@ -2323,7 +2323,7 @@ func TestLifecycleMCPTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(summaryEnvelope.Result.Content[0].Text), &summaries); err != nil {
 		t.Fatalf("unmarshal lifecycle summaries: %v", err)
 	}
-	if len(summaries) != 1 || summaries[0].Bucket != "renewal" || summaries[0].CallCount != 1 {
+	if len(summaries) != 1 || summaries[0].Bucket != "renewal" || summaries[0].CallCount != 1 || summaries[0].LatestCallID != "" {
 		t.Fatalf("unexpected lifecycle summary: %+v", summaries)
 	}
 

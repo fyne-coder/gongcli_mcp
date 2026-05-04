@@ -10,9 +10,11 @@ the same read-only tool layer.
 Current fixed boundaries:
 
 - MCP reads a local cache/store only. SQLite is the complete default backend;
-  the first Postgres vertical slice supports only `get_sync_status`,
-  `search_calls`, and `search_transcript_segments` over a read-only database
-  role.
+  the Postgres shared-deployment slice supports the explicit
+  `business-pilot` preset over a read-only database role, plus narrow
+  operator smoke/search allowlists for `search_calls` and
+  `search_transcript_segments`. Broader `analyst` and `all-readonly`
+  Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool

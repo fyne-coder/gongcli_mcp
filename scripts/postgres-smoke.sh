@@ -50,9 +50,33 @@ grep -q '"search_transcript_segments"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q 'synthetic-call-001' /tmp/gongctl-postgres-mcp.jsonl
 grep -q 'shared.*Postgres' /tmp/gongctl-postgres-mcp.jsonl
 
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"transcript_status","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp > /tmp/gongctl-postgres-business-pilot.jsonl
+
+grep -q '"get_sync_status"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"summarize_call_facts"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"rank_transcript_backlog"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q 'transcript_status' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"id":6,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"id":7,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"id":8,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q '"id":9,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
+if grep -q '"id":[6789],"error"' /tmp/gongctl-postgres-business-pilot.jsonl; then
+  echo "business-pilot MCP call returned an error" >&2
+  exit 1
+fi
+
 GONGCTL_TEST_POSTGRES_URL="$WRITER_URL" go test -count=1 ./internal/store/postgres
 
 echo "postgres smoke passed"
 echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
+echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"

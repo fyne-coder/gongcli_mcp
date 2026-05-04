@@ -20,10 +20,12 @@ For a faster source-first onboarding path, start with
 - `internal/store/sqlite`: local cache for calls, users, transcripts, CRM schema/settings inventory, search indexes, and sync state.
 - `internal/store/postgres`: first shared-deployment vertical slice for sync
   status, calls, users, transcripts, transcript segments, and read-only MCP
-  search/status tools. It is not full query parity with SQLite yet.
-- `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus SQLite.
-- `internal/transcripts`: transcript sync/search helpers on top of the Gong client plus SQLite.
-- `internal/mcp`: read-only local MCP adapter over SQLite. `catalog.go` owns
+  `business-pilot` tools. It is not full query parity with SQLite yet:
+  profile lifecycle source, governance-filtered views, analyst/all-readonly
+  tools, support bundles, and cache inventory remain follow-ups.
+- `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus the configured cache store.
+- `internal/transcripts`: transcript sync/search helpers on top of the store interface plus the Gong client.
+- `internal/mcp`: read-only MCP adapter over the store interface. `catalog.go` owns
   built-in presets and governance-compatible tool lists; `server.go` owns MCP
   request handling and tool execution.
 
@@ -75,7 +77,7 @@ Behavioral rules:
 
 ## MCP Boundary
 
-The CLI remains the first integration contract because it is easy to inspect, script, and run in customer-controlled environments. MCP reads from the proven SQLite cache instead of calling Gong directly.
+The CLI remains the first integration contract because it is easy to inspect, script, and run in customer-controlled environments. MCP reads from the configured cache store instead of calling Gong directly; SQLite is the complete/default store, and Postgres currently supports the narrower shared-deployment slice.
 
 Runtime details that matter when debugging MCP:
 
@@ -143,9 +145,9 @@ Unmapped CRM field surfaces are redacted by default. They return field names, ty
 
 Local SQLite state remains the complete proving ground and source of truth for
 MCP query tools. The Postgres backend is intentionally narrower: it proves the
-shared store path for `get_sync_status`, `search_calls`, and
-`search_transcript_segments` using `GONG_DATABASE_URL` / `DATABASE_URL` and a
-read-only database role. Full parity for lifecycle/profile/business-analysis,
+shared store path for sync status, call/transcript search, and the
+`business-pilot` MCP preset using `GONG_DATABASE_URL` / `DATABASE_URL` and a
+read-only database role. Full parity for profile/business-analysis,
 CRM JSON-derived views, support bundle/cache inventory, and governance filtered
 exports remains follow-up work.
 

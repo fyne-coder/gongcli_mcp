@@ -1600,6 +1600,15 @@ func mcpOpportunityCallSummaries(rows []sqlite.OpportunityCallSummary) []sqlite.
 	return out
 }
 
+func mcpLifecycleBucketSummaries(rows []sqlite.LifecycleBucketSummary) []sqlite.LifecycleBucketSummary {
+	out := make([]sqlite.LifecycleBucketSummary, len(rows))
+	for i, row := range rows {
+		row.LatestCallID = ""
+		out[i] = row
+	}
+	return out
+}
+
 func mcpTranscriptCRMSearchResults(rows []sqlite.TranscriptCRMSearchResult) []sqlite.TranscriptCRMSearchResult {
 	out := make([]sqlite.TranscriptCRMSearchResult, len(rows))
 	for i, row := range rows {
@@ -1681,7 +1690,7 @@ func (s *Server) summarizeCallsByLifecycle(ctx context.Context, raw json.RawMess
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newLifecycleToolResult(rows, info, args.LifecycleSource)
+	return newLifecycleToolResult(mcpLifecycleBucketSummaries(rows), info, args.LifecycleSource)
 }
 
 func (s *Server) searchCallsByLifecycle(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {

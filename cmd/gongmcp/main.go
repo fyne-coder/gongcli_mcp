@@ -152,7 +152,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		store = pgStore
 		closeStore = pgStore.Close
-		fmt.Fprintln(stderr, "postgres backend active: read-only MCP exposes get_sync_status, search_calls, and search_transcript_segments")
+		fmt.Fprintf(stderr, "postgres backend active: read-only MCP exposes %s\n", strings.Join(allowlist, ","))
 	} else {
 		if db == "" {
 			fmt.Fprintln(stderr, "--db is required")
@@ -263,9 +263,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func postgresToolAllowlist(allowlist []string, httpMode bool) ([]string, error) {
 	supported := map[string]struct{}{
-		"get_sync_status":            {},
-		"search_calls":               {},
-		"search_transcript_segments": {},
+		"get_sync_status":              {},
+		"rank_transcript_backlog":      {},
+		"search_calls":                 {},
+		"search_transcript_segments":   {},
+		"summarize_call_facts":         {},
+		"summarize_calls_by_lifecycle": {},
 	}
 	if len(allowlist) == 0 {
 		if httpMode {

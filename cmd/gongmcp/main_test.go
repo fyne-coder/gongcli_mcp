@@ -52,6 +52,34 @@ func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsBusinessPilotPreset(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("business-pilot")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true)
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	want := []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"}
+	if !reflect.DeepEqual(allowlist, want) {
+		t.Fatalf("allowlist=%v want %v", allowlist, want)
+	}
+}
+
+func TestPostgresToolAllowlistRejectsUnsupportedPostgresPresets(t *testing.T) {
+	for _, preset := range []string{"analyst", "all-readonly"} {
+		expanded, err := mcp.ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		_, err = postgresToolAllowlist(expanded, true)
+		if err == nil || !strings.Contains(err.Error(), "not supported by the postgres vertical slice") {
+			t.Fatalf("postgresToolAllowlist(%q) error=%v, want unsupported postgres error", preset, err)
+		}
+	}
+}
+
 func TestPostgresToolAllowlistRequiresExplicitSelectionForHTTP(t *testing.T) {
 	if _, err := postgresToolAllowlist(nil, true); err == nil {
 		t.Fatal("postgresToolAllowlist accepted implicit HTTP tools")

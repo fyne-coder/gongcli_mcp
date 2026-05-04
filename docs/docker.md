@@ -9,8 +9,9 @@
   Postgres database instead of a shared SQLite filesystem
 
 HTTP mode is explicit via `gongmcp --http ...`; the default MCP path remains
-stdio. In both modes, `gongmcp` reads SQLite only. Keep credentials and customer
-data outside the image.
+stdio. SQLite remains the complete/default cache, while the Postgres
+business-pilot slice lets separate sync and MCP containers share one database.
+Keep credentials and customer data outside the image.
 
 ## Build
 
@@ -148,11 +149,15 @@ The first Postgres vertical slice supports:
 - `gongctl sync status`
 - `gongctl search calls`
 - `gongctl search transcripts`
-- `gongmcp` tools: `get_sync_status`, `search_calls`,
+- `gongmcp --tool-preset business-pilot`: `get_sync_status`,
+  `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
+  `rank_transcript_backlog`
+- operator smoke/search allowlists for `search_calls` and
   `search_transcript_segments`
 
 It does not yet provide full SQLite query parity for governance filtered DB
-export, profile/business-analysis views, support bundles, cache inventory, or
+export, profile lifecycle source, analyst/all-readonly presets,
+business-analysis views, support bundles, cache inventory, or broader
 CRM/lifecycle-heavy MCP tools.
 
 Run the local synthetic smoke:
@@ -203,7 +208,7 @@ Point an MCP host at `docker run` with stdin kept open:
 
 Replace `/Users/YOU/gongctl-data` with the absolute host path that contains `gong.db`.
 
-The MCP container does not need Gong API credentials because it only reads the SQLite cache. Use `gongctl sync ...` commands to refresh that cache.
+The MCP container does not need Gong API credentials because it only reads the configured cache store. Use `gongctl sync ...` commands to refresh that cache.
 
 ## HTTP MCP For Private Pilots
 
@@ -226,13 +231,15 @@ docker run --rm \
   --db /data/gong.db
 ```
 
-HTTP mode does not need Gong credentials and still opens SQLite read-only. It is
-a private-pilot request/response endpoint over one operator-owned cache, not a
-tenant router or hosted review application. HTTP mode always requires an explicit
-tool preset or allowlist, including loopback binds behind a proxy. Non-local binds also
-require `--allow-open-network`, an explicit Origin allowlist, and TLS
-termination at a trusted company proxy/gateway. The customer's IT/platform
-owner manages bearer tokens outside the repo, image, and SQLite cache. Suitable
+HTTP mode does not need Gong credentials and opens the configured cache store
+read-only. It is a private-pilot request/response endpoint over one
+operator-owned cache, not a tenant router or hosted review application. HTTP
+mode always requires an explicit tool preset or allowlist, including loopback
+binds behind a proxy. Non-local binds also require `--allow-open-network`, an
+explicit Origin allowlist, and TLS termination at a trusted company
+proxy/gateway. For Postgres HTTP MCP, omit `--db` and set `GONG_DATABASE_URL`
+to the reader role URL. The customer's IT/platform owner manages bearer tokens
+outside the repo, image, and cache store. Suitable
 places include Docker secrets, mounted secret files, systemd environment files,
 Kubernetes Secrets, or a company secret manager.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP

@@ -2,12 +2,14 @@
 
 `gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports the first shared-deployment `business-pilot` slice. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 SQLite remains the default local/single-host cache. For shared multi-container
 deployments, the first Postgres vertical slice supports a shared database for
 sync status, cached calls, users, transcripts, transcript segments, and the
-read-only MCP tools `get_sync_status`, `search_calls`, and
-`search_transcript_segments`.
+read-only MCP `business-pilot` preset: `get_sync_status`,
+`summarize_call_facts`, `summarize_calls_by_lifecycle`, and
+`rank_transcript_backlog`. Operator smoke deployments can also explicitly
+allow `search_calls` and `search_transcript_segments`.
 
 ## Positioning
 
@@ -440,7 +442,7 @@ unsupported aggregate/config tools are refused.
 
 ## Local MCP (stdio)
 
-`gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache.
+`gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache. For the Postgres shared-deployment slice, omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` to a read-only database role.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
 
 By default, `gongmcp` exposes the full read-only MCP catalog to any connected
@@ -480,10 +482,12 @@ GONGMCP_MAX_SEARCH_RESULTS=100 \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 
-HTTP mode is a request/response JSON-RPC bridge over one operator-owned SQLite
-cache. Put it behind TLS termination at a trusted company proxy/gateway before
-non-local use. It is not a hosted SaaS layer, tenant router, browser app, or
-full streaming MCP service. Every HTTP mode requires an explicit tool preset or
+HTTP mode is a request/response JSON-RPC bridge over one operator-owned cache
+store: SQLite for local/single-host pilots, or the Postgres business-pilot slice
+for shared deployments. Put it behind TLS termination at a trusted company
+proxy/gateway before non-local use. It is not a hosted SaaS layer, tenant
+router, browser app, or full streaming MCP service. Every HTTP mode requires an
+explicit tool preset or
 allowlist, including loopback binds behind a proxy; the preferred shape is a
 loopback bind behind the TLS gateway. Any non-loopback `--http` bind also requires
 `--allow-open-network`. Unauthenticated HTTP is blocked by default and is
@@ -542,7 +546,7 @@ Tools:
 - `search_transcript_quotes_with_attribution`
 - `missing_transcripts`
 
-The MCP server requires `--db`, reads SQLite only, and intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
+The SQLite MCP path requires `--db`; the Postgres path omits `--db` and uses `GONG_DATABASE_URL` or `DATABASE_URL`. In both modes, the MCP server intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
 `get_call` returns minimized call detail instead of raw cached call JSON. `crm_field_population_matrix` only allows safe categorical group fields such as `StageName`.
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
@@ -564,7 +568,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 
 ```text
 cmd/gongctl/              CLI entrypoint
-cmd/gongmcp/              read-only local MCP server over SQLite
+cmd/gongmcp/              read-only MCP server over cache stores
 internal/gong/            typed API client + raw request support
 internal/auth/            env/config credential loading
 internal/ratelimit/       3 rps limiter + Retry-After-friendly client retries
@@ -575,7 +579,7 @@ internal/profile/         tenant-editable business profile parser, validator, di
 internal/store/sqlite/    local SQLite cache for calls, users, transcripts, CRM schema, settings, profiles, and sync state
 internal/syncsvc/         SQLite-backed call/user/inventory sync orchestration
 internal/transcripts/     transcript sync/search helpers on top of store + Gong client
-internal/mcp/             read-only MCP adapter over SQLite
+internal/mcp/             read-only MCP adapter over the store interface
 testdata/fixtures/        sanitized sample payloads only
 docs/                     architecture, data handling, MCP phase plan
 ```

@@ -69,40 +69,7 @@ func (s *Store) SummarizeOpportunityCalls(ctx context.Context, params sqlite.Opp
 func (s *Store) CRMFieldPopulationMatrix(ctx context.Context, params sqlite.CRMFieldPopulationMatrixParams) (*sqlite.CRMFieldPopulationMatrix, error) {
 	return nil, unsupported()
 }
-func (s *Store) ListLifecycleBucketDefinitions(ctx context.Context) ([]sqlite.LifecycleBucketDefinition, error) {
-	return nil, unsupported()
-}
-func (s *Store) ListLifecycleBucketDefinitionsWithSource(ctx context.Context, requested string) ([]sqlite.LifecycleBucketDefinition, *sqlite.ProfileQueryInfo, error) {
-	return nil, nil, unsupported()
-}
-func (s *Store) SummarizeCallsByLifecycle(ctx context.Context, params sqlite.LifecycleSummaryParams) ([]sqlite.LifecycleBucketSummary, error) {
-	return nil, unsupported()
-}
-func (s *Store) SummarizeCallsByLifecycleWithSource(ctx context.Context, params sqlite.LifecycleSummaryParams) ([]sqlite.LifecycleBucketSummary, *sqlite.ProfileQueryInfo, error) {
-	return nil, nil, unsupported()
-}
-func (s *Store) SearchCallsByLifecycle(ctx context.Context, params sqlite.LifecycleCallSearchParams) ([]sqlite.LifecycleCallSearchResult, error) {
-	return nil, unsupported()
-}
-func (s *Store) SearchCallsByLifecycleWithSource(ctx context.Context, params sqlite.LifecycleCallSearchParams) ([]sqlite.LifecycleCallSearchResult, *sqlite.ProfileQueryInfo, error) {
-	return nil, nil, unsupported()
-}
-func (s *Store) PrioritizeTranscriptsByLifecycle(ctx context.Context, params sqlite.LifecycleTranscriptPriorityParams) ([]sqlite.LifecycleTranscriptPriority, error) {
-	return nil, unsupported()
-}
-func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, params sqlite.LifecycleTranscriptPriorityParams) ([]sqlite.LifecycleTranscriptPriority, *sqlite.ProfileQueryInfo, error) {
-	return nil, nil, unsupported()
-}
 func (s *Store) CompareLifecycleCRMFields(ctx context.Context, params sqlite.LifecycleCRMFieldComparisonParams) (*sqlite.LifecycleCRMFieldComparison, error) {
-	return nil, unsupported()
-}
-func (s *Store) SummarizeCallFacts(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, error) {
-	return nil, unsupported()
-}
-func (s *Store) SummarizeCallFactsWithSource(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, *sqlite.ProfileQueryInfo, error) {
-	return nil, nil, unsupported()
-}
-func (s *Store) CallFactsCoverage(ctx context.Context) (*sqlite.CallFactsCoverage, error) {
 	return nil, unsupported()
 }
 func (s *Store) SearchTranscriptSegmentsByCallFacts(ctx context.Context, params sqlite.TranscriptCallFactsSearchParams) ([]sqlite.TranscriptCallFactsSearchResult, error) {

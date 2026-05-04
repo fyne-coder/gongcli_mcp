@@ -7,8 +7,10 @@ This document defines the current enterprise pilot deployment shape for
 
 - `gongctl` is the writable operator tool that authenticates to Gong and
   refreshes local cache state.
-- `gongmcp` is a read-only MCP server over an existing SQLite cache. It supports
-  local stdio and a minimal HTTP `/mcp` private-pilot mode.
+- `gongmcp` is a read-only MCP server over the configured cache store. SQLite
+  is complete/default; Postgres supports the first shared-deployment
+  `business-pilot` slice. It supports local stdio and a minimal HTTP `/mcp`
+  private-pilot mode.
 - Business users should consume only the approved MCP tool set through host or
   wrapper policy. They do not run live syncs, handle Gong credentials, or write
   to SQLite.
@@ -126,8 +128,12 @@ flowchart LR
   `DATABASE_URL`.
 - `gongmcp` uses a read-only database URL and must not receive Gong
   credentials.
-- The first slice exposes only `get_sync_status`, `search_calls`, and
-  `search_transcript_segments` through MCP. Full query parity is a follow-up.
+- The Postgres slice supports the explicit `business-pilot` preset through MCP
+  (`get_sync_status`, `summarize_call_facts`,
+  `summarize_calls_by_lifecycle`, and `rank_transcript_backlog`) plus narrow
+  operator smoke/search allowlists for `search_calls` and
+  `search_transcript_segments`. Full analyst/all-readonly query parity is a
+  follow-up.
 - AI governance filtered DB export remains SQLite-only until a Postgres
   governed-view or governed-snapshot replacement is implemented.
 
@@ -222,7 +228,8 @@ Storage-specific guidance:
 
 - `gongctl` needs network access to Gong and valid credentials for `auth check`
   and `sync ...` commands.
-- `gongmcp` reads SQLite only and should not receive Gong credentials.
+- `gongmcp` reads the configured cache store only and should not receive Gong
+  credentials. For Postgres deployments, give it a read-only database URL.
 - For containerized stdio MCP, prefer `docker run --network none` with a
   read-only data mount.
 - For HTTP MCP, require bearer auth, an explicit tool preset or allowlist, and TLS
