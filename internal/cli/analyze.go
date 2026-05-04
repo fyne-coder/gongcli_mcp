@@ -60,7 +60,7 @@ func (a *app) analyzeScorecardActivity(ctx context.Context, args []string) error
 	if err != nil {
 		return err
 	}
-	canonicalGroupBy := *groupBy
+	var canonicalGroupBy string
 	if len(rows) > 0 {
 		canonicalGroupBy = rows[0].GroupBy
 	} else {
