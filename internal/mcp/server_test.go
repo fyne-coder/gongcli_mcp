@@ -26,7 +26,7 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 	store := openSeededStore(t)
 	defer store.Close()
 
-	server := NewServer(store, "gongmcp", "test")
+	server := NewServerWithOptions(store, "gongmcp", "test", WithTranscriptEvidenceProvenance(TranscriptEvidenceRaw))
 	responses := runServer(t, server, requestFrame(Request{
 		JSONRPC: "2.0",
 		ID:      "init",
@@ -275,7 +275,7 @@ func TestBusinessAnalysisToolSetIsExposedWithSafeSchemas(t *testing.T) {
 	store := openSeededStore(t)
 	defer store.Close()
 
-	server := NewServer(store, "gongmcp", "test")
+	server := NewServerWithOptions(store, "gongmcp", "test", WithTranscriptEvidenceProvenance(TranscriptEvidenceRaw))
 	responses := runServer(t, server, requestFrame(Request{
 		JSONRPC: "2.0",
 		ID:      "tools",

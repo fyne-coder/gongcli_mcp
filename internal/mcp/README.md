@@ -32,7 +32,7 @@ Rules:
 - return transcript snippets only, not full transcript bodies
 - use `search_transcripts_by_call_facts` for scoped transcript evidence by date, lifecycle, scope, system, or direction; it may return bounded neighboring-segment excerpts, but must not return call IDs, titles, speaker IDs, or full transcript text
 - use `search_transcript_quotes_with_attribution` when business users need bounded quote evidence with available Account/Opportunity attribution; call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities require explicit opt-in flags, `transcript_status=missing` must fail closed because quote search starts from cached transcript segments, and person/contact titles must be reported as unavailable when not present in the cache
-- redact call IDs and speaker IDs from transcript segment search by default; exact identifiers require explicit opt-in flags
+- control transcript evidence provenance with `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted|alias|raw`; redacted is default, alias returns stable call/speaker refs, and raw IDs still require explicit opt-in flags
 - keep profile-aware tools tied to imported SQLite profile state
 - return lifecycle source and profile provenance when profile-aware behavior is used
 - keep unmapped CRM field output redacted by default

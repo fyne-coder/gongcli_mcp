@@ -162,6 +162,7 @@ docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
   -e GONGMCP_TOOL_PRESET=business-pilot \
+  -e GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted \
   -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
   -v /srv/gongctl/gong.db:/data/gong.db:ro \
   -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \

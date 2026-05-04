@@ -32,6 +32,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
+	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
 	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
@@ -134,6 +135,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid MCP limit policy: %v\n", err)
 		return 2
 	}
+	provenance, err := mcp.ParseTranscriptEvidenceProvenance(*transcriptEvidenceProvenance)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 
 	ctx := context.Background()
 	store, err := sqlite.OpenReadOnly(ctx, db)
@@ -143,7 +149,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy)}
+	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
 	if configPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG")); configPath != "" {
 		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
 			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
@@ -746,6 +752,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func envDefault(name, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func truthy(value string) bool {

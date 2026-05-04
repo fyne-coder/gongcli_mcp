@@ -99,7 +99,7 @@ Guardrails:
 - CRM schema/settings tools return cached metadata only, not raw settings payloads or CRM values; scorecard detail exposes question text as configuration metadata
 - Scorecard activity MCP output stays aggregate-only by default; it does not return call IDs, scorecard IDs, reviewer/reviewee/editor user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw activity payloads.
 - unmapped CRM field tools return redacted aggregate statistics only, not raw field example values
-- `search_transcript_segments` returns bounded snippets, but redacts call IDs and speaker IDs by default; exact IDs require `include_call_ids=true` and `include_speaker_ids=true`
+- `search_transcript_segments` returns bounded snippets; `gongmcp --transcript-evidence-provenance redacted|alias|raw` controls whether call/speaker provenance is omitted, returned as stable aliases, or exposed as raw IDs with the per-call include flags
 - `get_sync_status` includes public readiness flags and separates embedded CRM context from CRM integration/schema inventory so zero integration inventory is not mistaken for missing call CRM context
 - `rank_transcript_backlog` and `prioritize_transcripts_by_lifecycle` favor External and Conference-style customer conversations and redact call IDs/titles in model-facing MCP output
 - Opportunity aggregate tools redact opportunity IDs/names, owner IDs, amounts, close dates, and latest call IDs in model-facing MCP output; use CLI/operator workflows for exact local follow-up.
