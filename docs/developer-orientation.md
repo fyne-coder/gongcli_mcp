@@ -86,6 +86,22 @@ These are easy to miss if you only read the high-level docs.
   below that after MCP framing. Row-returning tools use `internal/mcp.LimitPolicy`;
   update schema generation, handler enforcement, `cmd/gongmcp` flags/env, and
   docs together when changing a cap family.
+- MCP `limit.maximum` in `tools/list` is a server maximum, not always the
+  omitted-request row count. For example, default search tools advertise a
+  maximum of 100 rows, but omitted `limit` uses the lower default request limit
+  in `internal/mcp/limits.go` unless the configured maximum is lower.
+- The running server's `tools/list` reflects `gongmcp --max-*` flags and
+  `GONGMCP_MAX_*` env vars. `gongctl mcp tool-info NAME` is an offline catalog
+  inspection path; it can reflect env vars, but it cannot see flags passed to a
+  separate running server process.
+- High-volume MCP tools keep the legacy array/object output shape below the
+  effective limit. When they return exactly the effective limit, they may switch
+  to a cap-feedback envelope with `results`, `returned`, `limit`, `capped: true`,
+  `tool`, and `suggested_refinements`. Client code should tolerate both shapes
+  for the capped row tools listed in `docs/mcp-data-exposure.md`.
+- Quote search requires cached transcript segments. `transcript_status=missing`
+  is invalid for `search_transcript_quotes_with_attribution`; use
+  `missing_transcripts` or backlog tools for transcript-coverage work.
 - MCP argument decoding is strict for unknown fields, but strips the reserved
   MCP `_meta` field before strict decoding so ChatGPT-style tool calls work.
 - Profile YAML uses a closed schema and closed rule operators. Imports are
@@ -113,10 +129,21 @@ Inspect the MCP catalog after changing tools:
 ```bash
 go run ./cmd/gongctl mcp tools
 go run ./cmd/gongctl mcp tool-info search_transcript_segments
+GONGMCP_MAX_SEARCH_RESULTS=250 go run ./cmd/gongctl mcp tool-info search_transcript_segments
 go run ./cmd/gongmcp --list-tool-presets
 go test -count=1 ./internal/mcp ./cmd/gongmcp
 go test -count=1 ./internal/mcp -run TestToolCatalogInvariants
 ```
+
+Smoke a configured cap without a host app:
+
+```bash
+go run ./cmd/gongmcp --db /path/to/cache.db --tool-preset analyst --max-search-results 25
+```
+
+Then inspect the running server with an MCP `tools/list` request. Use
+`gongctl mcp tool-info` only for the static catalog/env view, not as proof of a
+live server's flag state.
 
 Check profile behavior without live Gong access:
 
