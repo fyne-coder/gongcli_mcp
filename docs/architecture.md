@@ -83,6 +83,12 @@ Runtime details that matter when debugging MCP:
 - `/healthz` is for infrastructure checks; `/mcp` is the MCP endpoint
 - MCP argument decoding rejects unknown fields except reserved `_meta`
 - request/response frames are capped at 1 MiB
+- row limits come from `internal/mcp.LimitPolicy`; `tools/list` reflects the
+  running server's env/flag configuration, while `gongctl mcp tool-info` is an
+  offline catalog view that can only see defaults plus `GONGMCP_MAX_*` env vars
+- high-volume row tools may return a cap-feedback envelope only when they hit
+  the effective limit, so consumers should handle both the legacy result shape
+  and the `capped: true` envelope documented in `mcp-data-exposure.md`
 
 Implemented MCP tools:
 

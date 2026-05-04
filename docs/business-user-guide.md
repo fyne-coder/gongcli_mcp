@@ -167,6 +167,12 @@ The analyst tools use only these allowlisted filter fields:
 
 Use `limit` deliberately. Broad unfiltered scans are not appropriate for
 ChatGPT or Claude sessions because every tool result becomes model context.
+If a tool returns `capped: true`, keep the returned `results` but narrow the
+next request before increasing limits. Prefer a concrete date window plus one
+or more of `lifecycle_bucket`, `scope`, `system`, `direction`, CRM object, or a
+more specific transcript/theme query. Operators can configure higher MCP row
+caps for analyst or trusted-admin deployments, but the business-user workflow
+should stay filter-first.
 
 ### Example: Business Discovery Title Filtering
 

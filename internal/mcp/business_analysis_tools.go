@@ -15,7 +15,6 @@ import (
 
 const (
 	defaultBusinessAnalysisLimit      = 25
-	maxBusinessAnalysisLimit          = 100
 	maxBusinessAnalysisFTSQueryLength = 160
 )
 
@@ -210,13 +209,14 @@ type businessAnalysisTheme struct {
 	EvidenceType string `json:"evidence_type"`
 }
 
-func businessAnalysisTools() []tool {
+func businessAnalysisTools(policy LimitPolicy) []tool {
 	out := make([]tool, 0, len(businessAnalysisToolNameList))
+	policy = policy.Normalize()
 	for _, name := range businessAnalysisToolNameList {
 		out = append(out, tool{
 			Name:        name,
 			Description: businessAnalysisToolDescriptions[name],
-			InputSchema: businessAnalysisInputSchema(),
+			InputSchema: businessAnalysisInputSchema(policy),
 		})
 	}
 	return out
@@ -227,8 +227,9 @@ func isBusinessAnalysisTool(name string) bool {
 	return ok
 }
 
-func businessAnalysisInputSchema() map[string]any {
-	filter := callFilterSchema()
+func businessAnalysisInputSchema(policy LimitPolicy) map[string]any {
+	policy = policy.Normalize()
+	filter := callFilterSchema(policy)
 	return objectSchema(map[string]any{
 		"filter":                    filter,
 		"filter_a":                  filter,
@@ -243,7 +244,7 @@ func businessAnalysisInputSchema() map[string]any {
 		"segment":                   map[string]any{"type": "string"},
 		"segment_by":                map[string]any{"type": "string"},
 		"time_grain":                map[string]any{"type": "string", "enum": []string{"", "month", "quarter"}},
-		"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": maxBusinessAnalysisLimit},
+		"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": policy.BusinessAnalysisRows},
 		"include_call_ids":          map[string]any{"type": "boolean"},
 		"include_call_titles":       map[string]any{"type": "boolean"},
 		"include_account_names":     map[string]any{"type": "boolean"},
@@ -251,7 +252,8 @@ func businessAnalysisInputSchema() map[string]any {
 	}, nil)
 }
 
-func callFilterSchema() map[string]any {
+func callFilterSchema(policy LimitPolicy) map[string]any {
+	policy = policy.Normalize()
 	return objectSchema(map[string]any{
 		"title_query":             map[string]any{"type": "string"},
 		"query":                   map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength},
@@ -269,7 +271,7 @@ func callFilterSchema() map[string]any {
 		"crm_object_type":         map[string]any{"type": "string"},
 		"crm_object_id":           map[string]any{"type": "string"},
 		"participant_title_query": map[string]any{"type": "string"},
-		"limit":                   map[string]any{"type": "integer", "minimum": 1, "maximum": maxBusinessAnalysisLimit},
+		"limit":                   map[string]any{"type": "integer", "minimum": 1, "maximum": policy.BusinessAnalysisRows},
 	}, nil)
 }
 
@@ -297,16 +299,16 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		return toolCallResult{}, err
 	}
 
-	limit := boundedBusinessAnalysisLimit(args.Limit)
+	limit := s.limitPolicy.BusinessAnalysisLimit(args.Limit)
 	if normalized.Limit > 0 {
-		limit = boundedBusinessAnalysisLimit(normalized.Limit)
+		limit = s.limitPolicy.BusinessAnalysisLimit(normalized.Limit)
 		normalized.Limit = limit
 	}
 	if filterA.Limit > 0 {
-		filterA.Limit = boundedBusinessAnalysisLimit(filterA.Limit)
+		filterA.Limit = s.limitPolicy.BusinessAnalysisLimit(filterA.Limit)
 	}
 	if filterB.Limit > 0 {
-		filterB.Limit = boundedBusinessAnalysisLimit(filterB.Limit)
+		filterB.Limit = s.limitPolicy.BusinessAnalysisLimit(filterB.Limit)
 	}
 
 	query := firstNonBlank(args.Query, normalized.Query, args.ThemeQuery, args.Theme)
@@ -697,8 +699,8 @@ func boundedBusinessAnalysisLimit(value int) int {
 	if value <= 0 {
 		return defaultBusinessAnalysisLimit
 	}
-	if value > maxBusinessAnalysisLimit {
-		return maxBusinessAnalysisLimit
+	if value > hardMaxBusinessAnalysisRows {
+		return hardMaxBusinessAnalysisRows
 	}
 	return value
 }
@@ -908,7 +910,7 @@ func callRef(callID string) string {
 }
 
 func discoverBusinessAnalysisThemes(items []businessAnalysisItem, limit int) []businessAnalysisTheme {
-	if limit <= 0 || limit > maxBusinessAnalysisLimit {
+	if limit <= 0 || limit > hardMaxBusinessAnalysisRows {
 		limit = defaultBusinessAnalysisLimit
 	}
 	stop := map[string]struct{}{

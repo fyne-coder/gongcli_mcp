@@ -46,6 +46,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
+	maxSearchResults := flags.Int("max-search-results", 0, "Maximum rows for MCP search-style tools; defaults to GONGMCP_MAX_SEARCH_RESULTS or 100, hard-capped at 1000")
+	maxCRMFields := flags.Int("max-crm-fields", 0, "Maximum rows for MCP CRM field inventory tools; defaults to GONGMCP_MAX_CRM_FIELDS or 200, hard-capped at 1000")
+	maxLateStageSignals := flags.Int("max-late-stage-signals", 0, "Maximum rows for late-stage signal analysis; defaults to GONGMCP_MAX_LATE_STAGE_SIGNALS or 100, hard-capped at 500")
+	maxMissingTranscripts := flags.Int("max-missing-transcripts", 0, "Maximum rows for missing transcript tools; defaults to GONGMCP_MAX_MISSING_TRANSCRIPTS or 500, hard-capped at 10000")
+	maxOpportunitySummaries := flags.Int("max-opportunity-summaries", 0, "Maximum rows for Opportunity summary tools; defaults to GONGMCP_MAX_OPPORTUNITY_SUMMARIES or 100, hard-capped at 1000")
+	maxCRMMatrixCells := flags.Int("max-crm-matrix-cells", 0, "Maximum cells for CRM matrix tools; defaults to GONGMCP_MAX_CRM_MATRIX_CELLS or 200, hard-capped at 1000")
+	maxLifecycleResults := flags.Int("max-lifecycle-results", 0, "Maximum rows for lifecycle and backlog tools; defaults to GONGMCP_MAX_LIFECYCLE_RESULTS or 100, hard-capped at 1000")
+	maxLifecycleCRMFields := flags.Int("max-lifecycle-crm-fields", 0, "Maximum rows for lifecycle CRM comparison tools; defaults to GONGMCP_MAX_LIFECYCLE_CRM_FIELDS or 200, hard-capped at 1000")
+	maxCallFactGroups := flags.Int("max-call-fact-groups", 0, "Maximum rows for call-fact aggregate tools; defaults to GONGMCP_MAX_CALL_FACT_GROUPS or 200, hard-capped at 1000")
+	maxInventoryResults := flags.Int("max-inventory-results", 0, "Maximum rows for MCP config and inventory tools; defaults to GONGMCP_MAX_INVENTORY_RESULTS or 200, hard-capped at 1000")
+	maxBusinessAnalysisResults := flags.Int("max-business-analysis-results", 0, "Maximum rows for business-analysis tools; defaults to GONGMCP_MAX_BUSINESS_ANALYSIS_RESULTS or 100, hard-capped at 1000")
 	if err := flags.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -94,6 +105,35 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid tool selection: %v\n", err)
 		return 2
 	}
+	limitPolicy, err := resolveLimitPolicy(limitSelection{
+		SearchResults:              *maxSearchResults,
+		SearchResultsSet:           flagSet["max-search-results"],
+		CRMFields:                  *maxCRMFields,
+		CRMFieldsSet:               flagSet["max-crm-fields"],
+		LateStageSignals:           *maxLateStageSignals,
+		LateStageSignalsSet:        flagSet["max-late-stage-signals"],
+		MissingTranscripts:         *maxMissingTranscripts,
+		MissingTranscriptsSet:      flagSet["max-missing-transcripts"],
+		OpportunitySummaries:       *maxOpportunitySummaries,
+		OpportunitySummariesSet:    flagSet["max-opportunity-summaries"],
+		CRMMatrixCells:             *maxCRMMatrixCells,
+		CRMMatrixCellsSet:          flagSet["max-crm-matrix-cells"],
+		LifecycleResults:           *maxLifecycleResults,
+		LifecycleResultsSet:        flagSet["max-lifecycle-results"],
+		LifecycleCRMFields:         *maxLifecycleCRMFields,
+		LifecycleCRMFieldsSet:      flagSet["max-lifecycle-crm-fields"],
+		CallFactGroups:             *maxCallFactGroups,
+		CallFactGroupsSet:          flagSet["max-call-fact-groups"],
+		InventoryResults:           *maxInventoryResults,
+		InventoryResultsSet:        flagSet["max-inventory-results"],
+		BusinessAnalysisResults:    *maxBusinessAnalysisResults,
+		BusinessAnalysisResultsSet: flagSet["max-business-analysis-results"],
+		Getenv:                     os.Getenv,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid MCP limit policy: %v\n", err)
+		return 2
+	}
 
 	ctx := context.Background()
 	store, err := sqlite.OpenReadOnly(ctx, db)
@@ -103,7 +143,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist)}
+	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy)}
 	if configPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG")); configPath != "" {
 		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
 			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
@@ -190,6 +230,66 @@ type toolSelection struct {
 	PresetFlagSet    bool
 	AllowlistEnv     string
 	PresetEnv        string
+}
+
+type limitSelection struct {
+	SearchResults              int
+	SearchResultsSet           bool
+	CRMFields                  int
+	CRMFieldsSet               bool
+	LateStageSignals           int
+	LateStageSignalsSet        bool
+	MissingTranscripts         int
+	MissingTranscriptsSet      bool
+	OpportunitySummaries       int
+	OpportunitySummariesSet    bool
+	CRMMatrixCells             int
+	CRMMatrixCellsSet          bool
+	LifecycleResults           int
+	LifecycleResultsSet        bool
+	LifecycleCRMFields         int
+	LifecycleCRMFieldsSet      bool
+	CallFactGroups             int
+	CallFactGroupsSet          bool
+	InventoryResults           int
+	InventoryResultsSet        bool
+	BusinessAnalysisResults    int
+	BusinessAnalysisResultsSet bool
+	Getenv                     func(string) string
+}
+
+func resolveLimitPolicy(selection limitSelection) (mcp.LimitPolicy, error) {
+	policy, err := mcp.LimitPolicyFromEnv(selection.Getenv)
+	if err != nil {
+		return mcp.LimitPolicy{}, err
+	}
+	overrides := []struct {
+		set   bool
+		field string
+		value int
+	}{
+		{selection.SearchResultsSet, "search_results", selection.SearchResults},
+		{selection.CRMFieldsSet, "crm_fields", selection.CRMFields},
+		{selection.LateStageSignalsSet, "late_stage_signals", selection.LateStageSignals},
+		{selection.MissingTranscriptsSet, "missing_transcripts", selection.MissingTranscripts},
+		{selection.OpportunitySummariesSet, "opportunity_summaries", selection.OpportunitySummaries},
+		{selection.CRMMatrixCellsSet, "crm_matrix_cells", selection.CRMMatrixCells},
+		{selection.LifecycleResultsSet, "lifecycle_results", selection.LifecycleResults},
+		{selection.LifecycleCRMFieldsSet, "lifecycle_crm_fields", selection.LifecycleCRMFields},
+		{selection.CallFactGroupsSet, "call_fact_groups", selection.CallFactGroups},
+		{selection.InventoryResultsSet, "inventory_results", selection.InventoryResults},
+		{selection.BusinessAnalysisResultsSet, "business_analysis_rows", selection.BusinessAnalysisResults},
+	}
+	for _, override := range overrides {
+		if !override.set {
+			continue
+		}
+		policy, err = policy.WithOverride(override.field, override.value)
+		if err != nil {
+			return mcp.LimitPolicy{}, err
+		}
+	}
+	return policy.Normalize(), nil
 }
 
 func resolveToolAllowlist(selection toolSelection) ([]string, error) {

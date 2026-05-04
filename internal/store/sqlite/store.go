@@ -29,27 +29,27 @@ const (
 	defaultMissingTranscriptsLimit = 100
 	maxMissingTranscriptsLimit     = 10000
 	defaultTranscriptSearchLimit   = 20
-	maxTranscriptSearchLimit       = 100
+	maxTranscriptSearchLimit       = 1000
 	defaultCallSearchLimit         = 20
-	maxCallSearchLimit             = 100
+	maxCallSearchLimit             = 1000
 	defaultCRMFieldLimit           = 50
-	maxCRMFieldLimit               = 200
+	maxCRMFieldLimit               = 1000
 	defaultCRMFieldValueLimit      = 20
-	maxCRMFieldValueLimit          = 100
+	maxCRMFieldValueLimit          = 1000
 	defaultLateStageSignalLimit    = 25
-	maxLateStageSignalLimit        = 100
+	maxLateStageSignalLimit        = 500
 	defaultOpportunitySummaryLimit = 25
-	maxOpportunitySummaryLimit     = 100
+	maxOpportunitySummaryLimit     = 1000
 	defaultCRMMatrixLimit          = 50
-	maxCRMMatrixLimit              = 200
+	maxCRMMatrixLimit              = 1000
 	defaultLifecycleLimit          = 25
-	maxLifecycleLimit              = 100
+	maxLifecycleLimit              = 1000
 	defaultLifecycleCRMFieldLimit  = 50
-	maxLifecycleCRMFieldLimit      = 200
+	maxLifecycleCRMFieldLimit      = 1000
 	defaultCallFactsLimit          = 50
-	maxCallFactsLimit              = 200
+	maxCallFactsLimit              = 1000
 	defaultInventoryLimit          = 50
-	maxInventoryLimit              = 200
+	maxInventoryLimit              = 1000
 )
 
 type StartSyncRunParams struct {
@@ -186,9 +186,16 @@ type TranscriptSearchResult struct {
 }
 
 type CallSearchParams struct {
-	CRMObjectType string
-	CRMObjectID   string
-	Limit         int
+	CRMObjectType    string
+	CRMObjectID      string
+	FromDate         string
+	ToDate           string
+	LifecycleBucket  string
+	Scope            string
+	System           string
+	Direction        string
+	TranscriptStatus string
+	Limit            int
 }
 
 type CRMObjectTypeSummary struct {
@@ -375,10 +382,26 @@ type TranscriptAttributionSearchParams struct {
 	FromDate         string
 	ToDate           string
 	LifecycleBucket  string
+	Scope            string
+	System           string
+	Direction        string
+	TranscriptStatus string
 	Industry         string
 	AccountQuery     string
 	OpportunityStage string
 	Limit            int
+}
+
+type MissingTranscriptSearchParams struct {
+	FromDate        string
+	ToDate          string
+	LifecycleBucket string
+	Scope           string
+	System          string
+	Direction       string
+	CRMObjectType   string
+	CRMObjectID     string
+	Limit           int
 }
 
 type TranscriptCRMSearchResult struct {
@@ -398,6 +421,7 @@ type TranscriptCRMSearchResult struct {
 
 type TranscriptCallFactsSearchResult struct {
 	CallID          string `json:"-"`
+	SpeakerID       string `json:"-"`
 	StartedAt       string `json:"started_at"`
 	CallDate        string `json:"call_date"`
 	CallMonth       string `json:"call_month"`
@@ -529,6 +553,11 @@ type LifecycleCallSearchResult struct {
 
 type LifecycleTranscriptPriorityParams struct {
 	Bucket          string
+	FromDate        string
+	ToDate          string
+	Scope           string
+	System          string
+	Direction       string
 	Limit           int
 	LifecycleSource string
 }
@@ -1439,18 +1468,51 @@ func (s *Store) UpsertTranscript(ctx context.Context, raw json.RawMessage) (*Tra
 }
 
 func (s *Store) FindCallsMissingTranscripts(ctx context.Context, limit int) ([]MissingTranscriptCall, error) {
-	limit = boundedLimit(limit, defaultMissingTranscriptsLimit, maxMissingTranscriptsLimit)
+	return s.FindCallsMissingTranscriptsByFilters(ctx, MissingTranscriptSearchParams{Limit: limit})
+}
 
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT c.call_id, c.title, c.started_at
+func (s *Store) FindCallsMissingTranscriptsByFilters(ctx context.Context, params MissingTranscriptSearchParams) ([]MissingTranscriptCall, error) {
+	limit := boundedLimit(params.Limit, defaultMissingTranscriptsLimit, maxMissingTranscriptsLimit)
+
+	query := `SELECT c.call_id, c.title, c.started_at
 		   FROM calls c
-		   LEFT JOIN transcripts t ON t.call_id = c.call_id
-		  WHERE t.call_id IS NULL
+		   LEFT JOIN transcripts t ON t.call_id = c.call_id`
+	var args []any
+	where := []string{`t.call_id IS NULL`}
+	factWhere, factArgs, err := callFactFilterWhere("cf", callFactFilterParams{
+		FromDate:        params.FromDate,
+		ToDate:          params.ToDate,
+		LifecycleBucket: params.LifecycleBucket,
+		Scope:           params.Scope,
+		System:          params.System,
+		Direction:       params.Direction,
+	}, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(factWhere) > 0 {
+		where = append(where, `EXISTS (SELECT 1 FROM call_facts cf WHERE cf.call_id = c.call_id AND `+strings.Join(factWhere, ` AND `)+`)`)
+		args = append(args, factArgs...)
+	}
+	objectType := strings.TrimSpace(params.CRMObjectType)
+	objectID := strings.TrimSpace(params.CRMObjectID)
+	if objectType != "" || objectID != "" {
+		subquery := []string{`o.call_id = c.call_id`}
+		if objectType != "" {
+			subquery = append(subquery, `o.object_type = ?`)
+			args = append(args, objectType)
+		}
+		if objectID != "" {
+			subquery = append(subquery, `o.object_id = ?`)
+			args = append(args, objectID)
+		}
+		where = append(where, `EXISTS (SELECT 1 FROM call_context_objects o WHERE `+strings.Join(subquery, ` AND `)+`)`)
+	}
+	query += ` WHERE ` + strings.Join(where, ` AND `) + `
 		  ORDER BY c.started_at DESC, c.call_id
-		  LIMIT ?`,
-		limit,
-	)
+		  LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1614,6 +1676,22 @@ func (s *Store) SearchCallsRaw(ctx context.Context, params CallSearchParams) ([]
 			args = append(args, objectID)
 		}
 		where = append(where, `EXISTS (SELECT 1 FROM call_context_objects o WHERE `+strings.Join(subquery, ` AND `)+`)`)
+	}
+	factWhere, factArgs, err := callFactFilterWhere("cf", callFactFilterParams{
+		FromDate:         params.FromDate,
+		ToDate:           params.ToDate,
+		LifecycleBucket:  params.LifecycleBucket,
+		Scope:            params.Scope,
+		System:           params.System,
+		Direction:        params.Direction,
+		TranscriptStatus: params.TranscriptStatus,
+	}, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(factWhere) > 0 {
+		where = append(where, `EXISTS (SELECT 1 FROM call_facts cf WHERE cf.call_id = c.call_id AND `+strings.Join(factWhere, ` AND `)+`)`)
+		args = append(args, factArgs...)
 	}
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, ` AND `)
@@ -2392,6 +2470,7 @@ SELECT cf.call_id,
        cf.scope,
        cf.system,
        cf.direction,
+       ts.speaker_id,
        ts.segment_index,
        ts.start_ms,
        ts.end_ms,
@@ -2435,6 +2514,7 @@ SELECT cf.call_id,
 			&row.Scope,
 			&row.System,
 			&row.Direction,
+			&row.SpeakerID,
 			&row.SegmentIndex,
 			&row.StartMS,
 			&row.EndMS,
@@ -2487,6 +2567,17 @@ func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, param
 		where = append(where, `cf.lifecycle_bucket = ?`)
 		args = append(args, strings.ToLower(value))
 	}
+	factWhere, factArgs, err := callFactFilterWhere("cf", callFactFilterParams{
+		Scope:            params.Scope,
+		System:           params.System,
+		Direction:        params.Direction,
+		TranscriptStatus: params.TranscriptStatus,
+	}, true)
+	if err != nil {
+		return nil, err
+	}
+	where = append(where, factWhere...)
+	args = append(args, factArgs...)
 	if value := strings.TrimSpace(params.Industry); value != "" {
 		where = append(where, `EXISTS (
 			SELECT 1
@@ -2588,6 +2679,7 @@ WITH matched_segments AS (
 	    ON cf.call_id = ts.call_id
 	 WHERE ` + strings.Join(where, ` AND `) + `
 	 ORDER BY rank, c.started_at DESC, ts.call_id, ts.segment_index
+	 LIMIT ?
 ),
 selected_account AS (
 	SELECT call_id, object_key
@@ -2667,6 +2759,7 @@ SELECT m.call_id,
   FROM matched_segments m
  ORDER BY m.rank, m.started_at DESC, m.call_id, m.segment_index
  LIMIT ?`
+	args = append(args, limit)
 	args = append(args, selectedArgs...)
 	args = append(args, limit)
 
@@ -3111,6 +3204,44 @@ WITH candidates AS (
 		query += ` AND l.bucket = ?`
 		args = append(args, bucket)
 	}
+	var fromDate, toDate string
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizeDateFilter(value, "from_date")
+		if err != nil {
+			return nil, err
+		}
+		fromDate = date
+		query += ` AND substr(l.started_at, 1, 10) >= ?`
+		args = append(args, date)
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizeDateFilter(value, "to_date")
+		if err != nil {
+			return nil, err
+		}
+		toDate = date
+		query += ` AND substr(l.started_at, 1, 10) <= ?`
+		args = append(args, date)
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, errors.New("from_date must be on or before to_date")
+	}
+	if value := strings.TrimSpace(params.Scope); value != "" {
+		scope, ok := normalizedScope(value)
+		if !ok {
+			return nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		query += ` AND COALESCE(NULLIF(TRIM(json_extract(c.raw_json, '$.metaData.scope')), ''), NULLIF(TRIM(json_extract(c.raw_json, '$.scope')), ''), 'Unknown') = ?`
+		args = append(args, scope)
+	}
+	if value := strings.TrimSpace(params.System); value != "" {
+		query += ` AND l.system = ?`
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.Direction); value != "" {
+		query += ` AND l.direction = ?`
+		args = append(args, value)
+	}
 	query += `
 )
 SELECT call_id,
@@ -3434,6 +3565,82 @@ func callFactsWhere(params CallFactsSummaryParams) ([]string, []any, error) {
 			return nil, nil, fmt.Errorf("transcript_status must be one of: present, missing")
 		}
 		where = append(where, `transcript_status = ?`)
+		args = append(args, status)
+	}
+	return where, args, nil
+}
+
+type callFactFilterParams struct {
+	FromDate         string
+	ToDate           string
+	LifecycleBucket  string
+	Scope            string
+	System           string
+	Direction        string
+	TranscriptStatus string
+}
+
+func callFactFilterWhere(alias string, params callFactFilterParams, allowTranscriptStatus bool) ([]string, []any, error) {
+	if strings.TrimSpace(alias) == "" {
+		alias = "cf"
+	}
+	prefix := alias + "."
+	var where []string
+	var args []any
+	var fromDate, toDate string
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizeDateFilter(value, "from_date")
+		if err != nil {
+			return nil, nil, err
+		}
+		fromDate = date
+		where = append(where, prefix+`call_date >= ?`)
+		args = append(args, date)
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizeDateFilter(value, "to_date")
+		if err != nil {
+			return nil, nil, err
+		}
+		toDate = date
+		where = append(where, prefix+`call_date <= ?`)
+		args = append(args, date)
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, nil, errors.New("from_date must be on or before to_date")
+	}
+	if value := strings.TrimSpace(params.LifecycleBucket); value != "" {
+		if !isKnownLifecycleBucket(value) {
+			return nil, nil, fmt.Errorf("unknown lifecycle bucket %q", value)
+		}
+		where = append(where, prefix+`lifecycle_bucket = ?`)
+		args = append(args, strings.ToLower(value))
+	}
+	if value := strings.TrimSpace(params.Scope); value != "" {
+		scope, ok := normalizedScope(value)
+		if !ok {
+			return nil, nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		where = append(where, prefix+`scope = ?`)
+		args = append(args, scope)
+	}
+	if value := strings.TrimSpace(params.System); value != "" {
+		where = append(where, prefix+`system = ?`)
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.Direction); value != "" {
+		where = append(where, prefix+`direction = ?`)
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.TranscriptStatus); value != "" && value != "any" {
+		if !allowTranscriptStatus {
+			return nil, nil, errors.New("transcript_status is not supported for this query")
+		}
+		status, ok := normalizedTranscriptStatus(value)
+		if !ok {
+			return nil, nil, errors.New("transcript_status must be one of: present, missing, any")
+		}
+		where = append(where, prefix+`transcript_status = ?`)
 		args = append(args, status)
 	}
 	return where, args, nil

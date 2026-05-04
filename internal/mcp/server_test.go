@@ -116,6 +116,113 @@ func TestToolsListOnlyReturnsAllowlistedTools(t *testing.T) {
 	}
 }
 
+func TestToolSchemasReflectConfiguredLimitPolicy(t *testing.T) {
+	t.Parallel()
+
+	policy, err := DefaultLimitPolicy().WithOverride("search_results", 250)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+	policy, err = policy.WithOverride("business_analysis_rows", 300)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+
+	segmentTool, ok := FindToolWithLimitPolicy("search_transcript_segments", policy)
+	if !ok {
+		t.Fatal("search_transcript_segments not found")
+	}
+	if got := schemaLimitMaximum(t, segmentTool.InputSchema, "limit"); got != 250 {
+		t.Fatalf("search_transcript_segments maximum=%d want 250", got)
+	}
+
+	cohortTool, ok := FindToolWithLimitPolicy("build_call_cohort", policy)
+	if !ok {
+		t.Fatal("build_call_cohort not found")
+	}
+	if got := schemaLimitMaximum(t, cohortTool.InputSchema, "limit"); got != 300 {
+		t.Fatalf("build_call_cohort maximum=%d want 300", got)
+	}
+	filterSchema := mapField(t, mapField(t, cohortTool.InputSchema, "properties"), "filter")
+	if got := schemaLimitMaximum(t, filterSchema, "limit"); got != 300 {
+		t.Fatalf("build_call_cohort filter maximum=%d want 300", got)
+	}
+}
+
+func TestLimitPolicyFromEnvClampsHardCeiling(t *testing.T) {
+	t.Parallel()
+
+	policy, err := LimitPolicyFromEnv(func(key string) string {
+		if key == "GONGMCP_MAX_SEARCH_RESULTS" {
+			return "999999"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("LimitPolicyFromEnv returned error: %v", err)
+	}
+	if policy.SearchResults != hardMaxSearchResults {
+		t.Fatalf("SearchResults=%d want hard max %d", policy.SearchResults, hardMaxSearchResults)
+	}
+}
+
+func TestLimitPolicyAppliesConfiguredCapToOmittedLimit(t *testing.T) {
+	t.Parallel()
+
+	policy, err := DefaultLimitPolicy().WithOverride("search_results", 5)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+	if got := policy.SearchLimit(0); got != 5 {
+		t.Fatalf("SearchLimit(0)=%d want configured cap 5", got)
+	}
+	policy, err = DefaultLimitPolicy().WithOverride("missing_transcripts", 10)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+	if got := policy.MissingTranscriptLimit(0); got != 10 {
+		t.Fatalf("MissingTranscriptLimit(0)=%d want configured cap 10", got)
+	}
+	policy, err = DefaultLimitPolicy().WithOverride("business_analysis_rows", 10)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+	if got := policy.BusinessAnalysisLimit(0); got != 10 {
+		t.Fatalf("BusinessAnalysisLimit(0)=%d want configured cap 10", got)
+	}
+}
+
+func TestCapRefinementsOnlySuggestAcceptedFilters(t *testing.T) {
+	t.Parallel()
+
+	fieldRefs := crmFieldValueRefinements(searchCRMFieldValuesArgs{
+		ObjectType: "Opportunity",
+		FieldName:  "StageName",
+		ValueQuery: "Discovery",
+	})
+	for _, disallowed := range []string{"from_date", "lifecycle_bucket", "scope", "system", "direction", "crm_object"} {
+		if strings.Contains(strings.Join(fieldRefs, " "), disallowed) {
+			t.Fatalf("CRM field value refinements suggested unsupported filter %q: %v", disallowed, fieldRefs)
+		}
+	}
+	if !strings.Contains(strings.Join(fieldRefs, " "), "value_query") {
+		t.Fatalf("CRM field value refinements did not mention value_query: %v", fieldRefs)
+	}
+
+	crmRefs := crmTranscriptRefinements(searchTranscriptsByCRMContextArgs{
+		Query:      "implementation",
+		ObjectType: "Opportunity",
+	})
+	for _, disallowed := range []string{"from_date", "lifecycle_bucket", "scope", "system", "direction"} {
+		if strings.Contains(strings.Join(crmRefs, " "), disallowed) {
+			t.Fatalf("CRM transcript refinements suggested unsupported filter %q: %v", disallowed, crmRefs)
+		}
+	}
+	if !strings.Contains(strings.Join(crmRefs, " "), "object_id") {
+		t.Fatalf("CRM transcript refinements did not mention object_id: %v", crmRefs)
+	}
+}
+
 func TestToolPresetCatalogAliasesAndGovernanceCompatibility(t *testing.T) {
 	t.Parallel()
 
@@ -975,6 +1082,146 @@ func TestSearchTranscriptSegmentsCanOptIntoIdentifiers(t *testing.T) {
 	}
 }
 
+func TestSearchTranscriptSegmentsSupportsCallFactFilters(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedFilteredSegmentFixture(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "filtered-snippets",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query":               "implementation",
+				"from_date":           "2026-01-01",
+				"to_date":             "2026-03-31",
+				"scope":               "External",
+				"limit":               5,
+				"include_call_ids":    true,
+				"include_speaker_ids": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal filtered snippet payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("filtered snippet count=%d want 1: %+v", len(rows), rows)
+	}
+	if rows[0]["call_id"] == "" || rows[0]["speaker_id"] == "" {
+		t.Fatalf("filtered identifier opt-in did not return ids: %+v", rows[0])
+	}
+	if _, ok := rows[0]["context_excerpt"]; ok {
+		t.Fatalf("search_transcript_segments should preserve snippet shape without context_excerpt: %+v", rows[0])
+	}
+}
+
+func TestSearchTranscriptSegmentsReportsCapHit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "capped-snippets",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query": "external",
+				"limit": 1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal cap payload: %v", err)
+	}
+	if capped, _ := payload["capped"].(bool); !capped {
+		t.Fatalf("payload did not report cap hit: %+v", payload)
+	}
+	if intField(payload, "limit") != 1 || intField(payload, "returned") != 1 {
+		t.Fatalf("unexpected cap metadata: %+v", payload)
+	}
+	if rows := arrayField(t, payload, "results"); len(rows) != 1 {
+		t.Fatalf("results count=%d want 1 in %+v", len(rows), payload)
+	}
+	if refs := arrayField(t, payload, "suggested_refinements"); len(refs) == 0 {
+		t.Fatalf("missing suggested refinements in %+v", payload)
+	}
+}
+
+func TestSearchTranscriptSegmentsOmittedLimitHonorsConfiguredCap(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedFilteredSegmentFixture(t, store)
+	seedTranscriptSegmentFixture(t, store, "call_filtered_segments_2", "buyer-filtered-2", "2026-02-11T15:00:00Z", "The implementation plan needs another external review.")
+
+	policy, err := DefaultLimitPolicy().WithOverride("search_results", 1)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+	server := NewServerWithOptions(store, "gongmcp", "test", WithLimitPolicy(policy))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "omitted-limit-cap",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_segments",
+			"arguments": map[string]any{
+				"query": "implementation",
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal cap payload: %v", err)
+	}
+	if intField(payload, "limit") != 1 || intField(payload, "returned") != 1 {
+		t.Fatalf("omitted limit did not honor configured cap: %+v", payload)
+	}
+}
+
 func TestSearchTranscriptsByCallFactsFiltersAndRedactsIdentifiers(t *testing.T) {
 	t.Parallel()
 
@@ -1184,6 +1431,40 @@ func TestSearchTranscriptQuotesWithAttributionRedactsNamesByDefault(t *testing.T
 	}
 }
 
+func TestSearchTranscriptQuotesRejectsMissingTranscriptStatus(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "missing-status",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":             "implementation",
+				"transcript_status": "missing",
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected tool error, got %+v", envelope.Result)
+	}
+	if len(envelope.Result.Content) != 1 || !strings.Contains(envelope.Result.Content[0].Text, "transcript_status=missing") {
+		t.Fatalf("error did not explain invalid missing transcript status: %+v", envelope.Result)
+	}
+}
+
 func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *testing.T) {
 	t.Parallel()
 
@@ -1216,6 +1497,57 @@ func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *t
 	}
 	if !strings.Contains(envelope.Result.Content[0].Text, "include_account_names") {
 		t.Fatalf("tool error missing opt-in guidance: %+v", envelope.Result)
+	}
+}
+
+func TestMissingTranscriptsOmittedLimitHonorsConfiguredCap(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	for _, id := range []string{"call_missing_cap_1", "call_missing_cap_2"} {
+		if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+			"metaData": map[string]any{
+				"id":      id,
+				"title":   "Missing transcript cap call",
+				"started": "2026-02-10T15:00:00Z",
+			},
+		})); err != nil {
+			t.Fatalf("upsert missing transcript call: %v", err)
+		}
+	}
+	policy, err := DefaultLimitPolicy().WithOverride("missing_transcripts", 1)
+	if err != nil {
+		t.Fatalf("WithOverride returned error: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithLimitPolicy(policy))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "missing-cap",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name":      "missing_transcripts",
+			"arguments": map[string]any{},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("unmarshal cap payload: %v", err)
+	}
+	if intField(payload, "limit") != 1 || intField(payload, "returned") != 1 {
+		t.Fatalf("missing transcript omitted limit did not honor configured cap: %+v", payload)
 	}
 }
 
@@ -2512,6 +2844,14 @@ func namedOrResultsArrayField(t *testing.T, values map[string]any, key string) [
 	return arrayField(t, values, "results")
 }
 
+func schemaLimitMaximum(t *testing.T, schema map[string]any, field string) int {
+	t.Helper()
+
+	properties := mapField(t, schema, "properties")
+	limitSchema := mapField(t, properties, field)
+	return intField(limitSchema, "maximum")
+}
+
 func stringField(values map[string]any, key string) string {
 	value, _ := values[key].(string)
 	return value
@@ -2890,6 +3230,48 @@ methodology:
 		ImportedBy:      "example-user",
 	}); err != nil {
 		t.Fatalf("import business profile: %v", err)
+	}
+}
+
+func seedFilteredSegmentFixture(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+
+	seedTranscriptSegmentFixture(t, store, "call_filtered_segments", "buyer-filtered", "2026-02-10T15:00:00Z", "The implementation timeline is the main objection.")
+}
+
+func seedTranscriptSegmentFixture(t *testing.T, store *sqlite.Store, callID, speakerID, startedAt, text string) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"metaData": map[string]any{
+			"id":        callID,
+			"title":     "Filtered segment evidence",
+			"started":   startedAt,
+			"duration":  1800,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+	})); err != nil {
+		t.Fatalf("upsert filtered call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": callID,
+				"transcript": []any{
+					map[string]any{
+						"speakerId": speakerID,
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": text},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert filtered transcript: %v", err)
 	}
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
@@ -20,12 +21,20 @@ func (a *app) mcp(ctx context.Context, args []string) error {
 		if len(args) != 1 {
 			return errUsage
 		}
-		return writeJSONValue(a.out, mcp.ToolCatalog())
+		policy, err := mcp.LimitPolicyFromEnv(os.Getenv)
+		if err != nil {
+			return err
+		}
+		return writeJSONValue(a.out, mcp.ToolCatalogWithLimitPolicy(policy))
 	case "tool-info":
 		if len(args) != 2 {
 			return errUsage
 		}
-		tool, ok := mcp.FindTool(strings.TrimSpace(args[1]))
+		policy, err := mcp.LimitPolicyFromEnv(os.Getenv)
+		if err != nil {
+			return err
+		}
+		tool, ok := mcp.FindToolWithLimitPolicy(strings.TrimSpace(args[1]), policy)
 		if !ok {
 			return fmt.Errorf("unknown MCP tool %q", args[1])
 		}

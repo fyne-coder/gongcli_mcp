@@ -81,7 +81,7 @@ Implementation controls on the MCP side:
 
 - `cmd/gongmcp/main.go` requires an explicit `--db PATH`.
 - `gongmcp` opens SQLite through `sqlite.OpenReadOnly(...)`.
-- `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB.
+- `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB. Operators can raise selected row caps by `GONGMCP_MAX_*` env vars or `gongmcp --max-*` flags, but each family has a hard ceiling and `tools/list` reflects the active maximum.
 - Profile-aware reads refuse stale-cache rebuilds instead of mutating SQLite from MCP.
 - HTTP mode exposes `/mcp` plus unauthenticated `/healthz`, defaults to bearer
   auth, requires an explicit tool preset or allowlist, and blocks non-local binds unless

@@ -181,7 +181,7 @@ sed \
 ssh "$LAB_VM" "mkdir -p '$REMOTE_LAB/keycloak/import'"
 scp "$tmpdir/.env" "$LAB_VM:$REMOTE_LAB/.env" >/dev/null
 scp "$tmpdir/import/realm.json" "$LAB_VM:$REMOTE_LAB/keycloak/import/realm.json" >/dev/null
-ssh "$LAB_VM" "chmod 600 '$REMOTE_LAB/.env'"
+ssh "$LAB_VM" "chmod 600 '$REMOTE_LAB/.env' && chmod 644 '$REMOTE_LAB/keycloak/import/realm.json'"
 
 ssh "$LAB_VM" "
 set -euo pipefail
