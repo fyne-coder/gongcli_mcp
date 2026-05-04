@@ -557,35 +557,80 @@ SELECT ts.call_id,
 }
 
 func (s *Store) SearchCallsRaw(ctx context.Context, params sqlite.CallSearchParams) ([]json.RawMessage, error) {
-	if strings.TrimSpace(params.CRMObjectType) != "" || strings.TrimSpace(params.CRMObjectID) != "" || strings.TrimSpace(params.LifecycleBucket) != "" || strings.TrimSpace(params.Scope) != "" || strings.TrimSpace(params.System) != "" || strings.TrimSpace(params.Direction) != "" {
-		return nil, errors.New("postgres call search only supports date and transcript_status filters in this vertical slice")
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
 	}
 	limit := boundedLimit(params.Limit, defaultCallSearchLimit, maxCallSearchLimit)
-	query := `SELECT raw_json::text FROM calls c`
+	query := `SELECT c.raw_json::text FROM calls c`
 	where := []string{}
 	args := []any{}
 	addArg := func(value any) string {
 		args = append(args, value)
 		return fmt.Sprintf("$%d", len(args))
 	}
-	if from := strings.TrimSpace(params.FromDate); from != "" {
-		where = append(where, `c.started_at >= `+addArg(from))
-	}
-	if to := strings.TrimSpace(params.ToDate); to != "" {
-		if exclusive, ok := callSearchExclusiveToDate(to); ok {
-			where = append(where, `c.started_at < `+addArg(exclusive))
-		} else {
-			where = append(where, `c.started_at <= `+addArg(to))
+
+	objectType := strings.TrimSpace(params.CRMObjectType)
+	objectID := strings.TrimSpace(params.CRMObjectID)
+	if objectType != "" || objectID != "" {
+		subquery := []string{`o.call_id = c.call_id`}
+		if objectType != "" {
+			subquery = append(subquery, `o.object_type = `+addArg(objectType))
 		}
+		if objectID != "" {
+			subquery = append(subquery, `o.object_id = `+addArg(objectID))
+		}
+		where = append(where, `EXISTS (SELECT 1 FROM call_context_objects o WHERE `+strings.Join(subquery, ` AND `)+`)`)
 	}
-	switch strings.TrimSpace(params.TranscriptStatus) {
-	case "", "all", "any":
-	case "present":
-		where = append(where, `EXISTS (SELECT 1 FROM transcripts t WHERE t.call_id = c.call_id)`)
-	case "missing":
-		where = append(where, `NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.call_id = c.call_id)`)
-	default:
-		return nil, fmt.Errorf("unsupported transcript_status %q", params.TranscriptStatus)
+
+	factWhere := []string{`cf.call_id = c.call_id`}
+	var fromDate, toDate string
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "from_date")
+		if err != nil {
+			return nil, err
+		}
+		fromDate = date
+		factWhere = append(factWhere, `cf.call_date >= `+addArg(date))
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "to_date")
+		if err != nil {
+			return nil, err
+		}
+		toDate = date
+		factWhere = append(factWhere, `cf.call_date <= `+addArg(date))
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, errors.New("from_date must be on or before to_date")
+	}
+	if value := strings.TrimSpace(params.LifecycleBucket); value != "" {
+		if !postgresKnownLifecycleBucket(value) {
+			return nil, fmt.Errorf("unknown lifecycle bucket %q", value)
+		}
+		factWhere = append(factWhere, `cf.lifecycle_bucket = `+addArg(value))
+	}
+	if value := strings.TrimSpace(params.Scope); value != "" {
+		scope, ok := normalizePostgresScope(value)
+		if !ok {
+			return nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		factWhere = append(factWhere, `cf.scope = `+addArg(scope))
+	}
+	if value := strings.TrimSpace(params.System); value != "" {
+		factWhere = append(factWhere, `cf.system = `+addArg(value))
+	}
+	if value := strings.TrimSpace(params.Direction); value != "" {
+		factWhere = append(factWhere, `cf.direction = `+addArg(value))
+	}
+	if value := strings.TrimSpace(params.TranscriptStatus); value != "" && value != "any" {
+		status, ok := normalizePostgresTranscriptStatus(value)
+		if !ok {
+			return nil, errors.New("transcript_status must be one of: present, missing, any")
+		}
+		factWhere = append(factWhere, `cf.transcript_status = `+addArg(status))
+	}
+	if len(factWhere) > 1 {
+		where = append(where, `EXISTS (SELECT 1 FROM call_facts cf WHERE `+strings.Join(factWhere, ` AND `)+`)`)
 	}
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, ` AND `)
@@ -605,6 +650,70 @@ func (s *Store) SearchCallsRaw(ctx context.Context, params sqlite.CallSearchPara
 		out = append(out, json.RawMessage(raw))
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallDetail, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil, errors.New("call id is required")
+	}
+
+	var detail sqlite.CallDetail
+	if err := s.db.QueryRowContext(ctx, `SELECT call_id, title, started_at, duration_seconds, parties_count FROM calls WHERE call_id = $1`, callID).Scan(
+		&detail.CallID,
+		&detail.Title,
+		&detail.StartedAt,
+		&detail.DurationSeconds,
+		&detail.PartiesCount,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("call %q not found", callID)
+		}
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT o.object_type,
+       o.object_id,
+       '' AS object_name,
+       COUNT(f.id) AS field_count,
+       COUNT(NULLIF(TRIM(f.field_value_text), '')) AS populated_field_count,
+       COALESCE(string_agg(DISTINCT f.field_name, ',' ORDER BY f.field_name), '') AS field_names
+  FROM call_context_objects o
+  LEFT JOIN call_context_fields f
+    ON f.call_id = o.call_id
+   AND f.object_key = o.object_key
+ WHERE o.call_id = $1
+ GROUP BY o.object_key, o.object_type, o.object_id, o.object_name
+ ORDER BY o.object_type, o.object_id, o.object_key`, callID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var object sqlite.CallDetailCRMObject
+		var fieldNames string
+		if err := rows.Scan(
+			&object.ObjectType,
+			&object.ObjectID,
+			&object.ObjectName,
+			&object.FieldCount,
+			&object.PopulatedFieldCount,
+			&fieldNames,
+		); err != nil {
+			return nil, err
+		}
+		object.FieldNames = splitPostgresCommaList(fieldNames)
+		detail.CRMObjects = append(detail.CRMObjects, object)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &detail, nil
 }
 
 func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummary, error) {

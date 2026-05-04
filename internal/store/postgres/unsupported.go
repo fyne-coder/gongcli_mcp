@@ -12,9 +12,6 @@ var errUnsupported = errors.New("postgres store does not support this tool in th
 
 func unsupported() error { return errUnsupported }
 
-func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallDetail, error) {
-	return nil, unsupported()
-}
 func (s *Store) ListCRMObjectTypes(ctx context.Context) ([]sqlite.CRMObjectTypeSummary, error) {
 	return nil, unsupported()
 }

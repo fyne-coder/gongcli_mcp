@@ -20,7 +20,8 @@ For a faster source-first onboarding path, start with
 - `internal/store/sqlite`: local cache for calls, users, transcripts, CRM schema/settings inventory, search indexes, and sync state.
 - `internal/store/postgres`: first shared-deployment vertical slice for sync
   status, calls, users, transcripts, transcript segments, and read-only MCP
-  `business-pilot` tools. It is not full query parity with SQLite yet:
+  `business-pilot` plus core operator search/detail tools. It is not full
+  query parity with SQLite yet:
   profile lifecycle source, governance-filtered views, analyst/all-readonly
   tools, support bundles, and cache inventory remain follow-ups.
   [Postgres parity matrix](postgres-parity.md) tracks the full parity contract.

@@ -46,8 +46,19 @@ func TestPostgresToolAllowlistDefaultsToSupportedSlice(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsCoreQueryParityTools(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"get_sync_status", "search_calls", "get_call", "search_transcript_segments"}, false)
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	want := []string{"get_sync_status", "search_calls", "get_call", "search_transcript_segments"}
+	if !reflect.DeepEqual(allowlist, want) {
+		t.Fatalf("allowlist=%v want %v", allowlist, want)
+	}
+}
+
 func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
-	if _, err := postgresToolAllowlist([]string{"get_call"}, false); err == nil {
+	if _, err := postgresToolAllowlist([]string{"list_crm_object_types"}, false); err == nil {
 		t.Fatal("postgresToolAllowlist accepted unsupported tool")
 	}
 }

@@ -206,4 +206,11 @@ CREATE TABLE IF NOT EXISTS call_read_model_diagnostics (
 CREATE INDEX IF NOT EXISTS idx_pg_call_read_model_diagnostics_limits
 	ON call_read_model_diagnostics(object_limit_exceeded, field_limit_exceeded, call_id);
 `,
+	`
+CREATE INDEX IF NOT EXISTS idx_pg_calls_started_call_id
+	ON calls(started_at DESC, call_id);
+
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_search_filters
+	ON call_facts(transcript_status, lifecycle_bucket, scope, system, direction, call_date, started_at DESC, call_id);
+`,
 }

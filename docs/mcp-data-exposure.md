@@ -12,8 +12,10 @@ Current fixed boundaries:
 - MCP reads a local cache/store only. SQLite is the complete default backend;
   the Postgres shared-deployment slice supports the explicit
   `business-pilot` preset over a read-only database role, plus narrow
-  operator smoke/search allowlists for `search_calls` and
-  `search_transcript_segments`. Broader `analyst` and `all-readonly`
+  operator smoke/search allowlists for `search_calls`, `get_call`, and
+  `search_transcript_segments`. Postgres `get_call` is a record-reference tool
+  and should be enabled only through an explicit allowlist for reviewed
+  operator use, not through `business-pilot`. Broader `analyst` and `all-readonly`
   Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and

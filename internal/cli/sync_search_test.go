@@ -189,6 +189,22 @@ func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T)
 	}
 }
 
+func TestPostgresSearchCallsRequiresSensitiveExportOptIn(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongctl:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	err := a.search(context.Background(), []string{"calls", "--limit", "5"})
+	if err == nil || !strings.Contains(err.Error(), "allow-sensitive-export") {
+		t.Fatalf("search calls error=%v, want sensitive export opt-in error", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+}
+
 func TestReadOnlyCommandsMissingDBDoNotCreateDatabase(t *testing.T) {
 	tests := []struct {
 		name string

@@ -264,6 +264,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func postgresToolAllowlist(allowlist []string, httpMode bool) ([]string, error) {
 	supported := map[string]struct{}{
 		"get_sync_status":              {},
+		"get_call":                     {},
 		"rank_transcript_backlog":      {},
 		"search_calls":                 {},
 		"search_transcript_segments":   {},

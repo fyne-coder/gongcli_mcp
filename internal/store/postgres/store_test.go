@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -169,6 +170,144 @@ func TestBusinessPilotAggregatesMatchSQLite(t *testing.T) {
 	}
 }
 
+func TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	for _, raw := range businessPilotCallPayloads() {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	got, err := pgStore.GetCallDetail(ctx, "bp-renewal-missing")
+	if err != nil {
+		t.Fatalf("postgres GetCallDetail returned error: %v", err)
+	}
+	want, err := sqliteStore.GetCallDetail(ctx, "bp-renewal-missing")
+	if err != nil {
+		t.Fatalf("sqlite GetCallDetail returned error: %v", err)
+	}
+	blankCallDetailObjectNames(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres detail=%+v want sqlite %+v", got, want)
+	}
+	if len(got.CRMObjects) != 2 {
+		t.Fatalf("detail CRM object count=%d want 2: %+v", len(got.CRMObjects), got.CRMObjects)
+	}
+	if _, err := pgStore.GetCallDetail(ctx, "missing-call"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing GetCallDetail error=%v, want not found", err)
+	}
+	if _, err := pgStore.GetCallDetail(ctx, ""); err == nil || !strings.Contains(err.Error(), "call id is required") {
+		t.Fatalf("empty GetCallDetail error=%v, want required", err)
+	}
+}
+
+func TestPostgresSearchCallsRawSafeFiltersMatchSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	for _, raw := range businessPilotCallPayloads() {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+	for _, raw := range businessPilotTranscriptPayloads() {
+		if _, err := pgStore.UpsertTranscript(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertTranscript returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertTranscript(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertTranscript returned error: %v", err)
+		}
+	}
+
+	cases := []struct {
+		name   string
+		params sqlite.CallSearchParams
+	}{
+		{name: "crm object type", params: sqlite.CallSearchParams{CRMObjectType: "Opportunity", Limit: 10}},
+		{name: "crm object id", params: sqlite.CallSearchParams{CRMObjectID: "opp-renewal", Limit: 10}},
+		{name: "combined crm object", params: sqlite.CallSearchParams{CRMObjectType: "Opportunity", CRMObjectID: "opp-renewal", Limit: 10}},
+		{name: "from date", params: sqlite.CallSearchParams{FromDate: "2026-02-12", Limit: 10}},
+		{name: "inclusive to date", params: sqlite.CallSearchParams{ToDate: "2026-02-12", Limit: 10}},
+		{name: "lifecycle", params: sqlite.CallSearchParams{LifecycleBucket: "renewal", Limit: 10}},
+		{name: "scope", params: sqlite.CallSearchParams{Scope: "External", Limit: 10}},
+		{name: "system", params: sqlite.CallSearchParams{System: "Zoom", Limit: 10}},
+		{name: "direction", params: sqlite.CallSearchParams{Direction: "Conference", Limit: 10}},
+		{name: "transcript present", params: sqlite.CallSearchParams{TranscriptStatus: "present", Limit: 10}},
+		{name: "transcript missing", params: sqlite.CallSearchParams{TranscriptStatus: "missing", Limit: 10}},
+		{name: "combined business filter", params: sqlite.CallSearchParams{CRMObjectType: "Opportunity", LifecycleBucket: "renewal", Scope: "External", System: "Zoom", Direction: "Conference", TranscriptStatus: "missing", FromDate: "2026-02-01", ToDate: "2026-02-28", Limit: 10}},
+		{name: "injection shaped object id", params: sqlite.CallSearchParams{CRMObjectID: "opp-core' OR 1=1 --", Limit: 10}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sqliteRows, err := sqliteStore.SearchCallsRaw(ctx, tc.params)
+			if err != nil {
+				t.Fatalf("sqlite SearchCallsRaw returned error: %v", err)
+			}
+			postgresRows, err := pgStore.SearchCallsRaw(ctx, tc.params)
+			if err != nil {
+				t.Fatalf("postgres SearchCallsRaw returned error: %v", err)
+			}
+			got := rawCallIDs(t, postgresRows)
+			want := rawCallIDs(t, sqliteRows)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("postgres call IDs=%v want sqlite %v", got, want)
+			}
+		})
+	}
+	if _, err := pgStore.SearchCallsRaw(ctx, sqlite.CallSearchParams{FromDate: "2026-02-99"}); err == nil {
+		t.Fatal("bad from_date unexpectedly succeeded")
+	}
+	if _, err := pgStore.SearchCallsRaw(ctx, sqlite.CallSearchParams{FromDate: "2026-03-01", ToDate: "2026-02-01"}); err == nil {
+		t.Fatal("inverted date range unexpectedly succeeded")
+	}
+	if _, err := pgStore.SearchCallsRaw(ctx, sqlite.CallSearchParams{LifecycleBucket: "not_real"}); err == nil {
+		t.Fatal("bad lifecycle bucket unexpectedly succeeded")
+	}
+	if _, err := pgStore.SearchCallsRaw(ctx, sqlite.CallSearchParams{TranscriptStatus: "all"}); err == nil {
+		t.Fatal("transcript_status=all unexpectedly succeeded")
+	}
+}
+
 func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -198,7 +337,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
-	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value"} {
+	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)`, index).Scan(&exists); err != nil {
 			t.Fatalf("check index %s: %v", index, err)
@@ -774,6 +913,34 @@ SELECT 'field|' || f.call_id || '|' || f.object_key || '|' || o.object_type || '
 		t.Fatalf("iterate sqlite normalized rows: %v", err)
 	}
 	return out
+}
+
+func rawCallIDs(t *testing.T, rows []json.RawMessage) []string {
+	t.Helper()
+	out := make([]string, 0, len(rows))
+	for _, raw := range rows {
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("unmarshal raw call: %v", err)
+		}
+		id, _ := doc["id"].(string)
+		if id == "" {
+			if meta, ok := doc["metaData"].(map[string]any); ok {
+				id, _ = meta["id"].(string)
+			}
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func blankCallDetailObjectNames(detail *sqlite.CallDetail) {
+	if detail == nil {
+		return
+	}
+	for idx := range detail.CRMObjects {
+		detail.CRMObjects[idx].ObjectName = ""
+	}
 }
 
 func jsonContainsKey(raw json.RawMessage, key string) bool {

@@ -7,6 +7,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gongctl
+          POSTGRES_PASSWORD: gongctl_ci_password
+          POSTGRES_DB: gongctl
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gongctl -d gongctl"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      GONGCTL_TEST_POSTGRES_URL: postgres://gongctl:gongctl_ci_password@127.0.0.1:5432/gongctl?sslmode=disable
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

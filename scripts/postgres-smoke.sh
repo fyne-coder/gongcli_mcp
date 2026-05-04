@@ -66,13 +66,20 @@ fi
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_calls","arguments":{"limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcript_segments","arguments":{"query":"shared Postgres","limit":5}}}'
-} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=get_sync_status,search_calls,search_transcript_segments go run ./cmd/gongmcp > /tmp/gongctl-postgres-mcp.jsonl
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_call","arguments":{"call_id":"synthetic-call-001"}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=get_sync_status,search_calls,search_transcript_segments,get_call go run ./cmd/gongmcp > /tmp/gongctl-postgres-mcp.jsonl
 
 grep -q '"get_sync_status"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q '"search_calls"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q '"search_transcript_segments"' /tmp/gongctl-postgres-mcp.jsonl
+grep -q '"get_call"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q 'synthetic-call-001' /tmp/gongctl-postgres-mcp.jsonl
 grep -q 'shared.*Postgres' /tmp/gongctl-postgres-mcp.jsonl
+grep -q '"id":6,"result"' /tmp/gongctl-postgres-mcp.jsonl
+if grep -q 'raw_json\|crmObjects' /tmp/gongctl-postgres-mcp.jsonl; then
+  echo "get_call/search smoke exposed raw call payload fields" >&2
+  exit 1
+fi
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'

@@ -9,7 +9,7 @@ sync status, cached calls, users, transcripts, transcript segments, and the
 read-only MCP `business-pilot` preset: `get_sync_status`,
 `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
 `rank_transcript_backlog`. Operator smoke deployments can also explicitly
-allow `search_calls` and `search_transcript_segments`.
+allow `search_calls`, `get_call`, and `search_transcript_segments`.
 
 ## Positioning
 
@@ -284,6 +284,9 @@ gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-ru
 ## Advanced Local Operator Commands
 
 These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
+When using Postgres, `gongctl search calls` is a raw cached-call export path and
+requires `--allow-sensitive-export`; use `gongmcp` `search_calls` for minimized
+model-facing search output.
 
 ```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
