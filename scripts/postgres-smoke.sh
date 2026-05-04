@@ -46,6 +46,10 @@ docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "DELETE FROM call_facts WHERE call_id = 'synthetic-call-002'" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "INSERT INTO call_facts(call_id, title, updated_at) VALUES('synthetic-orphan-fact', 'orphan fact', now()::text)" >/dev/null
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model >/tmp/gongctl-postgres-integrity-gap.json
+grep -q '"status": "stale"' /tmp/gongctl-postgres-integrity-gap.json
+grep -q '"missing_fact_call_count": 1' /tmp/gongctl-postgres-integrity-gap.json
+grep -q '"orphan_fact_count": 1' /tmp/gongctl-postgres-integrity-gap.json
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-stale-mcp.txt 2>&1; then
   echo "read-only MCP unexpectedly started with a stale Postgres read model" >&2
   exit 1
@@ -115,5 +119,6 @@ echo "normalized counts output: /tmp/gongctl-postgres-normalized-counts.txt"
 echo "call facts output: /tmp/gongctl-postgres-call-facts.txt"
 echo "read model state output: /tmp/gongctl-postgres-read-model-state.json"
 echo "read model diagnostics output: /tmp/gongctl-postgres-read-model-diagnostics.txt"
+echo "integrity gap output: /tmp/gongctl-postgres-integrity-gap.json"
 echo "stale MCP denial output: /tmp/gongctl-postgres-stale-mcp.txt"
 echo "read model rebuild output: /tmp/gongctl-postgres-read-model-rebuild.json"

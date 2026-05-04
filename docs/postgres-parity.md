@@ -27,7 +27,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Context extraction limits/diagnostics | SQLite local cache has no Postgres write-amplification risk | complete in Phase 2 with capped Postgres extraction diagnostics | Bound per-call object/field expansion and expose counts/cap hits without raw CRM values | postgres-native equivalent | Phase 2 | `TestPostgresReadModelExtractionCapsRecordDiagnostics`; `scripts/postgres-smoke.sh` |
 | Builtin lifecycle facts | `call_lifecycle` view | materialized into `call_facts` | Deterministic builtin lifecycle columns from normalized context | must match at output layer | Phase 1 | SQLite-vs-Postgres lifecycle aggregate tests |
 | Call facts | `call_facts` view | foundation table added | Maintained indexed facts table for grouping/filtering | must match at output layer | Phase 1 | SQLite-vs-Postgres call-fact aggregate tests |
-| Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2 for builtin facts: migration/write refresh plus state table | Backfill on upgrade, refresh on writes, version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `gongctl sync read-model` |
+| Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2c for builtin facts: migration/write refresh plus trigger-maintained readiness counters | Backfill on upgrade, refresh on writes, cheap version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `TestPostgresReadModelReadinessRejectsRebuildInProgressState`; `gongctl sync read-model` |
 | Operator read-model check/rebuild | SQLite profile cache readiness/rebuild is profile-aware | complete for Postgres builtin facts via `gongctl sync read-model [--rebuild]` | Writable CLI can check/rebuild; read-only MCP never rebuilds | postgres-native equivalent | Phase 2 | `GONG_DATABASE_URL=... gongctl sync read-model --rebuild` |
 | Transcript FTS | SQLite FTS5 | Postgres `tsvector`/GIN | Equivalent bounded search semantics, documented ranking differences | postgres-native equivalent | Phase 2 | synthetic search comparison tests |
 | Call search | SQLite filters over calls/context | complete for normalized CRM object and builtin call-fact filters | Match safe filters or document intentional exclusions | must match | Phase 2 | `TestPostgresSearchCallsRawSafeFiltersMatchSQLite`; `scripts/postgres-smoke.sh` |
@@ -79,9 +79,14 @@ Postgres parity should be added deliberately, with each surface classified as
 - Closed: Postgres read-model state is versioned in
   `postgres_read_model_state`; read-only Postgres startup rejects missing/stale
   builtin facts instead of silently serving incomplete aggregates.
+- Closed: Postgres read-model readiness no longer runs full table counts and
+  anti-joins on the read/query hot path; `validateReadModelReady` reads the
+  state row while triggers keep missing/orphan fact counters current for
+  direct SQL changes and rebuild gaps.
 - Closed: operators can run `gongctl sync read-model` to check state and
   `gongctl sync read-model --rebuild` with a writable Postgres URL to repair
   builtin facts.
 - Still queued: profile cache parity, governance filtering/RLS, analyst and
-  all-readonly query parity, support/cache inventory, purge/retention, and
-  release rollback/backup hardening.
+  all-readonly query parity, support/cache inventory, purge/retention, large
+  tenant load testing for read-model counter write contention, and release
+  rollback/backup hardening.

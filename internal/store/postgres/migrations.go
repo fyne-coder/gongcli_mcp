@@ -213,4 +213,126 @@ CREATE INDEX IF NOT EXISTS idx_pg_calls_started_call_id
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_search_filters
 	ON call_facts(transcript_status, lifecycle_bucket, scope, system, direction, call_date, started_at DESC, call_id);
 `,
+	`
+ALTER TABLE postgres_read_model_state
+	ADD COLUMN IF NOT EXISTS missing_fact_call_count BIGINT NOT NULL DEFAULT 0,
+	ADD COLUMN IF NOT EXISTS orphan_fact_count BIGINT NOT NULL DEFAULT 0;
+
+UPDATE postgres_read_model_state
+   SET call_count = (SELECT COUNT(*) FROM calls),
+       fact_count = (SELECT COUNT(*) FROM call_facts),
+       missing_fact_call_count = (
+	       SELECT COUNT(*)
+	         FROM calls c
+	         LEFT JOIN call_facts cf ON cf.call_id = c.call_id
+	        WHERE cf.call_id IS NULL
+       ),
+       orphan_fact_count = (
+	       SELECT COUNT(*)
+	         FROM call_facts cf
+	         LEFT JOIN calls c ON c.call_id = cf.call_id
+	        WHERE c.call_id IS NULL
+       ),
+       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+ WHERE model_name = 'builtin_call_facts';
+
+CREATE OR REPLACE FUNCTION gongctl_read_model_calls_counter_fn() RETURNS trigger AS $$
+BEGIN
+	IF TG_OP = 'INSERT' THEN
+		UPDATE postgres_read_model_state
+		   SET call_count = call_count + 1,
+		       missing_fact_call_count = missing_fact_call_count + CASE WHEN EXISTS (SELECT 1 FROM call_facts WHERE call_id = NEW.call_id) THEN 0 ELSE 1 END,
+		       orphan_fact_count = GREATEST(orphan_fact_count - CASE WHEN EXISTS (SELECT 1 FROM call_facts WHERE call_id = NEW.call_id) THEN 1 ELSE 0 END, 0),
+		       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		 WHERE model_name = 'builtin_call_facts';
+		RETURN NEW;
+	ELSIF TG_OP = 'DELETE' THEN
+		UPDATE postgres_read_model_state
+		   SET call_count = GREATEST(call_count - 1, 0),
+		       missing_fact_call_count = GREATEST(missing_fact_call_count - CASE WHEN EXISTS (SELECT 1 FROM call_facts WHERE call_id = OLD.call_id) THEN 0 ELSE 1 END, 0),
+		       orphan_fact_count = orphan_fact_count + CASE WHEN EXISTS (SELECT 1 FROM call_facts WHERE call_id = OLD.call_id) THEN 1 ELSE 0 END,
+		       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		 WHERE model_name = 'builtin_call_facts';
+		RETURN OLD;
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION gongctl_read_model_facts_counter_fn() RETURNS trigger AS $$
+BEGIN
+	IF TG_OP = 'INSERT' THEN
+		UPDATE postgres_read_model_state
+		   SET fact_count = fact_count + 1,
+		       missing_fact_call_count = GREATEST(missing_fact_call_count - CASE WHEN EXISTS (SELECT 1 FROM calls WHERE call_id = NEW.call_id) THEN 1 ELSE 0 END, 0),
+		       orphan_fact_count = orphan_fact_count + CASE WHEN EXISTS (SELECT 1 FROM calls WHERE call_id = NEW.call_id) THEN 0 ELSE 1 END,
+		       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		 WHERE model_name = 'builtin_call_facts';
+		RETURN NEW;
+	ELSIF TG_OP = 'DELETE' THEN
+		UPDATE postgres_read_model_state
+		   SET fact_count = GREATEST(fact_count - 1, 0),
+		       missing_fact_call_count = missing_fact_call_count + CASE WHEN EXISTS (SELECT 1 FROM calls WHERE call_id = OLD.call_id) THEN 1 ELSE 0 END,
+		       orphan_fact_count = GREATEST(orphan_fact_count - CASE WHEN EXISTS (SELECT 1 FROM calls WHERE call_id = OLD.call_id) THEN 0 ELSE 1 END, 0),
+		       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+		 WHERE model_name = 'builtin_call_facts';
+		RETURN OLD;
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION gongctl_read_model_recalculate_counters_fn() RETURNS trigger AS $$
+BEGIN
+	UPDATE postgres_read_model_state
+	   SET call_count = (SELECT COUNT(*) FROM calls),
+	       fact_count = (SELECT COUNT(*) FROM call_facts),
+	       missing_fact_call_count = (
+		       SELECT COUNT(*)
+		         FROM calls c
+		         LEFT JOIN call_facts cf ON cf.call_id = c.call_id
+		        WHERE cf.call_id IS NULL
+	       ),
+	       orphan_fact_count = (
+		       SELECT COUNT(*)
+		         FROM call_facts cf
+		         LEFT JOIN calls c ON c.call_id = cf.call_id
+		        WHERE c.call_id IS NULL
+	       ),
+	       updated_at = to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+	 WHERE model_name = 'builtin_call_facts';
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS gongctl_read_model_calls_counter ON calls;
+CREATE TRIGGER gongctl_read_model_calls_counter
+AFTER INSERT OR DELETE ON calls
+FOR EACH ROW EXECUTE FUNCTION gongctl_read_model_calls_counter_fn();
+
+DROP TRIGGER IF EXISTS gongctl_read_model_calls_update_resync ON calls;
+CREATE TRIGGER gongctl_read_model_calls_update_resync
+AFTER UPDATE OF call_id ON calls
+FOR EACH STATEMENT EXECUTE FUNCTION gongctl_read_model_recalculate_counters_fn();
+
+DROP TRIGGER IF EXISTS gongctl_read_model_calls_truncate_resync ON calls;
+CREATE TRIGGER gongctl_read_model_calls_truncate_resync
+AFTER TRUNCATE ON calls
+FOR EACH STATEMENT EXECUTE FUNCTION gongctl_read_model_recalculate_counters_fn();
+
+DROP TRIGGER IF EXISTS gongctl_read_model_facts_counter ON call_facts;
+CREATE TRIGGER gongctl_read_model_facts_counter
+AFTER INSERT OR DELETE ON call_facts
+FOR EACH ROW EXECUTE FUNCTION gongctl_read_model_facts_counter_fn();
+
+DROP TRIGGER IF EXISTS gongctl_read_model_facts_update_resync ON call_facts;
+CREATE TRIGGER gongctl_read_model_facts_update_resync
+AFTER UPDATE OF call_id ON call_facts
+FOR EACH STATEMENT EXECUTE FUNCTION gongctl_read_model_recalculate_counters_fn();
+
+DROP TRIGGER IF EXISTS gongctl_read_model_facts_truncate_resync ON call_facts;
+CREATE TRIGGER gongctl_read_model_facts_truncate_resync
+AFTER TRUNCATE ON call_facts
+FOR EACH STATEMENT EXECUTE FUNCTION gongctl_read_model_recalculate_counters_fn();
+`,
 }

@@ -346,6 +346,66 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
+	for _, column := range []string{"missing_fact_call_count", "orphan_fact_count"} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'postgres_read_model_state' AND column_name = $1)`, column).Scan(&exists); err != nil {
+			t.Fatalf("check read model column %s: %v", column, err)
+		}
+		if !exists {
+			t.Fatalf("read model state column %s does not exist", column)
+		}
+	}
+	for _, trigger := range []string{
+		"gongctl_read_model_calls_counter",
+		"gongctl_read_model_calls_update_resync",
+		"gongctl_read_model_calls_truncate_resync",
+		"gongctl_read_model_facts_counter",
+		"gongctl_read_model_facts_update_resync",
+		"gongctl_read_model_facts_truncate_resync",
+	} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
+	SELECT 1
+	  FROM pg_trigger t
+	  JOIN pg_class c ON c.oid = t.tgrelid
+	  JOIN pg_namespace n ON n.oid = c.relnamespace
+	 WHERE n.nspname = current_schema()
+	   AND t.tgname = $1
+	   AND NOT t.tgisinternal
+)`, trigger).Scan(&exists); err != nil {
+			t.Fatalf("check read model trigger %s: %v", trigger, err)
+		}
+		if !exists {
+			t.Fatalf("read model trigger %s does not exist", trigger)
+		}
+	}
+}
+
+func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version = $1`, len(migrations)); err != nil {
+		t.Fatalf("delete latest migration version: %v", err)
+	}
+	defer func() {
+		if err := store.Migrate(ctx); err != nil {
+			t.Fatalf("restore migrations after stale-version test: %v", err)
+		}
+	}()
+	if _, err := OpenStatus(ctx, databaseURL); err == nil || !strings.Contains(err.Error(), "schema version") {
+		t.Fatalf("OpenStatus stale migration error=%v, want schema version guidance", err)
+	}
 }
 
 func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
@@ -615,6 +675,9 @@ func TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs(t 
 	if status.Ready || !strings.Contains(status.StaleReason, "call_id set mismatch") {
 		t.Fatalf("stale status not detected: %+v", status)
 	}
+	if err := store.validateReadModelReady(ctx); err == nil || !strings.Contains(err.Error(), "missing or stale") {
+		t.Fatalf("cheap readiness did not reject deleted fact row: %v", err)
+	}
 	if _, err := store.RebuildReadModel(ctx); err != nil {
 		t.Fatalf("RebuildReadModel returned error: %v", err)
 	}
@@ -639,6 +702,9 @@ func TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs(t 
 	if status.Ready || status.FactCount != 1 || status.CallCount != 1 || status.MissingFactCallCount != 1 || status.OrphanFactCount != 1 || !strings.Contains(status.StaleReason, "call_id set mismatch") {
 		t.Fatalf("mixed missing/orphan fact did not make state stale: %+v", status)
 	}
+	if err := store.validateReadModelReady(ctx); err == nil || !strings.Contains(err.Error(), "call_id set mismatch") {
+		t.Fatalf("cheap readiness did not reject mixed missing/orphan rows: %v", err)
+	}
 	if _, err := store.RebuildReadModel(ctx); err != nil {
 		t.Fatalf("RebuildReadModel orphan returned error: %v", err)
 	}
@@ -649,6 +715,132 @@ func TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs(t 
 	}
 	if !status.Ready || status.CallCount != 1 || status.FactCount != 1 {
 		t.Fatalf("orphan rebuild status unexpected: %+v", status)
+	}
+}
+
+func TestPostgresReadModelCounterResyncHandlesUpdateAndTruncate(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-resync-001","title":"Counter resync","started":"2026-02-12T15:00:00Z","duration":1200}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE call_facts SET call_id = 'pg-resync-orphan' WHERE call_id = 'pg-resync-001'`); err != nil {
+		t.Fatalf("update fact call_id: %v", err)
+	}
+	status, err := store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus after update returned error: %v", err)
+	}
+	if status.Ready || status.MissingFactCallCount != 1 || status.OrphanFactCount != 1 || !strings.Contains(status.StaleReason, "call_id set mismatch") {
+		t.Fatalf("update resync did not mark read model stale: %+v", status)
+	}
+	if _, err := store.RebuildReadModel(ctx); err != nil {
+		t.Fatalf("RebuildReadModel after update drift returned error: %v", err)
+	}
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus rebuilt returned error: %v", err)
+	}
+	if !status.Ready || status.MissingFactCallCount != 0 || status.OrphanFactCount != 0 {
+		t.Fatalf("rebuild did not repair update drift: %+v", status)
+	}
+	if _, err := store.DB().ExecContext(ctx, `TRUNCATE call_facts`); err != nil {
+		t.Fatalf("truncate facts: %v", err)
+	}
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus after truncate returned error: %v", err)
+	}
+	if status.Ready || status.CallCount != 1 || status.FactCount != 0 || status.MissingFactCallCount != 1 || status.OrphanFactCount != 0 {
+		t.Fatalf("truncate resync did not mark read model stale: %+v", status)
+	}
+}
+
+func TestPostgresReadModelReadinessRejectsMissingState(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM postgres_read_model_state WHERE model_name = $1`, postgresReadModelName); err != nil {
+		t.Fatalf("delete read model state: %v", err)
+	}
+	status, err := store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus returned error: %v", err)
+	}
+	if status.Ready || !strings.Contains(status.StaleReason, "state is missing") {
+		t.Fatalf("missing state not reported stale: %+v", status)
+	}
+	if err := store.validateReadModelReady(ctx); err == nil || !strings.Contains(err.Error(), "state is missing") {
+		t.Fatalf("cheap readiness did not reject missing state: %v", err)
+	}
+}
+
+func TestPostgresReadModelReadinessRejectsRebuildInProgressState(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-rebuild-progress-001","title":"Rebuild progress","started":"2026-02-12T15:00:00Z","duration":1200}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE postgres_read_model_state SET stale_reason = 'rebuild in progress' WHERE model_name = $1`, postgresReadModelName); err != nil {
+		t.Fatalf("mark rebuild in progress: %v", err)
+	}
+	status, err := store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus returned error: %v", err)
+	}
+	if status.Ready || status.StaleReason != "rebuild in progress" {
+		t.Fatalf("rebuild in progress state not preserved: %+v", status)
+	}
+	if err := store.validateReadModelReady(ctx); err == nil || !strings.Contains(err.Error(), "rebuild in progress") {
+		t.Fatalf("cheap readiness did not reject rebuild in progress: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-rebuild-progress-002","title":"Ordinary write","started":"2026-02-13T15:00:00Z","duration":1200}`)); err != nil {
+		t.Fatalf("ordinary UpsertCall returned error: %v", err)
+	}
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus after ordinary write returned error: %v", err)
+	}
+	if status.Ready || status.StaleReason != "rebuild in progress" {
+		t.Fatalf("ordinary write cleared explicit stale reason: %+v", status)
+	}
+	if _, err := store.RebuildReadModel(ctx); err != nil {
+		t.Fatalf("RebuildReadModel returned error: %v", err)
+	}
+	if err := store.validateReadModelReady(ctx); err != nil {
+		t.Fatalf("cheap readiness rejected rebuilt state: %v", err)
 	}
 }
 

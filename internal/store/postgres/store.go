@@ -86,6 +86,10 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.validateMigrationVersion(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := store.validateReadOnlyPrivileges(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -123,6 +127,10 @@ func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
 	db.SetConnMaxLifetime(30 * time.Minute)
 	store := &Store{db: db, readOnly: true}
 	if err := store.validateSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := store.validateMigrationVersion(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -198,6 +206,20 @@ func (s *Store) validateSchema(ctx context.Context) error {
 	}
 	if count != 11 {
 		return fmt.Errorf("postgres schema is not initialized: found %d/11 core tables", count)
+	}
+	return nil
+}
+
+func (s *Store) validateMigrationVersion(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("postgres store is not open")
+	}
+	var current int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM gongctl_schema_migrations`).Scan(&current); err != nil {
+		return fmt.Errorf("read postgres migration version: %w", err)
+	}
+	if current != len(migrations) {
+		return fmt.Errorf("postgres schema version %d is not current; run gongctl sync with a writable Postgres URL to migrate to version %d", current, len(migrations))
 	}
 	return nil
 }

@@ -33,6 +33,13 @@ type ReadModelStatus struct {
 	UpdatedAt              string `json:"updated_at"`
 }
 
+type readModelCounters struct {
+	CallCount            int64
+	FactCount            int64
+	MissingFactCallCount int64
+	OrphanFactCount      int64
+}
+
 func refreshCallReadModelTx(ctx context.Context, tx *sql.Tx, callID string) error {
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, callID); err != nil {
 		return err
@@ -204,11 +211,8 @@ ON CONFLICT(call_id) DO UPDATE SET
 }
 
 func updateReadModelStateTx(ctx context.Context, tx *sql.Tx, updatedAt string, staleReason string, forceCurrent bool) error {
-	var callCount, factCount int64
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls`).Scan(&callCount); err != nil {
-		return err
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts`).Scan(&factCount); err != nil {
+	counters, err := readModelCountersTx(ctx, tx, forceCurrent)
+	if err != nil {
 		return err
 	}
 	modelVersion := postgresReadModelVersion
@@ -216,41 +220,104 @@ func updateReadModelStateTx(ctx context.Context, tx *sql.Tx, updatedAt string, s
 	if !forceCurrent {
 		var existingVersion int
 		var existingRebuiltAt string
-		err := tx.QueryRowContext(ctx, `SELECT model_version, rebuilt_at FROM postgres_read_model_state WHERE model_name = $1`, postgresReadModelName).Scan(&existingVersion, &existingRebuiltAt)
+		var existingStaleReason string
+		err := tx.QueryRowContext(ctx, `SELECT model_version, rebuilt_at, stale_reason FROM postgres_read_model_state WHERE model_name = $1`, postgresReadModelName).Scan(&existingVersion, &existingRebuiltAt, &existingStaleReason)
 		if err == nil {
 			modelVersion = existingVersion
 			rebuiltAt = existingRebuiltAt
+			if staleReason == "" && strings.TrimSpace(existingStaleReason) != "" {
+				staleReason = existingStaleReason
+			}
 		} else if err != sql.ErrNoRows {
 			return err
 		}
 	}
 	if modelVersion != postgresReadModelVersion {
 		staleReason = fmt.Sprintf("read model version %d is older than supported version %d", modelVersion, postgresReadModelVersion)
-	} else if staleReason == "" && factCount != callCount {
-		staleReason = fmt.Sprintf("call_facts row count %d does not match calls row count %d", factCount, callCount)
+	} else if staleReason == "" && (counters.MissingFactCallCount > 0 || counters.OrphanFactCount > 0) {
+		staleReason = fmt.Sprintf("call_facts call_id set mismatch: missing=%d orphan=%d", counters.MissingFactCallCount, counters.OrphanFactCount)
+	} else if staleReason == "" && counters.FactCount != counters.CallCount {
+		staleReason = fmt.Sprintf("call_facts row count %d does not match calls row count %d", counters.FactCount, counters.CallCount)
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO postgres_read_model_state(
-	model_name, model_version, rebuilt_at, call_count, fact_count, stale_reason, updated_at
-) VALUES($1, $2, $3, $4, $5, $6, $7)
+	_, err = tx.ExecContext(ctx, `INSERT INTO postgres_read_model_state(
+	model_name, model_version, rebuilt_at, call_count, fact_count, missing_fact_call_count, orphan_fact_count, stale_reason, updated_at
+) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT(model_name) DO UPDATE SET
 	model_version = EXCLUDED.model_version,
 	rebuilt_at = EXCLUDED.rebuilt_at,
 	call_count = EXCLUDED.call_count,
 	fact_count = EXCLUDED.fact_count,
+	missing_fact_call_count = EXCLUDED.missing_fact_call_count,
+	orphan_fact_count = EXCLUDED.orphan_fact_count,
 	stale_reason = EXCLUDED.stale_reason,
 	updated_at = EXCLUDED.updated_at`,
 		postgresReadModelName,
 		modelVersion,
 		rebuiltAt,
-		callCount,
-		factCount,
+		counters.CallCount,
+		counters.FactCount,
+		counters.MissingFactCallCount,
+		counters.OrphanFactCount,
 		staleReason,
 		updatedAt,
 	)
 	return err
 }
 
+func readModelCountersTx(ctx context.Context, tx *sql.Tx, forceRecalculate bool) (readModelCounters, error) {
+	if forceRecalculate {
+		return calculateReadModelCountersTx(ctx, tx)
+	}
+	var counters readModelCounters
+	err := tx.QueryRowContext(ctx, `SELECT call_count, fact_count, missing_fact_call_count, orphan_fact_count
+  FROM postgres_read_model_state
+ WHERE model_name = $1`, postgresReadModelName).Scan(
+		&counters.CallCount,
+		&counters.FactCount,
+		&counters.MissingFactCallCount,
+		&counters.OrphanFactCount,
+	)
+	if err == nil {
+		return counters, nil
+	}
+	if err != sql.ErrNoRows {
+		return readModelCounters{}, err
+	}
+	return calculateReadModelCountersTx(ctx, tx)
+}
+
+func calculateReadModelCountersTx(ctx context.Context, tx *sql.Tx) (readModelCounters, error) {
+	var counters readModelCounters
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls`).Scan(&counters.CallCount); err != nil {
+		return readModelCounters{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts`).Scan(&counters.FactCount); err != nil {
+		return readModelCounters{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls c LEFT JOIN call_facts cf ON cf.call_id = c.call_id WHERE cf.call_id IS NULL`).Scan(&counters.MissingFactCallCount); err != nil {
+		return readModelCounters{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts cf LEFT JOIN calls c ON c.call_id = cf.call_id WHERE c.call_id IS NULL`).Scan(&counters.OrphanFactCount); err != nil {
+		return readModelCounters{}, err
+	}
+	return counters, nil
+}
+
 func (s *Store) ReadModelStatus(ctx context.Context) (*ReadModelStatus, error) {
+	status, err := s.readModelStatusState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("postgres store is not open")
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE object_limit_exceeded OR field_limit_exceeded OR TRIM(last_error) <> '') FROM call_read_model_diagnostics`).Scan(&status.DiagnosticsCallCount, &status.LimitExceededCallCount); err != nil {
+		return nil, err
+	}
+	return status, nil
+}
+
+func (s *Store) readModelStatusState(ctx context.Context) (*ReadModelStatus, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("postgres store is not open")
 	}
@@ -258,7 +325,7 @@ func (s *Store) ReadModelStatus(ctx context.Context) (*ReadModelStatus, error) {
 		ModelName:      postgresReadModelName,
 		CurrentVersion: postgresReadModelVersion,
 	}
-	err := s.db.QueryRowContext(ctx, `SELECT model_name, model_version, rebuilt_at, call_count, fact_count, stale_reason, updated_at
+	err := s.db.QueryRowContext(ctx, `SELECT model_name, model_version, rebuilt_at, call_count, fact_count, missing_fact_call_count, orphan_fact_count, stale_reason, updated_at
   FROM postgres_read_model_state
  WHERE model_name = $1`, postgresReadModelName).Scan(
 		&status.ModelName,
@@ -266,6 +333,8 @@ func (s *Store) ReadModelStatus(ctx context.Context) (*ReadModelStatus, error) {
 		&status.RebuiltAt,
 		&status.CallCount,
 		&status.FactCount,
+		&status.MissingFactCallCount,
+		&status.OrphanFactCount,
 		&status.StaleReason,
 		&status.UpdatedAt,
 	)
@@ -276,18 +345,6 @@ func (s *Store) ReadModelStatus(ctx context.Context) (*ReadModelStatus, error) {
 		}
 		return nil, err
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls`).Scan(&status.CallCount); err != nil {
-		return nil, err
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts`).Scan(&status.FactCount); err != nil {
-		return nil, err
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls c LEFT JOIN call_facts cf ON cf.call_id = c.call_id WHERE cf.call_id IS NULL`).Scan(&status.MissingFactCallCount); err != nil {
-		return nil, err
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts cf LEFT JOIN calls c ON c.call_id = cf.call_id WHERE c.call_id IS NULL`).Scan(&status.OrphanFactCount); err != nil {
-		return nil, err
-	}
 	if status.ModelVersion != postgresReadModelVersion {
 		status.StaleReason = fmt.Sprintf("read model version %d is older than supported version %d", status.ModelVersion, postgresReadModelVersion)
 	} else if status.StaleReason == "" && (status.MissingFactCallCount > 0 || status.OrphanFactCount > 0) {
@@ -295,9 +352,6 @@ func (s *Store) ReadModelStatus(ctx context.Context) (*ReadModelStatus, error) {
 	}
 	if status.StaleReason == "" && status.FactCount != status.CallCount {
 		status.StaleReason = fmt.Sprintf("call_facts row count %d does not match calls row count %d", status.FactCount, status.CallCount)
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE object_limit_exceeded OR field_limit_exceeded OR TRIM(last_error) <> '') FROM call_read_model_diagnostics`).Scan(&status.DiagnosticsCallCount, &status.LimitExceededCallCount); err != nil {
-		return nil, err
 	}
 	status.Ready = status.StaleReason == "" && status.ModelVersion == postgresReadModelVersion && status.FactCount == status.CallCount && status.MissingFactCallCount == 0 && status.OrphanFactCount == 0
 	return &status, nil
@@ -394,7 +448,7 @@ func (s *Store) refreshSingleCallReadModel(ctx context.Context, callID string) e
 }
 
 func (s *Store) validateReadModelReady(ctx context.Context) error {
-	status, err := s.ReadModelStatus(ctx)
+	status, err := s.readModelStatusState(ctx)
 	if err != nil {
 		return err
 	}
