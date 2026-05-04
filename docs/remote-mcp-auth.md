@@ -205,6 +205,90 @@ Cloudflare reference:
 
 - <https://developers.cloudflare.com/agents/model-context-protocol/authorization/>
 
+## Recommended First Pilot Broker
+
+Use Cloudflare Workers with the Cloudflare OAuth Provider Library as the default
+first pilot broker. JumpCloud, Cognito, Okta, Entra, or another IdP can still
+own human login, but the broker should own the MCP-specific work:
+
+- OAuth protected-resource metadata for the `/mcp` resource
+- authorization-server metadata/discovery
+- Dynamic Client Registration or a documented static-client fallback
+- PKCE-compatible authorization-code flow
+- MCP-scoped access-token issuance
+- issuer, audience/resource, expiry, scope, and user/group claim validation
+- forwarding approved requests to `gongmcp` with an internal bearer token
+
+This keeps `gongmcp` simple and customer-controlled: it remains a read-only MCP
+server over SQLite, with no Gong credentials and no native OAuth dependency.
+
+## Docker Compose Reference
+
+For customers who want a concrete configurable example, use the provider-specific
+starters under `deploy/remote-mcp-auth/`:
+
+- [Remote MCP auth examples](../deploy/remote-mcp-auth/README.md)
+- [JumpCloud Docker Compose](../deploy/remote-mcp-auth/jumpcloud/docker-compose.yml)
+- [JumpCloud env example](../deploy/remote-mcp-auth/jumpcloud/jumpcloud.env.example)
+- [AWS Cognito Docker Compose](../deploy/remote-mcp-auth/cognito/docker-compose.yml)
+- [AWS Cognito env example](../deploy/remote-mcp-auth/cognito/cognito.env.example)
+- [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md)
+
+The JumpCloud and Cognito Compose files are static-client/JWT-validation
+fallback examples, not full OAuth brokers. In those examples, `/mcp` is handled
+by the shim, which validates a bearer JWT or trusted proxy identity headers and
+then forwards the request to `gongmcp` with the internal bearer token. The
+included `oauth2-proxy` service is a browser/session helper for rehearsing the
+IdP login path; it does not add Dynamic Client Registration or issue
+MCP-scoped access tokens for ChatGPT/Claude. Use these Compose examples only
+when the target MCP client can be configured to use a pre-registered/static
+client or when an upstream gateway already performs the MCP-compatible OAuth
+work.
+
+For the fully MCP-shaped broker path, use the Cloudflare Worker example. It uses
+Cloudflare's OAuth Provider Library for Dynamic Client Registration, PKCE, token
+issuance, and MCP-facing metadata, then forwards authorized requests to the same
+internal `gongmcp` bearer-auth service.
+
+The older lab-auth stack remains useful as a disposable local rehearsal harness:
+
+- [Lab auth deployment](lab-auth-deployment.md)
+- [`deploy/lab-auth/docker-compose.yml`](../deploy/lab-auth/docker-compose.yml)
+- [`deploy/lab-auth/.env.example`](../deploy/lab-auth/.env.example)
+
+The lab uses Keycloak as a disposable OIDC provider, Caddy as the local gateway,
+`oauth2-proxy` for the browser/session path, a small MCP auth shim for protected
+resource metadata and token checks, and `gongmcp` as the read-only internal MCP
+service.
+
+```text
+Remote MCP client
+  -> HTTPS /mcp
+  -> gateway/broker
+  -> internal bearer auth
+  -> gongmcp --http 0.0.0.0:8080 --auth-mode bearer
+  -> read-only SQLite cache
+```
+
+Minimum configuration values to replace in a customer pilot:
+
+| Setting | Purpose |
+| --- | --- |
+| `PUBLIC_BASE_URL` / `LAB_PUBLIC_BASE_URL` | Public HTTPS MCP base URL, for example `https://gong-mcp.example.com` |
+| `GONGMCP_DB` / `LAB_DB` / mounted DB path | Read-only governed SQLite cache for MCP |
+| `GONGMCP_TOOL_PRESET` | Initial tool surface, usually `business-pilot` |
+| `GONGMCP_ALLOWED_ORIGINS` | Browser/client origins accepted by `gongmcp` |
+| provider-specific OIDC client settings | Broker application credentials for the chosen IdP, such as `JUMPCLOUD_OIDC_CLIENT_ID` or `COGNITO_OIDC_CLIENT_ID` |
+| approved email/group settings | User allowlist or group policy, such as `PILOT_ALLOWED_EMAILS` or `gong-mcp-users` |
+| internal bearer token or token file | Secret used only between the broker/shim and `gongmcp` |
+
+The lab and static-client Compose files are not production identity-provider
+configurations. They are runnable shapes to copy when explaining the moving
+pieces or validating direct bearer-token/JWT handling. For a production
+Cloudflare Workers pilot, replace the Keycloak/oauth2-proxy/shim pieces with a
+Worker using the Cloudflare OAuth Provider Library, and keep the same internal
+`gongmcp` bearer-auth service and read-only SQLite mount.
+
 ## JumpCloud Pattern
 
 Use JumpCloud as the human identity provider, not as the whole MCP

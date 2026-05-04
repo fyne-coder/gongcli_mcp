@@ -1,0 +1,17 @@
+{
+  "name": "gongctl-cloudflare-mcp-oauth-broker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260426.1",
+    "typescript": "^5.9.3",
+    "wrangler": "4.80.0"
+  }
+}

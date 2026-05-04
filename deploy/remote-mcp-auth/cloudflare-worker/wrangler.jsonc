@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gongctl-mcp-oauth-broker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "PUBLIC_BASE_URL": "https://gong-mcp.example.com",
+    "GONGMCP_UPSTREAM_URL": "https://internal-gongmcp.example.com/mcp",
+    "GONGMCP_ALLOWED_SCOPES": "gongmcp:status gongmcp:aggregate gongmcp:search",
+    "PILOT_ALLOWED_EMAILS": "approved-user@example.com"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "replace-with-oauth-kv-namespace-id"
+    }
+  ]
+}
