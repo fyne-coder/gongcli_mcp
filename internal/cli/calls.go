@@ -332,8 +332,3 @@ func safeFilename(value string) string {
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
 	return replacer.Replace(value)
 }
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}

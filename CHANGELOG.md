@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Enabled the CI staticcheck gate for dead-code findings while leaving only
+  package-comment cleanup (`ST1000`) suppressed.
 - Added scorecard activity sync, analysis, and aggregate MCP summary surfaces
   for answered scorecard activity without exposing raw call/user IDs or answer
   text.

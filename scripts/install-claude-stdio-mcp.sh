@@ -15,6 +15,10 @@ Options:
   --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2.
   --tool-preset NAME     Named tool preset. Default: business-pilot. Options: business-pilot, operator-smoke, analyst, governance-search, all-readonly.
   --tool-allowlist LIST  Optional comma-separated MCP tool allowlist.
+  --compat-expanded-allowlist
+                         Emit GONGMCP_TOOL_ALLOWLIST expanded from the Go preset catalog for older images.
+  --preset-catalog-bin PATH
+                         Explicit gongmcp binary for preset catalog inspection. Defaults to the Docker image.
   --config PATH          Claude config path. Defaults to macOS Claude Desktop config.
   --install              Merge into Claude config with a timestamped backup.
   --print                Print the JSON server entry. Default behavior.
@@ -26,35 +30,106 @@ Examples:
 USAGE
 }
 
-abs_path() {
-  case "$1" in
-    /*) printf '%s\n' "$1" ;;
-    *) printf '%s/%s\n' "$PWD" "$1" ;;
-  esac
+canonical_existing_file() {
+  local path="$1"
+  local resolved="$path"
+  local hops=0
+  while [[ -L "$resolved" ]]; do
+    hops=$((hops + 1))
+    if [[ "$hops" -gt 40 ]]; then
+      return 1
+    fi
+    local link_dir
+    link_dir="$(cd -P "$(dirname "$resolved")" 2>/dev/null && pwd)" || return 1
+    local target
+    target="$(readlink "$resolved")" || return 1
+    case "$target" in
+      /*) resolved="$target" ;;
+      *) resolved="$link_dir/$target" ;;
+    esac
+  done
+  local dir
+  dir="$(cd -P "$(dirname "$resolved")" 2>/dev/null && pwd)" || return 1
+  local base
+  base="$(basename "$resolved")"
+  [[ -f "$dir/$base" ]] || return 1
+  printf '%s/%s\n' "$dir" "$base"
 }
 
-preset_allowlist() {
-  case "$1" in
-    business-pilot|strict-business-pilot)
-      printf '%s\n' 'get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog'
-      ;;
-    operator-smoke)
-      printf '%s\n' 'get_sync_status,search_calls,search_transcript_segments,rank_transcript_backlog'
-      ;;
-    analyst|analyst-expansion)
-      printf '%s\n' 'get_sync_status,list_crm_object_types,list_crm_fields,get_business_profile,list_business_concepts,list_unmapped_crm_fields,analyze_late_stage_crm_signals,opportunities_missing_transcripts,search_transcripts_by_crm_context,opportunity_call_summary,crm_field_population_matrix,list_lifecycle_buckets,summarize_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,compare_lifecycle_crm_fields,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution'
-      ;;
-    governance-search)
-      printf '%s\n' 'search_calls,get_call,search_transcripts_by_crm_context,search_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution,missing_transcripts'
-      ;;
-    all-readonly|all-tools|all)
-      printf '%s\n' 'get_sync_status,search_calls,get_call,list_crm_object_types,list_crm_fields,list_crm_integrations,list_cached_crm_schema_objects,list_cached_crm_schema_fields,list_gong_settings,list_scorecards,get_scorecard,get_business_profile,list_business_concepts,list_unmapped_crm_fields,search_crm_field_values,analyze_late_stage_crm_signals,opportunities_missing_transcripts,search_transcripts_by_crm_context,opportunity_call_summary,crm_field_population_matrix,list_lifecycle_buckets,summarize_calls_by_lifecycle,search_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,compare_lifecycle_crm_fields,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution,missing_transcripts'
-      ;;
-    *)
-      echo "unknown tool preset: $1" >&2
-      exit 2
-      ;;
-  esac
+canonical_existing_dir() {
+  cd -P "$1" 2>/dev/null && pwd
+}
+
+script_dir() {
+  local source="${BASH_SOURCE[0]}"
+  while [[ -L "$source" ]]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    case "$source" in
+      /*) ;;
+      *) source="$dir/$source" ;;
+    esac
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+
+preset_catalog_json() {
+  local image="$1"
+  local catalog_bin="$2"
+  if [[ -n "$catalog_bin" ]]; then
+    if [[ ! -x "$catalog_bin" ]]; then
+      echo "--preset-catalog-bin is not executable: $catalog_bin" >&2
+      exit 1
+    fi
+    "$catalog_bin" --list-tool-presets
+    return
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    docker run --rm --network none --entrypoint /usr/local/bin/gongmcp "$image" --list-tool-presets
+    return
+  fi
+  echo "docker is required to read the gongmcp preset catalog; pass --preset-catalog-bin PATH for explicit local catalog inspection" >&2
+  exit 1
+}
+
+preset_tools_from_catalog() {
+  local preset="$1"
+  local image="$2"
+  local catalog_bin="$3"
+  local catalog
+  catalog="$(preset_catalog_json "$image" "$catalog_bin")"
+  if ! jq -e '
+    (.presets | type == "array")
+    and all(.presets[]; (.name | type == "string") and (.tools | type == "array") and all(.tools[]; type == "string"))
+  ' <<<"$catalog" >/dev/null; then
+    echo "invalid preset catalog JSON" >&2
+    exit 1
+  fi
+  local tools
+  tools="$(
+    jq -r --arg preset "$preset" '
+      def norm: ascii_downcase;
+      (.presets // [])
+      | map(select((.name | norm) == ($preset | norm) or ((.aliases // []) | map(norm) | index($preset | norm))))
+      | if length == 0 then "" else (.[0].tools | join(",")) end
+    ' <<<"$catalog"
+  )"
+  if [[ -z "$tools" ]]; then
+    local available
+    available="$(
+      jq -r '
+        (.presets // [])
+        | map([.name] + (.aliases // []))
+        | flatten
+        | join(", ")
+      ' <<<"$catalog"
+    )"
+    echo "unknown tool preset: $preset" >&2
+    echo "available presets: $available" >&2
+    exit 2
+  fi
+  printf '%s\n' "$tools"
 }
 
 DB_PATH=""
@@ -65,8 +140,12 @@ TOOL_PRESET="business-pilot"
 TOOL_PRESET_SET=0
 TOOL_ALLOWLIST=""
 TOOL_ALLOWLIST_SET=0
+COMPAT_EXPANDED_ALLOWLIST=0
+PRESET_CATALOG_BIN=""
 CONFIG_PATH="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
 INSTALL=0
+SCRIPT_DIR="$(script_dir)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -94,6 +173,14 @@ while [[ $# -gt 0 ]]; do
     --tool-allowlist)
       TOOL_ALLOWLIST="${2:?--tool-allowlist requires a comma-separated list}"
       TOOL_ALLOWLIST_SET=1
+      shift 2
+      ;;
+    --compat-expanded-allowlist)
+      COMPAT_EXPANDED_ALLOWLIST=1
+      shift
+      ;;
+    --preset-catalog-bin)
+      PRESET_CATALOG_BIN="${2:?--preset-catalog-bin requires a path}"
       shift 2
       ;;
     --config)
@@ -135,14 +222,28 @@ if [[ "$TOOL_PRESET_SET" -eq 1 && "$TOOL_ALLOWLIST_SET" -eq 1 ]]; then
   echo "--tool-preset and --tool-allowlist are mutually exclusive" >&2
   exit 2
 fi
-if [[ "$TOOL_ALLOWLIST_SET" -eq 0 && -n "$TOOL_PRESET" ]]; then
-  # Emit the expanded allowlist so generated Claude configs stay safe with
-  # older pinned images that do not yet understand GONGMCP_TOOL_PRESET.
-  TOOL_ALLOWLIST="$(preset_allowlist "$TOOL_PRESET")"
+if [[ "$COMPAT_EXPANDED_ALLOWLIST" -eq 1 && "$TOOL_ALLOWLIST_SET" -eq 1 ]]; then
+  echo "--compat-expanded-allowlist and --tool-allowlist are mutually exclusive" >&2
+  exit 2
 fi
 
-DB_PATH="$(abs_path "$DB_PATH")"
-if [[ ! -f "$DB_PATH" ]]; then
+TOOL_ENV_NAME=""
+TOOL_ENV_VALUE=""
+if [[ "$TOOL_ALLOWLIST_SET" -eq 1 ]]; then
+  TOOL_ENV_NAME="GONGMCP_TOOL_ALLOWLIST"
+  TOOL_ENV_VALUE="$TOOL_ALLOWLIST"
+elif [[ -n "$TOOL_PRESET" ]]; then
+  PRESET_ALLOWLIST="$(preset_tools_from_catalog "$TOOL_PRESET" "$IMAGE" "$PRESET_CATALOG_BIN")"
+  if [[ "$COMPAT_EXPANDED_ALLOWLIST" -eq 1 ]]; then
+    TOOL_ENV_NAME="GONGMCP_TOOL_ALLOWLIST"
+    TOOL_ENV_VALUE="$PRESET_ALLOWLIST"
+  else
+    TOOL_ENV_NAME="GONGMCP_TOOL_PRESET"
+    TOOL_ENV_VALUE="$TOOL_PRESET"
+  fi
+fi
+
+if ! DB_PATH="$(canonical_existing_file "$DB_PATH")"; then
   echo "database does not exist: $DB_PATH" >&2
   exit 1
 fi
@@ -150,7 +251,10 @@ fi
 if [[ -z "$DATA_DIR" ]]; then
   DATA_DIR="$(dirname "$DB_PATH")"
 else
-  DATA_DIR="$(abs_path "$DATA_DIR")"
+  if ! DATA_DIR="$(canonical_existing_dir "$DATA_DIR")"; then
+    echo "data directory does not exist: $DATA_DIR" >&2
+    exit 1
+  fi
 fi
 
 case "$DB_PATH" in
@@ -159,6 +263,12 @@ case "$DB_PATH" in
     echo "database must be inside --data-dir" >&2
     echo "db:       $DB_PATH" >&2
     echo "data-dir: $DATA_DIR" >&2
+    exit 1
+    ;;
+esac
+case "$DB_RELATIVE" in
+  ""|..|../*|*/../*|/*)
+    echo "database relative path is invalid: $DB_RELATIVE" >&2
     exit 1
     ;;
 esac
@@ -171,13 +281,14 @@ ENTRY_JSON="$(
     --arg mount "$MOUNT_ARG" \
     --arg image "$IMAGE" \
     --arg db "$CONTAINER_DB" \
-    --arg allowlist "$TOOL_ALLOWLIST" '
+    --arg toolEnvName "$TOOL_ENV_NAME" \
+    --arg toolEnvValue "$TOOL_ENV_VALUE" '
       [
         "run", "--rm", "-i",
         "--network", "none",
         "-v", $mount
       ]
-      + (if $allowlist == "" then [] else ["-e", ("GONGMCP_TOOL_ALLOWLIST=" + $allowlist)] end)
+      + (if $toolEnvName == "" then [] else ["-e", ($toolEnvName + "=" + $toolEnvValue)] end)
       + [
         $image,
         "--db", $db

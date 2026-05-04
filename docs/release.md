@@ -85,8 +85,7 @@ both succeed.
   `dist/build-env.txt` with binary artifacts.
 - Generate SBOMs and signatures in the company release pipeline when required.
   This repo's CI covers tests, vet, secret-pattern scanning, staticcheck
-  (`U1000` and `ST1000` disabled until existing internal dead-code and package
-  comment cleanup are scheduled),
+  (`ST1000` disabled until package comment cleanup is scheduled),
   govulncheck, Go module inventory, checksums, and Docker builds;
   signing/provenance can be layered on top by the publishing environment.
 

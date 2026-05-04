@@ -2124,22 +2124,6 @@ func addFactToSummary(row *CallFactsSummaryRow, fact profileCallFact) {
 	}
 }
 
-func lifecycleSearchResultFromProfileFact(fact profileCallFact) LifecycleCallSearchResult {
-	return LifecycleCallSearchResult{
-		CallID:            fact.CallID,
-		Title:             fact.Title,
-		StartedAt:         fact.StartedAt,
-		DurationSeconds:   fact.DurationSeconds,
-		Bucket:            fact.LifecycleBucket,
-		Confidence:        fact.LifecycleConfidence,
-		Reason:            fact.LifecycleReason,
-		EvidenceFields:    fact.EvidenceFields,
-		OpportunityCount:  fact.DealCount,
-		AccountCount:      fact.AccountCount,
-		TranscriptPresent: fact.TranscriptPresent,
-	}
-}
-
 func lifecycleRuleSignals(rules []profilepkg.Rule) []string {
 	out := make([]string, 0, len(rules))
 	for _, rule := range rules {
@@ -2152,28 +2136,6 @@ func lifecycleRuleSignals(rules []profilepkg.Rule) []string {
 		}
 	}
 	return out
-}
-
-func profilePriorityScore(fact profileCallFact, order map[string]int64) int64 {
-	score := int64(100)
-	if value, ok := order[fact.LifecycleBucket]; ok {
-		score = 100 - value
-	}
-	if fact.LifecycleBucket == "closed_won" || fact.LifecycleBucket == "closed_lost" || fact.LifecycleBucket == "post_sales" {
-		score += 50
-	}
-	if fact.LifecycleConfidence == "high" {
-		score += 20
-	}
-	if fact.DurationSeconds >= 1800 {
-		score += 20
-	} else if fact.DurationSeconds >= 600 {
-		score += 10
-	}
-	if fact.DealCount > 0 {
-		score += 10
-	}
-	return score
 }
 
 func profilePrioritySQL(order map[string]int64) string {
