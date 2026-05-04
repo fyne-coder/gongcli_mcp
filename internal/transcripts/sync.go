@@ -11,6 +11,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
 
 const (
@@ -31,16 +32,16 @@ type SyncResult struct {
 	BatchSize  int
 }
 
-func SyncMissing(ctx context.Context, client *gong.Client, store *sqlite.Store, outDir string, limit int) (result SyncResult, err error) {
+func SyncMissing(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, outDir string, limit int) (result SyncResult, err error) {
 	return SyncMissingWithBatch(ctx, client, store, outDir, limit, defaultBatchSize)
 }
 
-func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store *sqlite.Store, outDir string, limit int, batchSize int) (result SyncResult, err error) {
+func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, outDir string, limit int, batchSize int) (result SyncResult, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	outDir = strings.TrimSpace(outDir)
 	if outDir == "" {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
 
 const (
@@ -301,12 +302,12 @@ func SyncScorecardActivity(ctx context.Context, client *gong.Client, store *sqli
 	}
 }
 
-func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, params CallsParams) (result Result, err error) {
+func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncStore, params CallsParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	if params.MaxPages < 0 {
 		return result, errors.New("max pages must be >= 0")
@@ -422,12 +423,12 @@ func canRetryWithoutParties(err error) bool {
 	return httpErr.StatusCode == 400 || httpErr.StatusCode == 422
 }
 
-func SyncUsers(ctx context.Context, client *gong.Client, store *sqlite.Store, params UsersParams) (result Result, err error) {
+func SyncUsers(ctx context.Context, client *gong.Client, store storeiface.SyncStore, params UsersParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	if params.MaxPages < 0 {
 		return result, errors.New("max pages must be >= 0")
@@ -520,14 +521,14 @@ func SyncUsers(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 	}
 }
 
-func Status(ctx context.Context, store *sqlite.Store) (*sqlite.SyncStatusSummary, error) {
+func Status(ctx context.Context, store storeiface.SyncStatusReader) (*sqlite.SyncStatusSummary, error) {
 	if store == nil {
-		return nil, errors.New("sqlite store is required")
+		return nil, errors.New("store is required")
 	}
 	return store.SyncStatusSummary(ctx)
 }
 
-func finishRun(ctx context.Context, store *sqlite.Store, runID int64, result *Result, errp *error) {
+func finishRun(ctx context.Context, store storeiface.SyncRunStore, runID int64, result *Result, errp *error) {
 	status := "success"
 	errorText := ""
 	if *errp != nil {

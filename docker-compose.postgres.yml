@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gongctl
+      POSTGRES_USER: ${GONGCTL_POSTGRES_USER:-gongctl}
+      POSTGRES_PASSWORD: ${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}
+      GONGMCP_READER_PASSWORD: ${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}
+    ports:
+      - "127.0.0.1:${GONGCTL_POSTGRES_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gongctl -d gongctl"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - gongctl-postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  gongctl:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GONG_DATABASE_URL: postgres://${GONGCTL_POSTGRES_USER:-gongctl}:${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}@postgres:5432/gongctl?sslmode=disable
+    command: ["sync", "synthetic"]
+    profiles: ["sync"]
+
+  gongmcp:
+    build:
+      context: .
+      target: mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GONG_DATABASE_URL: postgres://gongmcp_reader:${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}@postgres:5432/gongctl?sslmode=disable
+      GONGMCP_TOOL_ALLOWLIST: get_sync_status,search_calls,search_transcript_segments
+    command: ["--stdio"]
+    profiles: ["mcp"]
+
+volumes:
+  gongctl-postgres-data:

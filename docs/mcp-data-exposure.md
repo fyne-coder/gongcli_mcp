@@ -9,7 +9,10 @@ the same read-only tool layer.
 
 Current fixed boundaries:
 
-- MCP reads a local SQLite cache only.
+- MCP reads a local cache/store only. SQLite is the complete default backend;
+  the first Postgres vertical slice supports only `get_sync_status`,
+  `search_calls`, and `search_transcript_segments` over a read-only database
+  role.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool
@@ -191,7 +194,7 @@ alone.
 
 ## MCP Call Volume And Limits
 
-`gongmcp` reads local SQLite. It does not call Gong. MCP traffic does not
+`gongmcp` reads the configured local store. It does not call Gong. MCP traffic does not
 consume the documented Gong API budget (about 3 calls per second and 10,000
 calls per day) — that budget is spent by `gongctl sync ...` on the operator
 side.
@@ -199,7 +202,7 @@ side.
 MCP traffic still has real per-call costs that scale poorly when an agent
 loops:
 
-- local SQLite I/O, especially full-text transcript searches against large
+- local database I/O, especially full-text transcript searches against large
   caches
 - wall-clock latency that compounds when the model fans out from one search
   result into per-call follow-up tools

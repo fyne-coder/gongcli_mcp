@@ -18,6 +18,9 @@ For a faster source-first onboarding path, start with
 - `internal/redact`: helpers for safe diagnostics/logging.
 - `internal/profile`: tenant profile parsing, canonicalization, discovery, validation, and closed rule evaluation.
 - `internal/store/sqlite`: local cache for calls, users, transcripts, CRM schema/settings inventory, search indexes, and sync state.
+- `internal/store/postgres`: first shared-deployment vertical slice for sync
+  status, calls, users, transcripts, transcript segments, and read-only MCP
+  search/status tools. It is not full query parity with SQLite yet.
 - `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus SQLite.
 - `internal/transcripts`: transcript sync/search helpers on top of the Gong client plus SQLite.
 - `internal/mcp`: read-only local MCP adapter over SQLite. `catalog.go` owns
@@ -35,7 +38,8 @@ Current public SQLite-backed commands:
 - `gongctl sync crm-schema --db PATH --integration-id ID --object-type TYPE`
 - `gongctl sync settings --db PATH --kind trackers|scorecards|workspaces [--workspace-id ID]`
 - `gongctl sync scorecard-activity --db PATH --call-from DATE --call-to DATE [--review-method AUTOMATIC|MANUAL|BOTH]`
-- `gongctl sync status --db PATH`
+- `gongctl sync status --db PATH` for SQLite, or omit `--db` and set
+  `GONG_DATABASE_URL` / `DATABASE_URL` for the Postgres vertical slice
 - `gongctl profile discover --db PATH --out PATH`
 - `gongctl profile validate --db PATH --profile PATH`
 - `gongctl profile import --db PATH --profile PATH`
@@ -137,7 +141,17 @@ Ad-hoc business rollups read metadata-only facts. The builtin path uses the SQLi
 
 Unmapped CRM field surfaces are redacted by default. They return field names, types, cardinality, population/null rates, and length distribution, not raw example values.
 
-Local SQLite state is the proving ground and source of truth for MCP query tools. MCP reads the already-defined store/search surfaces rather than inventing a separate persistence path.
+Local SQLite state remains the complete proving ground and source of truth for
+MCP query tools. The Postgres backend is intentionally narrower: it proves the
+shared store path for `get_sync_status`, `search_calls`, and
+`search_transcript_segments` using `GONG_DATABASE_URL` / `DATABASE_URL` and a
+read-only database role. Full parity for lifecycle/profile/business-analysis,
+CRM JSON-derived views, support bundle/cache inventory, and governance filtered
+exports remains follow-up work.
+
+Postgres maps SQLite FTS5 transcript search to PostgreSQL full-text search with
+a `tsvector`/GIN index and `ts_headline`. Exact FTS5 ranking/snippet parity is
+not guaranteed in this first slice.
 
 ## Endpoint Drift Strategy
 

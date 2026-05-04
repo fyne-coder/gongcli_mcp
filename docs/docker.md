@@ -5,6 +5,8 @@
 - one-shot CLI sync, search, and analysis commands
 - read-only stdio MCP over a mounted SQLite cache
 - read-only HTTP MCP private pilots over a mounted SQLite cache
+- first-slice shared Postgres deployments where sync and MCP containers use one
+  Postgres database instead of a shared SQLite filesystem
 
 HTTP mode is explicit via `gongmcp --http ...`; the default MCP path remains
 stdio. In both modes, `gongmcp` reads SQLite only. Keep credentials and customer
@@ -119,6 +121,57 @@ docker compose run --rm gongctl sync status --db /data/gong.db
 ```
 
 Compose intentionally fails if `GONGCTL_DATA_DIR` is unset so customer data is not written under the source checkout by accident.
+
+## Postgres Shared Deployment
+
+Use Postgres when the operator sync container and `gongmcp` container do not
+share a filesystem. SQLite remains the default for local/single-host pilots.
+
+Configuration contract:
+
+- SQLite: pass `--db PATH`.
+- Postgres: omit `--db` and set `GONG_DATABASE_URL`; `DATABASE_URL` is accepted
+  as a fallback.
+- Use a writer URL for `gongctl` sync jobs.
+- Use a reader URL for `gongmcp`.
+- The Compose example binds Postgres to `127.0.0.1` for local smoke use and
+  uses explicit dev passwords by default. Company deployments should provide
+  `GONGCTL_POSTGRES_PASSWORD` and `GONGMCP_READER_PASSWORD` from an approved
+  secret manager and should not publish the database port directly.
+
+The first Postgres vertical slice supports:
+
+- `gongctl sync synthetic`
+- `gongctl sync calls`
+- `gongctl sync users`
+- `gongctl sync transcripts`
+- `gongctl sync status`
+- `gongctl search calls`
+- `gongctl search transcripts`
+- `gongmcp` tools: `get_sync_status`, `search_calls`,
+  `search_transcript_segments`
+
+It does not yet provide full SQLite query parity for governance filtered DB
+export, profile/business-analysis views, support bundles, cache inventory, or
+CRM/lifecycle-heavy MCP tools.
+
+Run the local synthetic smoke:
+
+```bash
+scripts/postgres-smoke.sh
+```
+
+Inspect the Compose shape:
+
+```bash
+docker compose -f docker-compose.postgres.yml config --quiet
+```
+
+The Compose example separates:
+
+- `postgres`: shared database
+- `gongctl`: writer/sync container
+- `gongmcp`: read-only MCP container using a Postgres reader role
 
 ## MCP Over Docker
 

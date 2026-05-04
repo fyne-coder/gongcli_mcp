@@ -19,6 +19,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 	"github.com/fyne-coder/gongcli_mcp/internal/version"
 )
@@ -81,18 +82,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	db := strings.TrimSpace(*dbPath)
-	if db == "" {
-		fmt.Fprintln(stderr, "--db is required")
-		return 2
-	}
-	if _, err := os.Stat(db); err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(stderr, "db file not found: %s\n", filepath.Clean(db))
-			return 2
-		}
-		fmt.Fprintf(stderr, "stat db: %v\n", err)
-		return 1
-	}
+	postgresURL := postgres.URLFromEnv(os.Getenv)
+	postgresMode := db == "" && postgresURL != ""
 
 	allowlist, err := resolveToolAllowlist(toolSelection{
 		AllowlistFlag:    *toolAllowlist,
@@ -105,6 +96,14 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid tool selection: %v\n", err)
 		return 2
+	}
+	if postgresMode {
+		postgresHTTPMode := !*forceStdio && firstNonEmpty(*httpAddr, os.Getenv("GONGMCP_HTTP_ADDR")) != ""
+		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode)
+		if err != nil {
+			fmt.Fprintf(stderr, "invalid postgres tool selection: %v\n", err)
+			return 2
+		}
 	}
 	limitPolicy, err := resolveLimitPolicy(limitSelection{
 		SearchResults:              *maxSearchResults,
@@ -142,15 +141,48 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	ctx := context.Background()
-	store, err := sqlite.OpenReadOnly(ctx, db)
-	if err != nil {
-		fmt.Fprintf(stderr, "open db: %v\n", err)
-		return 1
+	var store mcp.Store
+	var governanceStore governance.CandidateStore
+	var closeStore func() error
+	if postgresMode {
+		pgStore, err := postgres.OpenReadOnly(ctx, postgresURL)
+		if err != nil {
+			fmt.Fprintf(stderr, "open postgres db: %v\n", err)
+			return 1
+		}
+		store = pgStore
+		closeStore = pgStore.Close
+		fmt.Fprintln(stderr, "postgres backend active: read-only MCP exposes get_sync_status, search_calls, and search_transcript_segments")
+	} else {
+		if db == "" {
+			fmt.Fprintln(stderr, "--db is required")
+			return 2
+		}
+		if _, err := os.Stat(db); err != nil {
+			if os.IsNotExist(err) {
+				fmt.Fprintf(stderr, "db file not found: %s\n", filepath.Clean(db))
+				return 2
+			}
+			fmt.Fprintf(stderr, "stat db: %v\n", err)
+			return 1
+		}
+		sqliteStore, err := sqlite.OpenReadOnly(ctx, db)
+		if err != nil {
+			fmt.Fprintf(stderr, "open db: %v\n", err)
+			return 1
+		}
+		store = sqliteStore
+		governanceStore = sqliteStore
+		closeStore = sqliteStore.Close
 	}
-	defer store.Close()
+	defer closeStore()
 
 	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
 	if configPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG")); configPath != "" {
+		if governanceStore == nil {
+			fmt.Fprintln(stderr, "AI governance config is not supported by the Postgres vertical slice; use SQLite filtered DB export or a governed SQLite cache")
+			return 2
+		}
 		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
 			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
 			return 2
@@ -160,12 +192,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "load AI governance config: failed")
 			return 2
 		}
-		snapshot, err := governance.Snapshot(ctx, configPath, store)
+		snapshot, err := governance.Snapshot(ctx, configPath, governanceStore)
 		if err != nil {
 			fmt.Fprintln(stderr, "snapshot AI governance state: failed")
 			return 1
 		}
-		audit, err := governance.BuildAudit(ctx, store, cfg)
+		audit, err := governance.BuildAudit(ctx, governanceStore, cfg)
 		if err != nil {
 			fmt.Fprintln(stderr, "audit AI governance config: failed")
 			return 1
@@ -176,7 +208,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(audit.SuppressedCallIDs))
 		serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
-			current, err := governance.Snapshot(checkCtx, configPath, store)
+			current, err := governance.Snapshot(checkCtx, configPath, governanceStore)
 			if err != nil {
 				return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
 			}
@@ -227,6 +259,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func postgresToolAllowlist(allowlist []string, httpMode bool) ([]string, error) {
+	supported := map[string]struct{}{
+		"get_sync_status":            {},
+		"search_calls":               {},
+		"search_transcript_segments": {},
+	}
+	if len(allowlist) == 0 {
+		if httpMode {
+			return nil, fmt.Errorf("postgres HTTP mode requires explicit --tool-preset, --tool-allowlist, GONGMCP_TOOL_PRESET, or GONGMCP_TOOL_ALLOWLIST")
+		}
+		return []string{"get_sync_status", "search_calls", "search_transcript_segments"}, nil
+	}
+	for _, name := range allowlist {
+		if _, ok := supported[name]; !ok {
+			return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", name)
+		}
+	}
+	return allowlist, nil
 }
 
 type toolSelection struct {

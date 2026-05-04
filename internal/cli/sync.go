@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,7 +12,9 @@ import (
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 	"github.com/fyne-coder/gongcli_mcp/internal/syncsvc"
 	transcriptsync "github.com/fyne-coder/gongcli_mcp/internal/transcripts"
 	"gopkg.in/yaml.v3"
@@ -19,7 +22,7 @@ import (
 
 func (a *app) sync(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl sync [run|calls|users|transcripts|crm-integrations|crm-schema|settings|scorecard-activity|status]")
+		fmt.Fprintln(a.err, "usage: gongctl sync [run|calls|users|transcripts|crm-integrations|crm-schema|settings|scorecard-activity|status|synthetic]")
 		return errUsage
 	}
 
@@ -42,6 +45,8 @@ func (a *app) sync(ctx context.Context, args []string) error {
 		return a.syncScorecardActivity(ctx, args[1:])
 	case "status":
 		return a.syncStatus(ctx, args[1:])
+	case "synthetic":
+		return a.syncSynthetic(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown sync command %q\n", args[0])
 		return errUsage
@@ -149,7 +154,7 @@ func (a *app) syncScorecardActivity(ctx context.Context, args []string) error {
 		result.RecordsWritten,
 		strings.ToUpper(strings.TrimSpace(*reviewMethod)),
 		displayCursor(result.Cursor),
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -197,7 +202,7 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 		}
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableCoreStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -226,7 +231,7 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 		displayContext(requestContext),
 		displayCursor(result.Cursor),
 		displayParticipantCaptureStatus(result.ParticipantCaptureStatus),
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -240,7 +245,7 @@ func (a *app) syncUsers(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableCoreStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -262,7 +267,7 @@ func (a *app) syncUsers(ctx context.Context, args []string) error {
 		result.RecordsSeen,
 		result.RecordsWritten,
 		displayCursor(result.Cursor),
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -388,7 +393,7 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 		return err
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableTranscriptStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -410,7 +415,7 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 		result.Requests,
 		result.BatchSize,
 		*outDir,
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -423,7 +428,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
+	store, err := openReadOnlyStatusStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -472,6 +477,80 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 	return writeJSONValue(a.out, response)
 }
 
+func (a *app) syncSynthetic(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sync synthetic", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+
+	store, err := openWritableCoreStore(ctx, *dbPath)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
+		Scope:          "synthetic",
+		SyncKey:        "synthetic:postgres-vertical-slice",
+		RequestContext: "synthetic_fixture=true",
+	})
+	if err != nil {
+		return err
+	}
+	written := int64(0)
+	finishStatus := "success"
+	finishError := ""
+	defer func() {
+		_ = store.FinishSyncRun(ctx, run.ID, sqlite.FinishSyncRunParams{
+			Status:         finishStatus,
+			RecordsSeen:    written,
+			RecordsWritten: written,
+			ErrorText:      finishError,
+			RequestContext: "synthetic_fixture=true",
+		})
+	}()
+
+	for _, raw := range syntheticCallPayloads() {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			finishStatus = "error"
+			finishError = err.Error()
+			return err
+		}
+		written++
+	}
+	for _, raw := range syntheticUserPayloads() {
+		if _, err := store.UpsertUser(ctx, raw); err != nil {
+			finishStatus = "error"
+			finishError = err.Error()
+			return err
+		}
+		written++
+	}
+	transcriptStore, ok := store.(interface {
+		UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+	})
+	if !ok {
+		return errors.New("selected store cannot write transcripts")
+	}
+	for _, raw := range syntheticTranscriptPayloads() {
+		if _, err := transcriptStore.UpsertTranscript(ctx, raw); err != nil {
+			finishStatus = "error"
+			finishError = err.Error()
+			return err
+		}
+		written++
+	}
+
+	fmt.Fprintf(a.err, "synced synthetic fixture: records_written=%d db=%s\n", written, displayStoreTarget(*dbPath))
+	return writeJSONValue(a.out, map[string]any{
+		"status":          "ok",
+		"records_written": written,
+		"db":              displayStoreTarget(*dbPath),
+	})
+}
+
 func openSQLiteStore(ctx context.Context, path string) (*sqlite.Store, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("--db is required")
@@ -484,6 +563,116 @@ func openSQLiteReadOnlyStore(ctx context.Context, path string) (*sqlite.Store, e
 		return nil, errors.New("--db is required")
 	}
 	return sqlite.OpenReadOnly(ctx, path)
+}
+
+type writableCoreStore interface {
+	storeiface.SyncStore
+	storeiface.Closer
+}
+
+type writableTranscriptStore interface {
+	storeiface.TranscriptStore
+	storeiface.Closer
+}
+
+type readOnlyStatusStore interface {
+	storeiface.SyncStatusReader
+	storeiface.Closer
+}
+
+type readOnlyTranscriptSearchStore interface {
+	SearchTranscriptSegments(context.Context, string, int) ([]sqlite.TranscriptSearchResult, error)
+	storeiface.Closer
+}
+
+type readOnlyCallSearchStore interface {
+	storeiface.CallSearcher
+	storeiface.Closer
+}
+
+func openWritableCoreStore(ctx context.Context, path string) (writableCoreStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
+func openWritableTranscriptStore(ctx context.Context, path string) (writableTranscriptStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
+func openReadOnlyStatusStore(ctx context.Context, path string) (readOnlyStatusStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.OpenReadOnly(ctx, databaseURL)
+}
+
+func openReadOnlyTranscriptSearchStore(ctx context.Context, path string) (readOnlyTranscriptSearchStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.OpenReadOnly(ctx, databaseURL)
+}
+
+func openReadOnlyCallSearchStore(ctx context.Context, path string) (readOnlyCallSearchStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.OpenReadOnly(ctx, databaseURL)
+}
+
+func displayStoreTarget(path string) string {
+	if strings.TrimSpace(path) != "" {
+		return path
+	}
+	if postgres.URLFromEnv(os.Getenv) != "" {
+		return "postgres"
+	}
+	return ""
+}
+
+func syntheticCallPayloads() []json.RawMessage {
+	return []json.RawMessage{
+		json.RawMessage(`{"id":"synthetic-call-001","title":"Pulsaris implementation kickoff","started":"2026-01-15T15:00:00Z","duration":1800,"parties":[{"id":"speaker-1"}]}`),
+		json.RawMessage(`{"id":"synthetic-call-002","title":"Pulsaris renewal risk review","started":"2026-01-20T16:00:00Z","duration":2400,"parties":[{"id":"speaker-1"},{"id":"speaker-2"}]}`),
+	}
+}
+
+func syntheticUserPayloads() []json.RawMessage {
+	return []json.RawMessage{
+		json.RawMessage(`{"id":"synthetic-user-001","emailAddress":"alex.operator@example.invalid","firstName":"Alex","lastName":"Operator","title":"RevOps Lead","active":true}`),
+	}
+}
+
+func syntheticTranscriptPayloads() []json.RawMessage {
+	return []json.RawMessage{
+		json.RawMessage(`{"callId":"synthetic-call-001","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":5000,"text":"We need a shared Postgres deployment path for the MCP server and sync job."},{"start":5000,"end":9000,"text":"SQLite remains useful for local pilots."}]}]}`),
+		json.RawMessage(`{"callId":"synthetic-call-002","transcript":[{"speakerId":"speaker-2","sentences":[{"start":0,"end":7000,"text":"The renewal risk is tied to transcript coverage and implementation evidence."}]}]}`),
+	}
 }
 
 func parseSyncCallsPreset(value string) (string, string, error) {

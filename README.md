@@ -3,6 +3,11 @@
 `gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
 This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+SQLite remains the default local/single-host cache. For shared multi-container
+deployments, the first Postgres vertical slice supports a shared database for
+sync status, cached calls, users, transcripts, transcript segments, and the
+read-only MCP tools `get_sync_status`, `search_calls`, and
+`search_transcript_segments`.
 
 ## Positioning
 
@@ -122,6 +127,11 @@ GoReleaser and Docker builds inject `version`, `commit`, and `date` into both `g
 
 For the fastest end-to-end path, use the [Quickstart](docs/quickstart.md).
 
+For shared deployments where the sync job and `gongmcp` run in separate
+containers without a shared filesystem, use Postgres instead of a mounted
+SQLite cache. See [Docker Deployment](docs/docker.md#postgres-shared-deployment)
+and [Enterprise Deployment](docs/enterprise-deployment.md#postgres-shared-container-deployment).
+
 Use the published GHCR images after a release is published:
 
 ```bash
@@ -172,6 +182,17 @@ scripts/docker-smoke.sh
 ```
 
 See [docs/docker.md](docs/docker.md) for Compose usage, MCP host configuration, and OCI registry deployment notes.
+
+Run the synthetic Postgres shared-deployment smoke:
+
+```bash
+scripts/postgres-smoke.sh
+```
+
+The smoke uses synthetic data only. It initializes Postgres, writes the
+synthetic cache through `gongctl sync synthetic`, starts `gongmcp` with a
+read-only Postgres role, calls the three supported MCP tools, and proves the
+reader role cannot write.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 

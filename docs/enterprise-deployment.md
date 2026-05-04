@@ -104,6 +104,33 @@ flowchart LR
 - Run `gongmcp` as a separate read-only process or container against the same
   mounted cache.
 
+### 2b. Postgres shared container deployment
+
+Use when the sync/runtime containers cannot share a protected filesystem.
+
+```mermaid
+flowchart LR
+  Gong["Gong API"] -->|"HTTPS with sync credentials"| Sync["gongctl sync job\nwriter role"]
+  Secrets["Customer secret store\nGong credentials + DB URLs"] --> Sync
+  Sync -->|"writes"| PG["Customer Postgres\nshared cache tables"]
+  PG -->|"SELECT only"| MCP["gongmcp\nreader role"]
+  Host["Approved MCP host"] -->|"stdio or private HTTP"| MCP
+  Ops["IT / platform owner"] --> PG
+  Ops --> Sync
+  Ops --> MCP
+```
+
+- SQLite remains supported for local/single-host installs.
+- Postgres is the shared deployment path for separate sync and MCP containers.
+- `gongctl` uses a writer database URL through `GONG_DATABASE_URL` or
+  `DATABASE_URL`.
+- `gongmcp` uses a read-only database URL and must not receive Gong
+  credentials.
+- The first slice exposes only `get_sync_status`, `search_calls`, and
+  `search_transcript_segments` through MCP. Full query parity is a follow-up.
+- AI governance filtered DB export remains SQLite-only until a Postgres
+  governed-view or governed-snapshot replacement is implemented.
+
 ### 3. MCP-only consumer host
 
 Use when business-user access must be separated from the writable sync runtime.

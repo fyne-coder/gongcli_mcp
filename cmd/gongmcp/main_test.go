@@ -35,6 +35,29 @@ func TestRunRequiresDBFlag(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistDefaultsToSupportedSlice(t *testing.T) {
+	allowlist, err := postgresToolAllowlist(nil, false)
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	want := []string{"get_sync_status", "search_calls", "search_transcript_segments"}
+	if !reflect.DeepEqual(allowlist, want) {
+		t.Fatalf("allowlist=%v want %v", allowlist, want)
+	}
+}
+
+func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
+	if _, err := postgresToolAllowlist([]string{"get_call"}, false); err == nil {
+		t.Fatal("postgresToolAllowlist accepted unsupported tool")
+	}
+}
+
+func TestPostgresToolAllowlistRequiresExplicitSelectionForHTTP(t *testing.T) {
+	if _, err := postgresToolAllowlist(nil, true); err == nil {
+		t.Fatal("postgresToolAllowlist accepted implicit HTTP tools")
+	}
+}
+
 func TestRunHelpExitsZero(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

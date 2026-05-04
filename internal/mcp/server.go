@@ -560,7 +560,7 @@ func defaultTools(policy LimitPolicy) []tool {
 	tools := []tool{
 		{
 			Name:        "get_sync_status",
-			Description: "Return cached sync run metadata and local SQLite record counts.",
+			Description: "Return cached sync run metadata and local store record counts.",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
@@ -873,7 +873,7 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "search_transcript_segments",
-			Description: "Search transcript snippets in the local SQLite FTS index. Call/speaker provenance is controlled by server transcript-evidence-provenance config: redacted by default, stable aliases in alias mode, raw IDs only in raw mode.",
+			Description: "Search transcript snippets in the configured local store. Call/speaker provenance is controlled by server transcript-evidence-provenance config: redacted by default, stable aliases in alias mode, raw IDs only in raw mode.",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":               map[string]any{"type": "string"},
@@ -934,7 +934,7 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "missing_transcripts",
-			Description: "List cached calls that do not yet have transcript segments stored in SQLite.",
+			Description: "List cached calls that do not yet have transcript segments stored in the configured local store.",
 			InputSchema: objectSchema(
 				map[string]any{
 					"from_date":        map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
