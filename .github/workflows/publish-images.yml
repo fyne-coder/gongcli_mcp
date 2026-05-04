@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, with or without leading v. Defaults to VERSION."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -38,6 +43,8 @@ jobs:
           go test ./...
           go vet ./...
           make secret-scan
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -78,12 +85,21 @@ jobs:
       - name: Resolve release metadata
         id: release
         shell: bash
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
           version="$(sed 's/^v//' VERSION)"
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${DISPATCH_VERSION}" ]]; then
+            version="${DISPATCH_VERSION#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must be semver like 0.3.2 or v0.3.2" >&2
+            exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=$(cut -d. -f1,2 <<<"$version")" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Metadata for gongctl
@@ -95,13 +111,17 @@ jobs:
             type=semver,pattern={{raw}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=v${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.release.outputs.major_minor }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-
 
       - name: Build and publish gongctl image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta-gongctl.outputs.tags }}
           labels: ${{ steps.meta-gongctl.outputs.labels }}
@@ -121,7 +141,10 @@ jobs:
             type=semver,pattern={{raw}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=v${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.release.outputs.major_minor }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-
 
       - name: Build and publish gongmcp image
@@ -129,6 +152,7 @@ jobs:
         with:
           context: .
           target: mcp
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta-gongmcp.outputs.tags }}
           labels: ${{ steps.meta-gongmcp.outputs.labels }}
