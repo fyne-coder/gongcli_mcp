@@ -12,8 +12,8 @@
   ],
   "users": [
     {
-      "username": "pilot@example.com",
-      "email": "pilot@example.com",
+      "username": "__LAB_APPROVED_EMAIL__",
+      "email": "__LAB_APPROVED_EMAIL__",
       "firstName": "Pilot",
       "lastName": "User",
       "enabled": true,
@@ -27,14 +27,14 @@
       "credentials": [
         {
           "type": "password",
-          "value": "__PILOT_PASSWORD__",
+          "value": "__LAB_APPROVED_PASSWORD__",
           "temporary": false
         }
       ]
     },
     {
-      "username": "blocked@example.com",
-      "email": "blocked@example.com",
+      "username": "__LAB_BLOCKED_EMAIL__",
+      "email": "__LAB_BLOCKED_EMAIL__",
       "firstName": "Blocked",
       "lastName": "User",
       "enabled": true,
@@ -42,14 +42,14 @@
       "credentials": [
         {
           "type": "password",
-          "value": "__BLOCKED_PASSWORD__",
+          "value": "__LAB_BLOCKED_PASSWORD__",
           "temporary": false
         }
       ]
     },
     {
-      "username": "test@fyne-llc.com",
-      "email": "test@fyne-llc.com",
+      "username": "__LAB_SECONDARY_EMAIL__",
+      "email": "__LAB_SECONDARY_EMAIL__",
       "firstName": "Test",
       "lastName": "User",
       "enabled": true,
@@ -63,7 +63,7 @@
       "credentials": [
         {
           "type": "password",
-          "value": "__TEST_PASSWORD__",
+          "value": "__LAB_SECONDARY_PASSWORD__",
           "temporary": false
         }
       ]

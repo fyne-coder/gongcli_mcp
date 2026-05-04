@@ -9,6 +9,9 @@
   dynamic-client-registration checks, offline-token and audience/group claim
   validation, OpenAI Responses API smoke testing, and ChatGPT manual connector
   guidance.
+- Prepared the public `v0.3.2` surfaces by aligning Docker/Claude helper
+  defaults, generalizing lab-auth host examples, and clarifying when GHCR tag
+  artifacts must exist before copy/paste use.
 - Fixed MCP tool-call compatibility with clients that send reserved `_meta`
   extension fields by stripping `_meta` before strict argument decoding while
   preserving validation for real unknown fields.

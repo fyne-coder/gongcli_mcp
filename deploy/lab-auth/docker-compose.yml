@@ -68,10 +68,10 @@ services:
       OIDC_ISSUER_URL: ${LAB_PUBLIC_BASE_URL}/realms/gong-lab
       OIDC_CLIENT_ID: gong-lab-proxy
       REQUIRED_GROUP: /gong-mcp-users
-      ALLOWED_EMAILS: pilot@example.com,test@fyne-llc.com
+      ALLOWED_EMAILS: ${LAB_ALLOWED_EMAILS:?set LAB_ALLOWED_EMAILS}
       TRUST_PROXY_HEADERS: "1"
     volumes:
-      - /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
+      - ${REMOTE_ROOT:?set REMOTE_ROOT}/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
     depends_on:
       - gongmcp
 
@@ -91,8 +91,8 @@ services:
       - --db
       - /data/gong.db
     volumes:
-      - /srv/gongctl/runtime/gong-mcp-governed.db:/data/gong.db:ro
-      - /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
+      - ${REMOTE_ROOT:?set REMOTE_ROOT}/runtime/gong-mcp-governed.db:/data/gong.db:ro
+      - ${REMOTE_ROOT:?set REMOTE_ROOT}/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
 
 volumes:
   keycloak-data:

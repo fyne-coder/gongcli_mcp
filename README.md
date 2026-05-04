@@ -129,6 +129,10 @@ docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 version
 docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 sync status --db /data/gong.db
 ```
 
+The `v0.3.2` image references require the `v0.3.2` tag workflow to have
+completed successfully. If the GHCR manifest is not available yet, build and
+use the local images below.
+
 For read-only MCP, use the MCP-only image:
 
 ```bash

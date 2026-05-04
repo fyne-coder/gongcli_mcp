@@ -41,14 +41,14 @@ The lab reuses Keycloak as the OAuth/OIDC authorization server. The shim is the
 OAuth protected resource for MCP and publishes discovery metadata:
 
 ```bash
-curl -fsS https://docker.transcripts.fyne-llc.com/.well-known/oauth-protected-resource | jq .
-curl -i https://docker.transcripts.fyne-llc.com/mcp
+curl -fsS "$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource" | jq .
+curl -i "$LAB_PUBLIC_BASE_URL/mcp"
 ```
 
 Expected protected-resource metadata:
 
-- `resource`: `https://docker.transcripts.fyne-llc.com/mcp`
-- `authorization_servers`: `https://docker.transcripts.fyne-llc.com/realms/gong-lab`
+- `resource`: `$LAB_PUBLIC_BASE_URL/mcp`
+- `authorization_servers`: `$LAB_PUBLIC_BASE_URL/realms/gong-lab`
 - `scopes_supported`: `openid`, `profile`, `email`, `offline_access`
 - `audiences_supported`: `gong-lab-proxy`
 
@@ -56,44 +56,43 @@ Expected unauthenticated MCP response:
 
 ```text
 HTTP/2 401
-WWW-Authenticate: Bearer realm="gongctl-lab", resource_metadata="https://docker.transcripts.fyne-llc.com/.well-known/oauth-protected-resource", authorization_uri="https://docker.transcripts.fyne-llc.com/realms/gong-lab", scope="openid profile email offline_access"
+WWW-Authenticate: Bearer realm="gongctl-lab", resource_metadata="$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource", authorization_uri="$LAB_PUBLIC_BASE_URL/realms/gong-lab", scope="openid profile email offline_access"
 ```
 
 Keycloak's OIDC metadata remains available at:
 
 ```bash
-curl -fsS https://docker.transcripts.fyne-llc.com/realms/gong-lab/.well-known/openid-configuration | jq .
+curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration" | jq .
 ```
 
-## Proxmox VM
+## Lab Host
 
-Current lab VM:
+Use any disposable Linux host that can run Docker and `docker-compose`.
 
-- Proxmox host: `root@192.168.1.21`
-- VMID/name: `1910` / `gongctl-auth-lab`
-- IP: `192.168.1.205`
-- OS/runtime: Debian 12, Docker, `docker-compose`
-- data root: `/srv/gongctl`
+Required operator inputs:
+
+- `LAB_VM`: SSH target for the lab host, for example `ssh-user@lab-host.example.com`.
+- `LAB_PUBLIC_BASE_URL`: URL that MCP clients use, for example `https://lab.example.com`.
+- `LAB_DB`: local path to the synthetic SQLite DB copied into the lab.
+- `REMOTE_ROOT`: remote data root; defaults to `/srv/gongctl`.
+- `LAB_APPROVED_EMAIL`: primary approved Keycloak test user.
+- `LAB_SECONDARY_EMAIL`: second approved Keycloak test user for offline-token checks.
+- `LAB_BLOCKED_EMAIL`: Keycloak user outside the approved group.
 
 ## Deploy
 
 From the repo root:
 
 ```bash
+export LAB_VM=ssh-user@lab-host.example.com
+export LAB_PUBLIC_BASE_URL=https://lab.example.com
+export LAB_DB=/path/to/synthetic-gong.db
 deploy/lab-auth/scripts/lab-up.sh
 ```
 
-Defaults:
-
-- `LAB_VM=root@192.168.1.205`
-- `LAB_PUBLIC_BASE_URL=http://192.168.1.205`
-- `LAB_DB=$HOME/gongctl-data/public-example-q1-2026/gong-example-q1-2026.db`
-
-Override them with environment variables if needed.
-
-The deploy script copies the current working tree to `/srv/gongctl/source`,
+The deploy script copies the current working tree to `$REMOTE_ROOT/source`,
 copies the synthetic public SQLite DB to
-`/srv/gongctl/runtime/gong-mcp-governed.db`, renders the Keycloak realm import,
+`$REMOTE_ROOT/runtime/gong-mcp-governed.db`, renders the Keycloak realm import,
 builds the MCP image, and starts the compose stack.
 
 Because this is a disposable lab, each deploy recreates the Keycloak volume so
@@ -105,14 +104,9 @@ Mapper Types`, `Consent Required`, and `Full Scope Disabled` registration
 policies after import. This is intentionally lab-only; production should use a
 reviewed static client or tighter registration policy.
 
-Current allowed lab users:
-
-- `pilot@example.com`
-- `test@fyne-llc.com`
-
-Both users are imported into the Keycloak `/gong-mcp-users` group. The
-`test@fyne-llc.com` password is stored in the VM lab `.env` as `TEST_PASSWORD`
-and defaults to the value provided for the lab if missing during deploy.
+The approved lab users are imported into the Keycloak `/gong-mcp-users` group.
+Their generated passwords are stored only in the remote lab `.env` as
+`LAB_APPROVED_PASSWORD` and `LAB_SECONDARY_PASSWORD`.
 The allowed lab users are also granted Keycloak's `offline_access` realm role so
 ChatGPT can complete its OAuth code-to-token exchange when it requests an
 offline-capable refresh token. Without that role, login can succeed but Keycloak
@@ -146,45 +140,52 @@ The quick tunnel URL is temporary. For a stable enterprise rehearsal URL, use a
 named Cloudflare Tunnel and DNS route, then deploy with:
 
 ```bash
+LAB_VM=ssh-user@lab-host.example.com \
 LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+LAB_DB=/path/to/synthetic-gong.db \
   deploy/lab-auth/scripts/lab-up.sh
+LAB_VM=ssh-user@lab-host.example.com \
 LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
   deploy/lab-auth/scripts/lab-smoke.sh
 ```
 
 ## Stable Cloudflare Tunnel
 
-Current stable lab route:
+For a stable lab route, create a named Cloudflare Tunnel and route a hostname to
+the lab host's local HTTP listener.
 
-- hostname: `https://docker.transcripts.fyne-llc.com`
-- tunnel: `gongctl-auth-lab-docker-transcripts`
-- tunnel ID: `b9d52fe1-e8f0-4708-aa59-e4be226be3ed`
-- DNS: proxied CNAME to `b9d52fe1-e8f0-4708-aa59-e4be226be3ed.cfargotunnel.com`
-- connector host: VM `1910` / `192.168.1.205`
-- connector container: `gongctl-auth-lab-tunnel`
-- connector token file: `/srv/gongctl/secrets/cloudflared-docker-transcripts-token`
+- hostname: `https://your-stable-hostname.example.com`
+- tunnel: your named Cloudflare Tunnel
+- tunnel ID: your Cloudflare Tunnel ID
+- DNS: proxied CNAME to the tunnel target assigned by Cloudflare
+- connector host: your lab VM or host
+- connector container: the value of `TUNNEL_CONTAINER`, for example `gongctl-lab-tunnel`
+- connector token file: `$REMOTE_ROOT/secrets/cloudflared-token`
 
-The tunnel is remotely configured in Cloudflare with this ingress:
+Configure the tunnel ingress to forward the public hostname to the local Caddy
+listener:
 
 ```text
-docker.transcripts.fyne-llc.com -> http://127.0.0.1:80
+your-stable-hostname.example.com -> http://127.0.0.1:80
 fallback -> http_status:404
 ```
 
 The VM runs the connector as a restartable Docker container:
 
 ```bash
-ssh root@192.168.1.205 \
-  'docker ps --filter name=gongctl-auth-lab-tunnel'
+ssh "$LAB_VM" \
+  'docker ps --filter name="${TUNNEL_CONTAINER:-gongctl-lab-tunnel}"'
 ```
 
 Redeploy and verify the lab against the stable hostname:
 
 ```bash
-LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
-LAB_TOOL_PRESET=all-readonly \
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+LAB_DB=/path/to/synthetic-gong.db \
   deploy/lab-auth/scripts/lab-up.sh
-LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
   deploy/lab-auth/scripts/lab-smoke.sh
 ```
 
@@ -203,7 +204,7 @@ The smoke verifies:
 - newly registered dynamic clients can receive access tokens with the
   `gong-lab-proxy` audience and `/gong-mcp-users` group claims.
 - unauthenticated `/mcp` is denied with `401` and `WWW-Authenticate`.
-- `test@fyne-llc.com` can request `offline_access` from Keycloak.
+- the secondary approved user can request `offline_access` from Keycloak.
 - a Keycloak user outside `gong-mcp-users` is denied.
 - wrong `Origin` is denied.
 - approved user token reaches MCP initialize.
@@ -217,9 +218,9 @@ The smoke verifies:
 Create a fresh ChatGPT custom MCP connector after every lab redeploy because the
 Keycloak volume and dynamic clients are disposable.
 
-- MCP server URL: `https://docker.transcripts.fyne-llc.com/mcp`
+- MCP server URL: `$LAB_PUBLIC_BASE_URL/mcp`
 - authentication: OAuth
-- test user: `test@fyne-llc.com`
+- test user: the value of `LAB_APPROVED_EMAIL` or `LAB_SECONDARY_EMAIL`
 
 First prompt:
 
@@ -255,8 +256,8 @@ business review rather than a status report. Mention which tools you used.
 If ChatGPT shows a generic connector failure, inspect payload-free server logs:
 
 ```bash
-ssh root@192.168.1.205 \
-  'cd /srv/gongctl/source/deploy/lab-auth && docker-compose logs --tail=120 keycloak shim caddy gongmcp'
+ssh "$LAB_VM" \
+  'cd "${REMOTE_ROOT:-/srv/gongctl}/source/deploy/lab-auth" && docker-compose logs --tail=120 keycloak shim caddy gongmcp'
 ```
 
 Common lab failures:
@@ -277,12 +278,13 @@ and MCP-compatible tool-call payload handling.
 ## Responses API E2E
 
 If `OPENAI_API_KEY` is available, run the external OpenAI Responses API smoke.
-This obtains a Keycloak access token for `pilot@example.com`, passes it to the
+This obtains a Keycloak access token for `LAB_APPROVED_EMAIL`, passes it to the
 Responses API as the MCP `authorization` value, imports the remote MCP tools,
 and asks the model to call `get_sync_status`.
 
 ```bash
-LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
   deploy/lab-auth/scripts/lab-openai-responses-smoke.sh
 ```
 
@@ -290,7 +292,8 @@ Optional model override:
 
 ```bash
 OPENAI_MODEL=gpt-5.5 \
-LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
   deploy/lab-auth/scripts/lab-openai-responses-smoke.sh
 ```
 
@@ -302,7 +305,7 @@ The script does not print the Keycloak token or OpenAI API key.
 deploy/lab-auth/scripts/lab-down.sh
 ```
 
-This stops the compose stack but does not delete `/srv/gongctl`, the copied DB,
+This stops the compose stack but does not delete `$REMOTE_ROOT`, the copied DB,
 or generated lab secrets.
 
 ## What This Does Not Prove

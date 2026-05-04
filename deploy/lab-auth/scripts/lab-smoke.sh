@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2029
 set -euo pipefail
 
-LAB_VM="${LAB_VM:-root@192.168.1.205}"
-LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-http://192.168.1.205}"
-REMOTE_LAB="${REMOTE_LAB:-/srv/gongctl/source/deploy/lab-auth}"
+LAB_VM="${LAB_VM:-}"
+LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-}"
+REMOTE_ROOT="${REMOTE_ROOT:-/srv/gongctl}"
+REMOTE_LAB="${REMOTE_LAB:-$REMOTE_ROOT/source/deploy/lab-auth}"
 
 require() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "missing required command: $1" >&2
     exit 1
   }
+}
+
+require_env() {
+  local name="$1"
+  if [[ -z "${!name:-}" ]]; then
+    echo "$name is required, see deploy/lab-auth/.env.example" >&2
+    exit 1
+  fi
 }
 
 remote_env() {
@@ -65,13 +75,38 @@ require curl
 require jq
 require python3
 require rg
+require_env LAB_VM
+require_env LAB_PUBLIC_BASE_URL
+case "$LAB_VM" in
+  -*|*[[:space:]]*)
+    echo "LAB_VM must be an ssh host target, not an option or whitespace-containing value" >&2
+    exit 2
+    ;;
+esac
+case "$REMOTE_ROOT" in
+  /*) ;;
+  *) echo "REMOTE_ROOT must be an absolute remote path" >&2; exit 2 ;;
+esac
+case "$REMOTE_ROOT" in
+  *\'*|*\"*|*[\;\`\$]*)
+    echo "REMOTE_ROOT contains unsupported shell metacharacters" >&2
+    exit 2
+    ;;
+esac
 
 OIDC_CLIENT_SECRET="$(remote_env OIDC_CLIENT_SECRET)"
-PILOT_PASSWORD="$(remote_env PILOT_PASSWORD)"
-BLOCKED_PASSWORD="$(remote_env BLOCKED_PASSWORD)"
-TEST_PASSWORD="$(remote_env TEST_PASSWORD)"
+LAB_APPROVED_EMAIL="$(remote_env LAB_APPROVED_EMAIL)"
+LAB_SECONDARY_EMAIL="$(remote_env LAB_SECONDARY_EMAIL)"
+LAB_BLOCKED_EMAIL="$(remote_env LAB_BLOCKED_EMAIL)"
+LAB_APPROVED_PASSWORD="$(remote_env LAB_APPROVED_PASSWORD)"
+LAB_BLOCKED_PASSWORD="$(remote_env LAB_BLOCKED_PASSWORD)"
+LAB_SECONDARY_PASSWORD="$(remote_env LAB_SECONDARY_PASSWORD)"
 GONGMCP_TOOL_PRESET="$(remote_env GONGMCP_TOOL_PRESET)"
 GONGMCP_TOOL_PRESET="${GONGMCP_TOOL_PRESET:-business-pilot}"
+if [[ -z "$OIDC_CLIENT_SECRET" || -z "$LAB_APPROVED_EMAIL" || -z "$LAB_SECONDARY_EMAIL" || -z "$LAB_BLOCKED_EMAIL" || -z "$LAB_APPROVED_PASSWORD" || -z "$LAB_BLOCKED_PASSWORD" || -z "$LAB_SECONDARY_PASSWORD" ]]; then
+  echo "remote lab .env is missing required lab auth values; redeploy with lab-up.sh" >&2
+  exit 1
+fi
 
 wait_for_url "$LAB_PUBLIC_BASE_URL/healthz"
 wait_for_url "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration"
@@ -150,8 +185,8 @@ dynamic_token_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protoc
   -H "Content-Type: application/x-www-form-urlencoded" \
   --data-urlencode "grant_type=password" \
   --data-urlencode "client_id=$dcr_client_id" \
-  --data-urlencode "username=test@fyne-llc.com" \
-  --data-urlencode "password=$TEST_PASSWORD" \
+  --data-urlencode "username=$LAB_SECONDARY_EMAIL" \
+  --data-urlencode "password=$LAB_SECONDARY_PASSWORD" \
   --data-urlencode "scope=openid profile email offline_access")"
 dynamic_access_token="$(jq -r '.access_token' <<<"$dynamic_token_response")"
 dynamic_claims="$(python3 - "$dynamic_access_token" <<'PY'
@@ -189,13 +224,13 @@ tr -d '\r' <"$headers_file" | rg -F "resource_metadata=\"$LAB_PUBLIC_BASE_URL/.w
 rm -f "$headers_file"
 
 echo "== obtain lab OIDC tokens =="
-pilot_token="$(token_for pilot@example.com "$PILOT_PASSWORD")"
-blocked_token="$(token_for blocked@example.com "$BLOCKED_PASSWORD")"
-test_token="$(token_for test@fyne-llc.com "$TEST_PASSWORD")"
-test "$pilot_token" != "null"
+approved_token="$(token_for "$LAB_APPROVED_EMAIL" "$LAB_APPROVED_PASSWORD")"
+blocked_token="$(token_for "$LAB_BLOCKED_EMAIL" "$LAB_BLOCKED_PASSWORD")"
+secondary_token="$(token_for "$LAB_SECONDARY_EMAIL" "$LAB_SECONDARY_PASSWORD")"
+test "$approved_token" != "null"
 test "$blocked_token" != "null"
-test "$test_token" != "null"
-echo "ok: received pilot, test, and blocked-user tokens"
+test "$secondary_token" != "null"
+echo "ok: received approved, secondary, and blocked-user tokens"
 
 echo "== approved users can request offline_access =="
 offline_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/token" \
@@ -203,12 +238,12 @@ offline_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/ope
   --data-urlencode "grant_type=password" \
   --data-urlencode "client_id=gong-lab-proxy" \
   --data-urlencode "client_secret=$OIDC_CLIENT_SECRET" \
-  --data-urlencode "username=test@fyne-llc.com" \
-  --data-urlencode "password=$TEST_PASSWORD" \
+  --data-urlencode "username=$LAB_SECONDARY_EMAIL" \
+  --data-urlencode "password=$LAB_SECONDARY_PASSWORD" \
   --data-urlencode "scope=openid profile email offline_access")"
 echo "$offline_response" | jq -e '.access_token' >/dev/null
 echo "$offline_response" | jq -e '.refresh_token' >/dev/null
-echo "ok: test@fyne-llc.com can receive an offline-capable token response"
+echo "ok: secondary approved user can receive an offline-capable token response"
 
 echo "== blocked user token is denied =="
 blocked_status="$(http_status \
@@ -225,7 +260,7 @@ esac
 
 echo "== bad Origin is denied =="
 bad_origin_status="$(http_status \
-  -H "Authorization: Bearer $pilot_token" \
+  -H "Authorization: Bearer $approved_token" \
   -H "Origin: http://evil.example.test" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"lab-smoke","version":"0"}}}' \
@@ -238,7 +273,7 @@ esac
 
 echo "== MCP initialize through OIDC token path =="
 initialize_response="$(curl -fsS \
-  -H "Authorization: Bearer $pilot_token" \
+  -H "Authorization: Bearer $approved_token" \
   -H "Origin: $LAB_PUBLIC_BASE_URL" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"lab-smoke","version":"0"}}}' \
@@ -246,9 +281,9 @@ initialize_response="$(curl -fsS \
 echo "$initialize_response" | jq .
 echo "$initialize_response" | jq -e '.result.protocolVersion' >/dev/null
 
-echo "== MCP initialize through test@fyne-llc.com token path =="
+echo "== MCP initialize through secondary approved-user token path =="
 test_initialize_response="$(curl -fsS \
-  -H "Authorization: Bearer $test_token" \
+  -H "Authorization: Bearer $secondary_token" \
   -H "Origin: $LAB_PUBLIC_BASE_URL" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"lab-smoke-test-user","version":"0"}}}' \
@@ -258,7 +293,7 @@ echo "$test_initialize_response" | jq -e '.result.protocolVersion' >/dev/null
 
 echo "== $GONGMCP_TOOL_PRESET tools/list =="
 tools_response="$(curl -fsS \
-  -H "Authorization: Bearer $pilot_token" \
+  -H "Authorization: Bearer $approved_token" \
   -H "Origin: $LAB_PUBLIC_BASE_URL" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
@@ -284,7 +319,7 @@ esac
 
 echo "== ChatGPT-style tools/call _meta is accepted =="
 meta_status_response="$(curl -fsS \
-  -H "Authorization: Bearer $pilot_token" \
+  -H "Authorization: Bearer $approved_token" \
   -H "Origin: $LAB_PUBLIC_BASE_URL" \
   -H "Content-Type: application/json" \
   --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{"_meta":{"openai/userAgent":"chatgpt-connector"}},"_meta":{"progressToken":"lab-smoke"}}}' \
@@ -294,12 +329,14 @@ echo "$meta_status_response" | jq -e '.error == null and (.result.isError // fal
 echo "$meta_status_response" | jq -e '.result.content[0].text | fromjson | has("total_calls")' >/dev/null
 
 echo "== MCP container has no Gong credentials =="
-ssh "$LAB_VM" "cd '$REMOTE_LAB' && docker-compose exec -T gongmcp env" \
-| { if rg '^GONG_ACCESS_KEY|^GONG_ACCESS_KEY_SECRET|^GONG_BASE_URL'; then exit 1; else exit 0; fi; }
+if ssh "$LAB_VM" "cd '$REMOTE_LAB' && docker-compose exec -T gongmcp env" | rg '^GONG_ACCESS_KEY|^GONG_ACCESS_KEY_SECRET|^GONG_BASE_URL'; then
+  echo "unexpected Gong credential env vars in gongmcp" >&2
+  exit 1
+fi
 echo "ok: no Gong credential env vars in gongmcp"
 
 echo "== DB mount is read-only =="
-ssh "$LAB_VM" "docker run --rm -v /srv/gongctl/runtime/gong-mcp-governed.db:/data/gong.db:ro alpine:3.22 sh -c 'echo x >> /data/gong.db'" >/tmp/gongctl-lab-ro.$$ 2>&1 && {
+ssh "$LAB_VM" "docker run --rm -v '$REMOTE_ROOT/runtime/gong-mcp-governed.db:/data/gong.db:ro' alpine:3.22 sh -c 'echo x >> /data/gong.db'" >/tmp/gongctl-lab-ro.$$ 2>&1 && {
   cat /tmp/gongctl-lab-ro.$$
   rm -f /tmp/gongctl-lab-ro.$$
   echo "expected read-only DB write to fail" >&2

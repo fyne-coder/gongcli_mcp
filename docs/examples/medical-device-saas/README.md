@@ -129,6 +129,9 @@ trails from one system instead of stitching together exports from multiple tools
 Claude can use the synthetic bundle through the existing MCP-only Docker image.
 No demo-specific image is required as long as the local MCP-only image or the
 published `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2` image is current.
+The published `v0.3.2` image requires the matching tag workflow to have
+completed; use `gongctl:mcp-local` from a local build until that manifest
+exists.
 Add a separate MCP server entry named `gong-demo` so the synthetic dataset stays
 separate from the real Q1 cache:
 

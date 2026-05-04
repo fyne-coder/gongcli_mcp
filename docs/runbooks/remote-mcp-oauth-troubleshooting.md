@@ -28,24 +28,26 @@ Browser login success alone is not enough.
 
 ## Lab Commands
 
-For the Proxmox auth lab:
+For the auth lab:
 
 ```bash
-LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://lab.example.com \
   deploy/lab-auth/scripts/lab-smoke.sh
 ```
 
 Inspect payload-free logs:
 
 ```bash
-ssh root@192.168.1.205 \
-  'cd /srv/gongctl/source/deploy/lab-auth && docker-compose logs --tail=120 keycloak shim caddy gongmcp'
+ssh "$LAB_VM" \
+  'cd "${REMOTE_ROOT:-/srv/gongctl}/source/deploy/lab-auth" && docker-compose logs --tail=120 keycloak shim caddy gongmcp'
 ```
 
 Run the external OpenAI Responses API smoke when `OPENAI_API_KEY` is available:
 
 ```bash
-LAB_PUBLIC_BASE_URL=https://docker.transcripts.fyne-llc.com \
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://lab.example.com \
   deploy/lab-auth/scripts/lab-openai-responses-smoke.sh
 ```
 

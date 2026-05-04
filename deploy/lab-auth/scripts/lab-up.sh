@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2029
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-LAB_VM="${LAB_VM:-root@192.168.1.205}"
-LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-http://192.168.1.205}"
-LAB_DB="${LAB_DB:-$HOME/gongctl-data/public-example-q1-2026/gong-example-q1-2026.db}"
+umask 077
+LAB_VM="${LAB_VM:-}"
+LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-}"
+LAB_DB="${LAB_DB:-}"
 LAB_TOOL_PRESET="${LAB_TOOL_PRESET:-${GONGMCP_TOOL_PRESET:-business-pilot}}"
+LAB_APPROVED_EMAIL="${LAB_APPROVED_EMAIL:-approved-user@example.test}"
+LAB_SECONDARY_EMAIL="${LAB_SECONDARY_EMAIL:-secondary-user@example.test}"
+LAB_BLOCKED_EMAIL="${LAB_BLOCKED_EMAIL:-blocked-user@example.test}"
 REMOTE_ROOT="${REMOTE_ROOT:-/srv/gongctl}"
 REMOTE_SOURCE="$REMOTE_ROOT/source"
 REMOTE_LAB="$REMOTE_SOURCE/deploy/lab-auth"
-
-if [[ ! -f "$LAB_DB" ]]; then
-  echo "lab DB not found: $LAB_DB" >&2
-  exit 1
-fi
 
 require() {
   command -v "$1" >/dev/null 2>&1 || {
     echo "missing required command: $1" >&2
     exit 1
   }
+}
+
+require_env() {
+  local name="$1"
+  if [[ -z "${!name:-}" ]]; then
+    echo "$name is required, see deploy/lab-auth/.env.example" >&2
+    exit 1
+  fi
 }
 
 rand_b64() {
@@ -56,6 +64,31 @@ require ssh
 require tar
 require scp
 require openssl
+require_env LAB_VM
+require_env LAB_PUBLIC_BASE_URL
+require_env LAB_DB
+
+case "$LAB_VM" in
+  -*|*[[:space:]]*)
+    echo "LAB_VM must be an ssh host target, not an option or whitespace-containing value" >&2
+    exit 2
+    ;;
+esac
+case "$REMOTE_ROOT" in
+  /*) ;;
+  *) echo "REMOTE_ROOT must be an absolute remote path" >&2; exit 2 ;;
+esac
+case "$REMOTE_ROOT" in
+  *\'*|*\"*|*[\;\`\$]*)
+    echo "REMOTE_ROOT contains unsupported shell metacharacters" >&2
+    exit 2
+    ;;
+esac
+
+if [[ ! -f "$LAB_DB" ]]; then
+  echo "lab DB not found: $LAB_DB" >&2
+  exit 1
+fi
 
 tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/gongctl-lab-auth.XXXXXX")"
 trap 'rm -rf "$tmpdir"' EXIT
@@ -81,15 +114,26 @@ if ssh "$LAB_VM" "test -f '$REMOTE_LAB/.env'"; then
 else
   cat >"$tmpdir/.env" <<EOF
 LAB_PUBLIC_BASE_URL=$LAB_PUBLIC_BASE_URL
+REMOTE_ROOT=$REMOTE_ROOT
 KEYCLOAK_ADMIN_PASSWORD=$(rand_b64 24)
 OIDC_CLIENT_SECRET=$(rand_b64 24)
 OAUTH2_PROXY_COOKIE_SECRET=$(rand_hex 16)
-PILOT_PASSWORD=$(rand_b64 18)
-BLOCKED_PASSWORD=$(rand_b64 18)
-TEST_PASSWORD=test@fynellc
+LAB_APPROVED_EMAIL=$LAB_APPROVED_EMAIL
+LAB_SECONDARY_EMAIL=$LAB_SECONDARY_EMAIL
+LAB_BLOCKED_EMAIL=$LAB_BLOCKED_EMAIL
+LAB_ALLOWED_EMAILS=$LAB_APPROVED_EMAIL,$LAB_SECONDARY_EMAIL
+LAB_APPROVED_PASSWORD=$(rand_b64 18)
+LAB_BLOCKED_PASSWORD=$(rand_b64 18)
+LAB_SECONDARY_PASSWORD=$(rand_b64 18)
 EOF
 fi
 set_env_value "$tmpdir/.env" GONGMCP_TOOL_PRESET "$LAB_TOOL_PRESET"
+set_env_value "$tmpdir/.env" LAB_PUBLIC_BASE_URL "$LAB_PUBLIC_BASE_URL"
+set_env_value "$tmpdir/.env" REMOTE_ROOT "$REMOTE_ROOT"
+set_env_value "$tmpdir/.env" LAB_APPROVED_EMAIL "$LAB_APPROVED_EMAIL"
+set_env_value "$tmpdir/.env" LAB_SECONDARY_EMAIL "$LAB_SECONDARY_EMAIL"
+set_env_value "$tmpdir/.env" LAB_BLOCKED_EMAIL "$LAB_BLOCKED_EMAIL"
+set_env_value "$tmpdir/.env" LAB_ALLOWED_EMAILS "$LAB_APPROVED_EMAIL,$LAB_SECONDARY_EMAIL"
 
 cookie_secret="$(read_remote_env "$tmpdir/.env" OAUTH2_PROXY_COOKIE_SECRET)"
 case "${#cookie_secret}" in
@@ -102,14 +146,22 @@ case "${#cookie_secret}" in
 esac
 
 oidc_secret="$(read_remote_env "$tmpdir/.env" OIDC_CLIENT_SECRET)"
-pilot_password="$(read_remote_env "$tmpdir/.env" PILOT_PASSWORD)"
-blocked_password="$(read_remote_env "$tmpdir/.env" BLOCKED_PASSWORD)"
-test_password="$(read_remote_env "$tmpdir/.env" TEST_PASSWORD)"
-if [[ -z "$test_password" ]]; then
-  printf '\nTEST_PASSWORD=test@fynellc\n' >>"$tmpdir/.env"
-  test_password="test@fynellc"
+approved_password="$(read_remote_env "$tmpdir/.env" LAB_APPROVED_PASSWORD)"
+blocked_password="$(read_remote_env "$tmpdir/.env" LAB_BLOCKED_PASSWORD)"
+secondary_password="$(read_remote_env "$tmpdir/.env" LAB_SECONDARY_PASSWORD)"
+if [[ -z "$approved_password" ]]; then
+  approved_password="$(rand_b64 18)"
 fi
-if [[ -z "$oidc_secret" || -z "$pilot_password" || -z "$blocked_password" || -z "$test_password" ]]; then
+if [[ -z "$blocked_password" ]]; then
+  blocked_password="$(rand_b64 18)"
+fi
+if [[ -z "$secondary_password" ]]; then
+  secondary_password="$(rand_b64 18)"
+fi
+set_env_value "$tmpdir/.env" LAB_APPROVED_PASSWORD "$approved_password"
+set_env_value "$tmpdir/.env" LAB_BLOCKED_PASSWORD "$blocked_password"
+set_env_value "$tmpdir/.env" LAB_SECONDARY_PASSWORD "$secondary_password"
+if [[ -z "$oidc_secret" || -z "$approved_password" || -z "$blocked_password" || -z "$secondary_password" ]]; then
   echo "lab env is missing required secrets" >&2
   exit 1
 fi
@@ -117,15 +169,19 @@ fi
 mkdir -p "$tmpdir/import"
 sed \
   -e "s/__LAB_PUBLIC_BASE_URL__/$(sed_escape "$LAB_PUBLIC_BASE_URL")/g" \
+  -e "s/__LAB_APPROVED_EMAIL__/$(sed_escape "$LAB_APPROVED_EMAIL")/g" \
+  -e "s/__LAB_SECONDARY_EMAIL__/$(sed_escape "$LAB_SECONDARY_EMAIL")/g" \
+  -e "s/__LAB_BLOCKED_EMAIL__/$(sed_escape "$LAB_BLOCKED_EMAIL")/g" \
   -e "s/__OIDC_CLIENT_SECRET__/$(sed_escape "$oidc_secret")/g" \
-  -e "s/__PILOT_PASSWORD__/$(sed_escape "$pilot_password")/g" \
-  -e "s/__BLOCKED_PASSWORD__/$(sed_escape "$blocked_password")/g" \
-  -e "s/__TEST_PASSWORD__/$(sed_escape "$test_password")/g" \
+  -e "s/__LAB_APPROVED_PASSWORD__/$(sed_escape "$approved_password")/g" \
+  -e "s/__LAB_BLOCKED_PASSWORD__/$(sed_escape "$blocked_password")/g" \
+  -e "s/__LAB_SECONDARY_PASSWORD__/$(sed_escape "$secondary_password")/g" \
   "$ROOT/deploy/lab-auth/keycloak/realm.template.json" >"$tmpdir/import/realm.json"
 
 ssh "$LAB_VM" "mkdir -p '$REMOTE_LAB/keycloak/import'"
 scp "$tmpdir/.env" "$LAB_VM:$REMOTE_LAB/.env" >/dev/null
 scp "$tmpdir/import/realm.json" "$LAB_VM:$REMOTE_LAB/keycloak/import/realm.json" >/dev/null
+ssh "$LAB_VM" "chmod 600 '$REMOTE_LAB/.env'"
 
 ssh "$LAB_VM" "
 set -euo pipefail

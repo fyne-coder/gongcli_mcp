@@ -52,6 +52,10 @@ Use the published image for released versions:
 docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 version
 ```
 
+The `v0.3.2` examples require the matching Git tag workflow to have published
+GHCR manifests for both `gongctl` and `gongmcp`. If the pull fails because the
+tag is not published yet, use locally built images for the same commands.
+
 If you are testing local source changes instead of a release, build the local
 images:
 

@@ -60,6 +60,12 @@ The GHCR workflow can also be run manually from GitHub Actions from the default
 branch. Manual runs publish SHA-tagged images only; release version tags come
 from protected `vX.Y.Z` tag pushes.
 
+Public docs may be prepared for the next `VERSION`, but a Docker image tag is
+not public until the corresponding protected tag workflow completes and
+`docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
+and `docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
+both succeed.
+
 ## Supply-Chain Notes
 
 - Publish immutable version tags and prefer digest-pinned Docker references in

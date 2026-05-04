@@ -12,8 +12,8 @@ Options:
   --db PATH              Host SQLite DB path. Required.
   --data-dir PATH        Host directory to mount read-only. Defaults to DB directory.
   --server-name NAME     Claude MCP server name. Default: gong.
-  --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.1.
-  --tool-preset NAME     Optional named tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly.
+  --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2.
+  --tool-preset NAME     Named tool preset. Default: business-pilot. Options: business-pilot, operator-smoke, analyst, governance-search, all-readonly.
   --tool-allowlist LIST  Optional comma-separated MCP tool allowlist.
   --config PATH          Claude config path. Defaults to macOS Claude Desktop config.
   --install              Merge into Claude config with a timestamped backup.
@@ -60,9 +60,11 @@ preset_allowlist() {
 DB_PATH=""
 DATA_DIR=""
 SERVER_NAME="gong"
-IMAGE="ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.1"
-TOOL_PRESET=""
+IMAGE="ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2"
+TOOL_PRESET="business-pilot"
+TOOL_PRESET_SET=0
 TOOL_ALLOWLIST=""
+TOOL_ALLOWLIST_SET=0
 CONFIG_PATH="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
 INSTALL=0
 
@@ -86,10 +88,12 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tool-preset)
       TOOL_PRESET="${2:?--tool-preset requires a preset name}"
+      TOOL_PRESET_SET=1
       shift 2
       ;;
     --tool-allowlist)
       TOOL_ALLOWLIST="${2:?--tool-allowlist requires a comma-separated list}"
+      TOOL_ALLOWLIST_SET=1
       shift 2
       ;;
     --config)
@@ -127,11 +131,11 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ -n "$TOOL_PRESET" && -n "$TOOL_ALLOWLIST" ]]; then
+if [[ "$TOOL_PRESET_SET" -eq 1 && "$TOOL_ALLOWLIST_SET" -eq 1 ]]; then
   echo "--tool-preset and --tool-allowlist are mutually exclusive" >&2
   exit 2
 fi
-if [[ -n "$TOOL_PRESET" ]]; then
+if [[ "$TOOL_ALLOWLIST_SET" -eq 0 && -n "$TOOL_PRESET" ]]; then
   # Emit the expanded allowlist so generated Claude configs stay safe with
   # older pinned images that do not yet understand GONGMCP_TOOL_PRESET.
   TOOL_ALLOWLIST="$(preset_allowlist "$TOOL_PRESET")"

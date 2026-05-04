@@ -44,6 +44,12 @@ docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2
 docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2
 ```
 
+A version tag is available only after the matching Git tag triggers
+`.github/workflows/publish-images.yml` and that workflow publishes the GHCR
+manifests. A `VERSION` bump or source release branch alone does not make an
+image tag pullable. Until the manifest exists, build `gongctl:local` and
+`gongctl:mcp-local` from source.
+
 The `gongctl` image includes both binaries, but business-user MCP hosts should
 use the `gongmcp` package so the writable CLI is not present in that runtime.
 
@@ -133,7 +139,9 @@ Point an MCP host at `docker run` with stdin kept open:
         "/Users/YOU/gongctl-data:/data:ro",
         "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2",
         "--db",
-        "/data/gong.db"
+        "/data/gong.db",
+        "--tool-preset",
+        "business-pilot"
       ]
     }
   }

@@ -111,6 +111,11 @@ images:
   mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2
 ```
 
+Use published image tags only after the corresponding tag workflow has
+completed and GHCR manifests are inspectable. For source checkouts ahead of a
+published tag, use local image names such as `gongctl:local` and
+`gongctl:mcp-local`.
+
 This should not contain Gong credentials. Credentials should remain environment
 variables, `.env` files outside Git, Docker/Kubernetes secrets, or a company
 secret manager.

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2029
 set -euo pipefail
 
-LAB_VM="${LAB_VM:-root@192.168.1.205}"
-LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-https://docker.transcripts.fyne-llc.com}"
-REMOTE_LAB="${REMOTE_LAB:-/srv/gongctl/source/deploy/lab-auth}"
+LAB_VM="${LAB_VM:-}"
+LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-}"
+REMOTE_ROOT="${REMOTE_ROOT:-/srv/gongctl}"
+REMOTE_LAB="${REMOTE_LAB:-$REMOTE_ROOT/source/deploy/lab-auth}"
 OPENAI_MODEL="${OPENAI_MODEL:-gpt-5.5}"
 
 require() {
@@ -11,6 +13,14 @@ require() {
     echo "missing required command: $1" >&2
     exit 1
   }
+}
+
+require_env() {
+  local name="$1"
+  if [[ -z "${!name:-}" ]]; then
+    echo "$name is required, see deploy/lab-auth/.env.example" >&2
+    exit 1
+  fi
 }
 
 remote_env() {
@@ -33,6 +43,24 @@ token_for() {
 require ssh
 require curl
 require jq
+require_env LAB_VM
+require_env LAB_PUBLIC_BASE_URL
+case "$LAB_VM" in
+  -*|*[[:space:]]*)
+    echo "LAB_VM must be an ssh host target, not an option or whitespace-containing value" >&2
+    exit 2
+    ;;
+esac
+case "$REMOTE_LAB" in
+  /*) ;;
+  *) echo "REMOTE_LAB must be an absolute remote path" >&2; exit 2 ;;
+esac
+case "$REMOTE_LAB" in
+  *\'*|*\"*|*[\;\`\$]*)
+    echo "REMOTE_LAB contains unsupported shell metacharacters" >&2
+    exit 2
+    ;;
+esac
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "OPENAI_API_KEY is required for the Responses API smoke." >&2
@@ -40,14 +68,19 @@ if [[ -z "${OPENAI_API_KEY:-}" ]]; then
 fi
 
 OIDC_CLIENT_SECRET="$(remote_env OIDC_CLIENT_SECRET)"
-PILOT_PASSWORD="$(remote_env PILOT_PASSWORD)"
-pilot_token="$(token_for pilot@example.com "$PILOT_PASSWORD")"
-test "$pilot_token" != "null"
+LAB_APPROVED_EMAIL="$(remote_env LAB_APPROVED_EMAIL)"
+LAB_APPROVED_PASSWORD="$(remote_env LAB_APPROVED_PASSWORD)"
+if [[ -z "$OIDC_CLIENT_SECRET" || -z "$LAB_APPROVED_EMAIL" || -z "$LAB_APPROVED_PASSWORD" ]]; then
+  echo "remote lab .env is missing required lab auth values; redeploy with lab-up.sh" >&2
+  exit 1
+fi
+approved_token="$(token_for "$LAB_APPROVED_EMAIL" "$LAB_APPROVED_PASSWORD")"
+test "$approved_token" != "null"
 
 request_body="$(jq -n \
   --arg model "$OPENAI_MODEL" \
   --arg server_url "$LAB_PUBLIC_BASE_URL/mcp" \
-  --arg authorization "$pilot_token" \
+  --arg authorization "$approved_token" \
   '{
     model: $model,
     tools: [{

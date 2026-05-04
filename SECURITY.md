@@ -14,7 +14,16 @@ If sensitive data is committed, rotate the affected credential in Gong and purge
 
 ## Supported Auth
 
-The MVP supports Gong access key and access key secret via environment variables. OAuth is intentionally deferred until the CLI flows are stable and the storage boundary is designed.
+For Gong API ingestion, the CLI supports Gong access key and access key secret
+through environment variables or a private `.env` file. Native Gong OAuth inside
+`gongctl` is not implemented.
+
+For MCP access, local stdio `gongmcp` reads SQLite only and does not need Gong
+credentials. HTTP `gongmcp` supports bearer-token auth and explicit Origin
+allowlisting for private deployments. Remote MCP OAuth/SSO should be handled by
+a customer-managed gateway or broker in front of `gongmcp`; this repository
+includes a lab harness that rehearses that gateway pattern, but it is not a
+production identity provider configuration.
 
 ## Reporting
 
