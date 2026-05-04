@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/contextmodel"
 	_ "modernc.org/sqlite"
 )
 
@@ -880,22 +881,9 @@ type scorecardActivityPayload struct {
 	RawSHA256           string
 }
 
-type contextObjectRow struct {
-	ObjectKey  string
-	ObjectType string
-	ObjectID   string
-	ObjectName string
-	RawJSON    []byte
-	Fields     []contextFieldRow
-}
+type contextObjectRow = contextmodel.ObjectRow
 
-type contextFieldRow struct {
-	FieldName  string
-	FieldLabel string
-	FieldType  string
-	ValueText  string
-	RawJSON    []byte
-}
+type contextFieldRow = contextmodel.FieldRow
 
 func Open(ctx context.Context, path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
@@ -5253,38 +5241,7 @@ func decodeTranscript(raw json.RawMessage) (*transcriptPayload, error) {
 }
 
 func extractContextObjects(raw json.RawMessage) ([]contextObjectRow, bool, error) {
-	normalized, err := normalizeJSON(raw)
-	if err != nil {
-		return nil, false, err
-	}
-
-	var root map[string]any
-	if err := json.Unmarshal(normalized, &root); err != nil {
-		return nil, false, err
-	}
-
-	type candidate struct {
-		name  string
-		value any
-	}
-
-	var candidates []candidate
-	for _, key := range []string{"context", "crmContext", "crm", "extendedContext", "crmObjects", "objects"} {
-		value, ok := root[key]
-		if !ok {
-			continue
-		}
-		candidates = append(candidates, candidate{name: key, value: value})
-	}
-	if len(candidates) == 0 {
-		return nil, false, nil
-	}
-
-	var objects []contextObjectRow
-	for _, candidate := range candidates {
-		objects = append(objects, collectContextObjects(candidate.name, candidate.value)...)
-	}
-	return objects, true, nil
+	return contextmodel.Extract(raw)
 }
 
 func collectContextObjects(defaultType string, value any) []contextObjectRow {

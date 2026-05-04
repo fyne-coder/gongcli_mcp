@@ -3,10 +3,50 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/store/contextmodel"
 )
+
+const (
+	postgresReadModelName            = "builtin_call_facts"
+	postgresReadModelVersion         = 2
+	maxPostgresContextObjectsPerCall = 200
+	maxPostgresContextFieldsPerCall  = 2000
+)
+
+type ReadModelStatus struct {
+	ModelName              string `json:"model_name"`
+	ModelVersion           int    `json:"model_version"`
+	CurrentVersion         int    `json:"current_version"`
+	Ready                  bool   `json:"ready"`
+	RebuiltAt              string `json:"rebuilt_at"`
+	CallCount              int64  `json:"call_count"`
+	FactCount              int64  `json:"fact_count"`
+	MissingFactCallCount   int64  `json:"missing_fact_call_count"`
+	OrphanFactCount        int64  `json:"orphan_fact_count"`
+	StaleReason            string `json:"stale_reason,omitempty"`
+	DiagnosticsCallCount   int64  `json:"diagnostics_call_count"`
+	LimitExceededCallCount int64  `json:"limit_exceeded_call_count"`
+	UpdatedAt              string `json:"updated_at"`
+}
 
 func refreshCallReadModelTx(ctx context.Context, tx *sql.Tx, callID string) error {
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, callID); err != nil {
+		return err
+	}
+	var raw string
+	if err := tx.QueryRowContext(ctx, `SELECT raw_json::text FROM calls WHERE call_id = $1`, callID).Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return refreshCallFactsTx(ctx, tx, callID)
+		}
+		return err
+	}
+	objects, diag, err := boundedPostgresContextRows(json.RawMessage(raw))
+	if err != nil {
+		_ = upsertReadModelDiagnosticsTx(ctx, tx, callID, readModelDiagnostics{LastError: err.Error()}, nowUTC())
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM call_context_fields WHERE call_id = $1`, callID); err != nil {
@@ -15,13 +55,37 @@ func refreshCallReadModelTx(ctx context.Context, tx *sql.Tx, callID string) erro
 	if _, err := tx.ExecContext(ctx, `DELETE FROM call_context_objects WHERE call_id = $1`, callID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, postgresInsertContextObjectsSQL, callID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, postgresInsertContextFieldsSQL, callID); err != nil {
-		return err
+	for _, object := range objects {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO call_context_objects(call_id, object_key, object_type, object_id, object_name, raw_json)
+VALUES($1, $2, $3, $4, $5, $6::jsonb)`,
+			callID,
+			object.ObjectKey,
+			object.ObjectType,
+			object.ObjectID,
+			object.ObjectName,
+			string(object.RawJSON),
+		); err != nil {
+			return err
+		}
+		for _, field := range object.Fields {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO call_context_fields(call_id, object_key, field_name, field_label, field_type, field_value_text, raw_json)
+VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+				callID,
+				object.ObjectKey,
+				field.FieldName,
+				field.FieldLabel,
+				field.FieldType,
+				field.ValueText,
+				string(field.RawJSON),
+			); err != nil {
+				return err
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE calls SET context_present = EXISTS (SELECT 1 FROM call_context_objects WHERE call_id = $1) WHERE call_id = $1`, callID); err != nil {
+		return err
+	}
+	if err := upsertReadModelDiagnosticsTx(ctx, tx, callID, diag, nowUTC()); err != nil {
 		return err
 	}
 	return refreshCallFactsTx(ctx, tx, callID)
@@ -64,6 +128,284 @@ func refreshCallFactsTx(ctx context.Context, tx *sql.Tx, callID string) error {
 	}
 	_, err := tx.ExecContext(ctx, postgresInsertCallFactsSQL, callID, nowUTC())
 	return err
+}
+
+type readModelDiagnostics struct {
+	ObjectCount         int64
+	FieldCount          int64
+	RawObjectCount      int64
+	RawFieldCount       int64
+	ObjectLimitExceeded bool
+	FieldLimitExceeded  bool
+	LastError           string
+}
+
+func boundedPostgresContextRows(raw json.RawMessage) ([]contextmodel.ObjectRow, readModelDiagnostics, error) {
+	objects, _, err := contextmodel.Extract(raw)
+	if err != nil {
+		return nil, readModelDiagnostics{}, err
+	}
+	diag := readModelDiagnostics{RawObjectCount: int64(len(objects))}
+	for _, object := range objects {
+		diag.RawFieldCount += int64(len(object.Fields))
+	}
+	if len(objects) > maxPostgresContextObjectsPerCall {
+		objects = objects[:maxPostgresContextObjectsPerCall]
+		diag.ObjectLimitExceeded = true
+	}
+	fieldBudget := maxPostgresContextFieldsPerCall
+	for idx := range objects {
+		if fieldBudget <= 0 {
+			objects[idx].Fields = nil
+			diag.FieldLimitExceeded = true
+			continue
+		}
+		if len(objects[idx].Fields) > fieldBudget {
+			objects[idx].Fields = objects[idx].Fields[:fieldBudget]
+			diag.FieldLimitExceeded = true
+		}
+		fieldBudget -= len(objects[idx].Fields)
+	}
+	diag.ObjectCount = int64(len(objects))
+	for _, object := range objects {
+		diag.FieldCount += int64(len(object.Fields))
+	}
+	if diag.RawFieldCount > diag.FieldCount {
+		diag.FieldLimitExceeded = true
+	}
+	return objects, diag, nil
+}
+
+func upsertReadModelDiagnosticsTx(ctx context.Context, tx *sql.Tx, callID string, diag readModelDiagnostics, updatedAt string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO call_read_model_diagnostics(
+	call_id, object_count, field_count, raw_object_count, raw_field_count,
+	object_limit_exceeded, field_limit_exceeded, last_error, updated_at
+) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT(call_id) DO UPDATE SET
+	object_count = EXCLUDED.object_count,
+	field_count = EXCLUDED.field_count,
+	raw_object_count = EXCLUDED.raw_object_count,
+	raw_field_count = EXCLUDED.raw_field_count,
+	object_limit_exceeded = EXCLUDED.object_limit_exceeded,
+	field_limit_exceeded = EXCLUDED.field_limit_exceeded,
+	last_error = EXCLUDED.last_error,
+	updated_at = EXCLUDED.updated_at`,
+		callID,
+		diag.ObjectCount,
+		diag.FieldCount,
+		diag.RawObjectCount,
+		diag.RawFieldCount,
+		diag.ObjectLimitExceeded,
+		diag.FieldLimitExceeded,
+		diag.LastError,
+		updatedAt,
+	)
+	return err
+}
+
+func updateReadModelStateTx(ctx context.Context, tx *sql.Tx, updatedAt string, staleReason string, forceCurrent bool) error {
+	var callCount, factCount int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls`).Scan(&callCount); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts`).Scan(&factCount); err != nil {
+		return err
+	}
+	modelVersion := postgresReadModelVersion
+	rebuiltAt := updatedAt
+	if !forceCurrent {
+		var existingVersion int
+		var existingRebuiltAt string
+		err := tx.QueryRowContext(ctx, `SELECT model_version, rebuilt_at FROM postgres_read_model_state WHERE model_name = $1`, postgresReadModelName).Scan(&existingVersion, &existingRebuiltAt)
+		if err == nil {
+			modelVersion = existingVersion
+			rebuiltAt = existingRebuiltAt
+		} else if err != sql.ErrNoRows {
+			return err
+		}
+	}
+	if modelVersion != postgresReadModelVersion {
+		staleReason = fmt.Sprintf("read model version %d is older than supported version %d", modelVersion, postgresReadModelVersion)
+	} else if staleReason == "" && factCount != callCount {
+		staleReason = fmt.Sprintf("call_facts row count %d does not match calls row count %d", factCount, callCount)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO postgres_read_model_state(
+	model_name, model_version, rebuilt_at, call_count, fact_count, stale_reason, updated_at
+) VALUES($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT(model_name) DO UPDATE SET
+	model_version = EXCLUDED.model_version,
+	rebuilt_at = EXCLUDED.rebuilt_at,
+	call_count = EXCLUDED.call_count,
+	fact_count = EXCLUDED.fact_count,
+	stale_reason = EXCLUDED.stale_reason,
+	updated_at = EXCLUDED.updated_at`,
+		postgresReadModelName,
+		modelVersion,
+		rebuiltAt,
+		callCount,
+		factCount,
+		staleReason,
+		updatedAt,
+	)
+	return err
+}
+
+func (s *Store) ReadModelStatus(ctx context.Context) (*ReadModelStatus, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("postgres store is not open")
+	}
+	status := ReadModelStatus{
+		ModelName:      postgresReadModelName,
+		CurrentVersion: postgresReadModelVersion,
+	}
+	err := s.db.QueryRowContext(ctx, `SELECT model_name, model_version, rebuilt_at, call_count, fact_count, stale_reason, updated_at
+  FROM postgres_read_model_state
+ WHERE model_name = $1`, postgresReadModelName).Scan(
+		&status.ModelName,
+		&status.ModelVersion,
+		&status.RebuiltAt,
+		&status.CallCount,
+		&status.FactCount,
+		&status.StaleReason,
+		&status.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			status.StaleReason = "read model state is missing"
+			return &status, nil
+		}
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls`).Scan(&status.CallCount); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts`).Scan(&status.FactCount); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls c LEFT JOIN call_facts cf ON cf.call_id = c.call_id WHERE cf.call_id IS NULL`).Scan(&status.MissingFactCallCount); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM call_facts cf LEFT JOIN calls c ON c.call_id = cf.call_id WHERE c.call_id IS NULL`).Scan(&status.OrphanFactCount); err != nil {
+		return nil, err
+	}
+	if status.ModelVersion != postgresReadModelVersion {
+		status.StaleReason = fmt.Sprintf("read model version %d is older than supported version %d", status.ModelVersion, postgresReadModelVersion)
+	} else if status.StaleReason == "" && (status.MissingFactCallCount > 0 || status.OrphanFactCount > 0) {
+		status.StaleReason = fmt.Sprintf("call_facts call_id set mismatch: missing=%d orphan=%d", status.MissingFactCallCount, status.OrphanFactCount)
+	}
+	if status.StaleReason == "" && status.FactCount != status.CallCount {
+		status.StaleReason = fmt.Sprintf("call_facts row count %d does not match calls row count %d", status.FactCount, status.CallCount)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE object_limit_exceeded OR field_limit_exceeded OR TRIM(last_error) <> '') FROM call_read_model_diagnostics`).Scan(&status.DiagnosticsCallCount, &status.LimitExceededCallCount); err != nil {
+		return nil, err
+	}
+	status.Ready = status.StaleReason == "" && status.ModelVersion == postgresReadModelVersion && status.FactCount == status.CallCount && status.MissingFactCallCount == 0 && status.OrphanFactCount == 0
+	return &status, nil
+}
+
+func (s *Store) RebuildReadModel(ctx context.Context) (*ReadModelStatus, error) {
+	if err := s.ensureWritable(); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM call_read_model_diagnostics`); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM call_context_fields`); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM call_context_objects`); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM call_facts`); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "rebuild in progress", false); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	lastCallID := ""
+	for {
+		callIDs, err := s.readModelCallIDBatch(ctx, lastCallID, 500)
+		if err != nil {
+			return nil, err
+		}
+		if len(callIDs) == 0 {
+			break
+		}
+		for _, callID := range callIDs {
+			if err := s.refreshSingleCallReadModel(ctx, callID); err != nil {
+				return nil, err
+			}
+			lastCallID = callID
+		}
+	}
+	tx, err = s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", true); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.ReadModelStatus(ctx)
+}
+
+func (s *Store) readModelCallIDBatch(ctx context.Context, afterCallID string, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id FROM calls WHERE call_id > $1 ORDER BY call_id LIMIT $2`, afterCallID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var callIDs []string
+	for rows.Next() {
+		var callID string
+		if err := rows.Scan(&callID); err != nil {
+			return nil, err
+		}
+		callIDs = append(callIDs, callID)
+	}
+	return callIDs, rows.Err()
+}
+
+func (s *Store) refreshSingleCallReadModel(ctx context.Context, callID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := refreshCallReadModelTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) validateReadModelReady(ctx context.Context) error {
+	status, err := s.ReadModelStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if status.Ready {
+		return nil
+	}
+	reason := strings.TrimSpace(status.StaleReason)
+	if reason == "" {
+		reason = "unknown stale read model state"
+	}
+	return fmt.Errorf("postgres read model is missing or stale: %s; run gongctl sync read-model --rebuild with a writable Postgres URL", reason)
 }
 
 const postgresContextSourcesSQL = `

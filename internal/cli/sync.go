@@ -22,7 +22,7 @@ import (
 
 func (a *app) sync(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl sync [run|calls|users|transcripts|crm-integrations|crm-schema|settings|scorecard-activity|status|synthetic]")
+		fmt.Fprintln(a.err, "usage: gongctl sync [run|calls|users|transcripts|crm-integrations|crm-schema|settings|scorecard-activity|status|read-model|synthetic]")
 		return errUsage
 	}
 
@@ -45,12 +45,68 @@ func (a *app) sync(ctx context.Context, args []string) error {
 		return a.syncScorecardActivity(ctx, args[1:])
 	case "status":
 		return a.syncStatus(ctx, args[1:])
+	case "read-model":
+		return a.syncReadModel(ctx, args[1:])
 	case "synthetic":
 		return a.syncSynthetic(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown sync command %q\n", args[0])
 		return errUsage
 	}
+}
+
+func (a *app) syncReadModel(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("sync read-model", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	dbPath := fs.String("db", "", "SQLite database path; read-model checks are Postgres-only when omitted")
+	rebuild := fs.Bool("rebuild", false, "rebuild the Postgres read model using a writable database URL")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if strings.TrimSpace(*dbPath) != "" {
+		return errors.New("sync read-model is only supported for Postgres; omit --db and set GONG_DATABASE_URL or DATABASE_URL")
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return errors.New("GONG_DATABASE_URL or DATABASE_URL is required for sync read-model")
+	}
+
+	var status *postgres.ReadModelStatus
+	var err error
+	action := "check"
+	if *rebuild {
+		action = "rebuild"
+		store, openErr := postgres.Open(ctx, databaseURL)
+		if openErr != nil {
+			return openErr
+		}
+		defer store.Close()
+		status, err = store.RebuildReadModel(ctx)
+	} else {
+		store, openErr := postgres.OpenStatus(ctx, databaseURL)
+		if openErr != nil {
+			return openErr
+		}
+		defer store.Close()
+		status, err = store.ReadModelStatus(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	state := "stale"
+	if status.Ready {
+		if *rebuild {
+			state = "rebuilt"
+		} else {
+			state = "current"
+		}
+	}
+	return writeJSONValue(a.out, map[string]any{
+		"backend":    "postgres",
+		"action":     action,
+		"status":     state,
+		"read_model": status,
+	})
 }
 
 func (a *app) syncRun(ctx context.Context, args []string) error {
@@ -473,6 +529,15 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 			LastSuccessAt: state.LastSuccessAt,
 			UpdatedAt:     state.UpdatedAt,
 		})
+	}
+	if readModelStore, ok := store.(interface {
+		ReadModelStatus(context.Context) (*postgres.ReadModelStatus, error)
+	}); ok {
+		readModel, err := readModelStore.ReadModelStatus(ctx)
+		if err != nil {
+			return err
+		}
+		response.PostgresReadModel = readModel
 	}
 	return writeJSONValue(a.out, response)
 }
@@ -1044,6 +1109,7 @@ type syncStatusResponse struct {
 	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`
 	PublicReadiness              sqlite.PublicReadiness     `json:"public_readiness"`
 	AttributionCoverage          sqlite.AttributionCoverage `json:"attribution_coverage"`
+	PostgresReadModel            *postgres.ReadModelStatus  `json:"postgres_read_model,omitempty"`
 	LastRun                      *syncRunJSON               `json:"last_run,omitempty"`
 	LastSuccessfulRun            *syncRunJSON               `json:"last_successful_run,omitempty"`
 	States                       []syncStateJSON            `json:"states"`

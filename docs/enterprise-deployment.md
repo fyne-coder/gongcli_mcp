@@ -128,6 +128,9 @@ flowchart LR
   `DATABASE_URL`.
 - `gongmcp` uses a read-only database URL and must not receive Gong
   credentials.
+- Operators can check or repair Postgres builtin fact readiness with
+  `gongctl sync read-model` and `gongctl sync read-model --rebuild` using a
+  writable database URL. MCP remains read-only and will not rebuild stale facts.
 - The Postgres slice supports the explicit `business-pilot` preset through MCP
   (`get_sync_status`, `summarize_call_facts`,
   `summarize_calls_by_lifecycle`, and `rank_transcript_backlog`) plus narrow

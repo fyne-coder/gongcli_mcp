@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -58,11 +59,22 @@ func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	return store, nil
 }
 
+func readOnlyDatabaseURL(databaseURL string) string {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil || parsed.Scheme == "" {
+		return databaseURL
+	}
+	query := parsed.Query()
+	query.Set("default_transaction_read_only", "on")
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, errors.New("postgres database URL is required")
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := sql.Open("pgx", readOnlyDatabaseURL(databaseURL))
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +90,41 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := store.validateReadModelReady(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if _, err := db.ExecContext(ctx, `SET default_transaction_read_only = on`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable postgres read-only session mode: %w", err)
+	}
+	var readOnlyMode string
+	if err := db.QueryRowContext(ctx, `SHOW default_transaction_read_only`).Scan(&readOnlyMode); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("verify postgres read-only session mode: %w", err)
+	}
+	if strings.ToLower(strings.TrimSpace(readOnlyMode)) != "on" {
+		_ = db.Close()
+		return nil, fmt.Errorf("postgres read-only session mode is %q, want on", readOnlyMode)
+	}
+	return store, nil
+}
+
+func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
+	if strings.TrimSpace(databaseURL) == "" {
+		return nil, errors.New("postgres database URL is required")
+	}
+	db, err := sql.Open("pgx", databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	store := &Store{db: db, readOnly: true}
+	if err := store.validateSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	return store, nil
 }
@@ -121,15 +165,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if current > len(migrations) {
 		return fmt.Errorf("postgres schema version %d is newer than supported version %d", current, len(migrations))
 	}
+	startingVersion := current
 	for idx := current; idx < len(migrations); idx++ {
 		statement := migrations[idx]
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply postgres migration %d: %w", idx+1, err)
-		}
-		if idx+1 == 2 {
-			if err := backfillReadModelTx(ctx, tx); err != nil {
-				return fmt.Errorf("backfill postgres read model: %w", err)
-			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO gongctl_schema_migrations(version, applied_at)
 VALUES($1, $2)
@@ -137,7 +177,15 @@ ON CONFLICT(version) DO NOTHING`, idx+1, nowUTC()); err != nil {
 			return fmt.Errorf("record postgres migration %d: %w", idx+1, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if startingVersion < len(migrations) {
+		if _, err := s.RebuildReadModel(ctx); err != nil {
+			return fmt.Errorf("backfill postgres read model: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) validateSchema(ctx context.Context) error {
@@ -145,11 +193,11 @@ func (s *Store) validateSchema(ctx context.Context) error {
 		return errors.New("postgres store is not open")
 	}
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sync_runs', 'sync_state', 'calls', 'users', 'transcripts', 'transcript_segments', 'call_context_objects', 'call_context_fields', 'call_facts')`).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sync_runs', 'sync_state', 'calls', 'users', 'transcripts', 'transcript_segments', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics')`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 9 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/9 core tables", count)
+	if count != 11 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/11 core tables", count)
 	}
 	return nil
 }
@@ -159,7 +207,7 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = current_schema()
-   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts')
+   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -342,6 +390,9 @@ ON CONFLICT(call_id) DO UPDATE SET
 	if err := refreshCallReadModelTx(ctx, tx, payload.CallID); err != nil {
 		return nil, err
 	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", false); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -436,6 +487,9 @@ VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`,
 		}
 	}
 	if err := refreshCallFactsTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", false); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

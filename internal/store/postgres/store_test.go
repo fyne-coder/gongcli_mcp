@@ -3,9 +3,11 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
@@ -32,7 +34,7 @@ func TestStoreSyntheticVerticalSlice(t *testing.T) {
 	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-call-001","title":"Postgres shared MCP kickoff","started":"2026-01-15T15:00:00Z","duration":1200,"parties":[{"id":"speaker-1"}]}`)); err != nil {
 		t.Fatalf("UpsertCall returned error: %v", err)
 	}
-	enrichedCall, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-call-002","title":"Preserve enriched call","started":"2026-01-15T18:00:00Z","duration":600,"parties":[{"id":"speaker-1"},{"id":"speaker-2"}],"context":{"crmObjects":[{"type":"account","id":"acct-1"}]}}`))
+	enrichedCall, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-call-002","title":"Preserve enriched call","started":"2026-01-15T18:00:00Z","duration":600,"parties":[{"id":"speaker-1"},{"id":"speaker-2"}],"context":{"crmObjects":[{"type":"account","id":"acct-1","fields":{"Name":"Acme"}}]}}`))
 	if err != nil {
 		t.Fatalf("UpsertCall enriched returned error: %v", err)
 	}
@@ -359,6 +361,202 @@ func TestPostgresCallFactsSelectsFieldsFromSameCRMObject(t *testing.T) {
 	}
 }
 
+func TestPostgresNormalizedRowsMatchSQLiteForRepresentativeContextShapes(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqlitePath := filepath.Join(t.TempDir(), "gong.db")
+	sqliteStore, err := sqlite.Open(ctx, sqlitePath)
+	if err != nil {
+		t.Fatalf("sqlite Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	fixtures := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-parity-001","title":"Array context","started":"2026-02-01T12:00:00Z","duration":1200,"context":[{"objectType":"Opportunity","id":"opp-array","name":"Array Opp","fields":[{"name":"StageName","label":"Stage","type":"picklist","value":"Contract Review"}]}]}`),
+		json.RawMessage(`{"id":"pg-parity-002","title":"Object fields","started":"2026-02-02T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Account","id":"acct-map","fields":{"Name":"Map Account","Industry":"Healthcare"}}]}}`),
+		json.RawMessage(`{"id":"pg-parity-003","title":"Nested properties","started":"2026-02-03T12:00:00Z","duration":1200,"crmContext":{"objects":[{"entityType":"Opportunity","crmId":"opp-properties","properties":{"Name":"Properties Opp","Type":"Renewal","Forecast_Category_VP__c":"Pipeline"}}]}}`),
+		json.RawMessage(`{"id":"pg-parity-004","title":"Fallbacks","started":"2026-02-04T12:00:00Z","duration":1200,"extendedContext":{"wrapper":{"items":[{"type":"Account","id":"acct-fallback","fields":[{"label":"Name","value":"Fallback Account"},{"apiName":"Account_Type__c","displayName":"Type","value":"Customer - Active"},{"value":"unnamed"}]}]}}}`),
+	}
+	for _, raw := range fixtures {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	if got, want := postgresNormalizedRows(t, ctx, pgStore), sqliteNormalizedRows(t, ctx, sqliteStore); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("postgres normalized rows differ\npostgres:\n%s\nsqlite:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestPostgresReadModelExtractionCapsRecordDiagnostics(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	var objects []string
+	for i := 0; i < maxPostgresContextObjectsPerCall+1; i++ {
+		var fields []string
+		for j := 0; j < 11; j++ {
+			fields = append(fields, fmt.Sprintf(`"Field_%03d":"value-%03d-%03d"`, j, i, j))
+		}
+		objects = append(objects, fmt.Sprintf(`{"type":"Opportunity","id":"opp-%03d","fields":{%s}}`, i, strings.Join(fields, ",")))
+	}
+	raw := json.RawMessage(`{"id":"pg-cap-001","title":"Capped context","started":"2026-02-12T15:00:00Z","duration":1200,"context":{"crmObjects":[` + strings.Join(objects, ",") + `]}}`)
+	if _, err := store.UpsertCall(ctx, raw); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-cap-001'`, maxPostgresContextObjectsPerCall)
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-cap-001'`, maxPostgresContextFieldsPerCall)
+
+	var objectCount, fieldCount, rawObjectCount, rawFieldCount int64
+	var objectLimitExceeded, fieldLimitExceeded bool
+	var lastError string
+	if err := store.DB().QueryRowContext(ctx, `SELECT object_count, field_count, raw_object_count, raw_field_count, object_limit_exceeded, field_limit_exceeded, last_error FROM call_read_model_diagnostics WHERE call_id = $1`, "pg-cap-001").Scan(&objectCount, &fieldCount, &rawObjectCount, &rawFieldCount, &objectLimitExceeded, &fieldLimitExceeded, &lastError); err != nil {
+		t.Fatalf("read diagnostics: %v", err)
+	}
+	if objectCount != maxPostgresContextObjectsPerCall || fieldCount != maxPostgresContextFieldsPerCall || rawObjectCount != maxPostgresContextObjectsPerCall+1 || rawFieldCount != int64((maxPostgresContextObjectsPerCall+1)*11) || !objectLimitExceeded || !fieldLimitExceeded || lastError != "" {
+		t.Fatalf("unexpected diagnostics: objects=%d/%d fields=%d/%d limits=%v/%v err=%q", objectCount, rawObjectCount, fieldCount, rawFieldCount, objectLimitExceeded, fieldLimitExceeded, lastError)
+	}
+}
+
+func TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-stale-001","title":"Stale state","started":"2026-02-12T15:00:00Z","duration":1200}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	status, err := store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus returned error: %v", err)
+	}
+	if !status.Ready || status.ModelVersion != postgresReadModelVersion || status.CallCount != 1 || status.FactCount != 1 {
+		t.Fatalf("initial read model status unexpected: %+v", status)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM call_facts WHERE call_id = $1`, "pg-stale-001"); err != nil {
+		t.Fatalf("delete call fact: %v", err)
+	}
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus stale returned error: %v", err)
+	}
+	if status.Ready || !strings.Contains(status.StaleReason, "call_id set mismatch") {
+		t.Fatalf("stale status not detected: %+v", status)
+	}
+	if _, err := store.RebuildReadModel(ctx); err != nil {
+		t.Fatalf("RebuildReadModel returned error: %v", err)
+	}
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus rebuilt returned error: %v", err)
+	}
+	if !status.Ready || status.CallCount != 1 || status.FactCount != 1 || status.StaleReason != "" {
+		t.Fatalf("rebuilt status unexpected: %+v", status)
+	}
+
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM call_facts WHERE call_id = $1`, "pg-stale-001"); err != nil {
+		t.Fatalf("delete rebuilt fact for mixed mismatch: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO call_facts(call_id, title, updated_at) VALUES('pg-orphan-001', 'orphan fact', $1)`, nowUTC()); err != nil {
+		t.Fatalf("insert orphan fact: %v", err)
+	}
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus orphan returned error: %v", err)
+	}
+	if status.Ready || status.FactCount != 1 || status.CallCount != 1 || status.MissingFactCallCount != 1 || status.OrphanFactCount != 1 || !strings.Contains(status.StaleReason, "call_id set mismatch") {
+		t.Fatalf("mixed missing/orphan fact did not make state stale: %+v", status)
+	}
+	if _, err := store.RebuildReadModel(ctx); err != nil {
+		t.Fatalf("RebuildReadModel orphan returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_facts WHERE call_id = 'pg-orphan-001'`, 0)
+	status, err = store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus orphan rebuilt returned error: %v", err)
+	}
+	if !status.Ready || status.CallCount != 1 || status.FactCount != 1 {
+		t.Fatalf("orphan rebuild status unexpected: %+v", status)
+	}
+}
+
+func TestPostgresWritableOpenDoesNotMarkOldReadModelVersionCurrent(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	resetPostgresTestStore(t, ctx, store)
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-old-model-001","title":"Old model","started":"2026-02-12T15:00:00Z","duration":1200}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE postgres_read_model_state SET model_version = $1, stale_reason = 'old version test' WHERE model_name = $2`, postgresReadModelVersion-1, postgresReadModelName); err != nil {
+		t.Fatalf("downgrade read model state: %v", err)
+	}
+	store.Close()
+
+	reopened, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("reopen writable store returned error: %v", err)
+	}
+	defer reopened.Close()
+	status, err := reopened.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus returned error: %v", err)
+	}
+	if status.Ready || status.ModelVersion != postgresReadModelVersion-1 || !strings.Contains(status.StaleReason, "older than supported") {
+		t.Fatalf("writable open marked old model current: %+v", status)
+	}
+	if _, err := reopened.RebuildReadModel(ctx); err != nil {
+		t.Fatalf("RebuildReadModel returned error: %v", err)
+	}
+	status, err = reopened.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus rebuilt returned error: %v", err)
+	}
+	if !status.Ready || status.ModelVersion != postgresReadModelVersion {
+		t.Fatalf("rebuild did not mark current: %+v", status)
+	}
+}
+
 func TestPostgresBusinessPilotMethodsReadMaterializedCallFacts(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -376,6 +574,21 @@ func TestPostgresBusinessPilotMethodsReadMaterializedCallFacts(t *testing.T) {
 	if _, err := store.DB().ExecContext(ctx, `INSERT INTO call_facts(call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, opportunity_count, account_count, updated_at)
 VALUES('direct-fact-001', 'Direct fact', '2026-03-01T15:00:00Z', '2026-03-01', '2026-03', 1800, '30_45m', 'Zoom', 'Conference', 'External', false, 'missing', 'renewal', 'high', 'direct materialized fact', 'Opportunity.Type', 1, 1, '2026-03-01T15:00:00Z')`); err != nil {
 		t.Fatalf("insert direct call_facts row: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO calls(call_id, title, started_at, duration_seconds, raw_json, raw_sha256, first_seen_at, updated_at)
+VALUES('direct-fact-001', 'Direct fact core row', '2026-03-01T15:00:00Z', 1800, '{}'::jsonb, 'sha', '2026-03-01T15:00:00Z', '2026-03-01T15:00:00Z')`); err != nil {
+		t.Fatalf("insert direct call core row: %v", err)
+	}
+	tx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin state tx: %v", err)
+	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", true); err != nil {
+		tx.Rollback()
+		t.Fatalf("update read model state: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit state tx: %v", err)
 	}
 
 	facts, err := store.SummarizeCallFacts(ctx, sqlite.CallFactsSummaryParams{GroupBy: "lifecycle", Limit: 10})
@@ -479,9 +692,20 @@ func TestPostgresPrioritizeTranscriptsByLifecycle(t *testing.T) {
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
+	}
+	tx, err := store.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("reset postgres begin tx: %v", err)
+	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", true); err != nil {
+		tx.Rollback()
+		t.Fatalf("reset postgres read model state: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("reset postgres commit tx: %v", err)
 	}
 }
 
@@ -494,6 +718,62 @@ func assertPostgresCount(t *testing.T, ctx context.Context, store *Store, query 
 	if got != want {
 		t.Fatalf("count query got %d want %d: %s", got, want, query)
 	}
+}
+
+func postgresNormalizedRows(t *testing.T, ctx context.Context, store *Store) []string {
+	t.Helper()
+	rows, err := store.DB().QueryContext(ctx, `
+SELECT 'object|' || call_id || '|' || object_key || '|' || object_type || '|' || object_id || '|' || object_name
+  FROM call_context_objects
+UNION ALL
+SELECT 'field|' || f.call_id || '|' || f.object_key || '|' || o.object_type || '|' || o.object_id || '|' || f.field_name || '|' || f.field_label || '|' || f.field_type || '|' || f.field_value_text
+  FROM call_context_fields f
+  JOIN call_context_objects o ON o.call_id = f.call_id AND o.object_key = f.object_key
+ ORDER BY 1`)
+	if err != nil {
+		t.Fatalf("query postgres normalized rows: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatalf("scan postgres normalized rows: %v", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate postgres normalized rows: %v", err)
+	}
+	return out
+}
+
+func sqliteNormalizedRows(t *testing.T, ctx context.Context, store *sqlite.Store) []string {
+	t.Helper()
+	rows, err := store.DB().QueryContext(ctx, `
+SELECT 'object|' || call_id || '|' || object_key || '|' || object_type || '|' || object_id || '|' || object_name
+  FROM call_context_objects
+UNION ALL
+SELECT 'field|' || f.call_id || '|' || f.object_key || '|' || o.object_type || '|' || o.object_id || '|' || f.field_name || '|' || f.field_label || '|' || f.field_type || '|' || f.field_value_text
+  FROM call_context_fields f
+  JOIN call_context_objects o ON o.call_id = f.call_id AND o.object_key = f.object_key
+ ORDER BY 1`)
+	if err != nil {
+		t.Fatalf("query sqlite normalized rows: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatalf("scan sqlite normalized rows: %v", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sqlite normalized rows: %v", err)
+	}
+	return out
 }
 
 func jsonContainsKey(raw json.RawMessage, key string) bool {

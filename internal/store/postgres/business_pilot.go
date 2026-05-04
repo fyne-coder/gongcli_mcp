@@ -31,6 +31,9 @@ func (s *Store) ListLifecycleBucketDefinitionsWithSource(ctx context.Context, re
 }
 
 func (s *Store) SummarizeCallsByLifecycle(ctx context.Context, params sqlite.LifecycleSummaryParams) ([]sqlite.LifecycleBucketSummary, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
+	}
 	bucket := strings.TrimSpace(params.Bucket)
 	if bucket != "" && !postgresKnownLifecycleBucket(bucket) {
 		return nil, fmt.Errorf("unknown lifecycle bucket %q", bucket)
@@ -82,6 +85,9 @@ func (s *Store) SummarizeCallsByLifecycleWithSource(ctx context.Context, params 
 }
 
 func (s *Store) SearchCallsByLifecycle(ctx context.Context, params sqlite.LifecycleCallSearchParams) ([]sqlite.LifecycleCallSearchResult, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
+	}
 	bucket := strings.TrimSpace(params.Bucket)
 	if bucket != "" && !postgresKnownLifecycleBucket(bucket) {
 		return nil, fmt.Errorf("unknown lifecycle bucket %q", bucket)
@@ -133,6 +139,9 @@ func (s *Store) SearchCallsByLifecycleWithSource(ctx context.Context, params sql
 }
 
 func (s *Store) PrioritizeTranscriptsByLifecycle(ctx context.Context, params sqlite.LifecycleTranscriptPriorityParams) ([]sqlite.LifecycleTranscriptPriority, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
+	}
 	bucket := strings.TrimSpace(params.Bucket)
 	if bucket != "" && !postgresKnownLifecycleBucket(bucket) {
 		return nil, fmt.Errorf("unknown lifecycle bucket %q", bucket)
@@ -237,6 +246,9 @@ func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, 
 }
 
 func (s *Store) SummarizeCallFacts(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
+	}
 	groupBy, column, err := postgresCallFactGroupColumn(params.GroupBy)
 	if err != nil {
 		return nil, err
@@ -296,6 +308,9 @@ func (s *Store) SummarizeCallFactsWithSource(ctx context.Context, params sqlite.
 }
 
 func (s *Store) CallFactsCoverage(ctx context.Context) (*sqlite.CallFactsCoverage, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return nil, err
+	}
 	var coverage sqlite.CallFactsCoverage
 	if err := s.db.QueryRowContext(ctx, `
 WITH facts AS (`+postgresCallFactsSQL()+`)

@@ -180,4 +180,30 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_facts_opportunity_type ON call_facts(oppo
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_account_type ON call_facts(account_type);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_account_industry ON call_facts(account_industry);
 `,
+	`
+CREATE TABLE IF NOT EXISTS postgres_read_model_state (
+	model_name TEXT PRIMARY KEY,
+	model_version INTEGER NOT NULL,
+	rebuilt_at TEXT NOT NULL,
+	call_count BIGINT NOT NULL DEFAULT 0,
+	fact_count BIGINT NOT NULL DEFAULT 0,
+	stale_reason TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS call_read_model_diagnostics (
+	call_id TEXT PRIMARY KEY,
+	object_count BIGINT NOT NULL DEFAULT 0,
+	field_count BIGINT NOT NULL DEFAULT 0,
+	raw_object_count BIGINT NOT NULL DEFAULT 0,
+	raw_field_count BIGINT NOT NULL DEFAULT 0,
+	object_limit_exceeded BOOLEAN NOT NULL DEFAULT false,
+	field_limit_exceeded BOOLEAN NOT NULL DEFAULT false,
+	last_error TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pg_call_read_model_diagnostics_limits
+	ON call_read_model_diagnostics(object_limit_exceeded, field_limit_exceeded, call_id);
+`,
 }

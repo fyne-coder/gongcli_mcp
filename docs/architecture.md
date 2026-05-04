@@ -152,6 +152,12 @@ read-only database role. Full parity for profile/business-analysis,
 CRM JSON-derived views, support bundle/cache inventory, and governance filtered
 exports remains follow-up work.
 
+Postgres materializes builtin call/context facts because it cannot lean on
+SQLite views at read time. The writable CLI owns read-model refresh and repair;
+`gongctl sync read-model` checks state, `gongctl sync read-model --rebuild`
+repairs stale builtin facts, and read-only MCP startup rejects stale/missing
+facts instead of mutating the database.
+
 Postgres maps SQLite FTS5 transcript search to PostgreSQL full-text search with
 a `tsvector`/GIN index and `ts_headline`. Exact FTS5 ranking/snippet parity is
 not guaranteed in this first slice.

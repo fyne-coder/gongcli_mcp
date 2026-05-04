@@ -192,9 +192,10 @@ scripts/postgres-smoke.sh
 ```
 
 The smoke uses synthetic data only. It initializes Postgres, writes the
-synthetic cache through `gongctl sync synthetic`, starts `gongmcp` with a
-read-only Postgres role, calls the three supported MCP tools, and proves the
-reader role cannot write.
+synthetic cache through `gongctl sync synthetic`, checks Postgres read-model
+state with `gongctl sync read-model`, starts `gongmcp` with a read-only
+Postgres role, calls the supported MCP tools, and proves the reader role cannot
+write.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 

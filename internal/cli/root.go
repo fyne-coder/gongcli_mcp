@@ -129,6 +129,7 @@ func (a *app) usage() {
   gongctl sync settings --db gong.db --kind trackers|scorecards|workspaces [--workspace-id ID]
   gongctl sync scorecard-activity --db gong.db --call-from YYYY-MM-DD --call-to YYYY-MM-DD [--review-method AUTOMATIC|MANUAL|BOTH] [--max-pages N]
   gongctl sync status --db gong.db
+  gongctl sync read-model [--rebuild]  # Postgres only via GONG_DATABASE_URL
   gongctl mcp tools
   gongctl mcp tool-info NAME
   gongctl search transcripts --db gong.db --query TEXT [--limit N]

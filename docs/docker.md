@@ -147,6 +147,8 @@ The first Postgres vertical slice supports:
 - `gongctl sync users`
 - `gongctl sync transcripts`
 - `gongctl sync status`
+- `gongctl sync read-model` and `gongctl sync read-model --rebuild` for
+  Postgres builtin fact readiness and repair
 - `gongctl search calls`
 - `gongctl search transcripts`
 - `gongmcp --tool-preset business-pilot`: `get_sync_status`,
@@ -160,6 +162,14 @@ export, profile lifecycle source, analyst/all-readonly presets,
 business-analysis views, support bundles, cache inventory, or broader
 CRM/lifecycle-heavy MCP tools. See the
 [Postgres parity matrix](postgres-parity.md) for the phased parity contract.
+
+Read-only `gongmcp` never rebuilds the Postgres read model. If startup reports a
+missing or stale Postgres read model, run the writable operator command first:
+
+```bash
+export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
+gongctl sync read-model --rebuild
+```
 
 Run the local synthetic smoke:
 

@@ -28,13 +28,32 @@ for _ in $(seq 1 60); do
 done
 
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync synthetic >/tmp/gongctl-postgres-sync.json
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model >/tmp/gongctl-postgres-read-model-state.json
+grep -q '"status": "current"' /tmp/gongctl-postgres-read-model-state.json
+grep -q '"call_count": 2' /tmp/gongctl-postgres-read-model-state.json
+grep -q '"fact_count": 2' /tmp/gongctl-postgres-read-model-state.json
+grep -q '"ready": true' /tmp/gongctl-postgres-read-model-state.json
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT 'call_context_objects', COUNT(*) FROM call_context_objects UNION ALL SELECT 'call_context_fields', COUNT(*) FROM call_context_fields UNION ALL SELECT 'call_facts', COUNT(*) FROM call_facts ORDER BY 1" >/tmp/gongctl-postgres-normalized-counts.txt
 grep -q 'call_facts|2' /tmp/gongctl-postgres-normalized-counts.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT call_id, transcript_present, transcript_status, lifecycle_bucket FROM call_facts ORDER BY call_id" >/tmp/gongctl-postgres-call-facts.txt
 grep -q 'synthetic-call-001|t|present|' /tmp/gongctl-postgres-call-facts.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT call_id, object_count, field_count, object_limit_exceeded, field_limit_exceeded, last_error FROM call_read_model_diagnostics ORDER BY call_id" >/tmp/gongctl-postgres-read-model-diagnostics.txt
+grep -q 'synthetic-call-001|0|0|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
+grep -q 'synthetic-call-002|0|0|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO gongmcp_reader" >/dev/null
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "DELETE FROM call_facts WHERE call_id = 'synthetic-call-002'" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "INSERT INTO call_facts(call_id, title, updated_at) VALUES('synthetic-orphan-fact', 'orphan fact', now()::text)" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-stale-mcp.txt 2>&1; then
+  echo "read-only MCP unexpectedly started with a stale Postgres read model" >&2
+  exit 1
+fi
+grep -q 'postgres read model is missing or stale' /tmp/gongctl-postgres-stale-mcp.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-read-model-rebuild.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-read-model-rebuild.json
+grep -q '"ready": true' /tmp/gongctl-postgres-read-model-rebuild.json
 
 if docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql "$READER_CONTAINER_URL" -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('should-fail', '{}'::jsonb, 'x', now()::text, now()::text)" >/tmp/gongctl-postgres-reader-write.txt 2>&1; then
   echo "reader role unexpectedly wrote to Postgres" >&2
@@ -87,3 +106,7 @@ echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"
 echo "normalized counts output: /tmp/gongctl-postgres-normalized-counts.txt"
 echo "call facts output: /tmp/gongctl-postgres-call-facts.txt"
+echo "read model state output: /tmp/gongctl-postgres-read-model-state.json"
+echo "read model diagnostics output: /tmp/gongctl-postgres-read-model-diagnostics.txt"
+echo "stale MCP denial output: /tmp/gongctl-postgres-stale-mcp.txt"
+echo "read model rebuild output: /tmp/gongctl-postgres-read-model-rebuild.json"
