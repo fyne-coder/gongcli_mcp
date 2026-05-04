@@ -28,6 +28,71 @@ func TestInstallClaudeStdioMCPScriptDefaultPresetEnvAndDockerIsolation(t *testin
 	assertArgPair(t, entry.Args, "--db", "/data/gong.db")
 }
 
+func TestInstallClaudeStdioMCPScriptDefaultCatalogUsesDockerWithNoNetwork(t *testing.T) {
+	tempDir := t.TempDir()
+	dockerArgsPath := filepath.Join(tempDir, "docker-args")
+	fakeBinDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(fakeBinDir, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin dir: %v", err)
+	}
+	fakeDocker := "#!/usr/bin/env bash\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(dockerArgsPath) + "\n" +
+		"cat <<'JSON'\n" +
+		`{"presets":[{"name":"business-pilot","tools":["get_sync_status"],"tool_count":1}]}` + "\n" +
+		"JSON\n"
+	fakeDockerPath := filepath.Join(fakeBinDir, "docker")
+	if err := os.WriteFile(fakeDockerPath, []byte(fakeDocker), 0o700); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+
+	stdout, stderr, code := runInstallClaudeStdioMCPScriptRawWithoutCatalogBin(t, []string{"PATH=" + fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH")}, "--image", "example/gongmcp:test")
+	if code != 0 {
+		t.Fatalf("script exit code=%d stderr=%q", code, stderr)
+	}
+	entry := parseClaudeMCPEntry(t, stdout)
+	assertArgPair(t, entry.Args, "-e", "GONGMCP_TOOL_PRESET=business-pilot")
+
+	rawArgs, err := os.ReadFile(dockerArgsPath)
+	if err != nil {
+		t.Fatalf("read fake docker args: %v", err)
+	}
+	got := strings.Split(strings.TrimSpace(string(rawArgs)), "\n")
+	if len(got) == 0 || got[0] != "run" {
+		t.Fatalf("docker catalog args=%q missing run subcommand", got)
+	}
+	assertArgPair(t, got, "--network", "none")
+	assertArgPair(t, got, "--entrypoint", "/usr/local/bin/gongmcp")
+	assertArgContains(t, got, "example/gongmcp:test")
+	assertArgContains(t, got, "--list-tool-presets")
+	for _, forbidden := range []string{"-v", "-e", "--db"} {
+		assertNoArg(t, got, forbidden)
+	}
+}
+
+func TestInstallClaudeStdioMCPScriptRejectsMalformedDockerCatalog(t *testing.T) {
+	tempDir := t.TempDir()
+	fakeBinDir := filepath.Join(tempDir, "bin")
+	if err := os.Mkdir(fakeBinDir, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin dir: %v", err)
+	}
+	fakeDocker := "#!/usr/bin/env bash\n" +
+		"cat <<'JSON'\n" +
+		`{"presets":[{"name":"business-pilot","tools":"get_sync_status"}]}` + "\n" +
+		"JSON\n"
+	fakeDockerPath := filepath.Join(fakeBinDir, "docker")
+	if err := os.WriteFile(fakeDockerPath, []byte(fakeDocker), 0o700); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+
+	_, stderr, code := runInstallClaudeStdioMCPScriptRawWithoutCatalogBin(t, []string{"PATH=" + fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH")})
+	if code != 1 {
+		t.Fatalf("exit code=%d stderr=%q want 1", code, stderr)
+	}
+	if !strings.Contains(stderr, "invalid preset catalog JSON") {
+		t.Fatalf("stderr=%q missing malformed catalog error", stderr)
+	}
+}
+
 func TestInstallClaudeStdioMCPScriptCompatExpandedAllowlistUsesPresetCatalog(t *testing.T) {
 	entry := runInstallClaudeStdioMCPScript(t, "--tool-preset", "analyst", "--compat-expanded-allowlist")
 
@@ -221,6 +286,33 @@ func runInstallClaudeStdioMCPScriptRawWithEnv(t *testing.T, extraEnv []string, a
 	return "", "", 1
 }
 
+func runInstallClaudeStdioMCPScriptRawWithoutCatalogBin(t *testing.T, extraEnv []string, args ...string) (string, string, int) {
+	t.Helper()
+	requireInstallScriptTools(t)
+
+	repoRoot := testRepoRoot(t)
+	scriptPath := filepath.Join(repoRoot, "scripts", "install-claude-stdio-mcp.sh")
+	dbPath := testDBPath(t)
+	cmdArgs := append([]string{scriptPath, "--db", dbPath}, args...)
+	cmd := exec.Command("bash", cmdArgs...)
+	cmd.Dir = repoRoot
+	cmd.Env = appendEnvOverrides(installScriptTestEnv(t), extraEnv)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return stdout.String(), stderr.String(), 0
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return stdout.String(), stderr.String(), exitErr.ExitCode()
+	}
+	t.Fatalf("run script: %v stderr=%q", err, stderr.String())
+	return "", "", 1
+}
+
 func hasArg(args []string, name string) bool {
 	for _, arg := range args {
 		if arg == name {
@@ -340,6 +432,25 @@ func assertNoEnvWithPrefix(t *testing.T, args []string, prefix string) {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, prefix) {
 			t.Fatalf("args=%v unexpectedly contained env prefix %q", args, prefix)
+		}
+	}
+}
+
+func assertArgContains(t *testing.T, args []string, value string) {
+	t.Helper()
+	for _, arg := range args {
+		if arg == value {
+			return
+		}
+	}
+	t.Fatalf("args=%v missing %q", args, value)
+}
+
+func assertNoArg(t *testing.T, args []string, value string) {
+	t.Helper()
+	for _, arg := range args {
+		if arg == value {
+			t.Fatalf("args=%v unexpectedly contained %q", args, value)
 		}
 	}
 }

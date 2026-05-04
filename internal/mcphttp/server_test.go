@@ -438,6 +438,46 @@ func TestHTTPHandlerValidatesOrigin(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerRejectsNonPOSTMCPRequests(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	store, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	server := mcp.NewServer(store, "gongmcp", "test")
+	var accessLog bytes.Buffer
+	handler := httpHandler(server, httpConfig{
+		Enabled:      true,
+		Addr:         "127.0.0.1:0",
+		AuthMode:     "bearer",
+		BearerTokens: []string{currentBearerToken},
+	}, &accessLog)
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+	req.Header.Set("Authorization", "Bearer "+currentBearerToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d want %d body=%q", recorder.Code, http.StatusMethodNotAllowed, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Allow"); got != http.MethodPost {
+		t.Fatalf("Allow header=%q want %q", got, http.MethodPost)
+	}
+	if strings.Contains(recorder.Body.String(), `"protocolVersion"`) {
+		t.Fatalf("non-POST response looked like successful initialize: %q", recorder.Body.String())
+	}
+	logOutput := accessLog.String()
+	if !strings.Contains(logOutput, "status=405") {
+		t.Fatalf("access log missing method rejection status: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `token_slot="current"`) {
+		t.Fatalf("access log missing authenticated token slot: %s", logOutput)
+	}
+}
+
 func TestHTTPHandlerAllowsLoopbackOriginsForLocalBind(t *testing.T) {
 	handler := httpHandler(mcp.NewServer(nil, "gongmcp", "test"), httpConfig{
 		Enabled:   true,
