@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.3.3 - 2026-05-04
+
+- Hardened lab-auth trusted proxy identity handling so client-supplied
+  `X-Auth-Request-*` and `X-Forwarded-*` identity headers are stripped at the
+  bundled Caddy `/mcp` routes and are ignored unless proxy-header trust is
+  explicitly enabled.
+- Changed lab, JumpCloud, and Cognito auth examples so trusted proxy identity
+  headers default to disabled and require an explicit `TRUST_PROXY_CIDRS` opt-in
+  when `TRUST_PROXY_HEADERS=1`.
+- Added shim regression tests and live lab smoke coverage for forged proxy
+  identity header denial.
+- Fixed CI invocation of `staticcheck` and `govulncheck` so quoted tool paths
+  are executed correctly by the GitHub Actions shell.
 - Added scorecard activity sync, analysis, and aggregate MCP summary surfaces
   for answered scorecard activity without exposing raw call/user IDs or answer
   text.
