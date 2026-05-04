@@ -223,6 +223,19 @@ tr -d '\r' <"$headers_file" | rg -i '^www-authenticate: Bearer ' >/dev/null
 tr -d '\r' <"$headers_file" | rg -F "resource_metadata=\"$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource\"" >/dev/null
 rm -f "$headers_file"
 
+echo "== forged proxy identity header is denied =="
+forged_proxy_status="$(http_status \
+  -H "X-Auth-Request-Email: $LAB_APPROVED_EMAIL" \
+  -H "Origin: $LAB_PUBLIC_BASE_URL" \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"lab-smoke-forged-proxy","version":"0"}}}' \
+  "$LAB_PUBLIC_BASE_URL/mcp")"
+rm -f /tmp/gongctl-lab-smoke-body.$$
+case "$forged_proxy_status" in
+  401) echo "ok: forged proxy header status=$forged_proxy_status" ;;
+  *) echo "expected forged proxy identity denial, got status=$forged_proxy_status" >&2; exit 1 ;;
+esac
+
 echo "== obtain lab OIDC tokens =="
 approved_token="$(token_for "$LAB_APPROVED_EMAIL" "$LAB_APPROVED_PASSWORD")"
 blocked_token="$(token_for "$LAB_BLOCKED_EMAIL" "$LAB_BLOCKED_PASSWORD")"

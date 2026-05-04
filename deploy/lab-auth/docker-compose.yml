@@ -69,7 +69,8 @@ services:
       OIDC_CLIENT_ID: gong-lab-proxy
       REQUIRED_GROUP: /gong-mcp-users
       ALLOWED_EMAILS: ${LAB_ALLOWED_EMAILS:?set LAB_ALLOWED_EMAILS}
-      TRUST_PROXY_HEADERS: "1"
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-0}
+      TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-}
     volumes:
       - ${REMOTE_ROOT:?set REMOTE_ROOT}/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
     depends_on:

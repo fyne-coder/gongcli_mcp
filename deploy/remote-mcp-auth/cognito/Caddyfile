@@ -16,7 +16,13 @@
 	}
 
 	route /mcp {
-		reverse_proxy shim:8090
+		reverse_proxy shim:8090 {
+			header_up -X-Auth-Request-Email
+			header_up -X-Auth-Request-Groups
+			header_up -X-Forwarded-Email
+			header_up -X-Forwarded-Groups
+			header_up -X-Forwarded-User
+		}
 	}
 
 	respond "gongctl Cognito remote MCP gateway" 200

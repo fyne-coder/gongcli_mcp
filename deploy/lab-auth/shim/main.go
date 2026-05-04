@@ -12,8 +12,10 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -31,6 +33,7 @@ type config struct {
 	requiredGroup     string
 	allowedEmails     map[string]struct{}
 	trustProxyHeaders bool
+	trustedProxyCIDRs []netip.Prefix
 }
 
 type app struct {
@@ -102,6 +105,14 @@ func loadConfig() (config, error) {
 	if clientID == "" {
 		return config{}, errors.New("OIDC_CLIENT_ID is required")
 	}
+	trustProxyHeaders := truthy(os.Getenv("TRUST_PROXY_HEADERS"))
+	trustedProxyCIDRs, err := parseCIDRList(os.Getenv("TRUST_PROXY_CIDRS"))
+	if err != nil {
+		return config{}, fmt.Errorf("TRUST_PROXY_CIDRS: %w", err)
+	}
+	if trustProxyHeaders && len(trustedProxyCIDRs) == 0 {
+		return config{}, errors.New("TRUST_PROXY_CIDRS is required when TRUST_PROXY_HEADERS is enabled")
+	}
 	return config{
 		addr:              envDefault("SHIM_ADDR", ":8090"),
 		upstream:          upstream,
@@ -111,7 +122,8 @@ func loadConfig() (config, error) {
 		clientID:          clientID,
 		requiredGroup:     strings.TrimSpace(os.Getenv("REQUIRED_GROUP")),
 		allowedEmails:     csvSet(os.Getenv("ALLOWED_EMAILS")),
-		trustProxyHeaders: truthy(os.Getenv("TRUST_PROXY_HEADERS")),
+		trustProxyHeaders: trustProxyHeaders,
+		trustedProxyCIDRs: trustedProxyCIDRs,
 	}, nil
 }
 
@@ -184,7 +196,15 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) authenticate(r *http.Request) (string, error) {
 	if a.cfg.trustProxyHeaders {
-		if principal, ok := a.authenticateProxyHeaders(r); ok {
+		if hasProxyIdentityHeader(r) {
+			if !remoteAddrAllowed(r.RemoteAddr, a.cfg.trustedProxyCIDRs) {
+				return "", fmt.Errorf("trusted proxy header from untrusted remote %q", r.RemoteAddr)
+			}
+		}
+		if principal, ok, err := a.authenticateProxyHeaders(r); ok {
+			if err != nil {
+				return "", err
+			}
 			return principal, nil
 		}
 	}
@@ -205,16 +225,16 @@ func (a *app) authenticate(r *http.Request) (string, error) {
 	return claim.Subject, nil
 }
 
-func (a *app) authenticateProxyHeaders(r *http.Request) (string, bool) {
+func (a *app) authenticateProxyHeaders(r *http.Request) (string, bool, error) {
 	email := firstHeader(r, "X-Auth-Request-Email", "X-Forwarded-Email", "X-Forwarded-User")
 	if email == "" {
-		return "", false
+		return "", false, nil
 	}
 	groups := splitGroups(firstHeader(r, "X-Auth-Request-Groups", "X-Forwarded-Groups"))
 	if err := a.authorize(email, groups); err != nil {
-		return "", false
+		return "", true, err
 	}
-	return email, true
+	return email, true, nil
 }
 
 func (a *app) authorize(email string, groups []string) error {
@@ -418,6 +438,50 @@ func firstHeader(r *http.Request, names ...string) string {
 		}
 	}
 	return ""
+}
+
+func hasProxyIdentityHeader(r *http.Request) bool {
+	return firstHeader(r,
+		"X-Auth-Request-Email",
+		"X-Forwarded-Email",
+		"X-Forwarded-User",
+	) != ""
+}
+
+func parseCIDRList(value string) ([]netip.Prefix, error) {
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' '
+	})
+	out := make([]netip.Prefix, 0, len(fields))
+	for _, field := range fields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(trimmed)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, prefix)
+	}
+	return out, nil
+}
+
+func remoteAddrAllowed(remoteAddr string, allowed []netip.Prefix) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return false
+	}
+	for _, prefix := range allowed {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitGroups(value string) []string {

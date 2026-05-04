@@ -25,10 +25,14 @@ Important distinction:
   broker with Dynamic Client Registration.
 - `jumpcloud/` and `cognito/` are static-client/JWT-validation gateway
   examples. Their `/mcp` route is handled by the shim, which validates an
-  incoming bearer JWT or trusted proxy identity header before forwarding to
-  `gongmcp`. The included `oauth2-proxy` service is a browser/session helper for
-  rehearsing the IdP login path; it does not make JumpCloud or Cognito provide
-  Dynamic Client Registration or MCP-scoped access-token issuance.
+  incoming bearer JWT before forwarding to `gongmcp`. Trusted proxy identity
+  headers are disabled by default; enable `TRUST_PROXY_HEADERS=1` only behind a
+  reviewed upstream gateway that overwrites those headers, and set
+  `TRUST_PROXY_CIDRS` to that exact gateway source range. The bundled Caddy
+  `/mcp` route strips inbound copies. The included `oauth2-proxy` service is a
+  browser/session
+  helper for rehearsing the IdP login path; it does not make JumpCloud or Cognito
+  provide Dynamic Client Registration or MCP-scoped access-token issuance.
 
 ## Which Example To Use
 

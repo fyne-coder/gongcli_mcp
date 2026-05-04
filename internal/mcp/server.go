@@ -1909,7 +1909,7 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 	}
 
 	limit := s.limitPolicy.SearchLimit(args.Limit)
-	snippets := make([]transcriptSnippet, 0)
+	var snippets []transcriptSnippet
 	filtered := 0
 	if searchTranscriptSegmentsUsesCallFactFilters(args) {
 		results, err := s.store.SearchTranscriptSegmentsByCallFacts(ctx, sqlite.TranscriptCallFactsSearchParams{

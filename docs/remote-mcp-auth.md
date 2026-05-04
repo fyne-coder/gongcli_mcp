@@ -236,12 +236,16 @@ starters under `deploy/remote-mcp-auth/`:
 
 The JumpCloud and Cognito Compose files are static-client/JWT-validation
 fallback examples, not full OAuth brokers. In those examples, `/mcp` is handled
-by the shim, which validates a bearer JWT or trusted proxy identity headers and
-then forwards the request to `gongmcp` with the internal bearer token. The
-included `oauth2-proxy` service is a browser/session helper for rehearsing the
-IdP login path; it does not add Dynamic Client Registration or issue
-MCP-scoped access tokens for ChatGPT/Claude. Use these Compose examples only
-when the target MCP client can be configured to use a pre-registered/static
+by the shim, which validates a bearer JWT and then forwards the request to
+`gongmcp` with the internal bearer token. Trusted proxy identity headers are
+disabled by default; enable `TRUST_PROXY_HEADERS=1` only where a reviewed
+upstream gateway overwrites those headers, and set `TRUST_PROXY_CIDRS` to that
+exact gateway source range. The bundled Caddy `/mcp` route strips inbound proxy
+identity headers before forwarding. The included `oauth2-proxy` service is a
+browser/session helper for rehearsing the IdP login path; it does not add
+Dynamic Client Registration or
+issue MCP-scoped access tokens for ChatGPT/Claude. Use these Compose examples
+only when the target MCP client can be configured to use a pre-registered/static
 client or when an upstream gateway already performs the MCP-compatible OAuth
 work.
 

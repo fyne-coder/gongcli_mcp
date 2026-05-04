@@ -27,8 +27,13 @@ The lab keeps the same important product boundary as the customer-hosted pilot:
 - only `business-pilot` MCP tools are exposed.
 
 The shim is the stand-in for a customer gateway/broker. It validates a lab
-Keycloak JWT or trusted proxy identity headers, checks the approved group/email,
-and injects the internal bearer token before forwarding to `gongmcp`.
+Keycloak JWT, checks the approved group/email, and injects the internal bearer
+token before forwarding to `gongmcp`. Trusted proxy identity headers are disabled
+by default; enable `TRUST_PROXY_HEADERS=1` only behind a reviewed upstream gateway
+that overwrites identity headers, and set `TRUST_PROXY_CIDRS` to that exact
+gateway source range. The bundled Caddy `/mcp` route strips inbound proxy
+identity headers before forwarding so a public client cannot forge
+`X-Auth-Request-Email` or `X-Forwarded-Email`.
 
 For ChatGPT remote MCP testing, `/mcp` must be reachable at a trusted HTTPS URL.
 The lab keeps Caddy and `gongmcp` on plain HTTP inside the VM and uses
@@ -204,6 +209,7 @@ The smoke verifies:
 - newly registered dynamic clients can receive access tokens with the
   `gong-lab-proxy` audience and `/gong-mcp-users` group claims.
 - unauthenticated `/mcp` is denied with `401` and `WWW-Authenticate`.
+- forged proxy identity headers on the direct `/mcp` route are denied.
 - the secondary approved user can request `offline_access` from Keycloak.
 - a Keycloak user outside `gong-mcp-users` is denied.
 - wrong `Origin` is denied.
