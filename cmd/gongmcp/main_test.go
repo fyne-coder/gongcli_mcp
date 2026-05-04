@@ -451,6 +451,51 @@ func TestResolveToolAllowlistRejectsAmbiguousSelection(t *testing.T) {
 	}
 }
 
+func TestResolveLimitPolicyFlagOverridesEnvAndClamps(t *testing.T) {
+	policy, err := resolveLimitPolicy(limitSelection{
+		SearchResults:    250,
+		SearchResultsSet: true,
+		Getenv: func(key string) string {
+			if key == "GONGMCP_MAX_SEARCH_RESULTS" {
+				return "125"
+			}
+			if key == "GONGMCP_MAX_MISSING_TRANSCRIPTS" {
+				return "999999"
+			}
+			return ""
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveLimitPolicy returned error: %v", err)
+	}
+	if policy.SearchResults != 250 {
+		t.Fatalf("SearchResults=%d want flag override 250", policy.SearchResults)
+	}
+	if policy.MissingTranscripts != 10000 {
+		t.Fatalf("MissingTranscripts=%d want hard cap 10000", policy.MissingTranscripts)
+	}
+}
+
+func TestResolveLimitPolicyRejectsInvalidValues(t *testing.T) {
+	if _, err := resolveLimitPolicy(limitSelection{
+		SearchResults:    -1,
+		SearchResultsSet: true,
+		Getenv:           func(string) string { return "" },
+	}); err == nil {
+		t.Fatal("resolveLimitPolicy allowed negative flag value")
+	}
+	if _, err := resolveLimitPolicy(limitSelection{
+		Getenv: func(key string) string {
+			if key == "GONGMCP_MAX_SEARCH_RESULTS" {
+				return "nope"
+			}
+			return ""
+		},
+	}); err == nil {
+		t.Fatal("resolveLimitPolicy allowed invalid env value")
+	}
+}
+
 func containsString(values []string, needle string) bool {
 	for _, value := range values {
 		if value == needle {

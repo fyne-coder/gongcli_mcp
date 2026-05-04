@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultBusinessAnalysisLimit       = 25
-	maxBusinessAnalysisLimit           = 100
+	maxBusinessAnalysisLimit           = 1000
 	maxBusinessAnalysisFTSQueryLength  = 160
 	maxBusinessAnalysisFTSQueryTerms   = 12
 	maxBusinessAnalysisFTSQueryTermLen = 48

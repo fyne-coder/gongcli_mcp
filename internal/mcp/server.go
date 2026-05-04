@@ -26,21 +26,6 @@ const httpToolCallTimeout = 60 * time.Second
 
 var errHTTPPayloadTooLarge = fmt.Errorf("request body exceeds maximum %d bytes", maxFrameBytes)
 
-const (
-	maxSearchResults        = 100
-	maxCRMFields            = 200
-	maxLateStageSignals     = 100
-	maxMissingTranscripts   = 500
-	maxOpportunitySummaries = 100
-	maxCRMMatrixCells       = 200
-	maxCallDetailObjects    = 20
-	maxCallDetailFieldNames = 50
-	maxLifecycleResults     = 100
-	maxLifecycleCRMFields   = 200
-	maxCallFactGroups       = 200
-	maxInventoryResults     = 200
-)
-
 type frameMode int
 
 const (
@@ -88,6 +73,7 @@ type Store interface {
 	SearchBusinessAnalysisEvidence(ctx context.Context, params sqlite.BusinessAnalysisEvidenceSearchParams) ([]sqlite.BusinessAnalysisEvidenceRow, error)
 	SummarizeBusinessAnalysisDimension(ctx context.Context, params sqlite.BusinessAnalysisDimensionSummaryParams) ([]sqlite.BusinessAnalysisDimensionRow, error)
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
+	FindCallsMissingTranscriptsByFilters(ctx context.Context, params sqlite.MissingTranscriptSearchParams) ([]sqlite.MissingTranscriptCall, error)
 }
 
 type Server struct {
@@ -95,6 +81,7 @@ type Server struct {
 	name              string
 	version           string
 	tools             []tool
+	limitPolicy       LimitPolicy
 	allowedToolNames  map[string]struct{}
 	suppressedCallIDs map[string]struct{}
 	governanceCheck   func(context.Context) error
@@ -192,9 +179,16 @@ type toolContent struct {
 }
 
 type searchCallsArgs struct {
-	CRMObjectType string `json:"crm_object_type"`
-	CRMObjectID   string `json:"crm_object_id"`
-	Limit         int    `json:"limit"`
+	CRMObjectType    string `json:"crm_object_type"`
+	CRMObjectID      string `json:"crm_object_id"`
+	FromDate         string `json:"from_date"`
+	ToDate           string `json:"to_date"`
+	LifecycleBucket  string `json:"lifecycle_bucket"`
+	Scope            string `json:"scope"`
+	System           string `json:"system"`
+	Direction        string `json:"direction"`
+	TranscriptStatus string `json:"transcript_status"`
+	Limit            int    `json:"limit"`
 }
 
 type getCallArgs struct {
@@ -292,6 +286,11 @@ type searchCallsByLifecycleArgs struct {
 
 type prioritizeTranscriptsByLifecycleArgs struct {
 	Bucket          string `json:"bucket"`
+	FromDate        string `json:"from_date"`
+	ToDate          string `json:"to_date"`
+	Scope           string `json:"scope"`
+	System          string `json:"system"`
+	Direction       string `json:"direction"`
 	Limit           int    `json:"limit"`
 	LifecycleSource string `json:"lifecycle_source"`
 }
@@ -316,6 +315,12 @@ type summarizeCallFactsArgs struct {
 
 type searchTranscriptSegmentsArgs struct {
 	Query             string `json:"query"`
+	FromDate          string `json:"from_date"`
+	ToDate            string `json:"to_date"`
+	LifecycleBucket   string `json:"lifecycle_bucket"`
+	Scope             string `json:"scope"`
+	System            string `json:"system"`
+	Direction         string `json:"direction"`
 	Limit             int    `json:"limit"`
 	IncludeCallIDs    bool   `json:"include_call_ids"`
 	IncludeSpeakerIDs bool   `json:"include_speaker_ids"`
@@ -337,6 +342,10 @@ type searchTranscriptQuotesWithAttributionArgs struct {
 	FromDate                string `json:"from_date"`
 	ToDate                  string `json:"to_date"`
 	LifecycleBucket         string `json:"lifecycle_bucket"`
+	Scope                   string `json:"scope"`
+	System                  string `json:"system"`
+	Direction               string `json:"direction"`
+	TranscriptStatus        string `json:"transcript_status"`
 	Industry                string `json:"industry"`
 	AccountQuery            string `json:"account_query"`
 	OpportunityStage        string `json:"opportunity_stage"`
@@ -348,7 +357,15 @@ type searchTranscriptQuotesWithAttributionArgs struct {
 }
 
 type missingTranscriptsArgs struct {
-	Limit int `json:"limit"`
+	FromDate        string `json:"from_date"`
+	ToDate          string `json:"to_date"`
+	LifecycleBucket string `json:"lifecycle_bucket"`
+	Scope           string `json:"scope"`
+	System          string `json:"system"`
+	Direction       string `json:"direction"`
+	CRMObjectType   string `json:"crm_object_type"`
+	CRMObjectID     string `json:"crm_object_id"`
+	Limit           int    `json:"limit"`
 }
 
 type searchCallSummary struct {
@@ -403,15 +420,26 @@ func NewServer(store Store, name, version string) *Server {
 
 func NewServerWithOptions(store Store, name, version string, opts ...ServerOption) *Server {
 	server := &Server{
-		store:   store,
-		name:    name,
-		version: version,
-		tools:   defaultTools(),
+		store:       store,
+		name:        name,
+		version:     version,
+		limitPolicy: DefaultLimitPolicy(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(server)
 		}
+	}
+	server.limitPolicy = server.limitPolicy.Normalize()
+	server.tools = defaultTools(server.limitPolicy)
+	if len(server.allowedToolNames) > 0 {
+		filtered := make([]tool, 0, len(server.tools))
+		for _, item := range server.tools {
+			if _, ok := server.allowedToolNames[item.Name]; ok {
+				filtered = append(filtered, item)
+			}
+		}
+		server.tools = filtered
 	}
 	return server
 }
@@ -429,14 +457,13 @@ func WithToolAllowlist(names []string) ServerOption {
 		return nil
 	}
 	return func(s *Server) {
-		filtered := make([]tool, 0, len(s.tools))
-		for _, item := range s.tools {
-			if _, ok := allowset[item.Name]; ok {
-				filtered = append(filtered, item)
-			}
-		}
-		s.tools = filtered
 		s.allowedToolNames = allowset
+	}
+}
+
+func WithLimitPolicy(policy LimitPolicy) ServerOption {
+	return func(s *Server) {
+		s.limitPolicy = policy.Normalize()
 	}
 }
 
@@ -460,7 +487,8 @@ func WithGovernanceCheck(check func(context.Context) error) ServerOption {
 	}
 }
 
-func defaultTools() []tool {
+func defaultTools(policy LimitPolicy) []tool {
+	policy = policy.Normalize()
 	tools := []tool{
 		{
 			Name:        "get_sync_status",
@@ -472,9 +500,16 @@ func defaultTools() []tool {
 			Description: "Search cached calls by stored CRM context filters and return summarized call metadata.",
 			InputSchema: objectSchema(
 				map[string]any{
-					"crm_object_type": map[string]any{"type": "string"},
-					"crm_object_id":   map[string]any{"type": "string"},
-					"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"crm_object_type":   map[string]any{"type": "string"},
+					"crm_object_id":     map[string]any{"type": "string"},
+					"from_date":         map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"to_date":           map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"lifecycle_bucket":  map[string]any{"type": "string"},
+					"scope":             map[string]any{"type": "string"},
+					"system":            map[string]any{"type": "string"},
+					"direction":         map[string]any{"type": "string"},
+					"transcript_status": map[string]any{"type": "string", "enum": []string{"", "present", "missing", "any"}},
+					"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
 				},
 				nil,
 			),
@@ -500,7 +535,7 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"object_type": map[string]any{"type": "string"},
-					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": maxCRMFields},
+					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": policy.CRMFields},
 				},
 				[]string{"object_type"},
 			),
@@ -527,7 +562,7 @@ func defaultTools() []tool {
 				map[string]any{
 					"integration_id": map[string]any{"type": "string"},
 					"object_type":    map[string]any{"type": "string"},
-					"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": maxInventoryResults},
+					"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": policy.InventoryResults},
 				},
 				nil,
 			),
@@ -538,7 +573,7 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"kind":  map[string]any{"type": "string"},
-					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxInventoryResults},
+					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": policy.InventoryResults},
 				},
 				nil,
 			),
@@ -549,7 +584,7 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"active_only": map[string]any{"type": "boolean"},
-					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": maxInventoryResults},
+					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": policy.InventoryResults},
 				},
 				nil,
 			),
@@ -579,7 +614,7 @@ func defaultTools() []tool {
 			Description: "List cached CRM fields not mapped by the active business profile with redacted aggregate statistics only.",
 			InputSchema: objectSchema(
 				map[string]any{
-					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxInventoryResults},
+					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": policy.InventoryResults},
 				},
 				nil,
 			),
@@ -594,7 +629,7 @@ func defaultTools() []tool {
 					"value_query":            map[string]any{"type": "string"},
 					"include_value_snippets": map[string]any{"type": "boolean"},
 					"include_call_ids":       map[string]any{"type": "boolean"},
-					"limit":                  map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"limit":                  map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
 				},
 				[]string{"object_type", "field_name", "value_query"},
 			),
@@ -608,7 +643,7 @@ func defaultTools() []tool {
 					"stage_field":           map[string]any{"type": "string"},
 					"late_stage_values":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"include_stage_proxies": map[string]any{"type": "boolean"},
-					"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": maxLateStageSignals},
+					"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": policy.LateStageSignals},
 				},
 				nil,
 			),
@@ -619,7 +654,7 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"stage_values": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": maxOpportunitySummaries},
+					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": policy.OpportunitySummaries},
 				},
 				nil,
 			),
@@ -632,7 +667,7 @@ func defaultTools() []tool {
 					"query":       map[string]any{"type": "string"},
 					"object_type": map[string]any{"type": "string"},
 					"object_id":   map[string]any{"type": "string"},
-					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
 				},
 				[]string{"query", "object_type"},
 			),
@@ -643,7 +678,7 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"stage_values": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": maxOpportunitySummaries},
+					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": policy.OpportunitySummaries},
 				},
 				nil,
 			),
@@ -655,7 +690,7 @@ func defaultTools() []tool {
 				map[string]any{
 					"object_type":    map[string]any{"type": "string"},
 					"group_by_field": map[string]any{"type": "string"},
-					"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": maxCRMMatrixCells},
+					"limit":          map[string]any{"type": "integer", "minimum": 1, "maximum": policy.CRMMatrixCells},
 				},
 				[]string{"object_type"},
 			),
@@ -688,7 +723,7 @@ func defaultTools() []tool {
 				map[string]any{
 					"bucket":                   map[string]any{"type": "string"},
 					"missing_transcripts_only": map[string]any{"type": "boolean"},
-					"limit":                    map[string]any{"type": "integer", "minimum": 1, "maximum": maxLifecycleResults},
+					"limit":                    map[string]any{"type": "integer", "minimum": 1, "maximum": policy.LifecycleResults},
 					"lifecycle_source":         map[string]any{"type": "string"},
 				},
 				nil,
@@ -700,7 +735,12 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"bucket":           map[string]any{"type": "string"},
-					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": maxLifecycleResults},
+					"from_date":        map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"to_date":          map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"scope":            map[string]any{"type": "string"},
+					"system":           map[string]any{"type": "string"},
+					"direction":        map[string]any{"type": "string"},
+					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": policy.LifecycleResults},
 					"lifecycle_source": map[string]any{"type": "string"},
 				},
 				nil,
@@ -714,7 +754,7 @@ func defaultTools() []tool {
 					"bucket_a":    map[string]any{"type": "string"},
 					"bucket_b":    map[string]any{"type": "string"},
 					"object_type": map[string]any{"type": "string"},
-					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": maxLifecycleCRMFields},
+					"limit":       map[string]any{"type": "integer", "minimum": 1, "maximum": policy.LifecycleCRMFields},
 				},
 				[]string{"bucket_a", "bucket_b", "object_type"},
 			),
@@ -731,7 +771,7 @@ func defaultTools() []tool {
 					"system":            map[string]any{"type": "string"},
 					"direction":         map[string]any{"type": "string"},
 					"transcript_status": map[string]any{"type": "string"},
-					"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": maxCallFactGroups},
+					"limit":             map[string]any{"type": "integer", "minimum": 1, "maximum": policy.CallFactGroups},
 				},
 				nil,
 			),
@@ -742,7 +782,12 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"bucket":           map[string]any{"type": "string"},
-					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": maxLifecycleResults},
+					"from_date":        map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"to_date":          map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"scope":            map[string]any{"type": "string"},
+					"system":           map[string]any{"type": "string"},
+					"direction":        map[string]any{"type": "string"},
+					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": policy.LifecycleResults},
 					"lifecycle_source": map[string]any{"type": "string"},
 				},
 				nil,
@@ -754,7 +799,13 @@ func defaultTools() []tool {
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":               map[string]any{"type": "string"},
-					"limit":               map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"from_date":           map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"to_date":             map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"lifecycle_bucket":    map[string]any{"type": "string"},
+					"scope":               map[string]any{"type": "string"},
+					"system":              map[string]any{"type": "string"},
+					"direction":           map[string]any{"type": "string"},
+					"limit":               map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
 					"include_call_ids":    map[string]any{"type": "boolean"},
 					"include_speaker_ids": map[string]any{"type": "boolean"},
 				},
@@ -773,7 +824,7 @@ func defaultTools() []tool {
 					"scope":            map[string]any{"type": "string"},
 					"system":           map[string]any{"type": "string"},
 					"direction":        map[string]any{"type": "string"},
-					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
 				},
 				[]string{"query"},
 			),
@@ -787,10 +838,14 @@ func defaultTools() []tool {
 					"from_date":                 map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
 					"to_date":                   map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
 					"lifecycle_bucket":          map[string]any{"type": "string"},
+					"scope":                     map[string]any{"type": "string"},
+					"system":                    map[string]any{"type": "string"},
+					"direction":                 map[string]any{"type": "string"},
+					"transcript_status":         map[string]any{"type": "string", "enum": []string{"", "present", "any"}},
 					"industry":                  map[string]any{"type": "string"},
 					"account_query":             map[string]any{"type": "string"},
 					"opportunity_stage":         map[string]any{"type": "string"},
-					"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": maxSearchResults},
+					"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
 					"include_call_ids":          map[string]any{"type": "boolean"},
 					"include_call_titles":       map[string]any{"type": "boolean"},
 					"include_account_names":     map[string]any{"type": "boolean"},
@@ -804,17 +859,29 @@ func defaultTools() []tool {
 			Description: "List cached calls that do not yet have transcript segments stored in SQLite.",
 			InputSchema: objectSchema(
 				map[string]any{
-					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": maxMissingTranscripts},
+					"from_date":        map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"to_date":          map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
+					"lifecycle_bucket": map[string]any{"type": "string"},
+					"scope":            map[string]any{"type": "string"},
+					"system":           map[string]any{"type": "string"},
+					"direction":        map[string]any{"type": "string"},
+					"crm_object_type":  map[string]any{"type": "string"},
+					"crm_object_id":    map[string]any{"type": "string"},
+					"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": policy.MissingTranscripts},
 				},
 				nil,
 			),
 		},
 	}
-	return append(tools, businessAnalysisTools()...)
+	return append(tools, businessAnalysisTools(policy)...)
 }
 
 func ToolCatalog() []ToolInfo {
-	server := NewServer(nil, "gongmcp", "dev")
+	return ToolCatalogWithLimitPolicy(DefaultLimitPolicy())
+}
+
+func ToolCatalogWithLimitPolicy(policy LimitPolicy) []ToolInfo {
+	server := NewServerWithOptions(nil, "gongmcp", "dev", WithLimitPolicy(policy))
 	out := make([]ToolInfo, 0, len(server.tools))
 	for _, item := range server.tools {
 		out = append(out, ToolInfo(item))
@@ -823,7 +890,11 @@ func ToolCatalog() []ToolInfo {
 }
 
 func FindTool(name string) (ToolInfo, bool) {
-	for _, tool := range ToolCatalog() {
+	return FindToolWithLimitPolicy(name, DefaultLimitPolicy())
+}
+
+func FindToolWithLimitPolicy(name string, policy LimitPolicy) (ToolInfo, bool) {
+	for _, tool := range ToolCatalogWithLimitPolicy(policy) {
 		if tool.Name == name {
 			return tool, true
 		}
@@ -1099,9 +1170,16 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 	}
 
 	rows, err := s.store.SearchCallsRaw(ctx, sqlite.CallSearchParams{
-		CRMObjectType: args.CRMObjectType,
-		CRMObjectID:   args.CRMObjectID,
-		Limit:         args.Limit,
+		CRMObjectType:    args.CRMObjectType,
+		CRMObjectID:      args.CRMObjectID,
+		FromDate:         args.FromDate,
+		ToDate:           args.ToDate,
+		LifecycleBucket:  args.LifecycleBucket,
+		Scope:            args.Scope,
+		System:           args.System,
+		Direction:        args.Direction,
+		TranscriptStatus: args.TranscriptStatus,
+		Limit:            s.limitPolicy.SearchLimit(args.Limit),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1120,7 +1198,7 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 		}
 		summaries = append(summaries, summary)
 	}
-	return s.newGovernedToolResult(summaries, filtered)
+	return s.newCappedToolResult("search_calls", summaries, len(summaries), s.limitPolicy.SearchLimit(args.Limit), filtered, searchCallRefinements(args))
 }
 
 func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1159,7 +1237,7 @@ func (s *Server) listCRMFields(ctx context.Context, raw json.RawMessage) (toolCa
 		return toolCallResult{}, err
 	}
 
-	rows, err := s.store.ListCRMFields(ctx, args.ObjectType, args.Limit)
+	rows, err := s.store.ListCRMFields(ctx, args.ObjectType, capLimit(args.Limit, defaultCRMFieldRequestLimit, s.limitPolicy.Normalize().CRMFields))
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -1201,7 +1279,7 @@ func (s *Server) listCachedCRMSchemaFields(ctx context.Context, raw json.RawMess
 	rows, err := s.store.ListCRMSchemaFields(ctx, sqlite.CRMSchemaFieldListParams{
 		IntegrationID: args.IntegrationID,
 		ObjectType:    args.ObjectType,
-		Limit:         args.Limit,
+		Limit:         capLimit(args.Limit, defaultInventoryRequestLimit, s.limitPolicy.Normalize().InventoryResults),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1217,7 +1295,7 @@ func (s *Server) listGongSettings(ctx context.Context, raw json.RawMessage) (too
 
 	rows, err := s.store.ListGongSettings(ctx, sqlite.GongSettingListParams{
 		Kind:  args.Kind,
-		Limit: args.Limit,
+		Limit: capLimit(args.Limit, defaultInventoryRequestLimit, s.limitPolicy.Normalize().InventoryResults),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1233,7 +1311,7 @@ func (s *Server) listScorecards(ctx context.Context, raw json.RawMessage) (toolC
 
 	rows, err := s.store.ListScorecards(ctx, sqlite.ScorecardListParams{
 		ActiveOnly: args.ActiveOnly,
-		Limit:      args.Limit,
+		Limit:      capLimit(args.Limit, defaultInventoryRequestLimit, s.limitPolicy.Normalize().InventoryResults),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1289,7 +1367,7 @@ func (s *Server) listUnmappedCRMFields(ctx context.Context, raw json.RawMessage)
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
-	rows, err := s.store.ListUnmappedCRMFields(ctx, sqlite.UnmappedCRMFieldParams{Limit: args.Limit})
+	rows, err := s.store.ListUnmappedCRMFields(ctx, sqlite.UnmappedCRMFieldParams{Limit: capLimit(args.Limit, defaultInventoryRequestLimit, s.limitPolicy.Normalize().InventoryResults)})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return toolCallResult{}, noActiveProfileError()
@@ -1309,7 +1387,7 @@ func (s *Server) searchCRMFieldValues(ctx context.Context, raw json.RawMessage) 
 		ObjectType:          args.ObjectType,
 		FieldName:           args.FieldName,
 		ValueQuery:          args.ValueQuery,
-		Limit:               args.Limit,
+		Limit:               capLimit(args.Limit, defaultCRMFieldValueRequestLimit, s.limitPolicy.Normalize().SearchResults),
 		IncludeValueSnippet: args.IncludeValueSnippets,
 	})
 	if err != nil {
@@ -1332,7 +1410,7 @@ func (s *Server) searchCRMFieldValues(ctx context.Context, raw json.RawMessage) 
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedToolResult(out, filtered)
+	return s.newCappedToolResult("search_crm_field_values", out, len(out), capLimit(args.Limit, defaultCRMFieldValueRequestLimit, s.limitPolicy.Normalize().SearchResults), filtered, crmFieldValueRefinements(args))
 }
 
 func (s *Server) analyzeLateStageCRMSignals(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1349,7 +1427,7 @@ func (s *Server) analyzeLateStageCRMSignals(ctx context.Context, raw json.RawMes
 		StageField:          args.StageField,
 		LateStageValues:     args.LateStageValues,
 		IncludeStageProxies: args.IncludeStageProxies,
-		Limit:               args.Limit,
+		Limit:               capLimit(args.Limit, defaultLateStageSignalRequestLimit, s.limitPolicy.Normalize().LateStageSignals),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1368,7 +1446,7 @@ func (s *Server) opportunitiesMissingTranscripts(ctx context.Context, raw json.R
 
 	rows, err := s.store.ListOpportunitiesMissingTranscripts(ctx, sqlite.OpportunityMissingTranscriptParams{
 		StageValues: args.StageValues,
-		Limit:       args.Limit,
+		Limit:       capLimit(args.Limit, defaultOpportunitySummaryRequestLimit, s.limitPolicy.Normalize().OpportunitySummaries),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1386,7 +1464,7 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 		Query:      args.Query,
 		ObjectType: args.ObjectType,
 		ObjectID:   args.ObjectID,
-		Limit:      args.Limit,
+		Limit:      s.limitPolicy.SearchLimit(args.Limit),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1400,7 +1478,8 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedToolResult(mcpTranscriptCRMSearchResults(out), filtered)
+	results := mcpTranscriptCRMSearchResults(out)
+	return s.newCappedToolResult("search_transcripts_by_crm_context", results, len(results), s.limitPolicy.SearchLimit(args.Limit), filtered, crmTranscriptRefinements(args))
 }
 
 func mcpOpportunityMissingTranscriptSummaries(rows []sqlite.OpportunityMissingTranscriptSummary) []sqlite.OpportunityMissingTranscriptSummary {
@@ -1452,7 +1531,7 @@ func (s *Server) opportunityCallSummary(ctx context.Context, raw json.RawMessage
 
 	rows, err := s.store.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{
 		StageValues: args.StageValues,
-		Limit:       args.Limit,
+		Limit:       capLimit(args.Limit, defaultOpportunitySummaryRequestLimit, s.limitPolicy.Normalize().OpportunitySummaries),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1472,7 +1551,7 @@ func (s *Server) crmFieldPopulationMatrix(ctx context.Context, raw json.RawMessa
 	report, err := s.store.CRMFieldPopulationMatrix(ctx, sqlite.CRMFieldPopulationMatrixParams{
 		ObjectType:   args.ObjectType,
 		GroupByField: args.GroupByField,
-		Limit:        args.Limit,
+		Limit:        capLimit(args.Limit, defaultCRMMatrixRequestLimit, s.limitPolicy.Normalize().CRMMatrixCells),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1521,7 +1600,7 @@ func (s *Server) searchCallsByLifecycle(ctx context.Context, raw json.RawMessage
 	rows, info, err := s.store.SearchCallsByLifecycleWithSource(ctx, sqlite.LifecycleCallSearchParams{
 		Bucket:                 args.Bucket,
 		MissingTranscriptsOnly: args.MissingTranscriptsOnly,
-		Limit:                  args.Limit,
+		Limit:                  s.limitPolicy.LifecycleLimit(args.Limit),
 		LifecycleSource:        args.LifecycleSource,
 	})
 	if err != nil {
@@ -1547,7 +1626,12 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 
 	rows, info, err := s.store.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{
 		Bucket:          args.Bucket,
-		Limit:           args.Limit,
+		FromDate:        args.FromDate,
+		ToDate:          args.ToDate,
+		Scope:           args.Scope,
+		System:          args.System,
+		Direction:       args.Direction,
+		Limit:           s.limitPolicy.LifecycleLimit(args.Limit),
 		LifecycleSource: args.LifecycleSource,
 	})
 	if err != nil {
@@ -1562,7 +1646,17 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedLifecycleToolResult(mcpTranscriptPriorities(out), info, args.LifecycleSource, filtered)
+	results := mcpTranscriptPriorities(out)
+	if shouldReturnCapEnvelope(len(results), s.limitPolicy.LifecycleLimit(args.Limit)) {
+		envelope := cappedToolPayload("prioritize_transcripts_by_lifecycle", results, len(results), s.limitPolicy.LifecycleLimit(args.Limit), transcriptBacklogRefinements(args))
+		if info != nil && (info.Profile != nil || strings.TrimSpace(args.LifecycleSource) != "") {
+			envelope["lifecycle_source"] = info.LifecycleSource
+			envelope["profile"] = mcpBusinessProfile(info.Profile)
+			envelope["unavailable_concepts"] = info.UnavailableConcepts
+		}
+		return newToolResult(envelope)
+	}
+	return s.newGovernedLifecycleToolResult(results, info, args.LifecycleSource, filtered)
 }
 
 func mcpTranscriptPriorities(rows []sqlite.LifecycleTranscriptPriority) []sqlite.LifecycleTranscriptPriority {
@@ -1613,7 +1707,7 @@ func (s *Server) compareLifecycleCRMFields(ctx context.Context, raw json.RawMess
 		BucketA:    args.BucketA,
 		BucketB:    args.BucketB,
 		ObjectType: args.ObjectType,
-		Limit:      args.Limit,
+		Limit:      capLimit(args.Limit, defaultLifecycleCRMFieldRequestLimit, s.limitPolicy.Normalize().LifecycleCRMFields),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1641,7 +1735,7 @@ func (s *Server) summarizeCallFacts(ctx context.Context, raw json.RawMessage) (t
 		System:           args.System,
 		Direction:        args.Direction,
 		TranscriptStatus: args.TranscriptStatus,
-		Limit:            args.Limit,
+		Limit:            capLimit(args.Limit, defaultCallFactRequestLimit, s.limitPolicy.Normalize().CallFactGroups),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1681,7 +1775,12 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 
 	rows, info, err := s.store.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{
 		Bucket:          args.Bucket,
-		Limit:           args.Limit,
+		FromDate:        args.FromDate,
+		ToDate:          args.ToDate,
+		Scope:           args.Scope,
+		System:          args.System,
+		Direction:       args.Direction,
+		Limit:           s.limitPolicy.LifecycleLimit(args.Limit),
 		LifecycleSource: args.LifecycleSource,
 	})
 	if err != nil {
@@ -1696,7 +1795,17 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedLifecycleToolResult(mcpTranscriptPriorities(out), info, args.LifecycleSource, filtered)
+	results := mcpTranscriptPriorities(out)
+	if shouldReturnCapEnvelope(len(results), s.limitPolicy.LifecycleLimit(args.Limit)) {
+		envelope := cappedToolPayload("rank_transcript_backlog", results, len(results), s.limitPolicy.LifecycleLimit(args.Limit), transcriptBacklogRefinements(args))
+		if info != nil && (info.Profile != nil || strings.TrimSpace(args.LifecycleSource) != "") {
+			envelope["lifecycle_source"] = info.LifecycleSource
+			envelope["profile"] = mcpBusinessProfile(info.Profile)
+			envelope["unavailable_concepts"] = info.UnavailableConcepts
+		}
+		return newToolResult(envelope)
+	}
+	return s.newGovernedLifecycleToolResult(results, info, args.LifecycleSource, filtered)
 }
 
 func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1705,36 +1814,76 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 		return toolCallResult{}, err
 	}
 
-	results, err := s.store.SearchTranscriptSegments(ctx, args.Query, args.Limit)
-	if err != nil {
-		return toolCallResult{}, err
-	}
-
-	snippets := make([]transcriptSnippet, 0, len(results))
+	limit := s.limitPolicy.SearchLimit(args.Limit)
+	snippets := make([]transcriptSnippet, 0)
 	filtered := 0
-	for _, row := range results {
-		if s.isSuppressedCall(row.CallID) {
-			filtered++
-			continue
-		}
-		callID := row.CallID
-		if !args.IncludeCallIDs {
-			callID = ""
-		}
-		speakerID := row.SpeakerID
-		if !args.IncludeSpeakerIDs {
-			speakerID = ""
-		}
-		snippets = append(snippets, transcriptSnippet{
-			CallID:       callID,
-			SpeakerID:    speakerID,
-			SegmentIndex: row.SegmentIndex,
-			StartMS:      row.StartMS,
-			EndMS:        row.EndMS,
-			Snippet:      row.Snippet,
+	if searchTranscriptSegmentsUsesCallFactFilters(args) {
+		results, err := s.store.SearchTranscriptSegmentsByCallFacts(ctx, sqlite.TranscriptCallFactsSearchParams{
+			Query:           args.Query,
+			FromDate:        args.FromDate,
+			ToDate:          args.ToDate,
+			LifecycleBucket: args.LifecycleBucket,
+			Scope:           args.Scope,
+			System:          args.System,
+			Direction:       args.Direction,
+			Limit:           limit,
 		})
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		snippets = make([]transcriptSnippet, 0, len(results))
+		for _, row := range results {
+			if s.isSuppressedCall(row.CallID) {
+				filtered++
+				continue
+			}
+			callID := row.CallID
+			if !args.IncludeCallIDs {
+				callID = ""
+			}
+			speakerID := row.SpeakerID
+			if !args.IncludeSpeakerIDs {
+				speakerID = ""
+			}
+			snippets = append(snippets, transcriptSnippet{
+				CallID:       callID,
+				SpeakerID:    speakerID,
+				SegmentIndex: row.SegmentIndex,
+				StartMS:      row.StartMS,
+				EndMS:        row.EndMS,
+				Snippet:      row.Snippet,
+			})
+		}
+	} else {
+		results, err := s.store.SearchTranscriptSegments(ctx, args.Query, limit)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		snippets = make([]transcriptSnippet, 0, len(results))
+		for _, row := range results {
+			if s.isSuppressedCall(row.CallID) {
+				filtered++
+				continue
+			}
+			callID := row.CallID
+			if !args.IncludeCallIDs {
+				callID = ""
+			}
+			speakerID := row.SpeakerID
+			if !args.IncludeSpeakerIDs {
+				speakerID = ""
+			}
+			snippets = append(snippets, transcriptSnippet{
+				CallID:       callID,
+				SpeakerID:    speakerID,
+				SegmentIndex: row.SegmentIndex,
+				StartMS:      row.StartMS,
+				EndMS:        row.EndMS,
+				Snippet:      row.Snippet,
+			})
+		}
 	}
-	return s.newGovernedToolResult(snippets, filtered)
+	return s.newCappedToolResult("search_transcript_segments", snippets, len(snippets), limit, filtered, transcriptSearchRefinements(args))
 }
 
 func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1751,7 +1900,7 @@ func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawM
 		Scope:           args.Scope,
 		System:          args.System,
 		Direction:       args.Direction,
-		Limit:           args.Limit,
+		Limit:           s.limitPolicy.SearchLimit(args.Limit),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1765,7 +1914,7 @@ func (s *Server) searchTranscriptsByCallFacts(ctx context.Context, raw json.RawM
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedToolResult(out, filtered)
+	return s.newCappedToolResult("search_transcripts_by_call_facts", out, len(out), s.limitPolicy.SearchLimit(args.Limit), filtered, callFactTranscriptRefinements(args))
 }
 
 func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1776,16 +1925,23 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	if strings.TrimSpace(args.AccountQuery) != "" && !args.IncludeAccountNames {
 		return toolCallResult{}, errors.New("account_query requires include_account_names=true because it can probe customer names")
 	}
+	if strings.EqualFold(strings.TrimSpace(args.TranscriptStatus), "missing") {
+		return toolCallResult{}, errors.New("transcript_status=missing is not valid for quote search because quote tools require cached transcript segments")
+	}
 
 	results, err := s.store.SearchTranscriptQuotesWithAttribution(ctx, sqlite.TranscriptAttributionSearchParams{
 		Query:            args.Query,
 		FromDate:         args.FromDate,
 		ToDate:           args.ToDate,
 		LifecycleBucket:  args.LifecycleBucket,
+		Scope:            args.Scope,
+		System:           args.System,
+		Direction:        args.Direction,
+		TranscriptStatus: args.TranscriptStatus,
 		Industry:         args.Industry,
 		AccountQuery:     args.AccountQuery,
 		OpportunityStage: args.OpportunityStage,
-		Limit:            args.Limit,
+		Limit:            s.limitPolicy.SearchLimit(args.Limit),
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1799,7 +1955,8 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedToolResult(mcpTranscriptAttributionResults(out, args), filtered)
+	attributed := mcpTranscriptAttributionResults(out, args)
+	return s.newCappedToolResult("search_transcript_quotes_with_attribution", attributed, len(attributed), s.limitPolicy.SearchLimit(args.Limit), filtered, attributionRefinements(args))
 }
 
 func mcpTranscriptAttributionResults(rows []sqlite.TranscriptAttributionSearchResult, args searchTranscriptQuotesWithAttributionArgs) []sqlite.TranscriptAttributionSearchResult {
@@ -1831,7 +1988,17 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 		return toolCallResult{}, err
 	}
 
-	rows, err := s.store.FindCallsMissingTranscripts(ctx, args.Limit)
+	rows, err := s.store.FindCallsMissingTranscriptsByFilters(ctx, sqlite.MissingTranscriptSearchParams{
+		FromDate:        args.FromDate,
+		ToDate:          args.ToDate,
+		LifecycleBucket: args.LifecycleBucket,
+		Scope:           args.Scope,
+		System:          args.System,
+		Direction:       args.Direction,
+		CRMObjectType:   args.CRMObjectType,
+		CRMObjectID:     args.CRMObjectID,
+		Limit:           s.limitPolicy.MissingTranscriptLimit(args.Limit),
+	})
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -1844,7 +2011,7 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 		}
 		out = append(out, row)
 	}
-	return s.newGovernedToolResult(out, filtered)
+	return s.newCappedToolResult("missing_transcripts", out, len(out), s.limitPolicy.MissingTranscriptLimit(args.Limit), filtered, missingTranscriptRefinements(args))
 }
 
 func (s *Server) ok(id any, result any) *response {
@@ -2005,6 +2172,136 @@ func (s *Server) newGovernedToolResult(value any, _ int) (toolCallResult, error)
 	return newToolResult(value)
 }
 
+func (s *Server) newCappedToolResult(toolName string, value any, returned int, limit int, filtered int, refinements []string) (toolCallResult, error) {
+	if !shouldReturnCapEnvelope(returned, limit) {
+		return s.newGovernedToolResult(value, filtered)
+	}
+	return newToolResult(cappedToolPayload(toolName, value, returned, limit, refinements))
+}
+
+func shouldReturnCapEnvelope(returned int, limit int) bool {
+	return limit > 0 && returned >= limit
+}
+
+func cappedToolPayload(toolName string, results any, returned int, limit int, refinements []string) map[string]any {
+	if len(refinements) == 0 {
+		refinements = []string{"add a narrower date, lifecycle, scope, system, direction, CRM, or text filter before increasing the cap"}
+	}
+	return map[string]any{
+		"results":               results,
+		"returned":              returned,
+		"limit":                 limit,
+		"capped":                true,
+		"tool":                  toolName,
+		"suggested_refinements": refinements,
+	}
+}
+
+func searchTranscriptSegmentsUsesCallFactFilters(args searchTranscriptSegmentsArgs) bool {
+	return firstNonBlank(args.FromDate, args.ToDate, args.LifecycleBucket, args.Scope, args.System, args.Direction) != ""
+}
+
+func searchCallRefinements(args searchCallsArgs) []string {
+	var out []string
+	if args.FromDate == "" || args.ToDate == "" {
+		out = append(out, "add from_date and to_date to bound the call date range")
+	}
+	if args.LifecycleBucket == "" {
+		out = append(out, "add lifecycle_bucket when investigating a specific sales or customer-success motion")
+	}
+	if args.Scope == "" || args.System == "" || args.Direction == "" {
+		out = append(out, "add scope, system, or direction to narrow the normalized call facts")
+	}
+	if args.CRMObjectType == "" && args.CRMObjectID == "" {
+		out = append(out, "add crm_object_type or crm_object_id when following a known Account, Opportunity, Contact, or Lead")
+	}
+	return out
+}
+
+func crmFieldValueRefinements(args searchCRMFieldValuesArgs) []string {
+	var out []string
+	if strings.TrimSpace(args.ValueQuery) == "" || len(strings.TrimSpace(args.ValueQuery)) < 3 {
+		out = append(out, "use a more specific value_query for the CRM value search")
+	} else {
+		out = append(out, "make value_query more specific before increasing the cap")
+	}
+	if strings.TrimSpace(args.ObjectType) == "" {
+		out = append(out, "set object_type to the CRM object you want to inspect")
+	}
+	if strings.TrimSpace(args.FieldName) == "" {
+		out = append(out, "set field_name to a single CRM field")
+	}
+	return out
+}
+
+func crmTranscriptRefinements(args searchTranscriptsByCRMContextArgs) []string {
+	var out []string
+	if strings.TrimSpace(args.Query) == "" || len(strings.TrimSpace(args.Query)) < 3 {
+		out = append(out, "use a more specific transcript query")
+	} else {
+		out = append(out, "make query more specific before increasing the cap")
+	}
+	if strings.TrimSpace(args.ObjectID) == "" {
+		out = append(out, "add object_id when following one known CRM record")
+	}
+	return out
+}
+
+func transcriptSearchRefinements(args searchTranscriptSegmentsArgs) []string {
+	return transcriptFilterRefinements(args.FromDate, args.ToDate, args.LifecycleBucket, args.Scope, args.System, args.Direction)
+}
+
+func callFactTranscriptRefinements(args searchTranscriptsByCallFactsArgs) []string {
+	return transcriptFilterRefinements(args.FromDate, args.ToDate, args.LifecycleBucket, args.Scope, args.System, args.Direction)
+}
+
+func attributionRefinements(args searchTranscriptQuotesWithAttributionArgs) []string {
+	out := transcriptFilterRefinements(args.FromDate, args.ToDate, args.LifecycleBucket, args.Scope, args.System, args.Direction)
+	if args.Industry == "" {
+		out = append(out, "add industry when preparing segment-specific quote evidence")
+	}
+	if args.OpportunityStage == "" {
+		out = append(out, "add opportunity_stage when comparing pipeline or outcome language")
+	}
+	return out
+}
+
+func missingTranscriptRefinements(args missingTranscriptsArgs) []string {
+	out := transcriptFilterRefinements(args.FromDate, args.ToDate, args.LifecycleBucket, args.Scope, args.System, args.Direction)
+	if args.CRMObjectType == "" && args.CRMObjectID == "" {
+		out = append(out, "add crm_object_type or crm_object_id to inspect a specific CRM slice")
+	}
+	return out
+}
+
+func transcriptBacklogRefinements(args prioritizeTranscriptsByLifecycleArgs) []string {
+	out := transcriptFilterRefinements(args.FromDate, args.ToDate, args.Bucket, args.Scope, args.System, args.Direction)
+	if args.Bucket == "" {
+		out = append(out, "add bucket to focus transcript sync priority on one lifecycle motion")
+	}
+	return out
+}
+
+func transcriptFilterRefinements(fromDate, toDate, lifecycleBucket, scope, system, direction string) []string {
+	var out []string
+	if fromDate == "" || toDate == "" {
+		out = append(out, "add from_date and to_date to bound the call date range")
+	}
+	if lifecycleBucket == "" {
+		out = append(out, "add lifecycle_bucket when the analysis is tied to a known business motion")
+	}
+	if scope == "" {
+		out = append(out, "add scope=External, Internal, or Unknown")
+	}
+	if system == "" {
+		out = append(out, "add system when the dataset spans multiple meeting systems")
+	}
+	if direction == "" {
+		out = append(out, "add direction when inbound, outbound, or conference style matters")
+	}
+	return out
+}
+
 func newLifecycleToolResult(results any, info *sqlite.ProfileQueryInfo, requested string) (toolCallResult, error) {
 	if info == nil || (info.Profile == nil && strings.TrimSpace(requested) == "") {
 		return newToolResult(results)
@@ -2088,14 +2385,14 @@ func minimizeCallDetail(detail *sqlite.CallDetail) {
 	if detail == nil {
 		return
 	}
-	if len(detail.CRMObjects) > maxCallDetailObjects {
-		detail.CRMObjects = detail.CRMObjects[:maxCallDetailObjects]
+	if len(detail.CRMObjects) > defaultCallDetailObjects {
+		detail.CRMObjects = detail.CRMObjects[:defaultCallDetailObjects]
 		detail.CRMObjectsTruncated = true
 	}
 	for idx := range detail.CRMObjects {
 		detail.CRMObjects[idx].ObjectName = ""
-		if len(detail.CRMObjects[idx].FieldNames) > maxCallDetailFieldNames {
-			detail.CRMObjects[idx].FieldNames = detail.CRMObjects[idx].FieldNames[:maxCallDetailFieldNames]
+		if len(detail.CRMObjects[idx].FieldNames) > defaultCallDetailFieldNames {
+			detail.CRMObjects[idx].FieldNames = detail.CRMObjects[idx].FieldNames[:defaultCallDetailFieldNames]
 			detail.CRMObjects[idx].FieldNamesTruncated = true
 		}
 	}
@@ -2220,8 +2517,8 @@ func summarizeCallDetail(raw json.RawMessage) (callDetail, error) {
 	}
 	objects := collectCallDetailCRMObjects(payload)
 	truncatedObjects := false
-	if len(objects) > maxCallDetailObjects {
-		objects = objects[:maxCallDetailObjects]
+	if len(objects) > defaultCallDetailObjects {
+		objects = objects[:defaultCallDetailObjects]
 		truncatedObjects = true
 	}
 
@@ -2289,8 +2586,8 @@ func buildCallDetailCRMObject(defaultType string, doc map[string]any) (callDetai
 
 	fieldNames, populatedCount, fieldCount := summarizeCRMFieldNames(fieldsValue)
 	fieldNamesTruncated := false
-	if len(fieldNames) > maxCallDetailFieldNames {
-		fieldNames = fieldNames[:maxCallDetailFieldNames]
+	if len(fieldNames) > defaultCallDetailFieldNames {
+		fieldNames = fieldNames[:defaultCallDetailFieldNames]
 		fieldNamesTruncated = true
 	}
 

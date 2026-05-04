@@ -864,6 +864,44 @@ func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, 
 		where += ` AND lifecycle_bucket = ?`
 		args = append(args, bucket)
 	}
+	var fromDate, toDate string
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizeDateFilter(value, "from_date")
+		if err != nil {
+			return nil, nil, err
+		}
+		fromDate = date
+		where += ` AND substr(started_at, 1, 10) >= ?`
+		args = append(args, date)
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizeDateFilter(value, "to_date")
+		if err != nil {
+			return nil, nil, err
+		}
+		toDate = date
+		where += ` AND substr(started_at, 1, 10) <= ?`
+		args = append(args, date)
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, nil, errors.New("from_date must be on or before to_date")
+	}
+	if value := strings.TrimSpace(params.Scope); value != "" {
+		scope, ok := normalizedScope(value)
+		if !ok {
+			return nil, nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		where += ` AND scope = ?`
+		args = append(args, scope)
+	}
+	if value := strings.TrimSpace(params.System); value != "" {
+		where += ` AND system = ?`
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(params.Direction); value != "" {
+		where += ` AND direction = ?`
+		args = append(args, value)
+	}
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT call_id, title, started_at, duration_seconds, system, direction, scope, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, evidence_fields_json, `+priorityExpr+` AS priority_score

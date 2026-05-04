@@ -209,19 +209,73 @@ loops:
 - host app billing or token quotas, which agents driving many MCP calls per
   turn can exhaust quickly
 
-Server-enforced ceilings already in effect (see `internal/mcp/server.go`):
+Server-enforced ceilings are configurable by trusted operators, but remain
+bounded by hard caps and the MCP frame limit:
 
-- maximum response frame of about 1 MiB
-- search results capped at 100 rows
-- missing-transcripts capped at 500 rows
-- CRM field, lifecycle, and call-fact result sets capped at 100–200 rows
-- inventory result sets capped at 200 rows
-- call-detail object/field-name lists truncated to 20 objects and 50 field
-  names
+| Limit family | Default | Env | `gongmcp` flag | Hard ceiling | Affected tools |
+| --- | ---: | --- | --- | ---: | --- |
+| Search rows | 100 | `GONGMCP_MAX_SEARCH_RESULTS` | `--max-search-results` | 1000 | `search_calls`, transcript search tools, CRM value search |
+| Missing transcripts | 500 | `GONGMCP_MAX_MISSING_TRANSCRIPTS` | `--max-missing-transcripts` | 10000 | `missing_transcripts` |
+| Inventory rows | 200 | `GONGMCP_MAX_INVENTORY_RESULTS` | `--max-inventory-results` | 1000 | cached schema/settings/scorecard/unmapped-field lists |
+| CRM fields | 200 | `GONGMCP_MAX_CRM_FIELDS` | `--max-crm-fields` | 1000 | `list_crm_fields` |
+| Lifecycle rows | 100 | `GONGMCP_MAX_LIFECYCLE_RESULTS` | `--max-lifecycle-results` | 1000 | lifecycle call search and transcript backlog tools |
+| Lifecycle CRM fields | 200 | `GONGMCP_MAX_LIFECYCLE_CRM_FIELDS` | `--max-lifecycle-crm-fields` | 1000 | `compare_lifecycle_crm_fields` |
+| Call-fact groups | 200 | `GONGMCP_MAX_CALL_FACT_GROUPS` | `--max-call-fact-groups` | 1000 | `summarize_call_facts` |
+| Opportunity summaries | 100 | `GONGMCP_MAX_OPPORTUNITY_SUMMARIES` | `--max-opportunity-summaries` | 1000 | Opportunity coverage and call-summary tools |
+| CRM matrix cells | 200 | `GONGMCP_MAX_CRM_MATRIX_CELLS` | `--max-crm-matrix-cells` | 1000 | `crm_field_population_matrix` |
+| Late-stage signal rows | 100 | `GONGMCP_MAX_LATE_STAGE_SIGNALS` | `--max-late-stage-signals` | 500 | `analyze_late_stage_crm_signals` |
+| Business-analysis rows | 100 | `GONGMCP_MAX_BUSINESS_ANALYSIS_RESULTS` | `--max-business-analysis-results` | 1000 | cohort/theme/quote/business-analysis tools |
+
+The maximum response frame remains about 1 MiB, and `get_call` still truncates
+call-detail CRM object/field-name lists to 20 objects and 50 field names. Very
+high row caps can still fail at the frame-size boundary when snippets or
+identifier opt-ins make each row large.
+
+Recommended cap posture:
+
+- `business-pilot`: keep defaults. Prefer aggregate tools and narrow presets.
+- `analyst`: raise search, lifecycle, and business-analysis rows only after
+  the analyst workflow uses explicit time/lifecycle filters.
+- `trusted-admin`: raise missing-transcript and inventory caps only on a
+  reviewed local or private-network deployment; keep the tool preset or
+  allowlist explicit.
+
+The running MCP server's `tools/list` response exposes the active schema
+maximums from env vars and `gongmcp --max-*` flags. The separate
+`gongctl mcp tool-info NAME` inspection command exposes defaults plus
+`GONGMCP_MAX_*` env overrides, because it is not connected to a running server
+process and cannot see that server's flags. For example:
+
+```bash
+GONGMCP_MAX_SEARCH_RESULTS=250 gongctl mcp tool-info search_transcript_segments
+```
+
+High-volume tools should be filter-first, not cap-first. `search_calls`,
+`search_transcript_segments`, `missing_transcripts`,
+`prioritize_transcripts_by_lifecycle`, and `rank_transcript_backlog` accept
+date, lifecycle, scope, system, and direction filters where the cache has
+normalized call facts. `search_calls` and `missing_transcripts` also accept
+CRM object filters. `search_transcript_quotes_with_attribution` accepts those
+call-fact filters plus its attribution filters such as industry, account, and
+Opportunity stage.
+
+The highest-volume row tools that commonly drive follow-up calls
+(`search_calls`, `search_crm_field_values`, transcript search tools,
+`missing_transcripts`, `prioritize_transcripts_by_lifecycle`, and
+`rank_transcript_backlog`) preserve their legacy array shape below the cap. When
+they reach the effective `limit`, they return an envelope with `results`,
+`returned`, `limit`, `capped: true`, and `suggested_refinements`. Other capped
+aggregate or inventory tools expose schema maximums and enforce limits, but may
+continue to return their normal payload shape without `capped: true`. The cap
+feedback deliberately does not expose governance-filtered counts, because
+filtered counts could become a match oracle.
 
 Practical recommendations:
 
 - Pass tighter `limit` values when the question does not need the full cap.
+- When `capped: true` appears, narrow by `from_date`/`to_date`,
+  `lifecycle_bucket`, `scope`, `system`, `direction`, CRM object, or a more
+  specific transcript query before increasing the server cap.
 - Start with aggregate tools (`summarize_calls_by_lifecycle`,
   `rank_transcript_backlog`, `summarize_call_facts`,
   `analyze_late_stage_crm_signals`) before reaching for identifier-bearing or

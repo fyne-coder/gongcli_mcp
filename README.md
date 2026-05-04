@@ -422,7 +422,8 @@ mode and turn on per-tool opt-ins
 deeper, identifier-bearing questions; see
 [docs/mcp-data-exposure.md](docs/mcp-data-exposure.md) for the trade-off and
 [docs/mcp-data-exposure.md#mcp-call-volume-and-limits](docs/mcp-data-exposure.md#mcp-call-volume-and-limits)
-for how to keep MCP traffic from overwhelming the host context window.
+for configurable row caps, cap-hit feedback, and filter-first guidance that
+keeps MCP traffic from overwhelming the host context window.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),
@@ -444,6 +445,7 @@ can expose the same read-only MCP tools over a minimal HTTP `/mcp` endpoint:
 GONGMCP_BEARER_TOKEN="<customer-managed-token>" \
 GONGMCP_ALLOWED_ORIGINS="https://approved-client.example.com" \
 GONGMCP_TOOL_PRESET=business-pilot \
+GONGMCP_MAX_SEARCH_RESULTS=100 \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 

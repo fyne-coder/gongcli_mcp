@@ -83,7 +83,9 @@ These are easy to miss if you only read the high-level docs.
 - HTTP exposes `/healthz` separately from `/mcp`; use `/healthz` for infra
   checks instead of probing MCP tool calls.
 - MCP request/response frames are capped at 1 MiB. Tool results are capped just
-  below that after MCP framing.
+  below that after MCP framing. Row-returning tools use `internal/mcp.LimitPolicy`;
+  update schema generation, handler enforcement, `cmd/gongmcp` flags/env, and
+  docs together when changing a cap family.
 - MCP argument decoding is strict for unknown fields, but strips the reserved
   MCP `_meta` field before strict decoding so ChatGPT-style tool calls work.
 - Profile YAML uses a closed schema and closed rule operators. Imports are
