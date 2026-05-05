@@ -12,7 +12,7 @@ import (
 
 const (
 	postgresReadModelName            = "builtin_call_facts"
-	postgresReadModelVersion         = 2
+	postgresReadModelVersion         = 3
 	maxPostgresContextObjectsPerCall = 200
 	maxPostgresContextFieldsPerCall  = 2000
 )
@@ -647,7 +647,9 @@ crm AS (
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name IN ('Expansion_Bookings__c', 'One_Year_Upsell__c') AND TRIM(f.field_value_text) NOT IN ('', '0', '0.0', '0.00') THEN 1 ELSE 0 END), 0) AS has_expansion_signal,
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name = 'StageName' AND LOWER(TRIM(f.field_value_text)) IN ('closed won', 'closed lost') THEN 1 ELSE 0 END), 0) AS has_closed_stage,
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name = 'StageName' AND LOWER(TRIM(f.field_value_text)) IN ('demo & business case', 'business case', 'sow & proposal', 'contract review', 'contract signing', 'crucible/last mile') THEN 1 ELSE 0 END), 0) AS has_late_stage,
-	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'account' AND f.field_name = 'Account_Type__c' AND LOWER(TRIM(f.field_value_text)) LIKE 'customer%' THEN 1 ELSE 0 END), 0) AS has_customer_account
+	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'account' AND f.field_name = 'Account_Type__c' AND LOWER(TRIM(f.field_value_text)) LIKE 'customer%' THEN 1 ELSE 0 END), 0) AS has_customer_account,
+	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) IN ('contact', 'lead') AND f.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(f.field_value_text) <> '' THEN 1 ELSE 0 END), 0) AS has_contact_title,
+	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c') AND TRIM(f.field_value_text) <> '' THEN 1 ELSE 0 END), 0) AS has_loss_reason
 	  FROM calls c
 	  LEFT JOIN selected_account sa ON sa.call_id = c.call_id
 	  LEFT JOIN selected_opportunity so ON so.call_id = c.call_id
@@ -671,6 +673,10 @@ signals AS (
 	       CASE WHEN COALESCE(NULLIF(c.raw_json#>>'{metaData,calendarEventId}', ''), NULLIF(c.raw_json->>'calendarEventId', ''), '') <> '' THEN true ELSE false END AS calendar_event_present,
 	       CASE WHEN COALESCE(NULLIF(c.raw_json#>>'{metaData,calendarEventId}', ''), NULLIF(c.raw_json->>'calendarEventId', ''), '') <> '' THEN 'calendar' ELSE 'no_calendar' END AS calendar_event_status,
 	       COALESCE(NULLIF(c.raw_json#>>'{metaData,sdrDisposition}', ''), NULLIF(c.raw_json->>'sdrDisposition', ''), '') AS sdr_disposition,
+	       (
+	         EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '')
+	         OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '')
+	       ) AS call_party_title_present,
 	       CASE WHEN t.call_id IS NULL THEN false ELSE true END AS transcript_present,
 	       CASE WHEN t.call_id IS NULL THEN 'missing' ELSE 'present' END AS transcript_status,
 	       COALESCE(crm.account_id, '') AS account_id,
@@ -695,7 +701,9 @@ signals AS (
 	       COALESCE(crm.has_expansion_signal, 0) AS has_expansion_signal,
 	       COALESCE(crm.has_closed_stage, 0) AS has_closed_stage,
 	       COALESCE(crm.has_late_stage, 0) AS has_late_stage,
-	       COALESCE(crm.has_customer_account, 0) AS has_customer_account
+	       COALESCE(crm.has_customer_account, 0) AS has_customer_account,
+	       COALESCE(crm.has_contact_title, 0) AS has_contact_title,
+	       COALESCE(crm.has_loss_reason, 0) AS has_loss_reason
 	  FROM calls c
 	  LEFT JOIN transcripts t ON t.call_id = c.call_id
 	  LEFT JOIN crm ON crm.call_id = c.call_id
@@ -708,7 +716,8 @@ INSERT INTO call_facts(
 	lifecycle_reason, lifecycle_evidence_fields, account_id, account_type, account_industry,
 	account_revenue_range, account_primary_procurement_system, opportunity_id, opportunity_stage,
 	opportunity_type, opportunity_amount, opportunity_probability, opportunity_forecast_category,
-	opportunity_primary_lead_source, opportunity_procurement_system, opportunity_count, account_count, updated_at
+	opportunity_primary_lead_source, opportunity_procurement_system, opportunity_count, account_count,
+	participant_title_present, loss_reason_present, updated_at
 )
 SELECT c.call_id,
        c.title,
@@ -784,5 +793,7 @@ SELECT c.call_id,
        c.opportunity_procurement_system,
        c.opportunity_count,
        c.account_count,
+       (c.call_party_title_present OR c.has_contact_title = 1),
+       (c.has_loss_reason = 1),
        $2
   FROM signals c`

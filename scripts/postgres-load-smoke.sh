@@ -35,6 +35,7 @@ export GONGCTL_POSTGRES_PORT="$PORT"
 export GONGCTL_POSTGRES_PASSWORD="${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}"
 export GONGMCP_READER_PASSWORD="${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}"
 export GONGMCP_BUSINESS_PILOT_READER_PASSWORD="${GONGMCP_BUSINESS_PILOT_READER_PASSWORD:-gongmcp_business_pilot_reader_dev_password}"
+export GONGMCP_ANALYST_READER_PASSWORD="${GONGMCP_ANALYST_READER_PASSWORD:-gongmcp_analyst_reader_dev_password}"
 
 urlencode() {
   python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$1"
@@ -43,6 +44,7 @@ urlencode() {
 WRITER_URL="postgres://gongctl:$(urlencode "$GONGCTL_POSTGRES_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
 READER_URL="postgres://gongmcp_reader:$(urlencode "$GONGMCP_READER_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
 BUSINESS_PILOT_READER_URL="postgres://gongmcp_business_pilot_reader:$(urlencode "$GONGMCP_BUSINESS_PILOT_READER_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
+ANALYST_READER_URL="postgres://gongmcp_analyst_reader:$(urlencode "$GONGMCP_ANALYST_READER_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
 
 ARTIFACT_DIR="${GONGCTL_POSTGRES_LOAD_ARTIFACT_DIR:-$(mktemp -d /tmp/gongctl-postgres-load.XXXXXX)}"
 mkdir -p "$ARTIFACT_DIR"
@@ -55,9 +57,13 @@ EXPLAIN_SEARCH_CALLS_OUT="$ARTIFACT_DIR/explain-search-calls.json"
 EXPLAIN_GET_CALL_OUT="$ARTIFACT_DIR/explain-get-call.json"
 EXPLAIN_TRANSCRIPT_OUT="$ARTIFACT_DIR/explain-transcript-search.json"
 EXPLAIN_BUSINESS_OUT="$ARTIFACT_DIR/explain-business-pilot.json"
+EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT="$ARTIFACT_DIR/explain-analyst-dimension-persona.json"
+EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT="$ARTIFACT_DIR/explain-analyst-dimension-loss-reason.json"
 PROFILE_COUNTS_OUT="$ARTIFACT_DIR/profile-cache-counts.txt"
 PROFILE_BACKLOG_ROWS_OUT="$ARTIFACT_DIR/profile-backlog-sanitized-rows.txt"
 PROFILE_MCP_OUT="$ARTIFACT_DIR/business-pilot-profile-load.jsonl"
+ANALYST_DIMENSIONS_OUT="$ARTIFACT_DIR/analyst-dimensions.jsonl"
+ANALYST_READER_APPLY_OUT="$ARTIFACT_DIR/analyst-reader-apply.json"
 EXPLAIN_PROFILE_SUMMARY_OUT="$ARTIFACT_DIR/explain-profile-lifecycle-summary.json"
 EXPLAIN_PROFILE_BACKLOG_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog.json"
 EXPLAIN_PROFILE_BACKLOG_DATED_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog-dated.json"
@@ -94,7 +100,7 @@ assert_no_public_secret_values() {
   local label="$1"
   shift
   local secret_value
-  for secret_value in "$GONGCTL_POSTGRES_PASSWORD" "$GONGMCP_READER_PASSWORD" "$GONGMCP_BUSINESS_PILOT_READER_PASSWORD"; do
+  for secret_value in "$GONGCTL_POSTGRES_PASSWORD" "$GONGMCP_READER_PASSWORD" "$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" "$GONGMCP_ANALYST_READER_PASSWORD"; do
     if [ -n "$secret_value" ] && grep -Fq -- "$secret_value" "$@"; then
       echo "$label exposed a configured connection secret" >&2
       exit 1
@@ -252,7 +258,8 @@ SELECT call_id,
 		       'system', CASE WHEN n % 2 = 0 THEN 'Zoom' ELSE 'Gong Connect' END,
 		       'direction', CASE WHEN n % 4 = 0 THEN 'Outbound' ELSE 'Conference' END,
 		       'purpose', 'Synthetic load performance validation',
-		       'calendarEventId', 'synthetic-cal-' || n
+		       'calendarEventId', 'synthetic-cal-' || n,
+		       'parties', CASE WHEN n % 2 = 0 THEN jsonb_build_array(jsonb_build_object('id', 'synthetic-load-contact-' || n, 'title', 'Synthetic load buyer title')) ELSE '[]'::jsonb END
 	       ),
 	       'context', jsonb_build_object(
 		       'crmObjects', jsonb_build_array(
@@ -264,7 +271,8 @@ SELECT call_id,
 					       'StageName', opportunity_stage,
 					       'Type', opportunity_type,
 					       'Forecast_Category_VP__c', 'Pipeline',
-					       'Primary_Lead_Source__c', 'Synthetic Load'
+					       'Primary_Lead_Source__c', 'Synthetic Load',
+					       'LossReason', CASE WHEN n % 3 = 0 THEN 'Synthetic load loss reason' ELSE '' END
 				       )
 			       ),
 			       jsonb_build_object(
@@ -350,19 +358,23 @@ UNION ALL SELECT 'lifecycle_upsell_expansion', COUNT(*) FROM call_facts WHERE li
 UNION ALL SELECT 'lifecycle_closed_won_lost_review', COUNT(*) FROM call_facts WHERE lifecycle_bucket = 'closed_won_lost_review'
 UNION ALL SELECT 'lifecycle_active_sales_pipeline', COUNT(*) FROM call_facts WHERE lifecycle_bucket = 'active_sales_pipeline'
 UNION ALL SELECT 'lifecycle_unknown', COUNT(*) FROM call_facts WHERE lifecycle_bucket = 'unknown'
+UNION ALL SELECT 'participant_title_present', COUNT(*) FROM call_facts WHERE participant_title_present
+UNION ALL SELECT 'loss_reason_present', COUNT(*) FROM call_facts WHERE loss_reason_present
 UNION ALL SELECT 'read_model_missing', missing_fact_call_count FROM postgres_read_model_state WHERE model_name = 'builtin_call_facts'
 UNION ALL SELECT 'read_model_orphan', orphan_fact_count FROM postgres_read_model_state WHERE model_name = 'builtin_call_facts'
 ORDER BY 1" >"$COUNTS_OUT"
 grep -q "calls|$CALL_COUNT" "$COUNTS_OUT"
 grep -q "call_facts|$CALL_COUNT" "$COUNTS_OUT"
 grep -q "call_context_objects|$((CALL_COUNT * 2))" "$COUNTS_OUT"
-grep -q "call_context_fields|$((CALL_COUNT * 6))" "$COUNTS_OUT"
+grep -q "call_context_fields|$((CALL_COUNT * 7))" "$COUNTS_OUT"
 grep -q "transcript_segments|$((CALL_COUNT * 2))" "$COUNTS_OUT"
 grep -Eq "lifecycle_partner\\|[1-9][0-9]*" "$COUNTS_OUT"
 grep -Eq "lifecycle_upsell_expansion\\|[1-9][0-9]*" "$COUNTS_OUT"
 grep -Eq "lifecycle_closed_won_lost_review\\|[1-9][0-9]*" "$COUNTS_OUT"
 grep -Eq "lifecycle_active_sales_pipeline\\|[1-9][0-9]*" "$COUNTS_OUT"
 grep -q "lifecycle_unknown|0" "$COUNTS_OUT"
+grep -Eq "participant_title_present\\|[1-9][0-9]*" "$COUNTS_OUT"
+grep -Eq "loss_reason_present\\|[1-9][0-9]*" "$COUNTS_OUT"
 grep -q "read_model_missing|0" "$COUNTS_OUT"
 grep -q "read_model_orphan|0" "$COUNTS_OUT"
 
@@ -556,6 +568,20 @@ SELECT transcript_status,
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
 EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
 SELECT *
+  FROM gongmcp_business_analysis_dimension(
+       'persona', 'shared Postgres', '', '', '2026-02-01', '2026-02-28',
+       '', '', '', '', '', '', '', '', '', '', '', 25)" >"$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT *
+  FROM gongmcp_business_analysis_dimension(
+       'loss_reason', 'shared Postgres', '', '', '2026-02-01', '2026-02-28',
+       '', '', '', '', '', '', '', '', '', '', '', 25)" >"$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT *
   FROM gongmcp_profile_lifecycle_summary_sanitized(9001, 'synthetic-load-profile-sha', '')" >"$EXPLAIN_PROFILE_SUMMARY_OUT"
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
@@ -592,7 +618,9 @@ python3 - \
   "$EXPLAIN_PROFILE_SUMMARY_OUT" \
   "$EXPLAIN_PROFILE_BACKLOG_OUT" \
   "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" \
-  "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT" <<'PY'
+  "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT" \
+  "$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT" \
+  "$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -620,6 +648,8 @@ expected = {
             "idx_pg_profile_call_fact_cache_bucket",
         },
     },
+    Path(sys.argv[9]): {"min_rows": 1},
+    Path(sys.argv[10]): {"min_rows": 1},
 }
 
 def walk(node):
@@ -658,8 +688,12 @@ PY
 # do not force a specific internal helper plan shape at this bounded synthetic
 # size. PostgreSQL can correctly choose sequential scans for small tables and
 # SECURITY DEFINER SQL functions report as Function Scan at the call boundary.
-if grep -Eq 'profile-load-call-|Synthetic profile load call' "$PROFILE_COUNTS_OUT" "$PROFILE_BACKLOG_ROWS_OUT" "$EXPLAIN_PROFILE_SUMMARY_OUT" "$EXPLAIN_PROFILE_BACKLOG_OUT" "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"; then
+if grep -Eq 'profile-load-call-|Synthetic profile load call' "$PROFILE_COUNTS_OUT" "$PROFILE_BACKLOG_ROWS_OUT" "$EXPLAIN_PROFILE_SUMMARY_OUT" "$EXPLAIN_PROFILE_BACKLOG_OUT" "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT" "$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT" "$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT"; then
   echo "profile helper load evidence unexpectedly exposed synthetic call identifiers or titles" >&2
+  exit 1
+fi
+if grep -Eq 'Synthetic load buyer title|Synthetic load loss reason|synthetic-load-contact-|synthetic-load-opp-|load-call-|Synthetic load call|raw_json|raw_sha256|field_value_text|postgres://' "$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT" "$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT"; then
+  echo "analyst dimension EXPLAIN evidence unexpectedly exposed identifiers, raw storage markers, or connection URLs" >&2
   exit 1
 fi
 
@@ -703,6 +737,45 @@ SELECT pg_terminate_backend(pid)
    AND pid <> pg_backend_pid();
 DROP OWNED BY gongmcp_business_pilot_reader;
 DROP ROLE gongmcp_business_pilot_reader;
+SQL
+
+analyst_reader_password_sql="$(printf '%s' "$GONGMCP_ANALYST_READER_PASSWORD" | sql_quote_literal)"
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/dev/null <<SQL
+SELECT pg_terminate_backend(pid)
+  FROM pg_stat_activity
+ WHERE usename = 'gongmcp_analyst_reader'
+   AND pid <> pg_backend_pid();
+DROP ROLE IF EXISTS gongmcp_analyst_reader;
+CREATE ROLE gongmcp_analyst_reader LOGIN NOINHERIT PASSWORD ${analyst_reader_password_sql};
+SQL
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-apply --preset analyst --role gongmcp_analyst_reader --database gongctl --apply >"$ANALYST_READER_APPLY_OUT"
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"summarize_themes_by_persona","arguments":{"filter":{"query":"shared Postgres","from_date":"2026-02-01","to_date":"2026-02-28","limit":25},"theme_query":"shared Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rank_personas_by_insight_quality","arguments":{"filter":{"query":"shared Postgres","from_date":"2026-02-01","to_date":"2026-02-28","limit":25},"theme_query":"shared Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"summarize_loss_reasons_by_theme","arguments":{"filter":{"query":"shared Postgres","from_date":"2026-02-01","to_date":"2026-02-28","limit":25},"theme_query":"shared Postgres"}}}'
+} | GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=analyst GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp >"$ANALYST_DIMENSIONS_OUT"
+assert_mcp_success "$ANALYST_DIMENSIONS_OUT" 3 4 5
+grep -q '"summarize_themes_by_persona"' "$ANALYST_DIMENSIONS_OUT"
+grep -q '"rank_personas_by_insight_quality"' "$ANALYST_DIMENSIONS_OUT"
+grep -q '"summarize_loss_reasons_by_theme"' "$ANALYST_DIMENSIONS_OUT"
+grep -q 'participant_title_present' "$ANALYST_DIMENSIONS_OUT"
+grep -q 'loss_reason_present' "$ANALYST_DIMENSIONS_OUT"
+if grep -Eq 'Synthetic load buyer title|Synthetic load loss reason|synthetic-load-contact-|synthetic-load-opp-|load-call-|Synthetic load call|raw_json|raw_sha256|field_value_text|postgres://|gongctl_dev_password|gongmcp_reader_dev_password|gongmcp_business_pilot_reader_dev_password|gongmcp_analyst_reader_dev_password' "$ANALYST_DIMENSIONS_OUT" "$ANALYST_READER_APPLY_OUT"; then
+  echo "analyst scoped load evidence exposed identifiers, raw storage, or connection secrets" >&2
+  exit 1
+fi
+assert_no_public_secret_values "analyst dimension load MCP evidence" "$ANALYST_DIMENSIONS_OUT" "$ANALYST_READER_APPLY_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SELECT pg_terminate_backend(pid)
+  FROM pg_stat_activity
+ WHERE usename = 'gongmcp_analyst_reader'
+   AND pid <> pg_backend_pid();
+DROP OWNED BY gongmcp_analyst_reader;
+DROP ROLE gongmcp_analyst_reader;
 SQL
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >"$READER_NO_ROLE_VIEW_OUT" <<'SQL'
@@ -857,7 +930,10 @@ cat >"$SUMMARY_OUT" <<JSON
   "synthetic_transcript_segments": $((CALL_COUNT * 2)),
   "bulk_insert_command_seconds": $load_insert_seconds,
   "read_model_rebuild_command_seconds": $rebuild_command_seconds,
-  "decision": "Bounded serial rebuild, read-path smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts prove analyzed sanitized helper-call execution at the function boundary; a separate equivalent profile-cache predicate probe shows expected selective index use where stable at this scale. This is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
+  "analyst_persona_dimension_explain": "$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT",
+  "analyst_loss_reason_dimension_explain": "$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT",
+  "analyst_dimension_mcp": "$ANALYST_DIMENSIONS_OUT",
+  "decision": "Bounded serial rebuild, read-path smoke, analyst dimension MCP smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts prove analyzed sanitized helper-call execution at the function boundary, including persona and loss-reason dimension calls backed by materialized presence flags; a separate equivalent profile-cache predicate probe shows expected selective index use where stable at this scale. This is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
 }
 JSON
 
@@ -871,6 +947,8 @@ assert_no_public_secret_values "postgres load smoke artifacts" \
   "$EXPLAIN_GET_CALL_OUT" \
   "$EXPLAIN_TRANSCRIPT_OUT" \
   "$EXPLAIN_BUSINESS_OUT" \
+  "$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT" \
+  "$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT" \
   "$PROFILE_COUNTS_OUT" \
   "$PROFILE_BACKLOG_ROWS_OUT" \
   "$PROFILE_MCP_OUT" \
@@ -881,6 +959,8 @@ assert_no_public_secret_values "postgres load smoke artifacts" \
   "$MCP_OUT" \
   "$OPERATOR_SMOKE_OUT" \
   "$BUSINESS_PILOT_OUT" \
+  "$ANALYST_DIMENSIONS_OUT" \
+  "$ANALYST_READER_APPLY_OUT" \
   "$STALE_MCP_OUT" \
   "$READER_REGRANT_OUT" \
   "$READER_NO_ROLE_VIEW_OUT"
@@ -894,6 +974,8 @@ echo "search_calls explain output: $EXPLAIN_SEARCH_CALLS_OUT"
 echo "get_call explain output: $EXPLAIN_GET_CALL_OUT"
 echo "transcript search explain output: $EXPLAIN_TRANSCRIPT_OUT"
 echo "business-pilot explain output: $EXPLAIN_BUSINESS_OUT"
+echo "analyst persona dimension explain output: $EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT"
+echo "analyst loss-reason dimension explain output: $EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT"
 echo "profile cache counts output: $PROFILE_COUNTS_OUT"
 echo "profile backlog rows output: $PROFILE_BACKLOG_ROWS_OUT"
 echo "business-pilot profile load MCP output: $PROFILE_MCP_OUT"
@@ -904,6 +986,8 @@ echo "profile transcript backlog index probe explain output: $EXPLAIN_PROFILE_BA
 echo "mcp output: $MCP_OUT"
 echo "operator-smoke output: $OPERATOR_SMOKE_OUT"
 echo "business-pilot output: $BUSINESS_PILOT_OUT"
+echo "analyst dimension MCP output: $ANALYST_DIMENSIONS_OUT"
+echo "analyst reader apply output: $ANALYST_READER_APPLY_OUT"
 echo "reader denial output: $READER_WRITE_OUT"
 echo "reader raw-read denial output: $READER_RAW_READ_OUT"
 echo "reader sensitive-read denial output: $READER_SENSITIVE_READ_OUT"

@@ -105,6 +105,42 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_crm_object_type_summary() FROM PUBLIC;
 `
 
+const postgresCRMFieldSummaryFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_crm_field_summary_sanitized(object_type_arg text, row_limit integer)
+RETURNS TABLE(
+	object_type text,
+	field_name text,
+	field_label text,
+	row_count bigint,
+	call_count bigint,
+	populated_count bigint,
+	distinct_value_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT o.object_type,
+       f.field_name,
+       MAX(f.field_label) AS field_label,
+       COUNT(*)::bigint AS row_count,
+       COUNT(DISTINCT f.call_id)::bigint AS call_count,
+       COUNT(CASE WHEN f.field_populated THEN 1 END)::bigint AS populated_count,
+       0::bigint AS distinct_value_count
+  FROM gongmcp_call_context_fields f
+  JOIN gongmcp_call_context_objects o
+    ON o.call_id = f.call_id
+   AND o.object_key = f.object_key
+ WHERE o.object_type = object_type_arg
+ GROUP BY o.object_type, f.field_name
+ ORDER BY COUNT(*) DESC, f.field_name
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 200)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_crm_field_summary_sanitized(text, integer) FROM PUBLIC;
+`
+
 const postgresTranscriptCRMContextSearchFunctionSQL = `
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_by_crm_context(search_text text, object_type_arg text, object_id_arg text, row_limit integer)
 RETURNS TABLE(
@@ -1071,7 +1107,11 @@ SELECT object_type,
 	 LIMIT $2
   ) fields`
 	if s.readOnly {
-		query = `
+		if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+			query = `SELECT object_type, field_name, field_label, row_count, call_count, populated_count, distinct_value_count
+  FROM gongmcp_crm_field_summary_sanitized($1, $2)`
+		} else {
+			query = `
 SELECT object_type,
        field_name,
        field_label,
@@ -1096,6 +1136,7 @@ SELECT object_type,
 	 ORDER BY COUNT(*) DESC, f.field_name
 	 LIMIT $2
   ) fields`
+		}
 	}
 	rows, err := s.db.QueryContext(ctx, query, objectType, limit)
 	if err != nil {

@@ -43,7 +43,10 @@ const (
 	postgresWriterLockKey          = "gongctl_postgres_writer_v1"
 )
 
-const postgresReadModelBackfillMigrationVersion = 2
+const (
+	postgresReadModelBackfillMigrationVersion = 2
+	postgresReadModelPresenceMigrationVersion = 24
+)
 
 type Store struct {
 	db              *sql.DB
@@ -416,7 +419,8 @@ func (s *Store) ensureConcurrentOperationalIndexes(ctx context.Context) error {
 }
 
 func shouldBackfillReadModelAfterMigrations(startingVersion int) bool {
-	return startingVersion < postgresReadModelBackfillMigrationVersion
+	return startingVersion < postgresReadModelBackfillMigrationVersion ||
+		startingVersion < postgresReadModelPresenceMigrationVersion
 }
 
 func rate(part int64, total int64) float64 {
@@ -484,6 +488,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP VIEW IF EXISTS gongmcp_transcript_segments;
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_object_type_summary();
+	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary_sanitized(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
 	DROP FUNCTION IF EXISTS gongmcp_unmapped_crm_field_inventory(integer);
@@ -497,6 +502,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
+	`+postgresCRMFieldSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
 	`+postgresLateStageSignalFunctionsSQL+`
@@ -506,6 +512,32 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresLifecycleCRMFieldComparisonFunctionSQL+`
 	`+postgresTranscriptCRMContextSearchFunctionSQL+`
 	`+postgresMissingTranscriptsFunctionSQL+`
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments(search_text text, row_limit integer)
+RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH q AS (
+	SELECT websearch_to_tsquery('simple', search_text) AS query
+),
+bounded AS (
+	SELECT LEAST(GREATEST(COALESCE(row_limit, 20), 1), 1000) AS limit_value
+)
+SELECT ts.call_id,
+       ts.speaker_id,
+       ts.segment_index,
+       ts.start_ms,
+       ts.end_ms,
+       ''::text AS text,
+       ts_headline('simple', ts.text, q.query, 'StartSel=[, StopSel=], MaxWords=12, MinWords=4, ShortWord=2') AS snippet
+  FROM transcript_segments ts, q, bounded
+ WHERE ts.search_vector @@ q.query
+ ORDER BY ts_rank_cd(ts.search_vector, q.query) DESC, ts.call_id, ts.segment_index
+ LIMIT (SELECT limit_value FROM bounded)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments(text, integer) FROM PUBLIC;
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -2186,8 +2218,12 @@ func (s *Store) SearchTranscriptSegments(ctx context.Context, query string, limi
 		return nil, errors.New("search query is required")
 	}
 	limit = boundedLimit(limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
+	functionName := "gongmcp_search_transcript_segments"
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		functionName = "gongmcp_search_transcript_segments_sanitized"
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id, speaker_id, segment_index, start_ms, end_ms, text, snippet
-  FROM gongmcp_search_transcript_segments($1, $2)`, query, limit)
+  FROM `+functionName+`($1, $2)`, query, limit)
 	if err != nil {
 		return nil, err
 	}

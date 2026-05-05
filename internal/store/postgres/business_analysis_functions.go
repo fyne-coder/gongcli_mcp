@@ -217,10 +217,7 @@ WITH filtered AS (
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
-	   AND (participant_title_query_arg = '' OR
-		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
-		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
-		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
+	   AND (participant_title_query_arg = '' OR cf.participant_title_present)
 )
 SELECT call_id,
        title,
@@ -283,10 +280,7 @@ WITH rows AS (
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
-	   AND (participant_title_query_arg = '' OR
-		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
-		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
-		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
+	   AND (participant_title_query_arg = '' OR cf.participant_title_present)
 )
 SELECT COUNT(*) AS call_count,
        COALESCE(SUM(CASE WHEN transcript_status = 'present' THEN 1 ELSE 0 END), 0) AS transcript_count,
@@ -407,9 +401,9 @@ WITH rows AS (
 		       WHEN 'lifecycle_bucket' THEN cf.lifecycle_bucket
 		       WHEN 'industry' THEN cf.account_industry
 		       WHEN 'account_industry' THEN cf.account_industry
-		       WHEN 'persona' THEN CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(pf.field_value_text) <> '') THEN 'participant_title_present' ELSE '' END
-		       WHEN 'participant_title' THEN CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(pf.field_value_text) <> '') THEN 'participant_title_present' ELSE '' END
-		       WHEN 'title' THEN CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(pf.field_value_text) <> '') THEN 'participant_title_present' ELSE '' END
+		       WHEN 'persona' THEN CASE WHEN cf.participant_title_present THEN 'participant_title_present' ELSE '' END
+		       WHEN 'participant_title' THEN CASE WHEN cf.participant_title_present THEN 'participant_title_present' ELSE '' END
+		       WHEN 'title' THEN CASE WHEN cf.participant_title_present THEN 'participant_title_present' ELSE '' END
 		       WHEN 'opportunity_stage' THEN cf.opportunity_stage
 		       WHEN 'stage' THEN cf.opportunity_stage
 		       WHEN 'opportunity_type' THEN cf.opportunity_type
@@ -429,7 +423,7 @@ WITH rows AS (
 		       END
 		       WHEN 'won_lost' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
 		       WHEN 'outcome' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
-		       WHEN 'loss_reason' THEN CASE WHEN EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type = 'Opportunity' AND pf.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c') AND TRIM(pf.field_value_text) <> '') THEN 'loss_reason_present' ELSE '' END
+		       WHEN 'loss_reason' THEN CASE WHEN cf.loss_reason_present THEN 'loss_reason_present' ELSE '' END
 		       ELSE ''
 	       END AS dimension_value
 	  FROM call_facts cf
@@ -570,6 +564,48 @@ SELECT md5(raw.call_id) AS call_id,
   FROM gongmcp_business_analysis_evidence(search_text, title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
 $function$;
 
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_sanitized(search_text text, row_limit integer)
+RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT md5(raw.call_id) AS call_id,
+       CASE WHEN raw.speaker_id = '' THEN '' ELSE md5(raw.speaker_id) END AS speaker_id,
+       raw.segment_index,
+       raw.start_ms,
+       raw.end_ms,
+       raw.text,
+       raw.snippet
+  FROM gongmcp_search_transcript_segments(search_text, row_limit) raw
+$function$;
+
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_by_call_facts_sanitized(search_text text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, row_limit integer)
+RETURNS TABLE(call_id text, started_at text, call_date text, call_month text, duration_seconds bigint, lifecycle_bucket text, scope text, system text, direction text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT md5(raw.call_id) AS call_id,
+       raw.started_at,
+       raw.call_date,
+       raw.call_month,
+       raw.duration_seconds,
+       raw.lifecycle_bucket,
+       raw.scope,
+       raw.system,
+       raw.direction,
+       CASE WHEN raw.speaker_id = '' THEN '' ELSE md5(raw.speaker_id) END AS speaker_id,
+       raw.segment_index,
+       raw.start_ms,
+       raw.end_ms,
+       raw.snippet,
+       raw.context_excerpt
+  FROM gongmcp_search_transcript_segments_by_call_facts(search_text, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, row_limit) raw
+$function$;
+
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
@@ -579,6 +615,8 @@ REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, tex
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_sanitized(text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer) FROM PUBLIC;
 `
 
 const postgresBusinessAnalysisReaderGrantStatementsSQL = `

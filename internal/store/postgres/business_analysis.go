@@ -40,7 +40,7 @@ func (s *Store) SearchTranscriptSegmentsByCallFacts(ctx context.Context, params 
 	}
 	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id, started_at, call_date, call_month, duration_seconds, lifecycle_bucket, scope, system, direction, speaker_id, segment_index, start_ms, end_ms, snippet, context_excerpt
-  FROM gongmcp_search_transcript_segments_by_call_facts($1, $2, $3, $4, $5, $6, $7, $8)`,
+  FROM `+s.postgresTranscriptSegmentsByCallFactsFunction()+`($1, $2, $3, $4, $5, $6, $7, $8)`,
 		queryText,
 		fromDate,
 		toDate,
@@ -297,6 +297,13 @@ func (s *Store) postgresTranscriptQuoteAttributionFunction() string {
 		return "gongmcp_search_transcript_quotes_with_attribution_sanitized"
 	}
 	return "gongmcp_search_transcript_quotes_with_attribution"
+}
+
+func (s *Store) postgresTranscriptSegmentsByCallFactsFunction() string {
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		return "gongmcp_search_transcript_segments_by_call_facts_sanitized"
+	}
+	return "gongmcp_search_transcript_segments_by_call_facts"
 }
 
 func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqlite.BusinessAnalysisFilter) (sqlite.BusinessAnalysisCohortSummary, error) {

@@ -1448,6 +1448,9 @@ for required_grant in \
   'GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls_sanitized' \
   'GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence_sanitized' \
   'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution_sanitized' \
+  'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_sanitized' \
+  'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts_sanitized' \
+  'GRANT EXECUTE ON FUNCTION public.gongmcp_crm_field_summary_sanitized' \
   'GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_dimension'
 do
   if ! grep -q "$required_grant" "$analyst_generated_sql"; then
@@ -1458,7 +1461,9 @@ done
 for forbidden_grant in \
   'GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text' \
   'GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text' \
-  'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text'
+  'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text' \
+  'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments(text' \
+  'GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts(text'
 do
   if grep -q "$forbidden_grant" "$analyst_generated_sql"; then
     echo "generated analyst reader grant SQL unexpectedly grants raw identifier-bearing helper $forbidden_grant: $analyst_generated_sql" >&2
@@ -1494,9 +1499,19 @@ if analyst_reader_psql -c "SELECT * FROM gongmcp_business_analysis_calls('', 'sh
   exit 1
 fi
 grep -q 'permission denied' /tmp/gongctl-postgres-analyst-reader-raw-business-calls-denied.txt
+if analyst_reader_psql -c "SELECT * FROM gongmcp_search_transcript_segments('shared Postgres', 1)" >/tmp/gongctl-postgres-analyst-reader-raw-transcript-search-denied.txt 2>&1; then
+  echo "analyst scoped reader unexpectedly executed raw transcript search helper" >&2
+  exit 1
+fi
+grep -q 'permission denied' /tmp/gongctl-postgres-analyst-reader-raw-transcript-search-denied.txt
 analyst_reader_psql -tA -c "SELECT row_to_json(r)::text FROM gongmcp_business_analysis_calls_sanitized('', 'shared Postgres', '', '', '', '', '', '', '', '', '', '', '', '', '', 1) r" >/tmp/gongctl-postgres-analyst-reader-business-calls-sanitized.json
 if grep -q 'synthetic-call-001\|CustomerA\|Shared Postgres pilot kickoff' /tmp/gongctl-postgres-analyst-reader-business-calls-sanitized.json; then
   echo "analyst scoped reader sanitized business-analysis helper exposed raw call identifier or title" >&2
+  exit 1
+fi
+analyst_reader_psql -tA -c "SELECT row_to_json(r)::text FROM gongmcp_search_transcript_segments_sanitized('shared Postgres', 1) r" >/tmp/gongctl-postgres-analyst-reader-transcript-search-sanitized.json
+if grep -q 'synthetic-call-001\|speaker-1' /tmp/gongctl-postgres-analyst-reader-transcript-search-sanitized.json; then
+  echo "analyst scoped reader sanitized transcript search helper exposed raw call or speaker identifier" >&2
   exit 1
 fi
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/tmp/gongctl-postgres-analyst-loss-reason-fixture.txt <<'SQL'
@@ -1534,6 +1549,7 @@ SQL
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_crm_fields","arguments":{"object_type":"Opportunity","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcripts_by_crm_context","arguments":{"query":"shared Postgres","object_type":"Opportunity","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"build_call_cohort","arguments":{"filter":{"query":"shared Postgres"},"limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"compare_theme_outcomes","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
@@ -1544,6 +1560,7 @@ SQL
   printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"generate_sales_hooks_from_themes","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
 } | GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=analyst GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst.jsonl
 grep -q '"get_sync_status"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"list_crm_fields"' /tmp/gongctl-postgres-analyst.jsonl
 grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-analyst.jsonl
 grep -q '"search_transcripts_by_crm_context"' /tmp/gongctl-postgres-analyst.jsonl
 grep -q '"build_call_cohort"' /tmp/gongctl-postgres-analyst.jsonl
@@ -1559,10 +1576,8 @@ grep -q '"compare_lifecycle_crm_fields"' /tmp/gongctl-postgres-analyst.jsonl
 grep -q 'lifecycle_source' /tmp/gongctl-postgres-analyst.jsonl
 grep -q 'cohort_id' /tmp/gongctl-postgres-analyst.jsonl
 grep -q 'shared.*Postgres' /tmp/gongctl-postgres-analyst.jsonl
-grep -q 'participant_title_present' /tmp/gongctl-postgres-analyst.jsonl
-grep -q 'loss_reason_present' /tmp/gongctl-postgres-analyst.jsonl
-assert_mcp_success /tmp/gongctl-postgres-analyst.jsonl 3 5 6 7 8 9 10 11 12
-if grep -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|raw_json\|raw_sha256\|field_value_text\|VP Operations\|LossReason raw sentinel\|Loss_Reason__c\|synthetic-call-001\|speaker-1\|contact-analyst-private\|Analyst Private Contact\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|opp-crm-context-private\|CRM Context Private Opportunity\|This synthetic segment validates' /tmp/gongctl-postgres-analyst.jsonl; then
+assert_mcp_success /tmp/gongctl-postgres-analyst.jsonl 3 4 5 6 7 8 9 10 11 12
+if grep -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|raw_json\|raw_sha256\|field_value_text\|VP Operations\|LossReason raw sentinel\|synthetic-call-001\|speaker-1\|contact-analyst-private\|Analyst Private Contact\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|opp-crm-context-private\|CRM Context Private Opportunity\|This synthetic segment validates' /tmp/gongctl-postgres-analyst.jsonl; then
   echo "postgres analyst preset output exposed connection, raw storage, identifier, or synthetic transcript markers" >&2
   exit 1
 fi
@@ -1851,7 +1866,9 @@ echo "analyst scoped reader grant SQL: /tmp/gongctl-postgres-analyst-reader-gran
 echo "analyst scoped reader apply JSON: /tmp/gongctl-postgres-analyst-reader-apply.json"
 echo "analyst scoped reader direct calls.call_id denial output: /tmp/gongctl-postgres-analyst-reader-calls-call-id-denied.txt"
 echo "analyst scoped reader raw business-analysis helper denial output: /tmp/gongctl-postgres-analyst-reader-raw-business-calls-denied.txt"
+echo "analyst scoped reader raw transcript search helper denial output: /tmp/gongctl-postgres-analyst-reader-raw-transcript-search-denied.txt"
 echo "analyst scoped reader sanitized business-analysis helper output: /tmp/gongctl-postgres-analyst-reader-business-calls-sanitized.json"
+echo "analyst scoped reader sanitized transcript search helper output: /tmp/gongctl-postgres-analyst-reader-transcript-search-sanitized.json"
 echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "compatibility reader business-pilot MCP output: /tmp/gongctl-postgres-business-pilot.jsonl"

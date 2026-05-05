@@ -165,6 +165,8 @@ CREATE TABLE IF NOT EXISTS call_facts (
 	opportunity_procurement_system TEXT NOT NULL DEFAULT '',
 	opportunity_count BIGINT NOT NULL DEFAULT 0,
 	account_count BIGINT NOT NULL DEFAULT 0,
+	participant_title_present BOOLEAN NOT NULL DEFAULT false,
+	loss_reason_present BOOLEAN NOT NULL DEFAULT false,
 	updated_at TEXT NOT NULL
 );
 
@@ -179,6 +181,8 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_facts_opportunity_stage ON call_facts(opp
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_opportunity_type ON call_facts(opportunity_type);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_account_type ON call_facts(account_type);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_account_industry ON call_facts(account_industry);
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_participant_title_present ON call_facts(participant_title_present, call_date, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_loss_reason_present ON call_facts(loss_reason_present, call_date, started_at DESC);
 `,
 	`
 CREATE TABLE IF NOT EXISTS postgres_read_model_state (
@@ -1245,12 +1249,15 @@ $$;
 DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
 DROP FUNCTION IF EXISTS gongmcp_crm_object_type_summary();
+DROP FUNCTION IF EXISTS gongmcp_crm_field_summary_sanitized(text, integer);
 ` + postgresCRMObjectTypeSummaryFunctionSQL + `
+` + postgresCRMFieldSummaryFunctionSQL + `
 ` + postgresCRMFieldValueSearchFunctionSQL + `
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_field_summary_sanitized(text, integer) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO gongmcp_reader';
 	END IF;
 END;
@@ -1654,5 +1661,42 @@ SELECT call_id, title, started_at, duration_seconds, system, direction, scope,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+`,
+	`
+ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS participant_title_present BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS loss_reason_present BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_participant_title_present ON call_facts(participant_title_present, call_date, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_loss_reason_present ON call_facts(loss_reason_present, call_date, started_at DESC);
+
+UPDATE call_facts cf
+   SET participant_title_present = (
+	       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '')
+	    OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '')
+	    OR EXISTS (
+	        SELECT 1
+	          FROM call_context_objects po
+	          JOIN call_context_fields pf
+	            ON pf.call_id = po.call_id
+	           AND pf.object_key = po.object_key
+	         WHERE po.call_id = cf.call_id
+	           AND po.object_type IN ('Contact', 'Lead')
+	           AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')
+	           AND TRIM(pf.field_value_text) <> ''
+	    )
+       ),
+       loss_reason_present = EXISTS (
+	        SELECT 1
+	          FROM call_context_objects po
+	          JOIN call_context_fields pf
+	            ON pf.call_id = po.call_id
+	           AND pf.object_key = po.object_key
+	         WHERE po.call_id = cf.call_id
+	           AND po.object_type = 'Opportunity'
+	           AND pf.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c')
+	           AND TRIM(pf.field_value_text) <> ''
+       )
+  FROM calls c
+ WHERE c.call_id = cf.call_id;
+` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
 }

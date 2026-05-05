@@ -1209,7 +1209,17 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_active_business_profile_sanitized", "gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_sanitized_limited", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_cache_meta_sanitized", "gongmcp_profile_call_fact_summary", "gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_lifecycle_summary_sanitized", "gongmcp_profile_transcript_backlog_sanitized", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_search_transcript_quotes_with_attribution_sanitized", "gongmcp_business_analysis_calls_sanitized", "gongmcp_business_analysis_evidence_sanitized", "gongmcp_cache_purge_plan"} {
+	for _, column := range []string{"participant_title_present", "loss_reason_present"} {
+		var dataType string
+		var nullable string
+		if err := store.DB().QueryRowContext(ctx, `SELECT data_type, is_nullable FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'call_facts' AND column_name = $1`, column).Scan(&dataType, &nullable); err != nil {
+			t.Fatalf("check call_facts.%s: %v", column, err)
+		}
+		if dataType != "boolean" || nullable != "NO" {
+			t.Fatalf("call_facts.%s type/nullability=%s/%s, want boolean/NO", column, dataType, nullable)
+		}
+	}
+	for _, function := range []string{"gongmcp_active_business_profile_sanitized", "gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_sanitized_limited", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_cache_meta_sanitized", "gongmcp_profile_call_fact_summary", "gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_lifecycle_summary_sanitized", "gongmcp_profile_transcript_backlog_sanitized", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_summary_sanitized", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_search_transcript_segments_sanitized", "gongmcp_search_transcript_segments_by_call_facts_sanitized", "gongmcp_search_transcript_quotes_with_attribution_sanitized", "gongmcp_business_analysis_calls_sanitized", "gongmcp_business_analysis_evidence_sanitized", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -1466,12 +1476,38 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if len(pgPersonaDimension) != 1 || pgPersonaDimension[0].Value != "participant_title_present" || pgPersonaDimension[0].CallCount != 1 {
 		t.Fatalf("unexpected postgres persona dimension summary: %+v", pgPersonaDimension)
 	}
+	if strings.Contains(pgPersonaDimension[0].Value, "VP Operations") {
+		t.Fatalf("postgres persona dimension exposed raw title value: %+v", pgPersonaDimension)
+	}
 	pgLossReasonDimension, err := pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "loss_reason", Limit: 10})
 	if err != nil {
 		t.Fatalf("postgres loss_reason SummarizeBusinessAnalysisDimension: %v", err)
 	}
 	if len(pgLossReasonDimension) != 1 || pgLossReasonDimension[0].Value != "loss_reason_present" || pgLossReasonDimension[0].CallCount != 1 {
 		t.Fatalf("unexpected postgres loss_reason dimension summary: %+v", pgLossReasonDimension)
+	}
+	if strings.Contains(pgLossReasonDimension[0].Value, "Timeline uncertainty") {
+		t.Fatalf("postgres loss_reason dimension exposed raw loss reason value: %+v", pgLossReasonDimension)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `UPDATE calls SET raw_json = jsonb_set(raw_json, '{metaData,parties}', '[]'::jsonb, true) WHERE call_id = 'pg-ba-001'`); err != nil {
+		t.Fatalf("blank raw party titles: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `UPDATE call_context_fields SET field_value_text = '' WHERE call_id = 'pg-ba-001' AND field_name IN ('LossReason', 'Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')`); err != nil {
+		t.Fatalf("blank raw loss/title fields: %v", err)
+	}
+	pgPersonaDimension, err = pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "persona", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres persona SummarizeBusinessAnalysisDimension after raw blanking: %v", err)
+	}
+	if len(pgPersonaDimension) != 1 || pgPersonaDimension[0].Value != "participant_title_present" || pgPersonaDimension[0].CallCount != 1 {
+		t.Fatalf("postgres persona dimension did not use materialized call_facts flag after raw blanking: %+v", pgPersonaDimension)
+	}
+	pgLossReasonDimension, err = pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "loss_reason", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres loss_reason SummarizeBusinessAnalysisDimension after raw blanking: %v", err)
+	}
+	if len(pgLossReasonDimension) != 1 || pgLossReasonDimension[0].Value != "loss_reason_present" || pgLossReasonDimension[0].CallCount != 1 {
+		t.Fatalf("postgres loss_reason dimension did not use materialized call_facts flag after raw blanking: %+v", pgLossReasonDimension)
 	}
 }
 
@@ -1783,8 +1819,11 @@ func TestShouldBackfillReadModelAfterMigrations(t *testing.T) {
 	if !shouldBackfillReadModelAfterMigrations(postgresReadModelBackfillMigrationVersion - 1) {
 		t.Fatalf("database before read-model backfill migration should rebuild")
 	}
-	if shouldBackfillReadModelAfterMigrations(len(migrations) - 1) {
-		t.Fatalf("inventory-only migration should not force unrelated read-model rebuild")
+	if !shouldBackfillReadModelAfterMigrations(postgresReadModelPresenceMigrationVersion - 1) {
+		t.Fatalf("database before read-model presence migration should rebuild")
+	}
+	if shouldBackfillReadModelAfterMigrations(len(migrations)) {
+		t.Fatalf("current migration version should not force unrelated read-model rebuild")
 	}
 }
 
@@ -1844,16 +1883,16 @@ func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
 	defer store.Close()
 	resetPostgresTestStore(t, ctx, store)
 
-	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-readmodel-001","title":"Renewal read model","started":"2026-02-12T15:00:00Z","duration":2400,"metaData":{"scope":"External","system":"Zoom","direction":"Conference","purpose":"Renewal review","calendarEventId":"cal-001"},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-readmodel","name":"Renewal Opportunity","fields":{"StageName":"Discovery & Demo (SQO)","Type":"Renewal","Forecast_Category_VP__c":"Pipeline","Primary_Lead_Source__c":"Customer Success"}},{"type":"Account","id":"acct-readmodel","name":"Renewal Account","fields":{"Account_Type__c":"Customer - Active","Industry":"Healthcare"}}]}}`)); err != nil {
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-readmodel-001","title":"Renewal read model","started":"2026-02-12T15:00:00Z","duration":2400,"metaData":{"scope":"External","system":"Zoom","direction":"Conference","purpose":"Renewal review","calendarEventId":"cal-001","parties":[{"id":"buyer","title":"VP Operations"}]},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-readmodel","name":"Renewal Opportunity","fields":{"StageName":"Discovery & Demo (SQO)","Type":"Renewal","Forecast_Category_VP__c":"Pipeline","Primary_Lead_Source__c":"Customer Success","LossReason":"Timeline uncertainty"}},{"type":"Account","id":"acct-readmodel","name":"Renewal Account","fields":{"Account_Type__c":"Customer - Active","Industry":"Healthcare"}}]}}`)); err != nil {
 		t.Fatalf("UpsertCall returned error: %v", err)
 	}
 	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-readmodel-001'`, 2)
-	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-readmodel-001'`, 6)
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-readmodel-001'`, 7)
 
 	var callDate, callMonth, durationBucket, scope, system, direction, transcriptStatus, lifecycleBucket, lifecycleConfidence, opportunityID, opportunityType, accountIndustry string
-	var transcriptPresent bool
+	var transcriptPresent, participantTitlePresent, lossReasonPresent bool
 	var opportunityCount, accountCount int64
-	if err := store.DB().QueryRowContext(ctx, `SELECT call_date, call_month, duration_bucket, scope, system, direction, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, opportunity_id, opportunity_type, account_industry, opportunity_count, account_count FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&callDate, &callMonth, &durationBucket, &scope, &system, &direction, &transcriptPresent, &transcriptStatus, &lifecycleBucket, &lifecycleConfidence, &opportunityID, &opportunityType, &accountIndustry, &opportunityCount, &accountCount); err != nil {
+	if err := store.DB().QueryRowContext(ctx, `SELECT call_date, call_month, duration_bucket, scope, system, direction, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, opportunity_id, opportunity_type, account_industry, opportunity_count, account_count, participant_title_present, loss_reason_present FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&callDate, &callMonth, &durationBucket, &scope, &system, &direction, &transcriptPresent, &transcriptStatus, &lifecycleBucket, &lifecycleConfidence, &opportunityID, &opportunityType, &accountIndustry, &opportunityCount, &accountCount, &participantTitlePresent, &lossReasonPresent); err != nil {
 		t.Fatalf("read call_facts: %v", err)
 	}
 	if callDate != "2026-02-12" || callMonth != "2026-02" || durationBucket != "30_45m" || scope != "External" || system != "Zoom" || direction != "Conference" {
@@ -1861,6 +1900,9 @@ func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
 	}
 	if transcriptPresent || transcriptStatus != "missing" || lifecycleBucket != "renewal" || lifecycleConfidence != "high" || opportunityID != "opp-readmodel" || opportunityType != "Renewal" || accountIndustry != "Healthcare" || opportunityCount != 1 || accountCount != 1 {
 		t.Fatalf("unexpected CRM/lifecycle facts: present=%v status=%s bucket=%s confidence=%s opp=%s type=%s industry=%s opp_count=%d acct_count=%d", transcriptPresent, transcriptStatus, lifecycleBucket, lifecycleConfidence, opportunityID, opportunityType, accountIndustry, opportunityCount, accountCount)
+	}
+	if !participantTitlePresent || !lossReasonPresent {
+		t.Fatalf("expected materialized participant/loss presence flags, got title=%v loss=%v", participantTitlePresent, lossReasonPresent)
 	}
 	coverage, err := store.CallFactsCoverage(ctx)
 	if err != nil {
@@ -1896,11 +1938,14 @@ func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
 	}
 	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-readmodel-001'`, 0)
 	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-readmodel-001'`, 0)
-	if err := store.DB().QueryRowContext(ctx, `SELECT transcript_present, transcript_status, opportunity_id, lifecycle_bucket FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&transcriptPresent, &transcriptStatus, &opportunityID, &lifecycleBucket); err != nil {
+	if err := store.DB().QueryRowContext(ctx, `SELECT transcript_present, transcript_status, opportunity_id, lifecycle_bucket, participant_title_present, loss_reason_present FROM call_facts WHERE call_id = $1`, "pg-readmodel-001").Scan(&transcriptPresent, &transcriptStatus, &opportunityID, &lifecycleBucket, &participantTitlePresent, &lossReasonPresent); err != nil {
 		t.Fatalf("read empty-context facts: %v", err)
 	}
 	if !transcriptPresent || transcriptStatus != "present" || opportunityID != "" || lifecycleBucket != "unknown" {
 		t.Fatalf("empty context facts not cleared/preserved correctly: present=%v status=%s opp=%s bucket=%s", transcriptPresent, transcriptStatus, opportunityID, lifecycleBucket)
+	}
+	if participantTitlePresent || lossReasonPresent {
+		t.Fatalf("empty context facts did not clear materialized presence flags: title=%v loss=%v", participantTitlePresent, lossReasonPresent)
 	}
 	summary, err := store.SyncStatusSummary(ctx)
 	if err != nil {

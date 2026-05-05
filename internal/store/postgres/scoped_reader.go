@@ -223,6 +223,9 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 		"list_crm_object_types": {
 			"public.gongmcp_crm_object_type_summary()",
 		},
+		"list_crm_fields": {
+			"public.gongmcp_crm_field_summary_sanitized(text, integer)",
+		},
 		"list_lifecycle_buckets": profileReadinessFunctions,
 		"list_scorecards": {
 			"public.gongmcp_scorecards(boolean, integer)",
@@ -314,6 +317,12 @@ func scopedReaderFunctionSignatures(signatures []string) []string {
 		}
 		if signature == "public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" {
 			signature = "public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
+		}
+		if signature == "public.gongmcp_search_transcript_segments(text, integer)" {
+			signature = "public.gongmcp_search_transcript_segments_sanitized(text, integer)"
+		}
+		if signature == "public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)" {
+			signature = "public.gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer)"
 		}
 		out = append(out, signature)
 	}
@@ -460,6 +469,8 @@ func rawScopedReaderFunctionRevokes() []string {
 		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_search_transcript_segments(text, integer)",
+		"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
 	}
 }
 
