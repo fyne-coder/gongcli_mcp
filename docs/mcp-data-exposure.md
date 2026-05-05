@@ -198,7 +198,10 @@ What the conservative defaults give you:
   preset/allowlist, which reduces direct-SQL bypass risk for admin-only helper
   functions. For `business-pilot`, startup also validates a first table/column
   boundary that denies direct reads of `calls.call_id`, `calls.title`,
-  `call_facts.call_id`, and `call_facts.title`. The scoped reader URL remains
+  `call_facts.call_id`, and `call_facts.title`. The reviewed business-pilot
+  grant block is printable with
+  `gongctl mcp postgres-reader-sql --preset business-pilot` and
+  does not include credentials or connection URLs. The scoped reader URL remains
   a service secret because selected functions and sanitized views can still
   expose minimized call metadata, timings, counts, and tenant terminology.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`

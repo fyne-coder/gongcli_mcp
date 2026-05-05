@@ -37,6 +37,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | `business-pilot` MCP preset | SQLite full preset | complete/foundation over Postgres facts | Keep supported tools stable and read-only | must match | Phase 1 | `scripts/postgres-smoke.sh` |
 | Tool-scoped Postgres reader roles | SQLite filesystem read-only boundary | complete for selected Postgres function grants | Generic `gongmcp_reader` remains supported; optional scoped mode validates required and extra `gongmcp_*` function EXECUTE grants against the selected preset/allowlist | postgres-native equivalent | Phase 9j | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh` |
 | Business-pilot scoped table grants | SQLite filesystem read-only boundary | complete for first Postgres business-pilot scoped role | Optional scoped startup validation checks selected function grants plus a first business-pilot table/column allowlist that denies direct `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title` while preserving generic reader compatibility | postgres-native hardening | Phase 9k | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh` |
+| Business-pilot scoped grant SQL handoff | Manual role/grant notes | complete for first Postgres business-pilot scoped role | `gongctl mcp postgres-reader-sql --preset business-pilot` emits deterministic, secret-free grant SQL from the same reviewed function and column maps used by startup validation | postgres-native operator handoff | Phase 9l | `TestMCPPostgresReaderSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
@@ -119,22 +120,27 @@ Postgres parity should be added deliberately, with each surface classified as
     client deployments.
 20. **Phase 9k business-pilot table grants**: optional Postgres startup
     validation for the first business-pilot scoped table/column boundary.
+21. **Phase 9l business-pilot grant SQL handoff**: print-only helper emits the
+    reviewed scoped reader grant SQL for customer-managed role provisioning.
 
-## Phase 9k Risk Status
+## Phase 9l Risk Status
 
 - Closed for the first business-pilot table boundary: scoped startup validation
   now rejects extra direct column grants outside the reviewed business-pilot
   table/view surface, and the synthetic scoped role no longer has direct
   `calls.call_id`, `calls.title`, `call_facts.call_id`, or `call_facts.title`
   grants.
+- Closed for first operator handoff: `gongctl mcp postgres-reader-sql --preset
+  business-pilot` emits deterministic SQL for the reviewed
+  business-pilot scoped reader role without credentials or database URLs.
 - Remaining risk: this is not a universal role generator. Sanitized views still
   include stable internal references needed by existing code paths, selected
   profile functions can return minimized call metadata to the MCP process, and
   non-business-pilot presets still use the generic/shared reader grant model
   until their own table/column maps are reviewed.
-- Still queued: DDL helpers for customer-managed scoped roles, per-surface
-  table/column maps beyond `business-pilot`, and governed views/RLS/materialized
-  snapshots for broader `analyst` / `all-readonly` readiness.
+- Still queued: per-surface table/column maps beyond `business-pilot`, optional
+  richer role-template automation, and governed views/RLS/materialized snapshots
+  for broader `analyst` / `all-readonly` readiness.
 
 ## Phase 9j Risk Status
 

@@ -258,8 +258,8 @@ search outputs.
 The smoke also creates a synthetic `business-pilot` scoped reader role, proves
 the selected business-pilot MCP calls work, denies direct reads of
 `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`,
-and verifies startup fails on an extra direct column grant; this is validation
-evidence, not customer DDL automation.
+verifies startup fails on an extra direct column grant, and applies that role
+from the generated `gongctl mcp postgres-reader-sql` SQL artifact.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 
@@ -606,6 +606,20 @@ boundary that avoids direct `calls.call_id`, `calls.title`,
 `call_facts.call_id`, and `call_facts.title` reads. The scoped reader URL is
 still a service secret because selected functions and sanitized views can expose
 minimized call metadata, timings, counts, and tenant terminology.
+To generate the reviewed business-pilot grant block without copying smoke
+script internals:
+
+```bash
+gongctl mcp postgres-reader-sql \
+  --preset business-pilot \
+  --role gongmcp_business_pilot_reader \
+  --database gongctl
+```
+
+The generated SQL does not create credentials or print database URLs. Create
+the LOGIN role and password through your normal secret-management process,
+review/apply the grant block, then run `gongmcp` with the scoped reader URL and
+`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),

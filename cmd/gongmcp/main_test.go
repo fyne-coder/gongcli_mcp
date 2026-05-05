@@ -158,6 +158,174 @@ func TestPostgresReadOnlyOptionsForBusinessPilotAllowlist(t *testing.T) {
 	}
 }
 
+func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("business-pilot")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "business-pilot")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	sql, err := buildPostgresReaderGrantSQL(allowlist, "gongmcp_business_pilot_reader", "gongctl")
+	if err != nil {
+		t.Fatalf("buildPostgresReaderGrantSQL returned error: %v", err)
+	}
+	for _, want := range []string{
+		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
+		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("parties_count", "started_at") ON TABLE "calls" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("transcript_status") ON TABLE "call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
+		`COMMIT;`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("generated SQL missing %q\n%s", want, sql)
+		}
+	}
+	for _, forbidden := range []string{
+		`PASSWORD '`,
+		`"call_id", "title"`,
+		`public.gongmcp_missing_transcripts`,
+		`field_values_json`,
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("generated SQL included forbidden %q\n%s", forbidden, sql)
+		}
+	}
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.Contains(line, `ON TABLE "calls"`) && strings.Contains(line, `"call_id"`) {
+			t.Fatalf("generated SQL included calls.call_id grant\n%s", sql)
+		}
+		if strings.Contains(line, `ON TABLE "calls"`) && strings.Contains(line, `"title"`) {
+			t.Fatalf("generated SQL included calls.title grant\n%s", sql)
+		}
+		if strings.Contains(line, `ON TABLE "call_facts"`) && strings.Contains(line, `"call_id"`) {
+			t.Fatalf("generated SQL included call_facts.call_id grant\n%s", sql)
+		}
+		if strings.Contains(line, `ON TABLE "call_facts"`) && strings.Contains(line, `"title"`) {
+			t.Fatalf("generated SQL included call_facts.title grant\n%s", sql)
+		}
+	}
+}
+
+func TestBuildPostgresReaderGrantSQLRejectsUnsupportedSurface(t *testing.T) {
+	if _, err := buildPostgresReaderGrantSQL([]string{"get_sync_status", "search_calls"}, "gongmcp_reader", "gongctl"); err == nil {
+		t.Fatal("buildPostgresReaderGrantSQL accepted unsupported non-business-pilot surface")
+	}
+}
+
+func TestBuildPostgresReaderGrantSQLRejectsUnsafeIdentifiers(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("business-pilot")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "business-pilot")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	for _, tc := range []struct {
+		name     string
+		roleName string
+		dbName   string
+	}{
+		{name: "role injection", roleName: `reader"; DROP ROLE writer; --`, dbName: "gongctl"},
+		{name: "database dash", roleName: "gongmcp_reader", dbName: "gongctl-prod"},
+		{name: "role starts digit", roleName: "1_reader", dbName: "gongctl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := buildPostgresReaderGrantSQL(allowlist, tc.roleName, tc.dbName); err == nil {
+				t.Fatal("buildPostgresReaderGrantSQL accepted unsafe identifier")
+			}
+		})
+	}
+}
+
+func TestPrintPostgresReaderGrantsForBusinessPilot(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{
+		"--print-postgres-reader-grants",
+		"--tool-preset", "business-pilot",
+		"--postgres-reader-role", "gongmcp_business_pilot_reader",
+		"--postgres-database", "gongctl",
+	}, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run code=%d stderr=%q", code, stderr.String())
+	}
+	sql := stdout.String()
+	for _, want := range []string{
+		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("parties_count", "started_at") ON TABLE "calls" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("transcript_status") ON TABLE "call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
+		`COMMIT;`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("generated SQL missing %q\n%s", want, sql)
+		}
+	}
+	for _, forbidden := range []string{
+		`"call_id") ON TABLE "calls"`,
+		`"title") ON TABLE "calls"`,
+		`"call_id") ON TABLE "call_facts"`,
+		`"title") ON TABLE "call_facts"`,
+		`PASSWORD`,
+		`postgres://`,
+		`GONG_DATABASE_URL`,
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("generated SQL contained forbidden %q\n%s", forbidden, sql)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr not empty: %q", stderr.String())
+	}
+}
+
+func TestPrintPostgresReaderGrantsRejectsUnsupportedPreset(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{
+		"--print-postgres-reader-grants",
+		"--tool-preset", "operator-smoke",
+	}, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("run code=%d want 2 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout not empty: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "business-pilot scoped reader surface") {
+		t.Fatalf("stderr=%q missing unsupported preset message", stderr.String())
+	}
+}
+
+func TestPrintPostgresReaderGrantsRejectsUnsafeIdentifier(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{
+		"--print-postgres-reader-grants",
+		"--tool-preset", "business-pilot",
+		"--postgres-reader-role", "gongmcp_reader;DROP",
+	}, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("run code=%d want 2 stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout not empty: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid --postgres-reader-role") {
+		t.Fatalf("stderr=%q missing unsafe identifier message", stderr.String())
+	}
+}
+
 func TestPostgresReadOnlyOptionsForMissingTranscriptsAllowlist(t *testing.T) {
 	options := postgresReadOnlyOptionsForAllowlist([]string{"missing_transcripts"})
 	want := "public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)"

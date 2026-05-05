@@ -80,6 +80,10 @@ trap cleanup EXIT
 
 cleanup
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up -d postgres
+# The official Postgres image briefly accepts local connections during
+# initdb before restarting into the long-running server. Avoid racing that
+# transient post-init shutdown on fresh volumes.
+sleep 2
 
 for _ in $(seq 1 90); do
   if docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tAc "SELECT 1" >/dev/null 2>&1; then
@@ -539,36 +543,29 @@ if reader_psql -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_a
   exit 1
 fi
 
+go run ./cmd/gongctl mcp postgres-reader-sql --preset business-pilot --role gongmcp_business_pilot_reader --database gongctl >/tmp/gongctl-postgres-business-pilot-reader-grants.sql
+grep -q 'GRANT SELECT ("parties_count", "started_at") ON TABLE "calls"' /tmp/gongctl-postgres-business-pilot-reader-grants.sql
+grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary' /tmp/gongctl-postgres-business-pilot-reader-grants.sql
+if grep -q "PASSWORD '" /tmp/gongctl-postgres-business-pilot-reader-grants.sql; then
+  echo "generated business-pilot reader grant SQL unexpectedly contains password text" >&2
+  exit 1
+fi
+if grep 'ON TABLE "calls"' /tmp/gongctl-postgres-business-pilot-reader-grants.sql | grep -q '"call_id"\|"title"'; then
+  echo "generated business-pilot reader grant SQL unexpectedly grants calls.call_id or calls.title" >&2
+  exit 1
+fi
+if grep 'ON TABLE "call_facts"' /tmp/gongctl-postgres-business-pilot-reader-grants.sql | grep -q '"call_id"\|"title"'; then
+  echo "generated business-pilot reader grant SQL unexpectedly grants call_facts.call_id or call_facts.title" >&2
+  exit 1
+fi
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T -e GONGMCP_BUSINESS_PILOT_READER_PASSWORD="$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" postgres sh -s >/tmp/gongctl-postgres-business-pilot-reader-create.txt 2>&1 <<'SH'
 set -eu
 psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v reader_password="$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" <<'SQL'
 DROP ROLE IF EXISTS gongmcp_business_pilot_reader;
 CREATE ROLE gongmcp_business_pilot_reader LOGIN PASSWORD :'reader_password';
-REVOKE CREATE ON SCHEMA public FROM gongmcp_business_pilot_reader;
-GRANT CONNECT ON DATABASE gongctl TO gongmcp_business_pilot_reader;
-GRANT USAGE ON SCHEMA public TO gongmcp_business_pilot_reader;
-GRANT SELECT (version) ON gongctl_schema_migrations TO gongmcp_business_pilot_reader;
-GRANT SELECT (id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, finished_at, records_seen, records_written, error_text) ON gongmcp_sync_runs TO gongmcp_business_pilot_reader;
-GRANT SELECT (sync_key, scope, cursor, last_run_id, last_status, last_error, last_success_at, updated_at) ON gongmcp_sync_state TO gongmcp_business_pilot_reader;
-GRANT SELECT (started_at, parties_count) ON calls TO gongmcp_business_pilot_reader;
-GRANT SELECT (user_id, title) ON users TO gongmcp_business_pilot_reader;
-GRANT SELECT (segment_count) ON transcripts TO gongmcp_business_pilot_reader;
-GRANT SELECT (transcript_status) ON call_facts TO gongmcp_business_pilot_reader;
-GRANT SELECT ON gongmcp_call_context_objects TO gongmcp_business_pilot_reader;
-GRANT SELECT ON gongmcp_call_context_fields TO gongmcp_business_pilot_reader;
-GRANT SELECT (model_name, model_version, rebuilt_at, call_count, fact_count, missing_fact_call_count, orphan_fact_count, stale_reason, updated_at) ON postgres_read_model_state TO gongmcp_business_pilot_reader;
-GRANT SELECT (kind) ON gong_settings TO gongmcp_business_pilot_reader;
-GRANT SELECT (integration_id) ON crm_integrations TO gongmcp_business_pilot_reader;
-GRANT SELECT (object_type) ON crm_schema_objects TO gongmcp_business_pilot_reader;
-GRANT SELECT (field_name) ON crm_schema_fields TO gongmcp_business_pilot_reader;
-GRANT EXECUTE ON FUNCTION gongmcp_active_business_profile() TO gongmcp_business_pilot_reader;
-GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_cache_meta(bigint, text) TO gongmcp_business_pilot_reader;
-GRANT EXECUTE ON FUNCTION gongmcp_profile_data_fingerprint() TO gongmcp_business_pilot_reader;
-GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) TO gongmcp_business_pilot_reader;
-GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO gongmcp_business_pilot_reader;
-GRANT EXECUTE ON FUNCTION gongmcp_scorecard_activity_totals() TO gongmcp_business_pilot_reader;
 SQL
 SH
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 </tmp/gongctl-postgres-business-pilot-reader-grants.sql >>/tmp/gongctl-postgres-business-pilot-reader-create.txt 2>&1
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -1452,7 +1449,8 @@ echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"
 echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "compatibility reader business-pilot MCP output: /tmp/gongctl-postgres-business-pilot.jsonl"
-echo "synthetic business-pilot scoped reader create output (not customer DDL template): /tmp/gongctl-postgres-business-pilot-reader-create.txt"
+echo "synthetic business-pilot scoped reader grant SQL: /tmp/gongctl-postgres-business-pilot-reader-grants.sql"
+echo "synthetic business-pilot scoped reader create output: /tmp/gongctl-postgres-business-pilot-reader-create.txt"
 echo "synthetic business-pilot scoped reader MCP output: /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl"
 echo "synthetic business-pilot scoped reader missing-transcripts denial output: /tmp/gongctl-postgres-business-pilot-reader-missing-transcripts-denied.txt"
 echo "synthetic business-pilot scoped reader calls.call_id denial output: /tmp/gongctl-postgres-business-pilot-reader-calls-call-id-denied.txt"

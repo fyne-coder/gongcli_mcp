@@ -143,6 +143,10 @@ Configuration contract:
   `--enforce-tool-scoped-db-grants`. The `business-pilot` preset also has a
   reviewed table/column grant boundary in this development slice; other
   presets still need their own reviewed maps before customer role automation.
+  Operators can emit the reviewed business-pilot grant block with
+  `gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE
+  --database DB`; create the role and
+  credential separately through the deployment secret manager.
   A scoped reader URL is still a service credential, not an analyst SQL login.
 - The Compose example binds Postgres to `127.0.0.1` for local smoke use and
   uses explicit dev passwords by default. Company deployments should provide

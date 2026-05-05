@@ -134,6 +134,9 @@ Implementation controls on the CLI side:
   the selected surface are executable. For `business-pilot`, startup also
   validates a first table/column boundary that denies direct reads of
   `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`.
+  The reviewed business-pilot grant block can be emitted with
+  `gongctl mcp postgres-reader-sql --preset business-pilot`; it
+  intentionally excludes role credentials and database URLs.
   The scoped reader URL remains a service secret because selected functions and
   sanitized views can still expose minimized call metadata, timings, counts,
   and tenant terminology.

@@ -135,6 +135,7 @@ func (a *app) usage() {
   gongctl sync read-model [--rebuild]  # Postgres only via GONG_DATABASE_URL
   gongctl mcp tools
   gongctl mcp tool-info NAME
+  gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE --database DB
   gongctl search transcripts --db gong.db --query TEXT [--limit N]
   gongctl search calls --db gong.db [--crm-object-type TYPE] [--crm-object-id ID] [--limit N]
   gongctl calls list --from YYYY-MM-DD --to YYYY-MM-DD [--context none|extended] [--out calls.json] [--allow-sensitive-export]
