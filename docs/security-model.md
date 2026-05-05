@@ -139,10 +139,12 @@ Implementation controls on the CLI side:
   `gongctl mcp postgres-reader-apply --preset business-pilot --dry-run` emits
   the same SQL and `--apply` reconciles it for an existing role using a
   writable `GONG_DATABASE_URL` / `DATABASE_URL`;
-  `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
-  compatibility path for MCP-only images. It intentionally excludes role
-  credentials and database URLs. Create LOGIN credentials through the deployment
-	  secret manager; the apply command does not manage passwords or create roles.
+	  `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
+	  compatibility path for MCP-only images. It intentionally excludes role
+	  credentials and database URLs. Create LOGIN credentials through the deployment
+	  secret manager as a standalone `NOINHERIT` role with no role memberships; the
+	  apply command rejects inherited/member roles and does not manage passwords or
+	  create roles.
 	  Do not configure default privileges that grant future public tables or
 	  functions to the scoped service role; keep MCP startup privilege enforcement
 	  enabled so stale grants fail closed.
@@ -152,9 +154,11 @@ Implementation controls on the CLI side:
   The scoped reader URL remains a service secret because selected functions and
   sanitized views can still expose minimized operational metadata, timings,
   counts, and tenant terminology. The scoped active-profile and profile-cache
-  helpers redact source metadata and call IDs/titles, and direct SQL callers can
-  invoke only the capped sanitized profile-cache helper, currently fixed at 1,000 rows per direct helper call; MCP result limits are
-  still enforced above that SQL helper.
+	  helpers redact source metadata and call IDs/titles, and direct SQL callers can
+	  invoke capped sanitized profile-cache rows plus sanitized profile summary,
+	  lifecycle summary, and transcript backlog helpers. The transcript backlog
+	  helper returns identifier-minimized per-call operational metadata; MCP result
+	  limits are still enforced above those SQL helpers.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose

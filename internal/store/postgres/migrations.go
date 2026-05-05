@@ -505,6 +505,10 @@ CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_bucket
 CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_started
 	ON profile_call_fact_cache(profile_id, canonical_sha256, started_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_backlog
+	ON profile_call_fact_cache(profile_id, canonical_sha256, lifecycle_bucket, scope, system, direction, started_at DESC)
+	WHERE transcript_present = false;
+
 CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_call
 	ON profile_call_fact_cache(call_id);
 
@@ -996,8 +1000,8 @@ ranked AS (
 	   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
 	   AND NOT c.transcript_present
 	   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
-	   AND (from_date_arg = '' OR left(c.started_at, 10) >= from_date_arg)
-	   AND (to_date_arg = '' OR left(c.started_at, 10) <= to_date_arg)
+	   AND (from_date_arg = '' OR c.started_at >= from_date_arg)
+	   AND (to_date_arg = '' OR c.started_at < ((NULLIF(to_date_arg, '')::date + INTERVAL '1 day')::date::text))
 	   AND (scope_arg = '' OR c.scope = scope_arg)
 	   AND (system_arg = '' OR c.system = system_arg)
 	   AND (direction_arg = '' OR c.direction = direction_arg)
@@ -1637,8 +1641,8 @@ ranked AS (
 	   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
 	   AND NOT c.transcript_present
 	   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
-	   AND (from_date_arg = '' OR left(c.started_at, 10) >= from_date_arg)
-	   AND (to_date_arg = '' OR left(c.started_at, 10) <= to_date_arg)
+	   AND (from_date_arg = '' OR c.started_at >= from_date_arg)
+	   AND (to_date_arg = '' OR c.started_at < ((NULLIF(to_date_arg, '')::date + INTERVAL '1 day')::date::text))
 	   AND (scope_arg = '' OR c.scope = scope_arg)
 	   AND (system_arg = '' OR c.system = system_arg)
 	   AND (direction_arg = '' OR c.direction = direction_arg)

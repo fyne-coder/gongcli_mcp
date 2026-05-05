@@ -70,6 +70,7 @@ Current fixed boundaries:
 | Aggregate | Counts, rates, readiness, or classification metadata with no direct record references |
 | Config | Tenant configuration/schema metadata such as field names, scorecard names, question text, or inventory IDs |
 | Record reference | Direct business record metadata such as call IDs, titles, object IDs, object names, or timestamps tied to a specific record |
+| Identifier-minimized record metadata | Per-record operational metadata where stable IDs and titles/names are blanked but timestamps, lifecycle labels, duration, direction, scope, or rationale can still describe one underlying record |
 | Snippet | Bounded transcript-derived text excerpts or bounded CRM value excerpts |
 | Opt-in elevation | Additional identifiers or text returned only when the caller explicitly sets an exposure flag |
 
@@ -79,7 +80,7 @@ Current fixed boundaries:
 | --- | --- | --- | --- | --- |
 | `get_sync_status` | Safe-default | Aggregate | Redacts active profile name and canonical hash; returns counts/readiness only | Reveals tenant activity and coverage posture |
 | `summarize_call_facts`, `summarize_calls_by_lifecycle` | Safe-default | Aggregate | Return rates, counts, classification logic, or allowlisted business dimensions only | Group labels can still expose tenant-specific terminology |
-| `rank_transcript_backlog`, `prioritize_transcripts_by_lifecycle` | Safe-default with review | Aggregate | Server blanks call IDs and titles before returning ranked backlog rows | Still reveals lifecycle, confidence, duration, and prioritization rationale |
+| `rank_transcript_backlog`, `prioritize_transcripts_by_lifecycle` | Safe-default with review | Identifier-minimized record metadata | Server blanks call IDs and titles before returning ranked backlog rows | Still reveals per-call started time, lifecycle, confidence, duration, scope, system, direction, and prioritization rationale |
 | `list_scorecards`, `get_scorecard` | Safe-default with review | Config | No raw settings payloads | Exposes scorecard names, question text, and scoring metadata, which may reflect internal QA/coaching policy |
 | `summarize_scorecard_activity` | Safe-default with review | Aggregate | No answered-scorecard IDs, call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, or raw activity payloads | Aggregate scorecard/program shape can still reveal coaching emphasis and review-process coverage |
 | `list_crm_object_types`, `list_crm_fields`, `list_unmapped_crm_fields` | Restricted | Aggregate + Config | Counts and field metadata only; no field values by default | Field names and labels can still reveal tenant business model |
@@ -204,9 +205,10 @@ What the conservative defaults give you:
   also run `gongctl mcp postgres-reader-apply --preset business-pilot` as a
   dry-run to emit the same reviewed SQL, then add `--apply` with a writable
   `GONG_DATABASE_URL` or `DATABASE_URL` to clear stale public table/function
-  privileges and regrant the reviewed surface for an existing role. Neither
-  path prints credentials or connection URLs, and role/password creation stays
-  in the deployment secret manager. `gongmcp --print-postgres-reader-grants
+  privileges and regrant the reviewed surface for an existing standalone
+  `NOINHERIT` role with no memberships. Neither path prints credentials or
+  connection URLs, and role/password creation stays in the deployment secret
+  manager. `gongmcp --print-postgres-reader-grants
   --tool-preset business-pilot` remains a compatibility path for MCP-only
   images. This first scoped role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader

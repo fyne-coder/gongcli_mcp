@@ -583,6 +583,7 @@ for generated_sql in /tmp/gongctl-postgres-business-pilot-reader-grants.sql /tmp
   grep -q 'Role and credentials must already exist' "$generated_sql"
   grep -q 'clearing existing public table/function privileges' "$generated_sql"
   grep -q 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public"' "$generated_sql"
+  grep -q 'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "public"' "$generated_sql"
   grep -q 'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public"' "$generated_sql"
   grep -q 'not an analyst SQL login' "$generated_sql"
   grep -q 'minimized operational metadata' "$generated_sql"
@@ -674,6 +675,7 @@ grep -q '"get_sync_status"' /tmp/gongctl-postgres-business-pilot-scoped-reader.j
 grep -q '"summarize_call_facts"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q '"rank_transcript_backlog"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
+grep -q 'priority_score' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 assert_mcp_success /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl 3 4 5 6 7
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -738,6 +740,7 @@ if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-p
 fi
 grep -q 'extra column SELECT grants outside selected MCP tools' /tmp/gongctl-postgres-business-pilot-reader-extra-column-grant.txt
 grep -q 'calls.title' /tmp/gongctl-postgres-business-pilot-reader-extra-column-grant.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE SELECT (title) ON calls FROM gongmcp_business_pilot_reader; GRANT SELECT ON SEQUENCE profile_meta_id_seq TO gongmcp_business_pilot_reader" >/dev/null
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-apply --preset business-pilot --role gongmcp_business_pilot_reader --database gongctl --apply >/tmp/gongctl-postgres-business-pilot-reader-apply-column-repair.json
 grep -q '"status": "applied"' /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair.json
 if business_pilot_reader_psql -c "SELECT title FROM calls LIMIT 1" >/tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-calls-title-denied.txt 2>&1; then
@@ -745,6 +748,11 @@ if business_pilot_reader_psql -c "SELECT title FROM calls LIMIT 1" >/tmp/gongctl
   exit 1
 fi
 grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-calls-title-denied.txt
+if business_pilot_reader_psql -c "SELECT last_value FROM profile_meta_id_seq" >/tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt 2>&1; then
+  echo "business-pilot scoped reader apply column repair left profile_meta_id_seq grant" >&2
+  exit 1
+fi
+grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE SELECT (title) ON calls FROM gongmcp_business_pilot_reader" >/dev/null
 business_pilot_profile_identity="$(docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT id, canonical_sha256 FROM profile_meta WHERE is_active = true LIMIT 1")"
 IFS='|' read -r business_pilot_profile_id business_pilot_profile_sha <<EOF
@@ -784,6 +792,11 @@ fi
 business_pilot_backlog_identifier_count="$(business_pilot_reader_psql -At -c "SELECT COUNT(*) FROM gongmcp_profile_transcript_backlog_sanitized($business_pilot_profile_id, '$business_pilot_profile_sha', '', '', '', '', '', '', 5) WHERE call_id <> '' OR title <> ''" | tee /tmp/gongctl-postgres-business-pilot-reader-profile-backlog-sanitized.txt | tr -d '[:space:]')"
 if [ "$business_pilot_backlog_identifier_count" != "0" ]; then
   echo "business-pilot scoped reader sanitized transcript backlog exposed identifiers" >&2
+  exit 1
+fi
+business_pilot_backlog_fact_count="$(business_pilot_reader_psql -At -c "SELECT COUNT(*) FROM gongmcp_profile_transcript_backlog_sanitized($business_pilot_profile_id, '$business_pilot_profile_sha', '', '', '', '', '', '', 5) WHERE started_at <> '' AND bucket <> '' AND priority_score > 0" | tee -a /tmp/gongctl-postgres-business-pilot-reader-profile-backlog-sanitized.txt | tr -d '[:space:]')"
+if [ "$business_pilot_backlog_fact_count" -lt 1 ]; then
+  echo "business-pilot scoped reader sanitized transcript backlog returned no ranked backlog rows" >&2
   exit 1
 fi
 if business_pilot_reader_psql -c "SELECT COUNT(*) FROM gongmcp_profile_call_fact_cache($business_pilot_profile_id, '$business_pilot_profile_sha')" >/tmp/gongctl-postgres-business-pilot-reader-profile-cache-identifier-helper-denied.txt 2>&1; then
@@ -837,6 +850,13 @@ grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-apply-re
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
 } | GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp > /tmp/gongctl-postgres-business-pilot-reader-apply-repair-mcp.jsonl
 assert_mcp_success /tmp/gongctl-postgres-business-pilot-reader-apply-repair-mcp.jsonl 3
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS gongmcp_leaky_parent; CREATE ROLE gongmcp_leaky_parent NOLOGIN; GRANT SELECT (title) ON calls TO gongmcp_leaky_parent; GRANT gongmcp_leaky_parent TO gongmcp_business_pilot_reader" >/dev/null
+if GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-apply --preset business-pilot --role gongmcp_business_pilot_reader --database gongctl --apply >/tmp/gongctl-postgres-business-pilot-reader-apply-membership-denied.txt 2>&1; then
+  echo "business-pilot scoped reader apply unexpectedly accepted inherited role membership" >&2
+  exit 1
+fi
+grep -q 'apply scoped Postgres reader grants failed' /tmp/gongctl-postgres-business-pilot-reader-apply-membership-denied.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE gongmcp_leaky_parent FROM gongmcp_business_pilot_reader; REVOKE SELECT (title) ON calls FROM gongmcp_leaky_parent; DROP ROLE gongmcp_leaky_parent" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T -e GONGMCP_FUNCTION_FREE_READER_PASSWORD="$GONGMCP_FUNCTION_FREE_READER_PASSWORD" postgres sh -s >/tmp/gongctl-postgres-function-free-reader-create.txt 2>&1 <<'SH'
 set -eu
 psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v reader_password="$GONGMCP_FUNCTION_FREE_READER_PASSWORD" <<'SQL'
@@ -1662,9 +1682,11 @@ echo "synthetic business-pilot scoped reader apply repair MCP output: /tmp/gongc
 echo "synthetic business-pilot scoped reader apply wrong-database denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-wrong-database.txt"
 echo "synthetic business-pilot scoped reader apply column repair JSON: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair.json"
 echo "synthetic business-pilot scoped reader apply column repair calls.title denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-calls-title-denied.txt"
+echo "synthetic business-pilot scoped reader apply column repair sequence denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt"
 echo "synthetic business-pilot scoped reader apply repair identifier-helper denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-identifier-helper-denied.txt"
 echo "synthetic business-pilot scoped reader apply repair active-profile denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-active-profile-denied.txt"
 echo "synthetic business-pilot scoped reader apply repair missing-transcripts denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-missing-transcripts-denied.txt"
+echo "synthetic business-pilot scoped reader apply role-membership denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-membership-denied.txt"
 echo "business-pilot grant SQL checks passed: no PASSWORD/URL markers, no configured secret values, no direct calls/call_facts call_id/title grants"
 echo "synthetic business-pilot scoped reader create output: /tmp/gongctl-postgres-business-pilot-reader-create.txt"
 echo "synthetic business-pilot scoped reader post-reconcile read-model output: /tmp/gongctl-postgres-business-pilot-reader-post-reconcile-read-model.json"
@@ -1687,6 +1709,7 @@ echo "synthetic business-pilot scoped reader sanitized profile summary output: /
 echo "synthetic business-pilot scoped reader sanitized lifecycle summary output: /tmp/gongctl-postgres-business-pilot-reader-profile-lifecycle-summary-sanitized.txt"
 echo "synthetic business-pilot scoped reader sanitized transcript backlog output: /tmp/gongctl-postgres-business-pilot-reader-profile-backlog-sanitized.txt"
 echo "synthetic business-pilot scoped reader extra column grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-column-grant.txt"
+echo "synthetic business-pilot scoped reader extra sequence grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-sequence-grant.txt"
 echo "synthetic business-pilot scoped reader identifier-bearing profile-cache helper denial output: /tmp/gongctl-postgres-business-pilot-reader-profile-cache-identifier-helper-denied.txt"
 echo "synthetic business-pilot scoped reader unbounded sanitized profile-cache denial output: /tmp/gongctl-postgres-business-pilot-reader-profile-cache-unbounded-sanitized-denied.txt"
 echo "synthetic business-pilot scoped reader limited sanitized profile-cache output: /tmp/gongctl-postgres-business-pilot-reader-profile-cache-sanitized-limited.txt"

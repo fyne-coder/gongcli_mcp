@@ -939,6 +939,93 @@ methodology:
 	if limitedFactRows != 1 {
 		t.Fatalf("limited sanitized profile cache function returned %d fact rows, want capped 1", limitedFactRows)
 	}
+	if _, err := pgStore.DB().ExecContext(ctx, `DELETE FROM profile_call_fact_cache WHERE profile_id = $1 AND call_id LIKE 'pg-profile-cap-%'`, pgImport.ProfileID); err != nil {
+		t.Fatalf("clear profile cap regression rows: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `DELETE FROM profile_lifecycle_rule WHERE profile_id = $1 AND bucket IN ('cap_regression_low', 'cap_regression_high')`, pgImport.ProfileID); err != nil {
+		t.Fatalf("clear profile cap regression rules: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `
+INSERT INTO profile_lifecycle_rule(profile_id, bucket, ordinal, label, description, rule_index, rule_json)
+VALUES($1, 'cap_regression_low', 500, 'Cap regression low', '', 0, '{}'::jsonb),
+      ($1, 'cap_regression_high', -100, 'Cap regression high', '', 0, '{}'::jsonb)`, pgImport.ProfileID); err != nil {
+		t.Fatalf("insert profile cap regression rules: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `
+INSERT INTO profile_call_fact_cache(
+	profile_id, canonical_sha256, call_id, title, started_at, duration_seconds,
+	system, direction, scope, purpose, calendar_event_present, transcript_present,
+	lifecycle_bucket, lifecycle_confidence, lifecycle_reason, evidence_fields_json,
+	deal_count, account_count, field_values_json
+)
+	SELECT $1::bigint,
+	       $2::text,
+       'pg-profile-cap-low-' || lpad(gs::text, 4, '0'),
+       'Profile cap low ' || gs::text,
+       to_char(timestamp '2026-04-01 00:00:00' + (gs || ' minutes')::interval, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+       120,
+       'Upload API',
+       'Inbound',
+       'Internal',
+       '',
+       false,
+       false,
+       'cap_regression_low',
+       'low',
+       '',
+       '[]'::jsonb,
+       0,
+       0,
+       '{}'::jsonb
+  FROM generate_series(1, 1000) gs
+UNION ALL
+	SELECT $1::bigint,
+	       $2::text,
+       'pg-profile-cap-high-' || lpad(gs::text, 4, '0'),
+       'Profile cap high ' || gs::text,
+       to_char(timestamp '2020-01-01 00:00:00' + (gs || ' minutes')::interval, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+       3600,
+       'Zoom',
+       'Conference',
+       'External',
+       '',
+       false,
+       false,
+       'cap_regression_high',
+       'high',
+       'high priority older row outside newest capped helper window',
+       '["cap_regression"]'::jsonb,
+       1,
+       1,
+       '{}'::jsonb
+  FROM generate_series(1, 5) gs`, pgImport.ProfileID, validation.CanonicalSHA256); err != nil {
+		t.Fatalf("insert profile cap regression rows: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `UPDATE profile_call_fact_cache_meta SET call_count = (SELECT COUNT(*) FROM profile_call_fact_cache WHERE profile_id = $1 AND canonical_sha256 = $2) WHERE profile_id = $1`, pgImport.ProfileID, validation.CanonicalSHA256); err != nil {
+		t.Fatalf("update profile cap regression metadata: %v", err)
+	}
+	var cappedHighRows int64
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_profile_call_fact_cache_sanitized_limited($1, $2, 1000) WHERE lifecycle_bucket = 'cap_regression_high'`, pgImport.ProfileID, validation.CanonicalSHA256).Scan(&cappedHighRows); err != nil {
+		t.Fatalf("read capped helper cap regression high rows: %v", err)
+	}
+	if cappedHighRows != 0 {
+		t.Fatalf("capped helper returned %d old high-priority cap regression rows, want 0", cappedHighRows)
+	}
+	readOnlyScopedView := &Store{db: pgStore.DB(), readOnly: true, readOnlyOptions: ReadOnlyOptions{EnforceAllowedColumnBoundary: true}}
+	capSummary, _, err := readOnlyScopedView.SummarizeCallsByLifecycleWithSource(ctx, sqlite.LifecycleSummaryParams{Bucket: "cap_regression_low", LifecycleSource: sqlite.LifecycleSourceProfile})
+	if err != nil {
+		t.Fatalf("scoped read-only lifecycle summary cap regression returned error: %v", err)
+	}
+	if len(capSummary) != 1 || capSummary[0].CallCount != 1000 || capSummary[0].MissingTranscriptCount != 1000 {
+		t.Fatalf("scoped read-only lifecycle summary cap regression rows=%+v, want full 1000 low rows", capSummary)
+	}
+	capBacklog, _, err := readOnlyScopedView.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{LifecycleSource: sqlite.LifecycleSourceProfile, Limit: 1})
+	if err != nil {
+		t.Fatalf("scoped read-only transcript backlog cap regression returned error: %v", err)
+	}
+	if len(capBacklog) != 1 || capBacklog[0].Bucket != "cap_regression_high" || capBacklog[0].CallID != "" || capBacklog[0].Title != "" {
+		t.Fatalf("scoped read-only transcript backlog cap regression rows=%+v, want redacted older high-priority row outside capped helper window", capBacklog)
+	}
 	var sanitizedProfileJSON string
 	if err := pgStore.DB().QueryRowContext(ctx, `SELECT profile_json::text FROM gongmcp_active_business_profile_sanitized()`).Scan(&sanitizedProfileJSON); err != nil {
 		t.Fatalf("read sanitized active profile function: %v", err)

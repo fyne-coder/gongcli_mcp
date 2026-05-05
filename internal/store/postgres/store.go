@@ -983,8 +983,8 @@ ranked AS (
 	   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
 	   AND NOT c.transcript_present
 	   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
-	   AND (from_date_arg = '' OR left(c.started_at, 10) >= from_date_arg)
-	   AND (to_date_arg = '' OR left(c.started_at, 10) <= to_date_arg)
+	   AND (from_date_arg = '' OR c.started_at >= from_date_arg)
+	   AND (to_date_arg = '' OR c.started_at < ((NULLIF(to_date_arg, '')::date + INTERVAL '1 day')::date::text))
 	   AND (scope_arg = '' OR c.scope = scope_arg)
 	   AND (system_arg = '' OR c.system = system_arg)
 	   AND (direction_arg = '' OR c.direction = direction_arg)
@@ -1319,6 +1319,37 @@ SELECT table_name
 	}
 	if len(writable) > 0 {
 		return fmt.Errorf("postgres read-only URL has write privileges on tables: %s", strings.Join(writable, ", "))
+	}
+	rows, err = s.db.QueryContext(ctx, `
+SELECT c.relname
+  FROM pg_class c
+  JOIN pg_namespace n
+    ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public'
+   AND c.relkind = 'S'
+   AND (
+	has_sequence_privilege(current_user, c.oid, 'USAGE') OR
+	has_sequence_privilege(current_user, c.oid, 'SELECT') OR
+	has_sequence_privilege(current_user, c.oid, 'UPDATE')
+   )
+ ORDER BY c.relname`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var readableSequences []string
+	for rows.Next() {
+		var sequence string
+		if err := rows.Scan(&sequence); err != nil {
+			return err
+		}
+		readableSequences = append(readableSequences, sequence)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(readableSequences) > 0 {
+		return fmt.Errorf("postgres read-only URL has sequence privileges: %s", strings.Join(readableSequences, ", "))
 	}
 	rows, err = s.db.QueryContext(ctx, `
 SELECT table_name
