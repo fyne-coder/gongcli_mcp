@@ -751,6 +751,119 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM PUBLIC;
 `
 
+const postgresLifecycleCRMFieldComparisonFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_compare_lifecycle_crm_fields(bucket_a_arg text, bucket_b_arg text, object_type_arg text, row_limit integer)
+RETURNS TABLE(
+	object_type text,
+	field_name text,
+	field_label text,
+	bucket_a_call_count bigint,
+	bucket_b_call_count bigint,
+	bucket_a_populated bigint,
+	bucket_b_populated bigint,
+	bucket_a_rate double precision,
+	bucket_b_rate double precision,
+	rate_delta double precision
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+	canonical_bucket_a text := TRIM(COALESCE(bucket_a_arg, ''));
+	canonical_bucket_b text := TRIM(COALESCE(bucket_b_arg, ''));
+	canonical_object_type text := TRIM(COALESCE(object_type_arg, ''));
+BEGIN
+	IF canonical_bucket_a = '' OR canonical_bucket_b = '' THEN
+		RAISE EXCEPTION 'bucket_a and bucket_b are required' USING ERRCODE = '22023';
+	END IF;
+	IF canonical_bucket_a = canonical_bucket_b THEN
+		RAISE EXCEPTION 'bucket_a and bucket_b must be different' USING ERRCODE = '22023';
+	END IF;
+	IF canonical_object_type = '' THEN
+		RAISE EXCEPTION 'object_type is required' USING ERRCODE = '22023';
+	END IF;
+	IF canonical_object_type <> 'Opportunity' THEN
+		RAISE EXCEPTION 'object_type % is not allowed for MCP-safe lifecycle CRM field comparison', canonical_object_type USING ERRCODE = '22023';
+	END IF;
+	IF canonical_bucket_a NOT IN ('outbound_prospecting', 'active_sales_pipeline', 'late_stage_sales', 'closed_won_lost_review', 'renewal', 'upsell_expansion', 'customer_success_account', 'partner', 'unknown') THEN
+		RAISE EXCEPTION 'unknown lifecycle bucket %', canonical_bucket_a USING ERRCODE = '22023';
+	END IF;
+	IF canonical_bucket_b NOT IN ('outbound_prospecting', 'active_sales_pipeline', 'late_stage_sales', 'closed_won_lost_review', 'renewal', 'upsell_expansion', 'customer_success_account', 'partner', 'unknown') THEN
+		RAISE EXCEPTION 'unknown lifecycle bucket %', canonical_bucket_b USING ERRCODE = '22023';
+	END IF;
+
+	RETURN QUERY
+	WITH selected_calls AS (
+		SELECT call_id, lifecycle_bucket AS bucket
+		  FROM call_facts
+		 WHERE lifecycle_bucket IN (canonical_bucket_a, canonical_bucket_b)
+		   AND NOT EXISTS (
+			SELECT 1
+			  FROM governance_suppressed_calls suppressed
+			 WHERE suppressed.call_id = call_facts.call_id
+		   )
+	),
+	bucket_totals AS (
+		SELECT bucket, COUNT(DISTINCT call_id)::bigint AS call_count
+		  FROM selected_calls
+		 GROUP BY bucket
+	),
+	field_presence AS (
+		SELECT DISTINCT sc.bucket,
+		       f.call_id,
+		       o.object_type,
+		       f.field_name,
+		       f.field_label
+		  FROM selected_calls sc
+		  JOIN call_context_fields f
+		    ON f.call_id = sc.call_id
+		  JOIN call_context_objects o
+		    ON o.call_id = f.call_id
+		   AND o.object_key = f.object_key
+		 WHERE TRIM(f.field_value_text) <> ''
+		   AND o.object_type = canonical_object_type
+	),
+	field_counts AS (
+		SELECT fp.object_type,
+		       fp.field_name,
+		       MAX(fp.field_label) AS field_label,
+		       COALESCE(MAX(CASE WHEN bt.bucket = canonical_bucket_a THEN bt.call_count END), 0)::bigint AS bucket_a_call_count,
+		       COALESCE(MAX(CASE WHEN bt.bucket = canonical_bucket_b THEN bt.call_count END), 0)::bigint AS bucket_b_call_count,
+		       COUNT(DISTINCT CASE WHEN fp.bucket = canonical_bucket_a THEN fp.call_id END)::bigint AS bucket_a_populated,
+		       COUNT(DISTINCT CASE WHEN fp.bucket = canonical_bucket_b THEN fp.call_id END)::bigint AS bucket_b_populated
+		  FROM field_presence fp
+		 CROSS JOIN bucket_totals bt
+		 GROUP BY fp.object_type, fp.field_name
+	),
+	rated AS (
+		SELECT field_counts.*,
+		       CASE WHEN field_counts.bucket_a_call_count <= 0 THEN 0::double precision ELSE field_counts.bucket_a_populated::double precision / field_counts.bucket_a_call_count::double precision END AS bucket_a_rate,
+		       CASE WHEN field_counts.bucket_b_call_count <= 0 THEN 0::double precision ELSE field_counts.bucket_b_populated::double precision / field_counts.bucket_b_call_count::double precision END AS bucket_b_rate
+		  FROM field_counts
+	)
+	SELECT rated.object_type,
+	       rated.field_name,
+	       rated.field_label,
+	       rated.bucket_a_call_count,
+	       rated.bucket_b_call_count,
+	       rated.bucket_a_populated,
+	       rated.bucket_b_populated,
+	       rated.bucket_a_rate,
+	       rated.bucket_b_rate,
+	       (rated.bucket_a_rate - rated.bucket_b_rate) AS rate_delta
+	  FROM rated
+	 ORDER BY abs(rated.bucket_a_rate - rated.bucket_b_rate) DESC,
+	          (rated.bucket_a_populated + rated.bucket_b_populated) DESC,
+	          rated.field_name
+	 LIMIT LEAST(GREATEST(COALESCE(row_limit, 50), 1), 1000);
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) FROM PUBLIC;
+`
+
 type postgresCRMIntegrationPayload struct {
 	IntegrationID string
 	Name          string
@@ -1323,6 +1436,66 @@ SELECT group_value,
 		}
 		cell.PopulationRate = rate(cell.PopulatedCount, cell.ObjectCount)
 		report.Cells = append(report.Cells, cell)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+func (s *Store) CompareLifecycleCRMFields(ctx context.Context, params sqlite.LifecycleCRMFieldComparisonParams) (*sqlite.LifecycleCRMFieldComparison, error) {
+	bucketA := strings.TrimSpace(params.BucketA)
+	bucketB := strings.TrimSpace(params.BucketB)
+	if bucketA == "" || bucketB == "" {
+		return nil, errors.New("bucket_a and bucket_b are required")
+	}
+	if !postgresKnownLifecycleBucket(bucketA) {
+		return nil, fmt.Errorf("unknown lifecycle bucket %q", bucketA)
+	}
+	if !postgresKnownLifecycleBucket(bucketB) {
+		return nil, fmt.Errorf("unknown lifecycle bucket %q", bucketB)
+	}
+	if bucketA == bucketB {
+		return nil, errors.New("bucket_a and bucket_b must be different")
+	}
+	objectType := strings.TrimSpace(params.ObjectType)
+	if objectType == "" {
+		return nil, errors.New("object_type is required")
+	}
+	if objectType != "Opportunity" {
+		return nil, fmt.Errorf("object_type %q is not allowed for MCP-safe lifecycle CRM field comparison", objectType)
+	}
+	limit := boundedLimit(params.Limit, defaultLifecycleCRMFieldLimit, maxLifecycleCRMFieldLimit)
+
+	rows, err := s.db.QueryContext(ctx, `SELECT object_type, field_name, field_label, bucket_a_call_count, bucket_b_call_count, bucket_a_populated, bucket_b_populated, bucket_a_rate, bucket_b_rate, rate_delta
+  FROM gongmcp_compare_lifecycle_crm_fields($1, $2, $3, $4)`, bucketA, bucketB, objectType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	report := &sqlite.LifecycleCRMFieldComparison{
+		BucketA:    bucketA,
+		BucketB:    bucketB,
+		ObjectType: objectType,
+	}
+	for rows.Next() {
+		var row sqlite.LifecycleCRMFieldComparisonRow
+		if err := rows.Scan(
+			&row.ObjectType,
+			&row.FieldName,
+			&row.FieldLabel,
+			&row.BucketACallCount,
+			&row.BucketBCallCount,
+			&row.BucketAPopulated,
+			&row.BucketBPopulated,
+			&row.BucketARate,
+			&row.BucketBRate,
+			&row.RateDelta,
+		); err != nil {
+			return nil, err
+		}
+		report.Fields = append(report.Fields, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

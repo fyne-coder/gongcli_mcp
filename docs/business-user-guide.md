@@ -35,10 +35,11 @@ local database files. Those workflows stay with the pilot operator.
   require operator/sponsor approval and are not the business-user default.
   Postgres expansion uses reviewed Postgres presets such as `analyst-core`,
   `analyst-business-core`, `governance-search`, or explicit tool allowlists
-  such as `search_transcripts_by_crm_context` for reviewed CRM-constrained
-  snippet investigations. The `search_transcripts_by_crm_context` Postgres
-  slice is development-branch work after `v0.3.3` until a tagged release
-  includes it.
+  such as `compare_lifecycle_crm_fields` for reviewed Opportunity lifecycle
+  CRM field comparison or `search_transcripts_by_crm_context` for reviewed CRM-constrained snippet
+  investigations. The `compare_lifecycle_crm_fields` and
+  `search_transcripts_by_crm_context` Postgres slices are development-branch
+  work after `v0.3.3` until a tagged release includes them.
 
 For the first-session handoff, use
 [Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).
@@ -573,9 +574,11 @@ Do not expose these tools to business users during the pilot:
 These tools are operator-only or expansion-candidate tools because they can
 reveal tenant structure, allow directed value lookup, or move too close to
 exact-call review for an initial business pilot.
-For Postgres deployments, `crm_field_population_matrix` is available only as a
-reviewed explicit operator allowlist and should stay out of business-user
-presets until aggregate privacy and customer-scale performance are hardened.
+For Postgres deployments, `crm_field_population_matrix` and
+`compare_lifecycle_crm_fields` are available only as reviewed explicit
+operator allowlists and should stay out of business-user presets until
+aggregate privacy and customer-scale performance are hardened. The current
+Postgres lifecycle comparison slice is limited to Opportunity fields.
 
 `search_transcript_quotes_with_attribution` is the right tool for marketing
 asks like “top quotes by Q1 theme, industry, and opportunity stage.” It returns

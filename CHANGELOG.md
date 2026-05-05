@@ -3,6 +3,11 @@
 ## Unreleased
 
 - Added development-branch Postgres explicit allowlist support for
+  `compare_lifecycle_crm_fields`, returning aggregate lifecycle-vs-CRM field
+  population comparisons for the reviewed `Opportunity` object type without
+  exposing call IDs, CRM object identifiers, raw CRM values, raw JSON, raw
+  hashes, or transcript content.
+- Added development-branch Postgres explicit allowlist support for
   `search_transcripts_by_crm_context`, returning CRM-constrained transcript
   snippets through a reader-executable function while redacting CRM object
   IDs/names, call titles, raw CRM values, raw JSON, raw hashes, and full

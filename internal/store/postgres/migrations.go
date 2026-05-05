@@ -972,4 +972,15 @@ BEGIN
 END;
 $$;
 `,
+	`
+DROP FUNCTION IF EXISTS gongmcp_compare_lifecycle_crm_fields(text, text, text, integer);
+` + postgresLifecycleCRMFieldComparisonFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }

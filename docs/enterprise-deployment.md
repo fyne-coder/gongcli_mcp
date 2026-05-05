@@ -148,10 +148,13 @@ flowchart LR
   `list_unmapped_crm_fields`, `search_crm_field_values`,
   `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`, and
   `opportunity_call_summary`, plus aggregate CRM field-population diagnostics
-  through `crm_field_population_matrix` and CRM-constrained transcript snippets
+  through `crm_field_population_matrix`, reviewed Opportunity lifecycle CRM
+  field comparison through `compare_lifecycle_crm_fields`, and
+  CRM-constrained transcript snippets
   through `search_transcripts_by_crm_context`, are available through explicit
-  allowlists. The `search_transcripts_by_crm_context` Postgres slice is
-  development-branch work after `v0.3.3` until a tagged release includes it.
+  allowlists. The `compare_lifecycle_crm_fields` and
+  `search_transcripts_by_crm_context` Postgres slices are development-branch
+  work after `v0.3.3` until a tagged release includes them.
   Full `analyst` and `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).
 - AI governance filtered DB export remains SQLite-only. Postgres supports a
@@ -573,9 +576,10 @@ allowlist and enable per-tool opt-ins to surface exact identifiers, bounded
 snippets, and attribution joined to Account/Opportunity context for deeper
 questions. Postgres deployments should expand through reviewed presets such as
 `analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool
-allowlists such as `crm_field_population_matrix` or
-`search_transcripts_by_crm_context`; full Postgres `analyst` and
-`all-readonly` remain gated until the parity matrix says otherwise. See
+allowlists such as `crm_field_population_matrix`,
+`compare_lifecycle_crm_fields`, or `search_transcripts_by_crm_context`; full
+Postgres `analyst` and `all-readonly` remain gated until the parity matrix
+says otherwise. See
 [mcp-data-exposure.md](mcp-data-exposure.md) for the trade-off framing and
 [mcp-data-exposure.md#mcp-call-volume-and-limits](mcp-data-exposure.md#mcp-call-volume-and-limits)
 for the per-call cost model and recommended limits.

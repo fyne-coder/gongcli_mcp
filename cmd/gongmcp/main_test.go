@@ -67,8 +67,18 @@ func TestPostgresToolAllowlistAcceptsCRMContextTranscriptSearch(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsLifecycleCRMFieldComparison(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"compare_lifecycle_crm_fields"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"compare_lifecycle_crm_fields"}) {
+		t.Fatalf("allowlist=%v want compare_lifecycle_crm_fields", allowlist)
+	}
+}
+
 func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
-	if _, err := postgresToolAllowlist([]string{"compare_lifecycle_crm_fields"}, false, ""); err == nil {
+	if _, err := postgresToolAllowlist([]string{"not_a_tool"}, false, ""); err == nil {
 		t.Fatal("postgresToolAllowlist accepted unsupported tool")
 	}
 }

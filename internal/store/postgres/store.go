@@ -34,6 +34,8 @@ const (
 	maxOpportunitySummaryLimit     = 1000
 	defaultCRMMatrixLimit          = 50
 	maxCRMMatrixLimit              = 1000
+	defaultLifecycleCRMFieldLimit  = 50
+	maxLifecycleCRMFieldLimit      = 1000
 	maxOpportunityStageValueCount  = 50
 	maxOpportunityStageValueLength = 200
 	maxLateStageValueCount         = 25
@@ -406,6 +408,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_opportunities_missing_transcripts(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_opportunity_call_summary(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_population_matrix(text, text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_compare_lifecycle_crm_fields(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
@@ -414,6 +417,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresOpportunitiesMissingTranscriptsFunctionSQL+`
 	`+postgresOpportunityCallSummaryFunctionSQL+`
 	`+postgresCRMFieldPopulationMatrixFunctionSQL+`
+	`+postgresLifecycleCRMFieldComparisonFunctionSQL+`
 	`+postgresTranscriptCRMContextSearchFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
@@ -706,6 +710,7 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -983,6 +988,7 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_opportunities_missing_transcripts(text, integer)'),
 		('public.gongmcp_opportunity_call_summary(text, integer)'),
 		('public.gongmcp_crm_field_population_matrix(text, text, integer)'),
+		('public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature

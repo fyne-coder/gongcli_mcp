@@ -1078,7 +1078,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -2587,6 +2587,157 @@ func TestPostgresCRMFieldPopulationMatrixMatchesSQLite(t *testing.T) {
 
 	if _, err := pgStore.DB().ExecContext(ctx, `SELECT COUNT(*) FROM gongmcp_crm_field_population_matrix('Opportunity', 'OwnerId', 10)`); err == nil {
 		t.Fatal("direct unsafe group_by_field did not fail")
+	}
+}
+
+func TestPostgresCompareLifecycleCRMFieldsMatchesSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	calls := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-lifecycle-crm-001","title":"Renewal with process","started":"2026-04-20T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-lifecycle-crm-1","name":"Renewal Opp One","fields":{"StageName":"Renewal Discussion","Type":"Renewal","Renewal_Process__c":"Formal","Procurement_System__c":"Coupa"}}]}}`),
+		json.RawMessage(`{"id":"pg-lifecycle-crm-002","title":"Renewal without process","started":"2026-04-21T12:00:00Z","duration":900,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-lifecycle-crm-2","name":"Renewal Opp Two","fields":{"StageName":"Renewal Discussion","Type":"Renewal","Renewal_Process__c":"","Procurement_System__c":"Ariba"}}]}}`),
+		json.RawMessage(`{"id":"pg-lifecycle-crm-003","title":"Active pipeline call","started":"2026-04-22T12:00:00Z","duration":1500,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-lifecycle-crm-3","name":"Pipeline Opp","fields":{"StageName":"Discovery","Type":"New Business","Renewal_Process__c":"","Procurement_System__c":"Coupa"}}]}}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+	}{pgStore, sqliteStore} {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("UpsertCall returned error: %v", err)
+			}
+		}
+	}
+
+	params := sqlite.LifecycleCRMFieldComparisonParams{
+		BucketA:    "renewal",
+		BucketB:    "active_sales_pipeline",
+		ObjectType: "Opportunity",
+		Limit:      10,
+	}
+	got, err := pgStore.CompareLifecycleCRMFields(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres CompareLifecycleCRMFields returned error: %v", err)
+	}
+	want, err := sqliteStore.CompareLifecycleCRMFields(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite CompareLifecycleCRMFields returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres lifecycle CRM comparison=%+v want sqlite %+v", got, want)
+	}
+
+	var foundRenewalProcess bool
+	for _, row := range got.Fields {
+		if row.FieldName == "Renewal_Process__c" {
+			foundRenewalProcess = true
+			if row.BucketACallCount != 2 || row.BucketBCallCount != 1 || row.BucketAPopulated != 1 || row.BucketBPopulated != 0 || row.BucketARate != 0.5 || row.BucketBRate != 0 || row.RateDelta != 0.5 {
+				t.Fatalf("unexpected Renewal_Process__c row: %+v", row)
+			}
+		}
+	}
+	if !foundRenewalProcess {
+		t.Fatalf("Renewal_Process__c missing from lifecycle CRM comparison: %+v", got.Fields)
+	}
+
+	limited, err := pgStore.CompareLifecycleCRMFields(ctx, sqlite.LifecycleCRMFieldComparisonParams{
+		BucketA:    "renewal",
+		BucketB:    "active_sales_pipeline",
+		ObjectType: "Opportunity",
+		Limit:      1,
+	})
+	if err != nil {
+		t.Fatalf("postgres limited CompareLifecycleCRMFields returned error: %v", err)
+	}
+	if len(limited.Fields) != 1 || limited.Fields[0].FieldName != got.Fields[0].FieldName {
+		t.Fatalf("unexpected limited lifecycle CRM comparison: %+v", limited)
+	}
+
+	for name, params := range map[string]sqlite.LifecycleCRMFieldComparisonParams{
+		"missing bucket": {BucketA: "renewal", ObjectType: "Opportunity"},
+		"same bucket":    {BucketA: "renewal", BucketB: "renewal", ObjectType: "Opportunity"},
+		"bad bucket":     {BucketA: "renewal", BucketB: "not-real", ObjectType: "Opportunity"},
+		"missing object": {BucketA: "renewal", BucketB: "active_sales_pipeline"},
+		"unsafe object":  {BucketA: "renewal", BucketB: "active_sales_pipeline", ObjectType: "Account"},
+	} {
+		if _, err := pgStore.CompareLifecycleCRMFields(ctx, params); err == nil {
+			t.Fatalf("%s: CompareLifecycleCRMFields returned nil error", name)
+		}
+	}
+
+	for _, column := range []string{"call_id", "title", "object_id", "object_name", "object_key", "field_value_text", "raw_json", "raw_sha256", "text"} {
+		if _, err := pgStore.DB().ExecContext(ctx, `SELECT `+column+` FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Opportunity', 10)`); err == nil {
+			t.Fatalf("lifecycle CRM comparison function exposed %s column", column)
+		}
+	}
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT object_type, field_name, field_label, bucket_a_call_count, bucket_b_call_count, bucket_a_populated, bucket_b_populated, bucket_a_rate, bucket_b_rate, rate_delta FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Opportunity', 10)`)
+	if err != nil {
+		t.Fatalf("direct safe lifecycle CRM comparison function returned error: %v", err)
+	}
+	defer directRows.Close()
+	var directText strings.Builder
+	for directRows.Next() {
+		var objectType, fieldName, fieldLabel string
+		var bucketACallCount, bucketBCallCount, bucketAPopulated, bucketBPopulated int64
+		var bucketARate, bucketBRate, rateDelta float64
+		if err := directRows.Scan(&objectType, &fieldName, &fieldLabel, &bucketACallCount, &bucketBCallCount, &bucketAPopulated, &bucketBPopulated, &bucketARate, &bucketBRate, &rateDelta); err != nil {
+			t.Fatalf("scan direct lifecycle CRM comparison row: %v", err)
+		}
+		directText.WriteString(fmt.Sprintf("%s|%s|%s|%d|%d|%d|%d|%.2f|%.2f|%.2f\n", objectType, fieldName, fieldLabel, bucketACallCount, bucketBCallCount, bucketAPopulated, bucketBPopulated, bucketARate, bucketBRate, rateDelta))
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("direct lifecycle CRM comparison rows error: %v", err)
+	}
+	if strings.Contains(directText.String(), "pg-lifecycle-crm") || strings.Contains(directText.String(), "opp-lifecycle-crm") || strings.Contains(directText.String(), "Renewal Opp") || strings.Contains(directText.String(), "Pipeline Opp") || strings.Contains(directText.String(), "Coupa") || strings.Contains(directText.String(), "Ariba") {
+		t.Fatalf("direct safe lifecycle CRM comparison leaked identifiers or raw values: %s", directText.String())
+	}
+
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'not-real', 'Opportunity', 10)`); err == nil {
+		t.Fatal("direct bad lifecycle bucket did not fail")
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Account', 10)`); err == nil {
+		t.Fatal("direct unsafe object_type did not fail")
+	}
+	for name, query := range map[string]string{
+		"null bucket_a":    `SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields(NULL, 'active_sales_pipeline', 'Opportunity', 10)`,
+		"null bucket_b":    `SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields('renewal', NULL, 'Opportunity', 10)`,
+		"null object_type": `SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', NULL, 10)`,
+	} {
+		if _, err := pgStore.DB().ExecContext(ctx, query); err == nil {
+			t.Fatalf("%s: direct NULL argument did not fail", name)
+		}
+	}
+
+	if _, err := pgStore.DB().ExecContext(ctx, `INSERT INTO governance_policy_state(config_sha256, data_fingerprint, suppressed_call_count, updated_at) VALUES('lifecycle-crm-test-sha', 'fingerprint', 1, $1)`, nowUTC()); err != nil {
+		t.Fatalf("insert governance policy state: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `INSERT INTO governance_suppressed_calls(config_sha256, call_id) VALUES('lifecycle-crm-test-sha', 'pg-lifecycle-crm-001')`); err != nil {
+		t.Fatalf("insert governance suppressed call: %v", err)
+	}
+	governed, err := pgStore.CompareLifecycleCRMFields(ctx, params)
+	if err != nil {
+		t.Fatalf("governed CompareLifecycleCRMFields returned error: %v", err)
+	}
+	for _, row := range governed.Fields {
+		if row.FieldName == "Renewal_Process__c" && row.BucketAPopulated != 0 {
+			t.Fatalf("governed lifecycle CRM comparison included suppressed call: %+v", row)
+		}
 	}
 }
 

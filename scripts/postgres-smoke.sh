@@ -894,6 +894,53 @@ if reader_psql -c "SELECT raw_sha256 FROM gongmcp_crm_field_population_matrix('O
   exit 1
 fi
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DELETE FROM calls WHERE call_id IN ('synthetic-lifecycle-crm-001','synthetic-lifecycle-crm-002','synthetic-lifecycle-crm-003'); INSERT INTO calls(call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('synthetic-lifecycle-crm-001', 'Lifecycle CRM renewal process', '2026-02-15T15:00:00Z', 1800, 2, true, '{\"id\":\"synthetic-lifecycle-crm-001\",\"title\":\"Lifecycle CRM renewal process\",\"started\":\"2026-02-15T15:00:00Z\",\"duration\":1800,\"metaData\":{\"scope\":\"External\",\"system\":\"Zoom\",\"direction\":\"Conference\"},\"context\":{\"crmObjects\":[{\"type\":\"Opportunity\",\"id\":\"opp-lifecycle-crm-001\",\"name\":\"Lifecycle Renewal One\",\"fields\":{\"StageName\":\"Renewal Discussion\",\"Type\":\"Renewal\",\"Renewal_Process__c\":\"Formal\",\"Procurement_System__c\":\"Coupa\"}}]}}'::jsonb, 'synthetic-lifecycle-crm-sha-001', now()::text, now()::text),('synthetic-lifecycle-crm-002', 'Lifecycle CRM renewal blank process', '2026-02-16T15:00:00Z', 1200, 2, true, '{\"id\":\"synthetic-lifecycle-crm-002\",\"title\":\"Lifecycle CRM renewal blank process\",\"started\":\"2026-02-16T15:00:00Z\",\"duration\":1200,\"metaData\":{\"scope\":\"External\",\"system\":\"Zoom\",\"direction\":\"Conference\"},\"context\":{\"crmObjects\":[{\"type\":\"Opportunity\",\"id\":\"opp-lifecycle-crm-002\",\"name\":\"Lifecycle Renewal Two\",\"fields\":{\"StageName\":\"Renewal Discussion\",\"Type\":\"Renewal\",\"Renewal_Process__c\":\"\",\"Procurement_System__c\":\"Ariba\"}}]}}'::jsonb, 'synthetic-lifecycle-crm-sha-002', now()::text, now()::text),('synthetic-lifecycle-crm-003', 'Lifecycle CRM active pipeline', '2026-02-17T15:00:00Z', 1500, 2, true, '{\"id\":\"synthetic-lifecycle-crm-003\",\"title\":\"Lifecycle CRM active pipeline\",\"started\":\"2026-02-17T15:00:00Z\",\"duration\":1500,\"metaData\":{\"scope\":\"External\",\"system\":\"Zoom\",\"direction\":\"Conference\"},\"context\":{\"crmObjects\":[{\"type\":\"Opportunity\",\"id\":\"opp-lifecycle-crm-003\",\"name\":\"Lifecycle Pipeline\",\"fields\":{\"StageName\":\"Discovery\",\"Type\":\"New Business\",\"Renewal_Process__c\":\"\",\"Procurement_System__c\":\"Coupa\"}}]}}'::jsonb, 'synthetic-lifecycle-crm-sha-003', now()::text, now()::text)" >/dev/null
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-lifecycle-crm-fixture-read-model.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-lifecycle-crm-fixture-read-model.json
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"compare_lifecycle_crm_fields","arguments":{"bucket_a":"renewal","bucket_b":"active_sales_pipeline","object_type":"Opportunity","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"compare_lifecycle_crm_fields","arguments":{"bucket_a":"renewal","bucket_b":"renewal","object_type":"Opportunity","limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=compare_lifecycle_crm_fields go run ./cmd/gongmcp > /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl
+grep -q '"compare_lifecycle_crm_fields"' /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl
+grep -q 'bucket_a.*renewal' /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl
+grep -q 'bucket_b.*active_sales_pipeline' /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl
+grep -q 'field_name.*Renewal_Process__c' /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl
+grep -q 'bucket_a.*bucket_b must be different' /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl
+assert_mcp_success /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl 3
+if grep -q 'synthetic-lifecycle-crm\|Lifecycle CRM\|opp-lifecycle-crm\|Lifecycle Renewal\|Lifecycle Pipeline\|Coupa\|Ariba\|New Business\|Formal\|field_value_text\|raw_json\|raw_sha256\|canonical_sha256' /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl; then
+  echo "Postgres lifecycle CRM comparison output exposed identifiers, raw values, or raw storage fields" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT object_type || '|' || field_name || '|' || bucket_a_call_count || '|' || bucket_b_call_count || '|' || bucket_a_populated || '|' || bucket_b_populated FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Opportunity', 5)" >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields.txt
+grep -q 'Opportunity|Renewal_Process__c|2|2|1|0' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields.txt
+if grep -q 'synthetic-lifecycle-crm\|Lifecycle CRM\|opp-lifecycle-crm\|Lifecycle Renewal\|Lifecycle Pipeline\|Coupa\|Ariba\|New Business\|Formal' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields.txt; then
+  echo "Postgres lifecycle CRM comparison function exposed identifiers or raw values" >&2
+  exit 1
+fi
+for column in call_id title object_id object_name object_key field_value_text raw_json raw_sha256 text; do
+  if reader_psql -c "SELECT $column FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Opportunity', 5)" >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-"$column".txt 2>&1; then
+    echo "Postgres lifecycle CRM comparison function exposed $column column" >&2
+    exit 1
+  fi
+done
+if reader_psql -c "SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'not-real', 'Opportunity', 5)" >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-bad-bucket.txt 2>&1; then
+  echo "Postgres lifecycle CRM comparison function accepted bad lifecycle bucket" >&2
+  exit 1
+fi
+grep -q 'unknown lifecycle bucket' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-bad-bucket.txt
+if reader_psql -c "SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Account', 5)" >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-bad-object.txt 2>&1; then
+  echo "Postgres lifecycle CRM comparison function accepted unsafe object_type" >&2
+  exit 1
+fi
+grep -q 'not allowed for MCP-safe lifecycle CRM field comparison' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-bad-object.txt
+if reader_psql -c "SELECT COUNT(*) FROM gongmcp_compare_lifecycle_crm_fields(NULL, 'active_sales_pipeline', 'Opportunity', 5)" >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-null-arg.txt 2>&1; then
+  echo "Postgres lifecycle CRM comparison function accepted NULL bucket" >&2
+  exit 1
+fi
+grep -q 'bucket_a and bucket_b are required' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-null-arg.txt
+
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without opportunities_missing_transcripts function grant" >&2
@@ -921,6 +968,15 @@ grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-
 grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) FROM gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=compare_lifecycle_crm_fields go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started without compare_lifecycle_crm_fields function grant" >&2
+  exit 1
+fi
+grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift.txt
+grep -q 'gongmcp_compare_lifecycle_crm_fields' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift-repaired.json
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=search_transcripts_by_crm_context go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without search_transcripts_by_crm_context function grant" >&2
@@ -930,7 +986,7 @@ grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-
 grep -q 'gongmcp_search_transcript_segments_by_crm_context' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift-repaired.json
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-public-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started with public function EXECUTE drift" >&2
   exit 1
@@ -939,6 +995,7 @@ grep -q 'over-broad function EXECUTE grants' /tmp/gongctl-postgres-reader-functi
 grep -q 'gongmcp_opportunities_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_opportunity_call_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-function-public-drift.txt
+grep -q 'gongmcp_compare_lifecycle_crm_fields' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_search_transcript_segments_by_crm_context' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_object_type_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-function-public-drift-repaired.json
@@ -1120,7 +1177,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -1278,6 +1335,14 @@ echo "CRM field population matrix raw-json denial output: /tmp/gongctl-postgres-
 echo "CRM field population matrix raw-sha denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-raw-sha256.txt"
 echo "CRM field population matrix function-grant drift denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt"
 echo "CRM field population matrix function-grant drift repair output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json"
+echo "lifecycle CRM comparison fixture output: /tmp/gongctl-postgres-lifecycle-crm-fixture-read-model.json"
+echo "lifecycle CRM comparison MCP output: /tmp/gongctl-postgres-compare-lifecycle-crm-fields.jsonl"
+echo "lifecycle CRM comparison reader output: /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields.txt"
+echo "lifecycle CRM comparison bad-bucket denial output: /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-bad-bucket.txt"
+echo "lifecycle CRM comparison bad-object denial output: /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-bad-object.txt"
+echo "lifecycle CRM comparison null-argument denial output: /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-null-arg.txt"
+echo "lifecycle CRM comparison function-grant drift denial output: /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift.txt"
+echo "lifecycle CRM comparison function-grant drift repair output: /tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-function-grant-drift-repaired.json"
 echo "cache inventory output: /tmp/gongctl-postgres-cache-inventory.json"
 echo "cache inventory writer URL output: /tmp/gongctl-postgres-cache-inventory-writer-url.json"
 echo "support bundle response output: /tmp/gongctl-postgres-support-bundle.json"
