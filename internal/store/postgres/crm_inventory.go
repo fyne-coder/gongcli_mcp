@@ -112,6 +112,80 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM PUBLIC;
 `
 
+const postgresUnmappedCRMFieldInventoryFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_unmapped_crm_field_inventory(row_limit integer)
+RETURNS TABLE(
+	object_type text,
+	field_name text,
+	field_label text,
+	field_type text,
+	object_count bigint,
+	populated_count bigint,
+	distinct_value_count bigint,
+	min_value_length bigint,
+	max_value_length bigint,
+	avg_value_length double precision
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH active_profile AS (
+	SELECT id
+	  FROM profile_meta
+	 WHERE is_active = true
+	 ORDER BY id DESC
+	 LIMIT 1
+),
+mapped_fields AS (
+	SELECT DISTINCT oa.object_type, fc.field_name
+	  FROM active_profile ap
+	  JOIN profile_field_concept fc
+	    ON fc.profile_id = ap.id
+	  JOIN profile_object_alias oa
+	    ON oa.profile_id = ap.id
+	   AND oa.concept = fc.object_concept
+),
+candidate_fields AS (
+	SELECT o.object_type,
+	       f.field_name,
+	       f.field_label,
+	       f.field_type,
+	       o.object_key,
+	       f.field_value_text
+	  FROM active_profile ap
+	  JOIN call_context_fields f
+	    ON true
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE NOT EXISTS (
+		SELECT 1
+		  FROM mapped_fields mf
+		 WHERE mf.object_type = o.object_type
+		   AND mf.field_name = f.field_name
+	 )
+)
+SELECT object_type,
+       field_name,
+       MAX(field_label) AS field_label,
+       MAX(field_type) AS field_type,
+       COUNT(DISTINCT object_key) AS object_count,
+       COUNT(DISTINCT CASE WHEN TRIM(field_value_text) <> '' THEN object_key END) AS populated_count,
+       COUNT(DISTINCT CASE WHEN TRIM(field_value_text) <> '' THEN field_value_text END) AS distinct_value_count,
+       COALESCE(MIN(CASE WHEN TRIM(field_value_text) <> '' THEN char_length(field_value_text) END), 0)::bigint AS min_value_length,
+       COALESCE(MAX(CASE WHEN TRIM(field_value_text) <> '' THEN char_length(field_value_text) END), 0)::bigint AS max_value_length,
+       COALESCE(AVG(CASE WHEN TRIM(field_value_text) <> '' THEN char_length(field_value_text) END), 0)::double precision AS avg_value_length
+  FROM candidate_fields
+ GROUP BY object_type, field_name
+ ORDER BY populated_count DESC, object_type, field_name
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 50), 1), 4000)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM PUBLIC;
+`
+
 type postgresCRMIntegrationPayload struct {
 	IntegrationID string
 	Name          string
@@ -293,6 +367,67 @@ SELECT call_id,
 			return nil, err
 		}
 		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListUnmappedCRMFields(ctx context.Context, params sqlite.UnmappedCRMFieldParams) ([]sqlite.UnmappedCRMField, error) {
+	_, p, _, err := s.activeProfile(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mapped := mappedProfileFields(p)
+	limit := boundedLimit(params.Limit, defaultCRMFieldLimit, maxCRMFieldLimit)
+	scanLimit := limit * 4
+	if scanLimit < limit {
+		scanLimit = limit
+	}
+	if scanLimit > maxCRMFieldLimit*4 {
+		scanLimit = maxCRMFieldLimit * 4
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT object_type,
+       field_name,
+       field_label,
+       field_type,
+       object_count,
+       populated_count,
+       distinct_value_count,
+       min_value_length,
+       max_value_length,
+       avg_value_length
+  FROM gongmcp_unmapped_crm_field_inventory($1)`, scanLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]sqlite.UnmappedCRMField, 0)
+	for rows.Next() {
+		var row sqlite.UnmappedCRMField
+		if err := rows.Scan(
+			&row.ObjectType,
+			&row.FieldName,
+			&row.FieldLabel,
+			&row.FieldType,
+			&row.ObjectCount,
+			&row.PopulatedCount,
+			&row.DistinctValueCount,
+			&row.MinValueLength,
+			&row.MaxValueLength,
+			&row.AvgValueLength,
+		); err != nil {
+			return nil, err
+		}
+		if _, ok := mapped[row.ObjectType+"."+row.FieldName]; ok {
+			continue
+		}
+		row.PopulationRate = rate(row.PopulatedCount, row.ObjectCount)
+		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
 	return out, rows.Err()
 }

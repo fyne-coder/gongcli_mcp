@@ -19,11 +19,11 @@ CRM context inventory, cached CRM schema/settings inventory, profile,
 lifecycle, and transcript-search tools while `analyst-business-core` adds
 bounded Postgres transcript-evidence and business-analysis tools. Scorecard
 settings inventory and aggregate answered scorecard activity are available
-through the Postgres analyst-core surface. Postgres also supports the explicit
-`search_crm_field_values` value-lookup tool by allowlist with the same
-redaction defaults and opt-ins as SQLite, while full `analyst` and
-`all-readonly` remain gated until the remaining full-catalog query parity is
-complete.
+through the Postgres analyst-core surface. Postgres also supports explicit
+`list_unmapped_crm_fields` and `search_crm_field_values` allowlists with the
+same metadata-only/default-redaction contracts as SQLite, while full `analyst`
+and `all-readonly` remain gated until the remaining full-catalog query parity
+is complete.
 
 ## Positioning
 
@@ -82,7 +82,8 @@ reviewed Postgres analyst starter surface including cached CRM schema/settings
 inventory, scorecard inventory, and scorecard activity aggregates,
 `analyst-business-core` for bounded Postgres
 transcript-evidence/business analysis workflows. For directed Postgres CRM
-value lookup, use an explicit `search_crm_field_values` allowlist.
+field discovery, use an explicit `list_unmapped_crm_fields` allowlist; for
+directed CRM value lookup, use an explicit `search_crm_field_values` allowlist.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
@@ -541,18 +542,24 @@ aggregate/config tools are refused.
 `gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache. For the Postgres shared-deployment slice, omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` to a read-only database role.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
 
-By default, `gongmcp` exposes the full read-only MCP catalog to any connected
-host. Company pilots should narrow that surface with `gongmcp --tool-preset`
-or `--tool-allowlist`, then layer host and filesystem controls around the
-approved business-user subset. Trusted single-user analyst workstations may
-use `--tool-preset all-readonly` or intentionally skip the allowlist in stdio
-mode and turn on per-tool opt-ins
+For SQLite stdio, `gongmcp` exposes the full read-only MCP catalog by default
+to any connected host. Company pilots should narrow that surface with
+`gongmcp --tool-preset` or `--tool-allowlist`, then layer host and filesystem
+controls around the approved business-user subset. Trusted single-user analyst
+workstations may use `--tool-preset all-readonly` or intentionally skip the
+allowlist in stdio mode and turn on per-tool opt-ins
 (`include_call_ids`, `include_speaker_ids`, `include_value_snippets`) for
 deeper, identifier-bearing questions; see
 [docs/mcp-data-exposure.md](docs/mcp-data-exposure.md) for the trade-off and
 [docs/mcp-data-exposure.md#mcp-call-volume-and-limits](docs/mcp-data-exposure.md#mcp-call-volume-and-limits)
 for configurable row caps, cap-hit feedback, and filter-first guidance that
 keeps MCP traffic from overwhelming the host context window.
+
+For Postgres stdio, the no-allowlist default is the bounded vertical-slice
+surface (`get_sync_status`, `search_calls`, and `search_transcript_segments`).
+Broader Postgres tools require a supported preset such as `business-pilot`,
+`analyst-core`, or `analyst-business-core`, or an explicit
+`GONGMCP_TOOL_ALLOWLIST`; full `analyst` and `all-readonly` remain rejected.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),
@@ -607,7 +614,9 @@ so the server can reject unexpected browser `Origin` headers.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
 JSON-RPC traffic.
 
-Tools:
+SQLite/full catalog tools. Postgres availability is limited to the supported
+presets and explicit allowlists described above; unsupported Postgres tools and
+the full `analyst` / `all-readonly` presets fail closed.
 
 - `get_sync_status`
 - `search_calls`
@@ -645,7 +654,7 @@ Tools:
 The SQLite MCP path requires `--db`; the Postgres path omits `--db` and uses `GONG_DATABASE_URL` or `DATABASE_URL`. In both modes, the MCP server intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
 `get_call` returns minimized call detail instead of raw cached call JSON. `crm_field_population_matrix` only allows safe categorical group fields such as `StageName`.
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
-`summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
+`summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `list_unmapped_crm_fields` for profile field-discovery gaps and `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `summarize_scorecard_activity` returns aggregate answered-scorecard counts and scores only. By default it does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw scorecard activity payloads.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
 The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values and object names remain denied.

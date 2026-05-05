@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -947,7 +949,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -1808,6 +1810,162 @@ func TestPostgresSearchCRMFieldValuesMatchesSQLite(t *testing.T) {
 	}
 }
 
+func TestPostgresListUnmappedCRMFieldsMatchesSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	if _, err := pgStore.ListUnmappedCRMFields(ctx, sqlite.UnmappedCRMFieldParams{Limit: 10}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("postgres ListUnmappedCRMFields without profile error=%v, want sql.ErrNoRows", err)
+	}
+	var directWithoutProfile int
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_unmapped_crm_field_inventory(10)`).Scan(&directWithoutProfile); err != nil {
+		t.Fatalf("direct function without profile returned error: %v", err)
+	}
+	if directWithoutProfile != 0 {
+		t.Fatalf("direct function without profile returned %d rows, want 0", directWithoutProfile)
+	}
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	fixtures := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-unmapped-001","title":"Unmapped CRM review","started":"2026-03-02T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-unmapped-1","name":"Unmapped Opp","fields":{"StageName":"Proposal","Type":"New Business","Procurement_System__c":"SAP Ariba"}},{"type":"Account","id":"acct-unmapped-1","name":"Unmapped Account","fields":{"Account_Type__c":"Prospect","Industry":"Manufacturing"}}]}}`),
+		json.RawMessage(`{"id":"pg-unmapped-002","title":"Second unmapped CRM review","started":"2026-03-03T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-unmapped-2","name":"Second Unmapped Opp","fields":{"StageName":"Discovery","Type":"Renewal","Procurement_System__c":"Coupa"}}]}}`),
+	}
+	for _, raw := range fixtures {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	profileBody := []byte(`
+version: 1
+name: Unmapped CRM test profile
+objects:
+  deal:
+    object_types: [Opportunity]
+  account:
+    object_types: [Account]
+fields:
+  deal_stage:
+    object: deal
+    names: [StageName]
+  account_type:
+    object: account
+    names: [Account_Type__c]
+lifecycle:
+  open:
+    order: 10
+    rules:
+      - field: deal_stage
+        op: in
+        values: [Proposal, Discovery]
+  closed_won:
+    order: 20
+  closed_lost:
+    order: 30
+  post_sales:
+    order: 40
+  unknown:
+    order: 999
+`)
+	inventory, err := pgStore.ProfileInventory(ctx)
+	if err != nil {
+		t.Fatalf("postgres ProfileInventory returned error: %v", err)
+	}
+	p, validation, err := profilepkg.ValidateBytes(profileBody, inventory)
+	if err != nil {
+		t.Fatalf("ValidateBytes returned error: %v", err)
+	}
+	if !validation.Valid {
+		t.Fatalf("profile validation failed: %+v", validation.Findings)
+	}
+	canonical, err := profilepkg.CanonicalJSON(p)
+	if err != nil {
+		t.Fatalf("CanonicalJSON returned error: %v", err)
+	}
+	params := sqlite.ProfileImportParams{
+		SourcePath:      "unmapped-crm-profile.yaml",
+		SourceSHA256:    validation.SourceSHA256,
+		CanonicalSHA256: validation.CanonicalSHA256,
+		RawYAML:         profileBody,
+		CanonicalJSON:   canonical,
+		Profile:         p,
+		Findings:        validation.Findings,
+		ImportedBy:      "test",
+	}
+	if _, err := pgStore.ImportProfile(ctx, params); err != nil {
+		t.Fatalf("postgres ImportProfile returned error: %v", err)
+	}
+	if _, err := sqliteStore.ImportProfile(ctx, params); err != nil {
+		t.Fatalf("sqlite ImportProfile returned error: %v", err)
+	}
+
+	got, err := pgStore.ListUnmappedCRMFields(ctx, sqlite.UnmappedCRMFieldParams{Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres ListUnmappedCRMFields returned error: %v", err)
+	}
+	want, err := sqliteStore.ListUnmappedCRMFields(ctx, sqlite.UnmappedCRMFieldParams{Limit: 10})
+	if err != nil {
+		t.Fatalf("sqlite ListUnmappedCRMFields returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres unmapped CRM fields=%+v want sqlite %+v", got, want)
+	}
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT object_type, field_name FROM gongmcp_unmapped_crm_field_inventory(10) ORDER BY object_type, field_name`)
+	if err != nil {
+		t.Fatalf("direct function after profile returned error: %v", err)
+	}
+	defer directRows.Close()
+	var directFields []string
+	for directRows.Next() {
+		var objectType, fieldName string
+		if err := directRows.Scan(&objectType, &fieldName); err != nil {
+			t.Fatalf("scan direct function row: %v", err)
+		}
+		directFields = append(directFields, objectType+"."+fieldName)
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("direct function rows error: %v", err)
+	}
+	for _, mapped := range []string{"Opportunity.StageName", "Account.Account_Type__c"} {
+		if stringSliceContains(directFields, mapped) {
+			t.Fatalf("direct function returned mapped field %q: %+v", mapped, directFields)
+		}
+	}
+	for _, row := range got {
+		if row.FieldName == "StageName" || row.FieldName == "Account_Type__c" {
+			t.Fatalf("mapped field was not filtered: %+v", got)
+		}
+		if row.FieldName == "Procurement_System__c" && (row.DistinctValueCount != 2 || row.PopulatedCount != 2 || row.MaxValueLength == 0) {
+			t.Fatalf("unexpected procurement field stats: %+v", row)
+		}
+	}
+	limited, err := pgStore.ListUnmappedCRMFields(ctx, sqlite.UnmappedCRMFieldParams{Limit: 1})
+	if err != nil {
+		t.Fatalf("postgres limited ListUnmappedCRMFields returned error: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Fatalf("limited unmapped len=%d want 1: %+v", len(limited), limited)
+	}
+}
+
 func TestPostgresReadModelExtractionCapsRecordDiagnostics(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -2319,6 +2477,15 @@ func assertPostgresCount(t *testing.T, ctx context.Context, store *Store, query 
 	if got != want {
 		t.Fatalf("count query got %d want %d: %s", got, want, query)
 	}
+}
+
+func stringSliceContains(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func postgresTableCounts(rows []sqlite.CacheTableCount) map[string]int64 {

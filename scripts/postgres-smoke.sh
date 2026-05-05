@@ -577,6 +577,31 @@ fi
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_unmapped_crm_fields","arguments":{"limit":10}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=list_unmapped_crm_fields go run ./cmd/gongmcp > /tmp/gongctl-postgres-unmapped-crm-fields.jsonl
+grep -q '"list_unmapped_crm_fields"' /tmp/gongctl-postgres-unmapped-crm-fields.jsonl
+grep -q 'field_name.*Industry' /tmp/gongctl-postgres-unmapped-crm-fields.jsonl
+grep -q 'field_name.*Type' /tmp/gongctl-postgres-unmapped-crm-fields.jsonl
+assert_mcp_success /tmp/gongctl-postgres-unmapped-crm-fields.jsonl 3
+if grep -q 'Proposal\|Manufacturing\|New Business\|Prospect\|synthetic-profile-call-001\|opp-profile-001\|acct-profile-001\|Profile Opportunity\|Profile Account\|raw_json\|raw_sha256\|field_value_text\|canonical_sha256\|Synthetic Postgres profile' /tmp/gongctl-postgres-unmapped-crm-fields.jsonl; then
+  echo "Postgres unmapped CRM fields output exposed raw values, identifiers, profile details, or raw storage fields" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT field_name FROM gongmcp_unmapped_crm_field_inventory(10) ORDER BY field_name" >/tmp/gongctl-postgres-reader-unmapped-crm-function-fields.txt
+grep -q 'Industry' /tmp/gongctl-postgres-reader-unmapped-crm-function-fields.txt
+grep -q 'Type' /tmp/gongctl-postgres-reader-unmapped-crm-function-fields.txt
+if grep -q 'StageName\|Account_Type__c' /tmp/gongctl-postgres-reader-unmapped-crm-function-fields.txt; then
+  echo "Postgres unmapped CRM function returned mapped profile fields" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_value_text FROM gongmcp_unmapped_crm_field_inventory(10)" >/tmp/gongctl-postgres-reader-unmapped-crm-function-value-column.txt 2>&1; then
+  echo "Postgres unmapped CRM function exposed field_value_text column" >&2
+  exit 1
+fi
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_crm_field_values","arguments":{"object_type":"Opportunity","field_name":"StageName","value_query":"Proposal","limit":5}}}'
 } | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=search_crm_field_values go run ./cmd/gongmcp > /tmp/gongctl-postgres-crm-field-values-redacted.jsonl
 grep -q '"search_crm_field_values"' /tmp/gongctl-postgres-crm-field-values-redacted.jsonl
@@ -787,7 +812,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -840,6 +865,9 @@ echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
 echo "analyst-core output: /tmp/gongctl-postgres-analyst-core.jsonl"
 echo "analyst-business-core output: /tmp/gongctl-postgres-analyst-business-core.jsonl"
+echo "unmapped CRM fields output: /tmp/gongctl-postgres-unmapped-crm-fields.jsonl"
+echo "reader unmapped CRM function fields output: /tmp/gongctl-postgres-reader-unmapped-crm-function-fields.txt"
+echo "reader unmapped CRM function value-column denial output: /tmp/gongctl-postgres-reader-unmapped-crm-function-value-column.txt"
 echo "CRM field values redacted output: /tmp/gongctl-postgres-crm-field-values-redacted.jsonl"
 echo "CRM field values opt-in output: /tmp/gongctl-postgres-crm-field-values-optin.jsonl"
 echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"

@@ -335,6 +335,7 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		"list_gong_settings":                        {},
 		"list_lifecycle_buckets":                    {},
 		"list_scorecards":                           {},
+		"list_unmapped_crm_fields":                  {},
 		"prioritize_transcripts_by_lifecycle":       {},
 		"rank_transcript_backlog":                   {},
 		"search_calls":                              {},

@@ -607,6 +607,22 @@ func (s *Store) activeProfileViaMCPFunction(ctx context.Context) (*profileMetaRe
 	return meta, &p, decoded.Warnings, nil
 }
 
+func mappedProfileFields(p *profilepkg.Profile) map[string]struct{} {
+	out := map[string]struct{}{}
+	if p == nil {
+		return out
+	}
+	for _, mapping := range p.Fields {
+		objectMapping := p.Objects[mapping.Object]
+		for _, objectType := range objectMapping.ObjectTypes {
+			for _, fieldName := range mapping.Names {
+				out[objectType+"."+fieldName] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
 func (s *Store) profileWarnings(ctx context.Context, profileID int64) ([]profilepkg.Finding, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT severity, code, message, path

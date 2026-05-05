@@ -322,6 +322,13 @@ func shouldBackfillReadModelAfterMigrations(startingVersion int) bool {
 	return startingVersion < postgresReadModelBackfillMigrationVersion
 }
 
+func rate(part int64, total int64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(part) / float64(total)
+}
+
 func (s *Store) reconcileReaderGrants(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("postgres store is not open")
@@ -334,7 +341,9 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
+	DROP FUNCTION IF EXISTS gongmcp_unmapped_crm_field_inventory(integer);
 	`+postgresCRMFieldValueSearchFunctionSQL+`
+	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -615,6 +624,7 @@ BEGIN
 		`+postgresScorecardActivityReaderGrantStatementsSQL+`
 		`+postgresCRMInventoryReaderGrantStatementsSQL+`
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -875,6 +885,7 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_scorecard_activity_summary(text, integer)'),
 		('public.gongmcp_scorecard_activity_totals()'),
 		('public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean)'),
+		('public.gongmcp_unmapped_crm_field_inventory(integer)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature
