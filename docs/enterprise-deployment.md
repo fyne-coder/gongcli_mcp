@@ -500,6 +500,14 @@ For Postgres, run the confirmed cleanup in a maintenance window with scheduled
 sync/write jobs stopped. The command takes the same database advisory writer
 lock as supported Postgres write paths and deletes only the call IDs
 materialized for that confirmed run.
+The repo includes `scripts/postgres-contention-smoke.sh` to exercise the
+shipped writer-lock behavior with a larger synthetic dataset, active profile
+cache, concurrent read-model rebuild, purge, reader status, and post-contention
+MCP smoke. Treat it as local release evidence at the configured synthetic size,
+not as production capacity proof. Archive its `summary.json`,
+`operation-results.jsonl`, counts, lock samples, reader denial, and MCP
+artifacts with the change record, and run a customer-platform benchmark before
+high-volume rollout.
 Use `cache purge --config retention-policy.yaml` for scheduled retention jobs
 so approval and backup metadata travel with the purge plan. The repo does not
 install the scheduler; cron, launchd, systemd, Kubernetes CronJob, or customer

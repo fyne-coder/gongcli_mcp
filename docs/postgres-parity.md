@@ -29,7 +29,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Call facts | `call_facts` view | foundation table added | Maintained indexed facts table for grouping/filtering | must match at output layer | Phase 1 | SQLite-vs-Postgres call-fact aggregate tests |
 | Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2c for builtin facts: migration/write refresh plus trigger-maintained readiness counters | Backfill on upgrade, refresh on writes, cheap version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `TestPostgresReadModelReadinessRejectsRebuildInProgressState`; `gongctl sync read-model` |
 | Operator read-model check/rebuild | SQLite profile cache readiness/rebuild is profile-aware | complete for Postgres builtin facts via `gongctl sync read-model [--rebuild]` | Writable CLI can check/rebuild; read-only MCP never rebuilds | postgres-native equivalent | Phase 2 | `GONG_DATABASE_URL=... gongctl sync read-model --rebuild` |
-| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call synthetic smoke; broader customer-scale benchmark queued before GA | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, and stale startup denial | postgres-native equivalent | Phase 2 | `./scripts/postgres-load-smoke.sh` |
+| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke plus 1,200-call contention smoke | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, and post-contention row/profile-cache correctness | postgres-native equivalent | Phase 2/8b | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh` |
 | Transcript FTS | SQLite FTS5 | Postgres `tsvector`/GIN with execute-only snippet function | Equivalent bounded search semantics, documented ranking differences | postgres-native equivalent | Phase 2 | synthetic search comparison tests |
 | Call search | SQLite filters over calls/context | complete for normalized CRM object and builtin call-fact filters | Match safe filters or document intentional exclusions | must match | Phase 2 | `TestPostgresSearchCallsRawSafeFiltersMatchSQLite`; `scripts/postgres-smoke.sh` |
 | MCP `get_call` | SQLite minimized call detail | complete for Postgres normalized context rows | Same minimized JSON contract over Postgres MCP | must match | Phase 2 | `TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext`; `scripts/postgres-smoke.sh` |
@@ -184,8 +184,19 @@ Postgres parity should be added deliberately, with each surface classified as
   Postgres read model, captures EXPLAIN artifacts for representative read
   paths, proves read-only MCP success through operator-smoke and business-pilot
   presets after rebuild, proves the reader role cannot write or directly read
-  raw JSON payload columns, and proves stale startup denial. Keep a larger
-  customer-scale benchmark queued before GA.
+  raw JSON payload columns, and proves stale startup denial.
+- Closed for Phase 8b synthetic contention validation:
+  `scripts/postgres-contention-smoke.sh` creates 1,200 synthetic calls with an
+  active profile cache, holds the shared advisory writer lock while concurrent
+  read-model rebuild, profile-cache refresh, and purge confirmation wait on it
+  and reader status runs alongside them, samples named lock state, then verifies final
+  read-model readiness, exact purge counts, profile-cache tombstone cleanup,
+  reader write/raw-read denial, and MCP tools/list plus get_sync_status /
+  rank_transcript_backlog success through the operator-smoke preset. This is
+  repo-local release evidence for the shipped writer-lock behavior at the
+  configured synthetic size, not customer capacity proof; customer-scale
+  production benchmarking remains deployment-owned before broad or high-volume
+  rollout.
 - Closed for Phase 6a operations diagnostics: `cache inventory` and
   `support bundle` can run against Postgres through `GONG_DATABASE_URL` /
   `DATABASE_URL`, including read-only-reader smoke coverage, schema/readiness
@@ -210,6 +221,5 @@ Postgres parity should be added deliberately, with each surface classified as
   paths. Scheduler installation, production PITR/replica retention, and
   customer backup-policy enforcement remain deployment-owned.
 - Still queued: database-enforced governance filtering/RLS, analyst and
-  all-readonly query parity, larger customer-scale load benchmarking for
-  read-model counter write contention, customer-platform PITR/replica restore
-  drills, and cross-version customer-data restore validation before GA.
+  all-readonly query parity, customer-platform PITR/replica restore drills, and
+  cross-version customer-data restore validation before GA.

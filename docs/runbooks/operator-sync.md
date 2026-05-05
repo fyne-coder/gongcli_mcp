@@ -189,6 +189,11 @@ Notes:
   sync/write jobs stopped. The command takes a database advisory writer lock and
   deletes the materialized call ID set for that run, but operator scheduling is
   still the retention control of record.
+- For pre-rollout validation, `scripts/postgres-contention-smoke.sh` exercises a
+  larger synthetic Postgres dataset with concurrent read-model rebuild,
+  profile-cache refresh, purge, reader status, and MCP smoke. Treat that as a
+  repo-local release evidence for shipped writer-lock behavior at the
+  configured synthetic size, not a benchmark or customer capacity proof.
 - For scheduled retention jobs, prefer a reviewed YAML policy instead of
   re-encoding the cutoff and approval state in job flags:
 
@@ -452,6 +457,13 @@ Before closing the change window, confirm:
 - read-only `gongmcp` smoke passed with no network and no credentials
 - for Postgres changes, backup/restore or restore-drill evidence exists and the
   restored read-only MCP smoke passed
+- for Postgres changes, repo-local contention smoke passed for the release
+  candidate; archive only the files listed under `summary.json.artifacts` after
+  the script's artifact leak scan passes, and do not archive generated binaries,
+  profile YAML, or retention policy YAML unless separately reviewed
+- for Postgres first-client or high-volume rollout, a customer-platform
+  contention/capacity benchmark passed for the approved load target, or the
+  deployment owner explicitly accepted that risk
 - any scheduled job change has a named owner and documented cadence
 - any scheduled retention job uses a reviewed `cache purge --config` policy or
   has an equivalent approval record tied to the dry-run plan
