@@ -167,9 +167,32 @@ grep -q '"ready": true' /tmp/gongctl-postgres-read-model-rebuild.json
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader" >/tmp/gongctl-postgres-reader-regrant.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >>/tmp/gongctl-postgres-reader-regrant.txt
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-regrant.txt
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze settings --kind scorecards >/tmp/gongctl-postgres-scorecard-settings.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecards >/tmp/gongctl-postgres-scorecards.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecard --scorecard-id synthetic-scorecard-001 >/tmp/gongctl-postgres-scorecard-detail.json
+grep -q '"object_id": "synthetic-generic-setting-id-001"' /tmp/gongctl-postgres-scorecard-settings.json
+grep -q '"name": "Synthetic discovery quality"' /tmp/gongctl-postgres-scorecards.json
+grep -q '"question_text": "Did the seller confirm the implementation timeline?"' /tmp/gongctl-postgres-scorecard-detail.json
+grep -q '"min_range": 1' /tmp/gongctl-postgres-scorecard-detail.json
+if grep -q '"max_range"' /tmp/gongctl-postgres-scorecard-detail.json; then
+  echo "scorecard detail did not tolerate nonnumeric maxRange" >&2
+  exit 1
+fi
+if grep -q 'raw_json\|raw_sha256\|raw_payload' /tmp/gongctl-postgres-scorecard-settings.json /tmp/gongctl-postgres-scorecards.json /tmp/gongctl-postgres-scorecard-detail.json; then
+  echo "scorecard inventory output exposed raw settings payload fields" >&2
+  exit 1
+fi
 
 if reader_psql -c "SELECT raw_json FROM calls LIMIT 1" >/tmp/gongctl-postgres-reader-raw-read.txt 2>&1; then
   echo "reader role unexpectedly read raw call JSON" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT raw_json FROM gong_settings LIMIT 1" >/tmp/gongctl-postgres-reader-settings-raw-read.txt 2>&1; then
+  echo "reader role unexpectedly read raw Gong settings JSON" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT raw_sha256 FROM gong_settings LIMIT 1" >>/tmp/gongctl-postgres-reader-settings-raw-read.txt 2>&1; then
+  echo "reader role unexpectedly read raw Gong settings hashes" >&2
   exit 1
 fi
 if reader_psql -c "SELECT cursor FROM sync_runs LIMIT 1" >/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
@@ -276,15 +299,21 @@ fi
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_crm_object_types","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_crm_fields","arguments":{"object_type":"Opportunity","limit":10}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_scorecards","arguments":{"limit":10}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_scorecard","arguments":{"scorecard_id":"synthetic-scorecard-001"}}}'
 } | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst-core.jsonl
 
 grep -q '"list_crm_object_types"' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q '"list_crm_fields"' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q '"list_scorecards"' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q '"get_scorecard"' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q 'Opportunity' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q 'StageName' /tmp/gongctl-postgres-analyst-core.jsonl
-assert_mcp_success /tmp/gongctl-postgres-analyst-core.jsonl 3 4
-if grep -q 'Proposal\|Manufacturing\|Profile Account\|raw_json\|field_value_text' /tmp/gongctl-postgres-analyst-core.jsonl; then
-  echo "analyst-core CRM inventory exposed raw CRM values" >&2
+grep -q 'Synthetic discovery quality' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q 'Did the seller confirm the implementation timeline?' /tmp/gongctl-postgres-analyst-core.jsonl
+assert_mcp_success /tmp/gongctl-postgres-analyst-core.jsonl 3 4 5 6
+if grep -q 'Proposal\|Manufacturing\|Profile Account\|raw_json\|field_value_text\|raw_sha256\|raw_payload' /tmp/gongctl-postgres-analyst-core.jsonl; then
+  echo "analyst-core inventory exposed raw CRM/settings values" >&2
   exit 1
 fi
 
@@ -523,6 +552,7 @@ echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"
 echo "reader raw-read denial output: /tmp/gongctl-postgres-reader-raw-read.txt"
+echo "reader settings raw-read denial output: /tmp/gongctl-postgres-reader-settings-raw-read.txt"
 echo "reader sensitive-read denial output: /tmp/gongctl-postgres-reader-sensitive-read.txt"
 echo "reader regrant output: /tmp/gongctl-postgres-reader-regrant.txt"
 echo "reader column-drift denial output: /tmp/gongctl-postgres-reader-column-drift.txt"
@@ -544,6 +574,9 @@ echo "profile mcp output: /tmp/gongctl-postgres-profile-mcp.jsonl"
 echo "profile fixture read model output: /tmp/gongctl-postgres-profile-fixture-read-model.json"
 echo "profile stale reader output: /tmp/gongctl-postgres-profile-stale-reader.jsonl"
 echo "profile cache rewarm output: /tmp/gongctl-postgres-profile-cache-rewarm.json"
+echo "scorecard settings output: /tmp/gongctl-postgres-scorecard-settings.json"
+echo "scorecards output: /tmp/gongctl-postgres-scorecards.json"
+echo "scorecard detail output: /tmp/gongctl-postgres-scorecard-detail.json"
 echo "governance fixture output: /tmp/gongctl-postgres-governance-fixture.txt"
 echo "governance read model output: /tmp/gongctl-postgres-governance-read-model.json"
 echo "governance audit output: /tmp/gongctl-postgres-governance-audit.json"

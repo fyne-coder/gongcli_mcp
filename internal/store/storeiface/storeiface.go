@@ -28,10 +28,19 @@ type TranscriptWriter interface {
 	UpsertTranscript(ctx context.Context, raw json.RawMessage) (*sqlite.TranscriptRecord, error)
 }
 
+type GongSettingWriter interface {
+	UpsertGongSetting(ctx context.Context, kind string, raw json.RawMessage) (*sqlite.GongSettingRecord, error)
+}
+
 type SyncStore interface {
 	SyncRunStore
 	CallWriter
 	UserWriter
+}
+
+type SettingsStore interface {
+	SyncRunStore
+	GongSettingWriter
 }
 
 type SyncStatusReader interface {

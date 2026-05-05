@@ -17,8 +17,10 @@ governance mode supports a prepared private policy for the narrowed
 `governance-search` MCP slice. `analyst-core` adds Postgres-supported call,
 CRM context inventory, profile, lifecycle, and transcript-search tools while
 `analyst-business-core` adds bounded Postgres transcript-evidence and
-business-analysis tools. Full `analyst` and `all-readonly` remain gated until
-inventory and scorecard parity is complete.
+business-analysis tools. Scorecard settings inventory is available through the
+Postgres analyst-core surface, while full `analyst` and `all-readonly` remain
+gated until scorecard activity, support/cache, and remaining catalog parity are
+complete.
 
 ## Positioning
 
@@ -73,10 +75,10 @@ gongctl profile schema
 ```
 
 Use `business-pilot` for first business-user access, `analyst-core` for the
-reviewed Postgres analyst starter surface, `analyst-business-core` for bounded
-Postgres transcript-evidence/business-analysis workflows, and `all-readonly`
-only for trusted SQLite admin/analyst sessions against a reviewed SQLite or
-filtered cache.
+reviewed Postgres analyst starter surface including scorecard inventory,
+`analyst-business-core` for bounded Postgres transcript-evidence/business
+analysis workflows, and `all-readonly` only for trusted SQLite admin/analyst
+sessions against a reviewed SQLite or filtered cache.
 
 - Deployment worksheet: [Customer implementation checklist](docs/implementation-checklist.md)
 - Local/container start: [Quickstart](docs/quickstart.md)
@@ -334,6 +336,9 @@ gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity -
 gongctl calls show --db ~/gongctl-data/gong.db --call-id CALL_ID --json
 # With GONG_DATABASE_URL set, Postgres returns minimized call detail without --db.
 gongctl calls show --call-id CALL_ID --json
+gongctl sync settings --kind scorecards
+gongctl analyze scorecards
+gongctl analyze scorecard --scorecard-id SCORECARD_ID
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --json
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --out calls-with-crm-context.json --allow-sensitive-export
 gongctl calls export --from 2026-04-01 --to 2026-04-24 --out calls.jsonl
@@ -395,7 +400,7 @@ Rules:
 - `sync calls --include-parties` requests Gong call participant fields such as names, emails, speaker IDs, and titles. Use it only for approved operator refreshes because returned participant payloads are cached in raw call JSON.
 - `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
 - `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
-- `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces.
+- `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces. With `GONG_DATABASE_URL` set and `--db` omitted, this cache can be written to Postgres for shared deployments.
 - `sync scorecard-activity` caches answered scorecard activity from Gong's scorecard
   activity stats endpoint. It stores local raw JSON for operator audit, but
   public summaries should use aggregate analyze/MCP surfaces.
@@ -432,7 +437,7 @@ Rules:
   or warm it; read-only MCP requires that cache to be current and reports a
   stale-cache error instead of writing to the cache.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.
-- `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads.
+- `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads. With `GONG_DATABASE_URL` set and `--db` omitted, these read from Postgres through the read-only role.
 - `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
 - After upgrading to a build with new SQLite migrations, run a writable `gongctl sync ...` command before starting `gongmcp`; read-only MCP refuses older schema versions and tells the operator to run a sync command first.
 - `sync` commands write concise progress summaries to `stderr`.

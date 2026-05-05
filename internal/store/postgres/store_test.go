@@ -663,7 +663,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls", "gong_settings"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -745,7 +745,16 @@ func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
 	defer store.Close()
 	resetPostgresTestStore(t, ctx, store)
 
-	governanceMigrationVersion := len(migrations) - 3
+	governanceMigrationVersion := 0
+	for idx, migration := range migrations {
+		if strings.Contains(migration, "CREATE TABLE IF NOT EXISTS governance_policy_state") {
+			governanceMigrationVersion = idx + 1
+			break
+		}
+	}
+	if governanceMigrationVersion == 0 {
+		t.Fatal("governance migration not found")
+	}
 	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version >= $1`, governanceMigrationVersion); err != nil {
 		t.Fatalf("delete governance-and-later migration versions: %v", err)
 	}
@@ -869,6 +878,101 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	}
 	if len(pgDimension) != 1 || pgDimension[0].Value != "Manufacturing" || pgDimension[0].CallCount != 1 {
 		t.Fatalf("unexpected postgres dimension summary: %+v", pgDimension)
+	}
+}
+
+func TestPostgresScorecardSettingsInventoryMatchesSQLiteRepresentativeSlice(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gongctl.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	raw := json.RawMessage(`{"scorecardId":"pg-scorecard-001","scorecardName":"Discovery quality","enabled":true,"reviewMethod":"MANUAL","workspaceId":"workspace-001","created":"2026-01-01T00:00:00Z","updated":"2026-01-02T00:00:00Z","questions":[{"questionId":"question-001","questionText":"Did the rep confirm pain?","questionType":"SCALE","isOverall":true,"minRange":1,"maxRange":5,"answerGuide":"Synthetic guidance","answerOptions":["No","Yes"]}]}`)
+	if _, err := pgStore.UpsertGongSetting(ctx, "scorecards", raw); err != nil {
+		t.Fatalf("postgres UpsertGongSetting returned error: %v", err)
+	}
+	if _, err := sqliteStore.UpsertGongSetting(ctx, "scorecards", raw); err != nil {
+		t.Fatalf("sqlite UpsertGongSetting returned error: %v", err)
+	}
+
+	pgScorecards, err := pgStore.ListScorecards(ctx, sqlite.ScorecardListParams{ActiveOnly: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres ListScorecards returned error: %v", err)
+	}
+	sqliteScorecards, err := sqliteStore.ListScorecards(ctx, sqlite.ScorecardListParams{ActiveOnly: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("sqlite ListScorecards returned error: %v", err)
+	}
+	if len(pgScorecards) != 1 || pgScorecards[0].CachedUpdatedAt == "" {
+		t.Fatalf("postgres scorecards missing cached timestamp: %+v", pgScorecards)
+	}
+	if len(sqliteScorecards) != 1 || sqliteScorecards[0].CachedUpdatedAt == "" {
+		t.Fatalf("sqlite scorecards missing cached timestamp: %+v", sqliteScorecards)
+	}
+	pgScorecards[0].CachedUpdatedAt = ""
+	sqliteScorecards[0].CachedUpdatedAt = ""
+	if !reflect.DeepEqual(pgScorecards, sqliteScorecards) {
+		t.Fatalf("postgres scorecards=%+v want sqlite %+v", pgScorecards, sqliteScorecards)
+	}
+
+	pgDetail, err := pgStore.GetScorecardDetail(ctx, "pg-scorecard-001")
+	if err != nil {
+		t.Fatalf("postgres GetScorecardDetail returned error: %v", err)
+	}
+	sqliteDetail, err := sqliteStore.GetScorecardDetail(ctx, "pg-scorecard-001")
+	if err != nil {
+		t.Fatalf("sqlite GetScorecardDetail returned error: %v", err)
+	}
+	if pgDetail.CachedUpdatedAt == "" || sqliteDetail.CachedUpdatedAt == "" {
+		t.Fatalf("scorecard detail missing cached timestamp: postgres=%+v sqlite=%+v", pgDetail, sqliteDetail)
+	}
+	pgDetail.CachedUpdatedAt = ""
+	sqliteDetail.CachedUpdatedAt = ""
+	if !reflect.DeepEqual(pgDetail, sqliteDetail) {
+		t.Fatalf("postgres scorecard detail=%+v want sqlite %+v", pgDetail, sqliteDetail)
+	}
+	if len(pgDetail.Questions) != 1 || pgDetail.Questions[0].QuestionText != "Did the rep confirm pain?" {
+		t.Fatalf("unexpected scorecard questions: %+v", pgDetail.Questions)
+	}
+
+	mixedIDRaw := json.RawMessage(`{"id":"generic-setting-id-002","scorecardId":"pg-scorecard-lookup-002","scorecardName":"Lookup scorecard","enabled":true,"questions":[{"questionId":"question-lookup","questionText":"Can list_scorecards ID be fetched?","minRange":1.5,"maxRange":"N/A"}]}`)
+	if _, err := pgStore.UpsertGongSetting(ctx, "scorecards", mixedIDRaw); err != nil {
+		t.Fatalf("postgres mixed-id UpsertGongSetting returned error: %v", err)
+	}
+	mixedSummaries, err := pgStore.ListScorecards(ctx, sqlite.ScorecardListParams{ActiveOnly: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres mixed-id ListScorecards returned error: %v", err)
+	}
+	var listedScorecardID string
+	for _, summary := range mixedSummaries {
+		if summary.Name == "Lookup scorecard" {
+			listedScorecardID = summary.ScorecardID
+			break
+		}
+	}
+	if listedScorecardID != "pg-scorecard-lookup-002" {
+		t.Fatalf("mixed-id scorecard listed id=%q, want scorecardId", listedScorecardID)
+	}
+	mixedDetail, err := pgStore.GetScorecardDetail(ctx, listedScorecardID)
+	if err != nil {
+		t.Fatalf("postgres mixed-id GetScorecardDetail(%q) returned error: %v", listedScorecardID, err)
+	}
+	if len(mixedDetail.Questions) != 1 || mixedDetail.Questions[0].MinRange != 1 || mixedDetail.Questions[0].MaxRange != 0 {
+		t.Fatalf("mixed-id scorecard detail did not tolerate numeric variants: %+v", mixedDetail.Questions)
 	}
 }
 
@@ -1550,7 +1654,7 @@ lists:
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

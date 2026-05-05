@@ -162,12 +162,12 @@ func SyncCRMSchema(ctx context.Context, client *gong.Client, store *sqlite.Store
 	return result, nil
 }
 
-func SyncSettings(ctx context.Context, client *gong.Client, store *sqlite.Store, params SettingsParams) (result Result, err error) {
+func SyncSettings(ctx context.Context, client *gong.Client, store storeiface.SettingsStore, params SettingsParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	kind, endpoint, rootKey, err := settingsEndpoint(params.Kind, params.WorkspaceID)
 	if err != nil {

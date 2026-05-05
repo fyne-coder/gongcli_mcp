@@ -398,14 +398,14 @@ func (a *app) syncCRMSchema(ctx context.Context, args []string) error {
 func (a *app) syncSettings(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync settings", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	kind := fs.String("kind", "", "settings kind: trackers, scorecards, workspaces")
 	workspaceID := fs.String("workspace-id", "", "optional Gong workspace ID for tracker settings")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableSettingsStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -426,7 +426,7 @@ func (a *app) syncSettings(ctx context.Context, args []string) error {
 		*kind,
 		result.RecordsSeen,
 		result.RecordsWritten,
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -607,6 +607,18 @@ func (a *app) syncSynthetic(ctx context.Context, args []string) error {
 		}
 		written++
 	}
+	if settingsStore, ok := store.(interface {
+		UpsertGongSetting(context.Context, string, json.RawMessage) (*sqlite.GongSettingRecord, error)
+	}); ok {
+		for _, raw := range syntheticScorecardSettingPayloads() {
+			if _, err := settingsStore.UpsertGongSetting(ctx, "scorecards", raw); err != nil {
+				finishStatus = "error"
+				finishError = err.Error()
+				return err
+			}
+			written++
+		}
+	}
 
 	fmt.Fprintf(a.err, "synced synthetic fixture: records_written=%d db=%s\n", written, displayStoreTarget(*dbPath))
 	return writeJSONValue(a.out, map[string]any{
@@ -637,6 +649,11 @@ type writableCoreStore interface {
 
 type writableTranscriptStore interface {
 	storeiface.TranscriptStore
+	storeiface.Closer
+}
+
+type writableSettingsStore interface {
+	storeiface.SettingsStore
 	storeiface.Closer
 }
 
@@ -672,6 +689,17 @@ func openWritableCoreStore(ctx context.Context, path string) (writableCoreStore,
 }
 
 func openWritableTranscriptStore(ctx context.Context, path string) (writableTranscriptStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
+func openWritableSettingsStore(ctx context.Context, path string) (writableSettingsStore, error) {
 	if strings.TrimSpace(path) != "" {
 		return sqlite.Open(ctx, path)
 	}
@@ -753,6 +781,12 @@ func syntheticTranscriptPayloads() []json.RawMessage {
 	return []json.RawMessage{
 		json.RawMessage(`{"callId":"synthetic-call-001","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":5000,"text":"We need a shared Postgres deployment path for the MCP server and sync job."},{"start":5000,"end":9000,"text":"SQLite remains useful for local pilots."}]}]}`),
 		json.RawMessage(`{"callId":"synthetic-call-002","transcript":[{"speakerId":"speaker-2","sentences":[{"start":0,"end":7000,"text":"The renewal risk is tied to transcript coverage and implementation evidence."}]}]}`),
+	}
+}
+
+func syntheticScorecardSettingPayloads() []json.RawMessage {
+	return []json.RawMessage{
+		json.RawMessage(`{"id":"synthetic-generic-setting-id-001","scorecardId":"synthetic-scorecard-001","scorecardName":"Synthetic discovery quality","enabled":true,"reviewMethod":"MANUAL","workspaceId":"synthetic-workspace-001","created":"2026-01-01T00:00:00Z","updated":"2026-01-02T00:00:00Z","questions":[{"questionId":"synthetic-question-001","questionText":"Did the seller confirm the implementation timeline?","questionType":"SCALE","minRange":1.5,"maxRange":"N/A","answerGuide":"Synthetic scoring guidance only."}]}`),
 	}
 }
 

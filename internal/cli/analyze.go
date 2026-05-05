@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
 
 func (a *app) analyze(ctx context.Context, args []string) error {
@@ -284,7 +285,7 @@ func (a *app) analyzeSettings(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
+	store, err := openReadOnlySettingsInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -314,7 +315,7 @@ func (a *app) analyzeScorecards(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
+	store, err := openReadOnlySettingsInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -343,7 +344,7 @@ func (a *app) analyzeScorecard(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
+	store, err := openReadOnlySettingsInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -354,6 +355,29 @@ func (a *app) analyzeScorecard(ctx context.Context, args []string) error {
 		return err
 	}
 	return writeJSONValue(a.out, detail)
+}
+
+type readOnlySettingsInventoryStore interface {
+	ListGongSettings(context.Context, sqlite.GongSettingListParams) ([]sqlite.GongSettingRecord, error)
+	ListScorecards(context.Context, sqlite.ScorecardListParams) ([]sqlite.ScorecardSummary, error)
+	GetScorecardDetail(context.Context, string) (*sqlite.ScorecardDetail, error)
+	storeiface.Closer
+}
+
+func openReadOnlySettingsInventoryStore(ctx context.Context, path string) (readOnlySettingsInventoryStore, error) {
+	if path != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	store, err := openReadOnlyStatusStore(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	inventoryStore, ok := store.(readOnlySettingsInventoryStore)
+	if !ok {
+		_ = store.Close()
+		return nil, fmt.Errorf("selected store does not support settings inventory")
+	}
+	return inventoryStore, nil
 }
 
 type callFactsSummaryResponse struct {

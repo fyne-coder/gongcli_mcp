@@ -51,9 +51,9 @@ gongmcp --list-tool-presets
 | `business-pilot` | `get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog` | default business-user lane |
 | `strict-business-pilot` | alias for `business-pilot` | backward-compatible docs/scripts alias |
 | `operator-smoke` | `get_sync_status,search_calls,search_transcript_segments,get_call,rank_transcript_backlog` | operator-only install validation |
-| `analyst-core` | core Postgres-supported call/profile/lifecycle/CRM-context inventory tools | reviewed Postgres analyst starter surface |
+| `analyst-core` | core Postgres-supported call/profile/lifecycle/CRM-context inventory and scorecard inventory tools | reviewed Postgres analyst starter surface |
 | `analyst-business-core` | bounded Postgres transcript-evidence and business-analysis tools plus analyst-core tools | reviewed Postgres analyst business-analysis surface before full parity |
-| `analyst` | broader evidence surface excluding admin-only record lookup, CRM value search, Gong settings, scorecards, and schema inventory | trusted analyst sessions after sponsor approval |
+| `analyst` | broader evidence surface excluding admin-only record lookup, CRM value search, and unreviewed schema/settings/activity inventory | trusted analyst sessions after sponsor approval |
 | `analyst-expansion` | alias for `analyst` | backward-compatible docs/scripts alias |
 | `governance-search` | governance-compatible search/snippet tools only | raw-DB AI governance fallback when a filtered DB is not available |
 | `all-readonly` | every current read-only MCP tool in `tools/list` | trusted single-user admin/analyst or fully reviewed filtered-DB deployments |

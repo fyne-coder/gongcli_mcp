@@ -324,11 +324,13 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 	supported := map[string]struct{}{
 		"get_sync_status":                           {},
 		"get_business_profile":                      {},
+		"get_scorecard":                             {},
 		"get_call":                                  {},
 		"list_business_concepts":                    {},
 		"list_crm_fields":                           {},
 		"list_crm_object_types":                     {},
 		"list_lifecycle_buckets":                    {},
+		"list_scorecards":                           {},
 		"prioritize_transcripts_by_lifecycle":       {},
 		"rank_transcript_backlog":                   {},
 		"search_calls":                              {},

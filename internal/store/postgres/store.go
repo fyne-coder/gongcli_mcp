@@ -257,12 +257,13 @@ func (s *Store) reconcileReaderGrants(ctx context.Context) error {
 	}
 	_, err := s.db.ExecContext(ctx, `
 CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text AS cursor, from_value, to_value, ''::text AS request_context, status, started_at, finished_at, records_seen, records_written, ''::text AS error_text FROM sync_runs;
-CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
-CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
-DROP VIEW IF EXISTS gongmcp_transcript_segments;
-DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
-`+postgresBusinessAnalysisFunctionsSQL+`
-DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
+	CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
+	CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
+	DROP VIEW IF EXISTS gongmcp_transcript_segments;
+	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
+	`+postgresBusinessAnalysisFunctionsSQL+`
+	`+postgresSettingsFunctionsSQL+`
+	DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
 LANGUAGE sql
@@ -533,11 +534,12 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_governance_data_fingerprint() TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_governance_policy_state(text) TO gongmcp_reader;
-			GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
-`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
-		END IF;
-	END;
-	$$;`)
+				GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
+	`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
+	`+postgresSettingsReaderGrantStatementsSQL+`
+			END IF;
+		END;
+		$$;`)
 	if err != nil {
 		return fmt.Errorf("reconcile postgres reader grants: %w", err)
 	}
@@ -570,14 +572,15 @@ func (s *Store) validateSchema(ctx context.Context) error {
 			'profile_validation_warning',
 			'profile_call_fact_cache_meta',
 			'profile_call_fact_cache',
-			'governance_policy_state',
-			'governance_suppressed_calls'
-		  ]) AS core_table(table_name)
-		 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
+				'governance_policy_state',
+				'governance_suppressed_calls',
+				'gong_settings'
+			  ]) AS core_table(table_name)
+			 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 21 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/21 core tables", count)
+	if count != 22 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/22 core tables", count)
 	}
 	return nil
 }
@@ -608,7 +611,7 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-	   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
+		   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'gong_settings')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -640,7 +643,7 @@ SELECT table_name
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-	   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
+		   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT') OR
 	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
@@ -689,10 +692,12 @@ WITH forbidden(table_name, column_name) AS (
 		('call_facts', 'sdr_disposition'),
 		('call_facts', 'account_id'),
 		('call_facts', 'account_primary_procurement_system'),
-		('call_facts', 'opportunity_id'),
-		('call_facts', 'opportunity_amount'),
-		('call_facts', 'opportunity_probability'),
-		('call_facts', 'opportunity_procurement_system')
+			('call_facts', 'opportunity_id'),
+			('call_facts', 'opportunity_amount'),
+			('call_facts', 'opportunity_probability'),
+			('call_facts', 'opportunity_procurement_system'),
+			('gong_settings', 'raw_json'),
+			('gong_settings', 'raw_sha256')
 )
 SELECT c.table_name || '.' || c.column_name
   FROM information_schema.columns c
@@ -1210,6 +1215,8 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		{`SELECT COUNT(DISTINCT call_id) FROM call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
 		{`SELECT COUNT(*) FROM call_context_objects`, &summary.TotalEmbeddedCRMObjects},
 		{`SELECT COUNT(*) FROM gongmcp_call_context_fields`, &summary.TotalEmbeddedCRMFields},
+		{`SELECT COUNT(*) FROM gong_settings`, &summary.TotalGongSettings},
+		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &summary.TotalScorecards},
 		{`SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id WHERE t.call_id IS NULL`, &summary.MissingTranscripts},
 		{`SELECT COUNT(*) FROM gongmcp_sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
 		{`SELECT COUNT(*) FROM calls WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.CallsWithTitles},

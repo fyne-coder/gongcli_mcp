@@ -72,7 +72,7 @@ func TestPostgresToolAllowlistAcceptsAnalystCorePreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("postgresToolAllowlist returned error: %v", err)
 	}
-	want := []string{"get_sync_status", "search_calls", "get_call", "list_crm_object_types", "list_crm_fields", "get_business_profile", "list_business_concepts", "list_lifecycle_buckets", "summarize_calls_by_lifecycle", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "summarize_call_facts", "rank_transcript_backlog", "search_transcript_segments"}
+	want := []string{"get_sync_status", "search_calls", "get_call", "list_crm_object_types", "list_crm_fields", "list_scorecards", "get_scorecard", "get_business_profile", "list_business_concepts", "list_lifecycle_buckets", "summarize_calls_by_lifecycle", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "summarize_call_facts", "rank_transcript_backlog", "search_transcript_segments"}
 	if !reflect.DeepEqual(allowlist, want) {
 		t.Fatalf("allowlist=%v want %v", allowlist, want)
 	}
@@ -489,7 +489,7 @@ func TestResolveToolAllowlistPresets(t *testing.T) {
 		{
 			name: "analyst core preset",
 			in:   toolSelection{PresetEnv: "analyst-core"},
-			want: []string{"get_sync_status", "search_calls", "get_call", "list_crm_object_types", "list_crm_fields", "get_business_profile", "list_business_concepts", "list_lifecycle_buckets", "summarize_calls_by_lifecycle", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "summarize_call_facts", "rank_transcript_backlog", "search_transcript_segments"},
+			want: []string{"get_sync_status", "search_calls", "get_call", "list_crm_object_types", "list_crm_fields", "list_scorecards", "get_scorecard", "get_business_profile", "list_business_concepts", "list_lifecycle_buckets", "summarize_calls_by_lifecycle", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "summarize_call_facts", "rank_transcript_backlog", "search_transcript_segments"},
 		},
 		{
 			name: "all readonly expands to catalog",

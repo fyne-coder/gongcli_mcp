@@ -24,15 +24,6 @@ func (s *Store) ListCRMSchemaObjects(ctx context.Context, integrationID string) 
 func (s *Store) ListCRMSchemaFields(ctx context.Context, params sqlite.CRMSchemaFieldListParams) ([]sqlite.CRMSchemaFieldRecord, error) {
 	return nil, unsupported()
 }
-func (s *Store) ListGongSettings(ctx context.Context, params sqlite.GongSettingListParams) ([]sqlite.GongSettingRecord, error) {
-	return nil, unsupported()
-}
-func (s *Store) ListScorecards(ctx context.Context, params sqlite.ScorecardListParams) ([]sqlite.ScorecardSummary, error) {
-	return nil, unsupported()
-}
-func (s *Store) GetScorecardDetail(ctx context.Context, scorecardID string) (*sqlite.ScorecardDetail, error) {
-	return nil, unsupported()
-}
 func (s *Store) ScorecardActivityOverview(ctx context.Context, limit int) (*sqlite.ScorecardActivityOverview, error) {
 	return nil, unsupported()
 }
