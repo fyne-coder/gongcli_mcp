@@ -594,6 +594,56 @@ $function$;
 
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) FROM PUBLIC;
 
+DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_sanitized(bigint, text);
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_sanitized(profile_id_arg bigint, canonical_sha_arg text)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	duration_seconds bigint,
+	system text,
+	direction text,
+	scope text,
+	purpose text,
+	calendar_event_present boolean,
+	transcript_present boolean,
+	lifecycle_bucket text,
+	lifecycle_confidence text,
+	lifecycle_reason text,
+	evidence_fields_json jsonb,
+	deal_count bigint,
+	account_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT ''::text AS call_id,
+       ''::text AS title,
+       c.started_at,
+       c.duration_seconds,
+       c.system,
+       c.direction,
+       c.scope,
+       c.purpose,
+       c.calendar_event_present,
+       c.transcript_present,
+       c.lifecycle_bucket,
+       c.lifecycle_confidence,
+       c.lifecycle_reason,
+       c.evidence_fields_json,
+       c.deal_count,
+       c.account_count
+  FROM profile_call_fact_cache c
+  JOIN profile_meta p
+    ON p.id = c.profile_id
+ WHERE p.is_active = true
+   AND c.profile_id = profile_id_arg
+   AND c.canonical_sha256 = canonical_sha_arg
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM PUBLIC;
+
 DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_summary(profile_id_arg bigint, canonical_sha_arg text, group_by_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, row_limit integer)
 RETURNS TABLE(
@@ -1035,5 +1085,56 @@ BEGIN
 	END IF;
 END;
 $$;
+`,
+	`
+DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_sanitized(bigint, text);
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_sanitized(profile_id_arg bigint, canonical_sha_arg text)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	duration_seconds bigint,
+	system text,
+	direction text,
+	scope text,
+	purpose text,
+	calendar_event_present boolean,
+	transcript_present boolean,
+	lifecycle_bucket text,
+	lifecycle_confidence text,
+	lifecycle_reason text,
+	evidence_fields_json jsonb,
+	deal_count bigint,
+	account_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT ''::text AS call_id,
+       ''::text AS title,
+       c.started_at,
+       c.duration_seconds,
+       c.system,
+       c.direction,
+       c.scope,
+       c.purpose,
+       c.calendar_event_present,
+       c.transcript_present,
+       c.lifecycle_bucket,
+       c.lifecycle_confidence,
+       c.lifecycle_reason,
+       c.evidence_fields_json,
+       c.deal_count,
+       c.account_count
+  FROM profile_call_fact_cache c
+  JOIN profile_meta p
+    ON p.id = c.profile_id
+ WHERE p.is_active = true
+   AND c.profile_id = profile_id_arg
+   AND c.canonical_sha256 = canonical_sha_arg
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM PUBLIC;
 `,
 }

@@ -911,6 +911,27 @@ methodology:
 	if readOnlyInfo.LifecycleSource != sqlite.LifecycleSourceProfile || !reflect.DeepEqual(readOnlyRows, sqliteRows) {
 		t.Fatalf("read-only postgres profile rows=%+v info=%+v want sqlite rows %+v", readOnlyRows, readOnlyInfo, sqliteRows)
 	}
+	var directIdentifierRows int64
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_profile_call_fact_cache($1, $2) WHERE call_id <> '' OR title <> ''`, pgImport.ProfileID, validation.CanonicalSHA256).Scan(&directIdentifierRows); err != nil {
+		t.Fatalf("read generic profile cache function identifiers: %v", err)
+	}
+	if directIdentifierRows == 0 {
+		t.Fatal("generic profile cache function returned no identifier-bearing rows")
+	}
+	var sanitizedIdentifierRows int64
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_profile_call_fact_cache_sanitized($1, $2) WHERE call_id <> '' OR title <> ''`, pgImport.ProfileID, validation.CanonicalSHA256).Scan(&sanitizedIdentifierRows); err != nil {
+		t.Fatalf("read sanitized profile cache function identifiers: %v", err)
+	}
+	if sanitizedIdentifierRows != 0 {
+		t.Fatalf("sanitized profile cache function returned %d identifier-bearing rows, want 0", sanitizedIdentifierRows)
+	}
+	var directFactRows int64
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_profile_call_fact_cache_sanitized($1, $2) WHERE started_at <> '' AND lifecycle_bucket <> ''`, pgImport.ProfileID, validation.CanonicalSHA256).Scan(&directFactRows); err != nil {
+		t.Fatalf("read sanitized profile cache function facts: %v", err)
+	}
+	if directFactRows == 0 {
+		t.Fatal("profile cache function returned no non-identifier fact rows")
+	}
 	pgOpen, pgOpenInfo, err := pgStore.SearchCallsByLifecycleWithSource(ctx, sqlite.LifecycleCallSearchParams{Bucket: "open", LifecycleSource: sqlite.LifecycleSourceAuto, Limit: 10})
 	if err != nil {
 		t.Fatalf("postgres auto profile lifecycle search returned error: %v", err)
@@ -1078,7 +1099,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1

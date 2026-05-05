@@ -116,7 +116,7 @@ flowchart LR
   Gong["Gong API"] -->|"HTTPS with sync credentials"| Sync["gongctl sync job\nwriter role"]
   Secrets["Customer secret store\nGong credentials + DB URLs"] --> Sync
   Sync -->|"writes"| PG["Customer Postgres\nshared cache tables"]
-  PG -->|"SELECT only"| MCP["gongmcp\nreader role"]
+  PG -->|"read-only SELECT/EXECUTE grants"| MCP["gongmcp\nreader role"]
   Host["Approved MCP host"] -->|"stdio or private HTTP"| MCP
   Ops["IT / platform owner"] --> PG
   Ops --> Sync
@@ -143,8 +143,10 @@ flowchart LR
   business-pilot --postgres-reader-role ROLE --postgres-database DB` is a
   compatibility path for MCP-only images. Apply the SQL to a fresh `NOINHERIT`
   role, or revoke stale grants before role reuse. Treat the scoped URL as a
-  `gongmcp` service credential, not an analyst SQL login: selected security
-  definer functions can return minimized call IDs/titles to direct SQL holders.
+  `gongmcp` service credential, not an analyst SQL login. The scoped
+  profile-cache helper redacts call IDs/titles, but selected functions still
+  expose minimized operational metadata, timings, counts, and tenant
+  terminology.
   This first scoped business-pilot role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader
   until a sanitized builtin SQL surface exists.

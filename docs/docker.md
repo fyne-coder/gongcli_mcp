@@ -148,8 +148,9 @@ Configuration contract:
   `gongmcp` with `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
   `--enforce-tool-scoped-db-grants`. Other presets still need their own
   reviewed maps before customer role automation. A scoped reader URL is still a
-  service credential, not an analyst SQL login; selected security definer
-  functions can return minimized call IDs/titles to direct SQL holders. This
+  service credential, not an analyst SQL login. The scoped profile-cache helper
+  redacts call IDs/titles, but selected functions still expose
+  minimized operational metadata, timings, counts, and tenant terminology. This
   first scoped `business-pilot` role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader
   until a sanitized builtin SQL surface exists.

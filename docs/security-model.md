@@ -15,7 +15,7 @@ answers live in [Customer-hosted package](customer-hosted-package.md) and
 The current design is intentionally local-first:
 
 - `gongctl` is the live Gong API client and the only surface that should handle Gong credentials.
-- `gongmcp` reads a previously synced SQLite cache and does not call Gong directly.
+- `gongmcp` reads a previously synced SQLite or Postgres cache and does not call Gong directly.
 - The repository can be public; tenant data, credentials, and local cache files cannot.
 
 Current enforcement limits are important: `gongctl` now has a
@@ -39,8 +39,8 @@ non-sensitive.
 
 1. The operator provides Gong credentials through exported environment variables or an ignored `.env` file.
 2. `gongctl` reads those credentials and uses them only for live API calls.
-3. Sync commands write cached results to a local SQLite database and optional local transcript/profile files.
-4. `gongmcp` starts later with `--db PATH`, opens that SQLite file read-only, and serves stdio or HTTP MCP requests without Gong credentials.
+3. Sync commands write cached results to a local SQLite database or shared Postgres database and optional local transcript/profile files.
+4. `gongmcp` starts later with `--db PATH` for SQLite or `GONG_DATABASE_URL`/`DATABASE_URL` for Postgres, opens the cache read-only, and serves stdio or HTTP MCP requests without Gong credentials. Postgres reader URLs are MCP service credentials, not Gong API credentials.
 
 Operational implications:
 
@@ -143,9 +143,10 @@ Implementation controls on the CLI side:
   explicit `lifecycle_source=builtin` still requires the broader compatibility
   reader until a sanitized builtin SQL surface exists.
   The scoped reader URL remains a service secret because selected functions and
-  sanitized views can still expose minimized call metadata, timings, counts,
-  tenant terminology, and selected security definer functions can return
-  minimized call IDs/titles to direct SQL holders.
+  sanitized views can still expose minimized operational metadata, timings,
+  counts, and tenant terminology. The scoped profile-cache helper redacts call
+  IDs/titles, but direct SQL callers can invoke it over all matching cached
+  rows; MCP result limits are enforced above that SQL helper.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose

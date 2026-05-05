@@ -208,9 +208,8 @@ What the conservative defaults give you:
   `lifecycle_source=builtin` still requires the broader compatibility reader
   until a sanitized builtin SQL surface exists. The scoped reader URL remains
   a service secret because selected functions and sanitized views can still
-  expose minimized call metadata, timings, counts, tenant terminology, and
-  selected security definer functions can return minimized call IDs/titles to
-  direct SQL holders.
+  expose minimized call metadata, timings, counts, tenant terminology. The
+  scoped profile-cache helper redacts call IDs/titles.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes

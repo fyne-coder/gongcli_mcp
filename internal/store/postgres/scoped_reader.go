@@ -21,6 +21,9 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 		EnforceAllowedFunctionBoundary: true,
 	}
 	if BusinessPilotScopedColumns(allowlist) {
+		signatures = businessPilotFunctionSignatures(signatures)
+		options.RequiredFunctionSignatures = signatures
+		options.AllowedFunctionSignatures = signatures
 		columns := BusinessPilotColumnSelectGrants()
 		options.RequiredColumnSelectGrants = columns
 		options.AllowedColumnSelectGrants = columns
@@ -53,7 +56,8 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString(".\n")
 	b.WriteString("-- Create credentials outside this grant block using your secret manager.\n")
 	b.WriteString("-- Apply to a fresh NOINHERIT role; revoke stale table/function grants before reusing an existing role.\n")
-	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login: selected SECURITY DEFINER functions can return minimized call IDs/titles to direct SQL holders.\n")
+	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.\n")
+	b.WriteString("-- Direct SQL callers can invoke the sanitized profile-cache helper over all matching cached rows; MCP limits are enforced above the SQL helper.\n")
 	b.WriteString("-- This grant block supports the business-pilot scoped reader for profile-backed lifecycle analysis; use the compatibility reader role for builtin lifecycle-source analysis until a sanitized builtin SQL surface is available.\n")
 	b.WriteString("-- Role expected before running this block: ")
 	b.WriteString(roleIdent)
@@ -68,6 +72,9 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
 	b.WriteString("GRANT USAGE ON SCHEMA \"public\" TO ")
+	b.WriteString(roleIdent)
+	b.WriteString(";\n")
+	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM ")
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
 
@@ -220,6 +227,17 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 	return signatures
 }
 
+func businessPilotFunctionSignatures(signatures []string) []string {
+	out := make([]string, 0, len(signatures))
+	for _, signature := range signatures {
+		if signature == "public.gongmcp_profile_call_fact_cache(bigint, text)" {
+			signature = "public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)"
+		}
+		out = append(out, signature)
+	}
+	return out
+}
+
 func BusinessPilotScopedColumns(allowlist []string) bool {
 	want := map[string]struct{}{
 		"get_sync_status":              {},
@@ -243,16 +261,13 @@ func BusinessPilotColumnSelectGrants() []ColumnSelectGrant {
 		{Table: "gongctl_schema_migrations", Column: "version"},
 		{Table: "calls", Column: "started_at"},
 		{Table: "calls", Column: "parties_count"},
+		{Table: "calls", Column: "context_present"},
 		{Table: "users", Column: "user_id"},
 		{Table: "users", Column: "title"},
 		{Table: "transcripts", Column: "segment_count"},
 		{Table: "gongmcp_call_context_objects", Column: "id"},
-		{Table: "gongmcp_call_context_objects", Column: "call_id"},
-		{Table: "gongmcp_call_context_objects", Column: "object_key"},
 		{Table: "gongmcp_call_context_objects", Column: "object_type"},
 		{Table: "gongmcp_call_context_fields", Column: "id"},
-		{Table: "gongmcp_call_context_fields", Column: "call_id"},
-		{Table: "gongmcp_call_context_fields", Column: "object_key"},
 		{Table: "gongmcp_call_context_fields", Column: "field_name"},
 		{Table: "gongmcp_call_context_fields", Column: "field_label"},
 		{Table: "gongmcp_call_context_fields", Column: "field_type"},

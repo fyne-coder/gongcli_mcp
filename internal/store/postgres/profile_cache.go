@@ -302,6 +302,10 @@ SELECT call_id,
    AND canonical_sha256 = $2
  ORDER BY started_at DESC, call_id`
 	if s.readOnly {
+		functionName := "gongmcp_profile_call_fact_cache"
+		if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+			functionName = "gongmcp_profile_call_fact_cache_sanitized"
+		}
 		rowsQuery = `
 SELECT call_id,
        title,
@@ -319,7 +323,7 @@ SELECT call_id,
        evidence_fields_json::text,
        deal_count,
        account_count
-  FROM gongmcp_profile_call_fact_cache($1, $2)
+  FROM ` + functionName + `($1, $2)
  ORDER BY started_at DESC, call_id`
 	}
 	rows, err := s.db.QueryContext(ctx, rowsQuery, profileID, canonicalSHA256)
