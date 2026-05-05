@@ -50,7 +50,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
 | Support bundle | SQLite sanitized support bundle | complete for metadata-only Postgres diagnostics | Sanitized Postgres diagnostics without secrets/customer payloads or database URLs | postgres-native equivalent | Phase 6a | support bundle fixture inspection; `scripts/postgres-smoke.sh` |
 | Cache inventory | SQLite file/table inventory | complete for Postgres table/version/readiness diagnostics | Postgres table counts, schema version, read-model/profile readiness, and reader-role diagnostics without database URL export | postgres-native equivalent | Phase 6a | `TestPostgresCacheInventoryAndDiagnostics`; `scripts/postgres-smoke.sh` |
-| Purge/retention | SQLite purge commands | queued | Postgres retention diagnostics and dry-run/confirm semantics | postgres-native equivalent | Phase 6 | purge dry-run tests |
+| Purge/retention | SQLite purge commands | complete for bounded call-scoped Postgres row cleanup | Reader-role dry-run plan plus writable confirmed purge for calls and dependent transcript, CRM-context, read-model, profile-cache, scorecard-activity, and governance-suppression rows; physical WAL/backups/replicas remain operator-owned | postgres-native equivalent | Phase 6b | purge dry-run/confirm tests and smoke |
 | Backup/restore | SQLite file copy guidance | queued | Postgres dump/restore, migration rollback, and role-grant guidance | postgres-native equivalent | Phase 7 | documented operator smoke |
 | Release hardening | SQLite CI coverage plus release gates | queued for Postgres service tests | CI-backed Postgres service tests and versioned docs/images | must match release quality | Phase 7 | CI service test + release checklist |
 
@@ -168,7 +168,17 @@ Postgres parity should be added deliberately, with each surface classified as
   `DATABASE_URL`, including read-only-reader smoke coverage, schema/readiness
   diagnostics, table counts, and support artifact checks that reject database
   URL, path, secret, raw payload, transcript, and raw CRM value leakage.
+- Closed for Phase 6b retention diagnostics: `cache purge` can run against
+  Postgres through `GONG_DATABASE_URL` / `DATABASE_URL`, previews metadata-only
+  counts through the reader role, rejects confirmed purges with the reader URL,
+  and deletes a transaction-materialized call ID set with a writable URL without
+  exporting raw identifiers, transcript text, or database URLs. Postgres keeps
+  call-ID tombstones as operational metadata to block accidental rehydration of
+  purged call-scoped rows by later sync steps. Supported Postgres write paths
+  and confirmed purge share a database advisory writer lock, but operators
+  should still run destructive cleanup in a maintenance window with scheduled
+  sync jobs stopped.
 - Still queued: database-enforced governance filtering/RLS, analyst and
-  all-readonly query parity, purge/retention, larger
+  all-readonly query parity, larger
   customer-scale load benchmarking for read-model counter write contention, and
   release rollback/backup hardening.

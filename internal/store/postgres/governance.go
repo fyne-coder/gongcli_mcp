@@ -97,6 +97,9 @@ func (s *Store) BuildAndSaveGovernancePolicy(ctx context.Context, configSHA256 s
 		return nil, nil, err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, nil, err
+	}
 	candidates, err := governanceNameCandidates(ctx, tx)
 	if err != nil {
 		return nil, nil, err

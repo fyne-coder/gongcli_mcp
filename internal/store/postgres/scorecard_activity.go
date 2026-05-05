@@ -212,7 +212,18 @@ func (s *Store) UpsertScorecardActivity(ctx context.Context, raw json.RawMessage
 		return nil, err
 	}
 	now := nowUTC()
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO scorecard_activity(
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err := ensurePostgresCallNotPurgedTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO scorecard_activity(
 	answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_started_at,
 	reviewed_user_id, reviewer_user_id, editor_user_id, review_method, review_time,
 	visibility_type, overall_score, average_score, answer_count,
@@ -269,6 +280,9 @@ WHERE
 		now,
 		now,
 	); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.scorecardActivityByID(ctx, payload.AnsweredScorecardID)

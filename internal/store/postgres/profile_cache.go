@@ -175,6 +175,13 @@ func (s *Store) rebuildProfileCallFactCache(ctx context.Context, meta *profileMe
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return err
+	}
+	calls, err = filterProfileCallsNotPurgedTx(ctx, tx, calls)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM profile_call_fact_cache WHERE profile_id = $1`, meta.ID); err != nil {
 		return err
 	}
@@ -235,6 +242,32 @@ ON CONFLICT(profile_id) DO UPDATE SET
 		return err
 	}
 	return tx.Commit()
+}
+
+func filterProfileCallsNotPurgedTx(ctx context.Context, tx *sql.Tx, calls []profileCallFact) ([]profileCallFact, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT call_id FROM purged_call_ids`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	purged := map[string]bool{}
+	for rows.Next() {
+		var callID string
+		if err := rows.Scan(&callID); err != nil {
+			return nil, err
+		}
+		purged[callID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	filtered := calls[:0]
+	for _, call := range calls {
+		if !purged[call.CallID] {
+			filtered = append(filtered, call)
+		}
+	}
+	return filtered, nil
 }
 
 func (s *Store) loadProfileCallFactCache(ctx context.Context, profileID int64, canonicalSHA256 string) ([]profileCallFact, error) {

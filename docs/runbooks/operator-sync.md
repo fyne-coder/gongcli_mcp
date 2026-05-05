@@ -142,6 +142,8 @@ bin/gongctl sync run --config <data-root>/configs/company-sync.yaml --dry-run
 bin/gongctl sync run --config <data-root>/configs/company-sync.yaml
 bin/gongctl cache inventory --db <data-root>/cache/gong.db
 bin/gongctl cache purge --db <data-root>/cache/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" bin/gongctl cache purge --older-than 2026-04-01 --confirm
 ```
 
 Notes:
@@ -167,11 +169,21 @@ Notes:
 - `cache purge --older-than YYYY-MM-DD` is dry-run unless `--confirm` is present.
   Save the dry-run JSON plan with the retention/change record, then run the
   confirmed command only after backup, legal-hold, and data-owner checks pass.
-  The command removes matching cached calls and dependent transcript, CRM
-  context, and profile fact-cache rows, then enables SQLite `secure_delete`,
-  checkpoints/truncates WAL state, and runs `VACUUM`; it does not remove
-  transcript JSON files, snapshots, backups, profiles, CRM schema inventory,
-  settings inventory, or sync history.
+  SQLite uses `--db`; Postgres omits `--db` and uses `GONG_DATABASE_URL` or
+  `DATABASE_URL`. The Postgres reader URL can preview metadata-only counts, and
+  confirmed Postgres purge requires a writable URL. The command removes matching
+  cached calls and dependent transcript, CRM-context, read-model, profile
+  fact-cache, scorecard-activity, and governance-suppression rows. SQLite
+  confirmed purge additionally enables `secure_delete`, checkpoint/truncate WAL
+  state, and runs `VACUUM`; Postgres WAL, replicas, snapshots, dumps, and
+  backups remain outside the command. It does not remove transcript JSON files,
+  snapshots, backups, profiles, CRM schema inventory, settings inventory, or
+  sync history. Postgres keeps call-ID tombstones as operational metadata to
+  block accidental rehydration of purged call-scoped rows by later sync steps.
+- Run confirmed Postgres purge during a maintenance window with scheduled
+  sync/write jobs stopped. The command takes a database advisory writer lock and
+  deletes the materialized call ID set for that run, but operator scheduling is
+  still the retention control of record.
 - If the pilot uses a reviewed business profile, validate and import it only
   from the protected profile path:
 

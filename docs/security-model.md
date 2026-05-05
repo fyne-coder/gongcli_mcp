@@ -122,6 +122,9 @@ Implementation controls on the CLI side:
   analyst SQL credential. This phase suppresses restricted records in the MCP
   layer; direct SQL use of the reader URL can still query minimized readable
   tables until governed views/RLS/materialized snapshots replace direct grants.
+  The reader role also has execute-only access to selected metadata helpers,
+  including retention purge planning counts; treat those count-only diagnostics
+  as tenant operational metadata.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose
@@ -139,10 +142,17 @@ Implementation controls on the CLI side:
   schema/readiness/reader-role diagnostics and does not export the database
   URL. Even though it avoids transcript bodies and raw payload dumps, its
   output should still be handled as tenant operational metadata.
-- `gongctl cache purge --db ... --older-than YYYY-MM-DD` is dry-run by default.
-  Confirmed purges delete matching call rows and dependent cached transcripts,
-  transcript segments, embedded CRM context, and profile call-fact cache rows,
-  then use SQLite `secure_delete`, WAL checkpoint/truncation, and `VACUUM`.
+- `gongctl cache purge --db ... --older-than YYYY-MM-DD` is dry-run by default
+  for SQLite. With Postgres, omit `--db` and set `GONG_DATABASE_URL` or
+  `DATABASE_URL`; a reader URL can produce metadata-only counts, while
+  `--confirm` requires a writable URL. Confirmed purges delete matching call
+  rows and dependent cached transcripts, transcript segments, embedded CRM
+  context, read-model rows, profile call-fact cache rows, scorecard activity
+  rows, and governance-suppression rows. SQLite confirmed purges also use
+  `secure_delete`, WAL checkpoint/truncation, and `VACUUM`. Postgres confirmed
+  purges do not physically erase WAL, replicas, snapshots, dumps, or backups.
+  Postgres keeps call-ID tombstones as operational metadata to block accidental
+  rehydration of purged call-scoped rows by later sync steps.
   Operators must still handle transcript files, snapshots, backups, sync
   history, profile definitions, CRM schema inventory, and settings inventory
   through company retention controls.
@@ -171,6 +181,10 @@ not currently blocked by the restricted-mode gate.
 Cache-retention delete commands now use a reviewed dry-run/confirmation shape.
 They remain operator-only and should be paired with backup, legal-hold, and
 data-owner approval records.
+For Postgres, run retention cleanup when scheduled sync/write jobs are not
+active. The command takes a database advisory writer lock and deletes only the
+call ID set materialized for that confirmed run, but the operating window should
+still be treated as maintenance.
 
 ## Recommended Pilot Controls
 

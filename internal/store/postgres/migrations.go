@@ -825,4 +825,59 @@ DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 `,
 	postgresCRMInventoryMigrationSQL + postgresCRMInventoryReaderGrantsSQL + `
 `,
+	`
+CREATE TABLE IF NOT EXISTS purged_call_ids (
+	call_id TEXT PRIMARY KEY,
+	started_at TEXT NOT NULL DEFAULT '',
+	purge_started_before TEXT NOT NULL DEFAULT '',
+	purged_at TEXT NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION gongmcp_cache_purge_plan(started_before_arg text)
+RETURNS TABLE(
+	call_count bigint,
+	transcript_count bigint,
+	transcript_segment_count bigint,
+	context_object_count bigint,
+	context_field_count bigint,
+	call_fact_count bigint,
+	read_model_diagnostic_count bigint,
+	profile_call_fact_count bigint,
+	scorecard_activity_count bigint,
+	governance_suppressed_call_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH purge_calls AS (
+	SELECT call_id
+	  FROM calls
+	 WHERE TRIM(started_at) <> ''
+	   AND started_at < started_before_arg
+)
+SELECT
+	(SELECT COUNT(*) FROM purge_calls),
+	(SELECT COUNT(*) FROM transcripts WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM transcript_segments WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_context_objects WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_context_fields WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_facts WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_read_model_diagnostics WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM scorecard_activity WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM governance_suppressed_calls WHERE call_id IN (SELECT call_id FROM purge_calls))
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_cache_purge_plan(text) FROM PUBLIC;
+
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }

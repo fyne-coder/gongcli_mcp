@@ -184,6 +184,188 @@ func TestPostgresCacheInventoryAndDiagnostics(t *testing.T) {
 	}
 }
 
+func TestPostgresCachePurgeBeforePlansAndDeletesCacheRows(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	oldCall := json.RawMessage(`{"id":"pg-purge-old","title":"Old purge call","started":"2026-04-20T14:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-purge-old","name":"Old purge opportunity","fields":{"StageName":"Discovery"}}]}}`)
+	newCall := json.RawMessage(`{"id":"pg-purge-new","title":"New retained call","started":"2026-04-24T14:00:00Z","duration":900}`)
+	if _, err := store.UpsertCall(ctx, oldCall); err != nil {
+		t.Fatalf("UpsertCall old returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, newCall); err != nil {
+		t.Fatalf("UpsertCall new returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-purge-old","transcript":[{"speakerId":"speaker-old","sentences":[{"start":0,"end":1000,"text":"old purge transcript needle"}]}]}`)); err != nil {
+		t.Fatalf("UpsertTranscript returned error: %v", err)
+	}
+	if _, err := store.UpsertScorecardActivity(ctx, json.RawMessage(`{"answeredScorecardId":"pg-purge-scorecard","scorecardId":"pg-purge-scorecard-template","scorecardName":"Retention QA","callId":"pg-purge-old","callStartTime":"2026-04-20T14:00:00Z","reviewMethod":"MANUAL","reviewTime":"2026-04-21T14:00:00Z","answers":[{"isOverall":true,"score":4,"notApplicable":false}]}`)); err != nil {
+		t.Fatalf("UpsertScorecardActivity returned error: %v", err)
+	}
+	if _, err := importSyntheticPostgresProfile(t, ctx, store); err != nil {
+		t.Fatalf("import synthetic profile: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'pg-purge-old'`, 1)
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO governance_policy_state(config_sha256, data_fingerprint, suppressed_call_count, updated_at) VALUES('purge-policy-sha', 'fingerprint-before-purge', 1, now()::text)`); err != nil {
+		t.Fatalf("insert governance policy row: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO governance_suppressed_calls(config_sha256, call_id) VALUES('purge-policy-sha', 'pg-purge-old')`); err != nil {
+		t.Fatalf("insert governance suppressed call row: %v", err)
+	}
+
+	readOnlyView := &Store{db: store.DB(), readOnly: true}
+	plan, err := readOnlyView.PlanCachePurgeBefore(ctx, "2026-04-22")
+	if err != nil {
+		t.Fatalf("read-only PlanCachePurgeBefore returned error: %v", err)
+	}
+	if plan.CallCount != 1 ||
+		plan.TranscriptCount != 1 ||
+		plan.TranscriptSegmentCount != 1 ||
+		plan.ContextObjectCount != 1 ||
+		plan.ContextFieldCount != 1 ||
+		plan.CallFactCount != 1 ||
+		plan.ReadModelDiagnosticCount != 1 ||
+		plan.ProfileCallFactCount != 1 ||
+		plan.ScorecardActivityCount != 1 ||
+		plan.GovernanceSuppressedCallCount != 1 {
+		t.Fatalf("unexpected purge plan: %+v", plan)
+	}
+	if _, err := readOnlyView.PurgeCacheBefore(ctx, "2026-04-22"); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("read-only purge error=%v, want read-only failure", err)
+	}
+
+	results, err := store.SearchTranscriptSegments(ctx, "needle", 10)
+	if err != nil {
+		t.Fatalf("SearchTranscriptSegments before purge returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("search results before purge=%d want 1", len(results))
+	}
+
+	executed, err := store.PurgeCacheBefore(ctx, "2026-04-22")
+	if err != nil {
+		t.Fatalf("PurgeCacheBefore returned error: %v", err)
+	}
+	if executed.CallCount != 1 || executed.ScorecardActivityCount != 1 || executed.GovernanceSuppressedCallCount != 1 {
+		t.Fatalf("unexpected executed purge plan: %+v", executed)
+	}
+
+	for _, check := range []struct {
+		name  string
+		query string
+	}{
+		{"old calls", `SELECT COUNT(*) FROM calls WHERE call_id = 'pg-purge-old'`},
+		{"old transcripts", `SELECT COUNT(*) FROM transcripts WHERE call_id = 'pg-purge-old'`},
+		{"old transcript segments", `SELECT COUNT(*) FROM transcript_segments WHERE call_id = 'pg-purge-old'`},
+		{"old context objects", `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-purge-old'`},
+		{"old context fields", `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-purge-old'`},
+		{"old call facts", `SELECT COUNT(*) FROM call_facts WHERE call_id = 'pg-purge-old'`},
+		{"old read-model diagnostics", `SELECT COUNT(*) FROM call_read_model_diagnostics WHERE call_id = 'pg-purge-old'`},
+		{"old profile cache", `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'pg-purge-old'`},
+		{"old scorecard activity", `SELECT COUNT(*) FROM scorecard_activity WHERE call_id = 'pg-purge-old'`},
+		{"old governance suppressed calls", `SELECT COUNT(*) FROM governance_suppressed_calls WHERE call_id = 'pg-purge-old'`},
+	} {
+		assertPostgresCount(t, ctx, store, check.query, 0)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM calls WHERE call_id = 'pg-purge-new'`, 1)
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM purged_call_ids WHERE call_id = 'pg-purge-old'`, 1)
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-purge-old","transcript":[{"speakerId":"speaker-old","sentences":[{"start":0,"end":1000,"text":"should not be recreated"}]}]}`)); err == nil || !strings.Contains(err.Error(), "purged by retention policy") {
+		t.Fatalf("UpsertTranscript after purge error=%v, want retention tombstone failure", err)
+	}
+	if _, err := store.UpsertScorecardActivity(ctx, json.RawMessage(`{"answeredScorecardId":"pg-purge-scorecard-after","scorecardId":"pg-purge-scorecard-template","scorecardName":"Retention QA","callId":"pg-purge-old","callStartTime":"2026-04-20T14:00:00Z","reviewMethod":"MANUAL","reviewTime":"2026-04-21T14:00:00Z","answers":[{"isOverall":true,"score":4,"notApplicable":false}]}`)); err == nil || !strings.Contains(err.Error(), "purged by retention policy") {
+		t.Fatalf("UpsertScorecardActivity after purge error=%v, want retention tombstone failure", err)
+	}
+	if _, err := store.UpsertCall(ctx, oldCall); err == nil || !strings.Contains(err.Error(), "purged by retention policy") {
+		t.Fatalf("UpsertCall after purge error=%v, want retention tombstone failure", err)
+	}
+	if err := store.RefreshActiveProfileReadModel(ctx); err != nil {
+		t.Fatalf("RefreshActiveProfileReadModel after purge returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'pg-purge-old'`, 0)
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'pg-purge-new'`, 1)
+	status, err := store.ReadModelStatus(ctx)
+	if err != nil {
+		t.Fatalf("ReadModelStatus returned error: %v", err)
+	}
+	if !status.Ready || status.CallCount != 1 || status.FactCount != 1 || status.StaleReason != "" {
+		t.Fatalf("unexpected read model status after purge: %+v", status)
+	}
+	results, err = store.SearchTranscriptSegments(ctx, "needle", 10)
+	if err != nil {
+		t.Fatalf("SearchTranscriptSegments after purge returned error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("search results after purge=%d want 0", len(results))
+	}
+}
+
+func importSyntheticPostgresProfile(t *testing.T, ctx context.Context, store *Store) (*sqlite.ProfileImportResult, error) {
+	t.Helper()
+	profileBody := []byte(`
+version: 1
+name: Synthetic purge profile
+objects:
+  deal:
+    object_types: [Opportunity]
+fields:
+  deal_stage:
+    object: deal
+    names: [StageName]
+lifecycle:
+  open:
+    order: 10
+    label: Open
+    rules:
+      - object: deal
+        field_name: StageName
+        op: equals
+        value: Discovery
+  closed_won:
+    order: 20
+  closed_lost:
+    order: 30
+  post_sales:
+    order: 40
+  unknown:
+    order: 999
+`)
+	inventory, err := store.ProfileInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p, validation, err := profilepkg.ValidateBytes(profileBody, inventory)
+	if err != nil {
+		return nil, err
+	}
+	if !validation.Valid {
+		return nil, fmt.Errorf("profile validation failed: %+v", validation.Findings)
+	}
+	canonical, err := profilepkg.CanonicalJSON(p)
+	if err != nil {
+		return nil, err
+	}
+	return store.ImportProfile(ctx, sqlite.ProfileImportParams{
+		SourcePath:      "synthetic-purge-profile.yaml",
+		SourceSHA256:    validation.SourceSHA256,
+		CanonicalSHA256: validation.CanonicalSHA256,
+		RawYAML:         profileBody,
+		CanonicalJSON:   canonical,
+		Profile:         p,
+		Findings:        validation.Findings,
+		ImportedBy:      "test",
+	})
+}
+
 func TestBusinessPilotAggregatesMatchSQLite(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -747,7 +929,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "purged_call_ids", "governance_policy_state", "governance_suppressed_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -756,7 +938,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
-	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started", "idx_pg_crm_integrations_provider_name", "idx_pg_crm_schema_objects_type", "idx_pg_crm_schema_fields_object_name"} {
+	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started", "idx_pg_profile_call_fact_cache_call", "idx_pg_crm_integrations_provider_name", "idx_pg_crm_schema_objects_type", "idx_pg_crm_schema_fields_object_name"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)`, index).Scan(&exists); err != nil {
 			t.Fatalf("check index %s: %v", index, err)
@@ -765,7 +947,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -1998,7 +2180,7 @@ lists:
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE crm_schema_fields, crm_schema_objects, crm_integrations, scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE crm_schema_fields, crm_schema_objects, crm_integrations, scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, purged_call_ids, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

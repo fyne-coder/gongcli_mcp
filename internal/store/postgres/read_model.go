@@ -365,6 +365,10 @@ func (s *Store) RebuildReadModel(ctx context.Context) (*ReadModelStatus, error) 
 	if err != nil {
 		return nil, err
 	}
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM call_read_model_diagnostics`); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -408,6 +412,10 @@ func (s *Store) RebuildReadModel(ctx context.Context) (*ReadModelStatus, error) 
 	if err != nil {
 		return nil, err
 	}
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", true); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -444,6 +452,9 @@ func (s *Store) refreshSingleCallReadModel(ctx context.Context, callID string) e
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return err
+	}
 	if err := refreshCallReadModelTx(ctx, tx, callID); err != nil {
 		return err
 	}

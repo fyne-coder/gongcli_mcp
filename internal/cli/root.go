@@ -110,6 +110,7 @@ func (a *app) usage() {
   gongctl auth check
   gongctl cache inventory --db gong.db  # or omit --db with GONG_DATABASE_URL for Postgres
   gongctl cache purge --db gong.db --older-than YYYY-MM-DD [--dry-run|--confirm]
+  gongctl cache purge --older-than YYYY-MM-DD [--dry-run|--confirm]  # Postgres via GONG_DATABASE_URL
   gongctl profile discover --db gong.db --out gongctl-profile.yaml
   gongctl profile validate --db gong.db --profile gongctl-profile.yaml
   gongctl profile import --db gong.db --profile gongctl-profile.yaml [--activate=false]

@@ -288,6 +288,9 @@ func (s *Store) ImportProfile(ctx context.Context, params sqlite.ProfileImportPa
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, err
+	}
 
 	existing, err := profileByCanonicalTx(ctx, tx, canonicalSHA256)
 	switch {
@@ -471,6 +474,9 @@ func (s *Store) ActivateProfile(ctx context.Context, ref string) (*sqlite.Profil
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = false WHERE id <> $1`, doc.Meta.ProfileID); err != nil {
 		return nil, err
 	}

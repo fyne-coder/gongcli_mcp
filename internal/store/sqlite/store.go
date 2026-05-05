@@ -760,13 +760,17 @@ type CacheTableCount struct {
 }
 
 type CachePurgePlan struct {
-	StartedBefore          string `json:"started_before"`
-	CallCount              int64  `json:"call_count"`
-	TranscriptCount        int64  `json:"transcript_count"`
-	TranscriptSegmentCount int64  `json:"transcript_segment_count"`
-	ContextObjectCount     int64  `json:"context_object_count"`
-	ContextFieldCount      int64  `json:"context_field_count"`
-	ProfileCallFactCount   int64  `json:"profile_call_fact_count"`
+	StartedBefore                 string `json:"started_before"`
+	CallCount                     int64  `json:"call_count"`
+	TranscriptCount               int64  `json:"transcript_count"`
+	TranscriptSegmentCount        int64  `json:"transcript_segment_count"`
+	ContextObjectCount            int64  `json:"context_object_count"`
+	ContextFieldCount             int64  `json:"context_field_count"`
+	CallFactCount                 int64  `json:"call_fact_count,omitempty"`
+	ReadModelDiagnosticCount      int64  `json:"read_model_diagnostic_count,omitempty"`
+	ProfileCallFactCount          int64  `json:"profile_call_fact_count"`
+	ScorecardActivityCount        int64  `json:"scorecard_activity_count,omitempty"`
+	GovernanceSuppressedCallCount int64  `json:"governance_suppressed_call_count,omitempty"`
 }
 
 type ProfileReadiness struct {

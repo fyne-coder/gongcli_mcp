@@ -369,6 +369,8 @@ bin/gongctl sync run --config /srv/gongctl/company-sync.yaml
 bin/gongctl cache inventory --db /srv/gongctl/cache/gong.db
 GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache inventory
 bin/gongctl cache purge --db /srv/gongctl/cache/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" bin/gongctl cache purge --older-than 2026-04-01 --confirm
 ```
 
 The config runner resolves relative `db` and transcript `out_dir` paths from
@@ -379,9 +381,11 @@ profile status, and last sync metadata. For Postgres shared deployments, omit
 `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL`; the inventory reports
 schema/readiness/reader-role diagnostics without exporting the database URL.
 
-`cache purge` is dry-run by default. Use it to preview retention cleanup, then
-run the same command with `--confirm` only after backup, legal-hold, and owner
-approval checks are complete.
+`cache purge` is dry-run by default. For Postgres shared deployments, use the
+reader URL for the metadata-only plan and a writable URL only for the approved
+`--confirm` run. Use it to preview retention cleanup, then run the same command
+with `--confirm` only after backup, legal-hold, and owner approval checks are
+complete.
 
 ## Admin-Run Sync Contract
 
@@ -443,12 +447,21 @@ Retention policy should define:
 For approved retention cleanup, run `cache purge --older-than YYYY-MM-DD`
 without `--confirm` first and keep the JSON plan with the change record. The
 confirmed purge deletes matching calls plus dependent transcripts, transcript
-segments, embedded CRM context, and profile call-fact cache rows. It enables
-SQLite `secure_delete`, checkpoints/truncates WAL state, and runs `VACUUM` to
-reduce retained bytes in the active database file. It does not delete sync-run
-history, profile definitions, CRM schema inventory, settings inventory,
-transcript JSON files outside SQLite, snapshots, or backups; handle those
-through the company retention workflow.
+segments, embedded CRM context, read-model rows, profile call-fact cache rows,
+scorecard activity rows, and governance-suppression rows. SQLite confirmed
+purges enable `secure_delete`, checkpoint/truncate WAL state, and run `VACUUM`
+to reduce retained bytes in the active database file. Postgres confirmed purges
+remove rows from the shared database but do not physically erase WAL, replicas,
+snapshots, dumps, or backups. The command does not delete sync-run history,
+profile definitions, CRM schema inventory, settings inventory, transcript JSON
+files outside SQLite/Postgres, snapshots, or backups; handle those through the
+company retention workflow. Postgres keeps call-ID tombstones as operational
+metadata to block accidental rehydration of purged call-scoped rows by later
+sync steps.
+For Postgres, run the confirmed cleanup in a maintenance window with scheduled
+sync/write jobs stopped. The command takes the same database advisory writer
+lock as supported Postgres write paths and deletes only the call IDs
+materialized for that confirmed run.
 
 Decommissioning should include:
 

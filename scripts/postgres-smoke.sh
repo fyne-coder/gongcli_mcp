@@ -249,6 +249,59 @@ if grep -R -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|1
   exit 1
 fi
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/tmp/gongctl-postgres-purge-fixture.txt
+DELETE FROM transcript_segments WHERE call_id = 'synthetic-retention-old';
+DELETE FROM transcripts WHERE call_id = 'synthetic-retention-old';
+DELETE FROM calls WHERE call_id = 'synthetic-retention-old';
+DELETE FROM scorecard_activity WHERE answered_scorecard_id = 'synthetic-retention-scorecard';
+INSERT INTO calls(call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at)
+VALUES('synthetic-retention-old', 'Retention cleanup candidate', '2025-12-15T15:00:00Z', 900, 2, true, '{"id":"synthetic-retention-old","title":"Retention cleanup candidate","started":"2025-12-15T15:00:00Z","duration":900,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-retention-old","name":"Retention Opportunity","fields":{"StageName":"Proposal"}}]}}'::jsonb, 'retention-old-sha', now()::text, now()::text);
+INSERT INTO transcripts(call_id, raw_json, raw_sha256, segment_count, first_seen_at, updated_at)
+VALUES('synthetic-retention-old', '{"callId":"synthetic-retention-old"}'::jsonb, 'retention-old-transcript-sha', 1, now()::text, now()::text);
+INSERT INTO transcript_segments(call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json)
+VALUES('synthetic-retention-old', 0, 'speaker-retention-old', 0, 1000, 'retentionpurgeunique transcript text should be removed.', '{"speakerId":"speaker-retention-old"}'::jsonb);
+INSERT INTO scorecard_activity(answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_started_at, review_method, review_time, overall_score, average_score, answer_count, raw_json, raw_sha256, first_seen_at, updated_at)
+VALUES('synthetic-retention-scorecard', 'synthetic-scorecard-001', 'Synthetic discovery quality', 'synthetic-retention-old', '2025-12-15T15:00:00Z', 'MANUAL', '2025-12-16T15:00:00Z', 4, 4, 1, '{"answeredScorecardId":"synthetic-retention-scorecard"}'::jsonb, 'retention-scorecard-sha', now()::text, now()::text);
+SQL
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-purge-fixture-read-model.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-purge-fixture-read-model.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache purge --older-than 2026-01-01 >/tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"dry_run": true' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"executed": false' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"call_count": 1' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"transcript_count": 1' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"transcript_segment_count": 1' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"call_fact_count": 1' /tmp/gongctl-postgres-purge-dry-run.json
+grep -q '"scorecard_activity_count": 1' /tmp/gongctl-postgres-purge-dry-run.json
+if grep -q 'synthetic-retention-old\|retentionpurgeunique\|postgres://\|gongmcp_reader_dev_password\|gongctl_dev_password' /tmp/gongctl-postgres-purge-dry-run.json; then
+  echo "Postgres purge dry-run exposed raw identifiers, transcript text, or secrets" >&2
+  exit 1
+fi
+if GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache purge --older-than 2026-01-01 --confirm >/tmp/gongctl-postgres-purge-reader-confirm-denied.txt 2>&1; then
+  echo "Postgres purge unexpectedly allowed reader URL confirmation" >&2
+  exit 1
+fi
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache purge --older-than 2026-01-01 --confirm >/tmp/gongctl-postgres-purge-confirm.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-purge-confirm.json
+grep -q '"executed": true' /tmp/gongctl-postgres-purge-confirm.json
+grep -q '"call_count": 1' /tmp/gongctl-postgres-purge-confirm.json
+if grep -q 'synthetic-retention-old\|retentionpurgeunique\|postgres://\|gongctl_dev_password' /tmp/gongctl-postgres-purge-confirm.json; then
+  echo "Postgres purge confirm exposed raw identifiers, transcript text, or secrets" >&2
+  exit 1
+fi
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT 'calls', COUNT(*) FROM calls WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'transcript_segments', COUNT(*) FROM transcript_segments WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'call_facts', COUNT(*) FROM call_facts WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'profile_call_fact_cache', COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'scorecard_activity', COUNT(*) FROM scorecard_activity WHERE call_id = 'synthetic-retention-old' ORDER BY 1" >/tmp/gongctl-postgres-purge-post-counts.txt
+if grep -v '|0$' /tmp/gongctl-postgres-purge-post-counts.txt >/dev/null; then
+  echo "Postgres purge left old call-dependent rows" >&2
+  cat /tmp/gongctl-postgres-purge-post-counts.txt >&2
+  exit 1
+fi
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl search transcripts --query retentionpurgeunique --limit 5 >/tmp/gongctl-postgres-purge-search-after.json
+if grep -q 'synthetic-retention-old' /tmp/gongctl-postgres-purge-search-after.json; then
+  echo "Postgres purge left searchable transcript evidence" >&2
+  exit 1
+fi
+
 if reader_psql -c "SELECT raw_json FROM calls LIMIT 1" >/tmp/gongctl-postgres-reader-raw-read.txt 2>&1; then
 	echo "reader role unexpectedly read raw call JSON" >&2
   exit 1
@@ -596,9 +649,9 @@ if grep -q 'raw_yaml\|canonical_json' /tmp/gongctl-postgres-profile-mcp.jsonl; t
   exit 1
 fi
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT ON profile_call_fact_cache TO gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT ON profile_call_fact_cache TO gongmcp_reader; GRANT SELECT ON purged_call_ids TO gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-select-drift.txt 2>&1; then
-  echo "read-only MCP unexpectedly started with direct SELECT on profile cache table" >&2
+  echo "read-only MCP unexpectedly started with direct SELECT on sensitive tables" >&2
   exit 1
 fi
 grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-select-drift.txt
@@ -623,9 +676,9 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
-  echo "read-only MCP unexpectedly started without scorecard activity function grant" >&2
+  echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
 fi
 grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-function-grant-drift.txt
@@ -723,6 +776,13 @@ echo "cache inventory output: /tmp/gongctl-postgres-cache-inventory.json"
 echo "cache inventory writer URL output: /tmp/gongctl-postgres-cache-inventory-writer-url.json"
 echo "support bundle response output: /tmp/gongctl-postgres-support-bundle.json"
 echo "support bundle directory: /tmp/gongctl-postgres-support-bundle"
+echo "purge fixture output: /tmp/gongctl-postgres-purge-fixture.txt"
+echo "purge fixture read model output: /tmp/gongctl-postgres-purge-fixture-read-model.json"
+echo "purge dry-run output: /tmp/gongctl-postgres-purge-dry-run.json"
+echo "purge reader confirm denial output: /tmp/gongctl-postgres-purge-reader-confirm-denied.txt"
+echo "purge confirm output: /tmp/gongctl-postgres-purge-confirm.json"
+echo "purge post-counts output: /tmp/gongctl-postgres-purge-post-counts.txt"
+echo "purge post-search output: /tmp/gongctl-postgres-purge-search-after.json"
 echo "governance fixture output: /tmp/gongctl-postgres-governance-fixture.txt"
 echo "governance read model output: /tmp/gongctl-postgres-governance-read-model.json"
 echo "governance audit output: /tmp/gongctl-postgres-governance-audit.json"

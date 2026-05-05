@@ -25,6 +25,7 @@ const (
 	maxCallSearchLimit           = 1000
 	defaultCRMFieldLimit         = 50
 	maxCRMFieldLimit             = 1000
+	postgresWriterLockKey        = "gongctl_postgres_writer_v1"
 )
 
 const postgresReadModelBackfillMigrationVersion = 2
@@ -218,6 +219,35 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+func lockPostgresWriterTx(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, postgresWriterLockKey); err != nil {
+		return fmt.Errorf("postgres writer lock busy; retry after the active sync or retention maintenance finishes: %w", err)
+	}
+	return nil
+}
+
+func ensurePostgresCallNotPurgedTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil
+	}
+	var exists bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM purged_call_ids WHERE call_id = $1)`, callID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if exists {
+		return errors.New("call-scoped cache row was purged by retention policy; refusing to recreate retained call-scoped cache rows")
+	}
+	return nil
+}
+
 func (s *Store) Migrate(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("postgres store is not open")
@@ -255,6 +285,9 @@ ON CONFLICT(version) DO NOTHING`, idx+1, nowUTC()); err != nil {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	if err := s.ensureConcurrentOperationalIndexes(ctx); err != nil {
+		return err
+	}
 	if err := s.reconcileReaderGrants(ctx); err != nil {
 		return err
 	}
@@ -262,6 +295,23 @@ ON CONFLICT(version) DO NOTHING`, idx+1, nowUTC()); err != nil {
 		if _, err := s.RebuildReadModel(ctx); err != nil {
 			return fmt.Errorf("backfill postgres read model: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) ensureConcurrentOperationalIndexes(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("postgres store is not open")
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT to_regclass('public.profile_call_fact_cache') IS NOT NULL`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pg_profile_call_fact_cache_call ON profile_call_fact_cache(call_id)`); err != nil {
+		return fmt.Errorf("ensure postgres operational index idx_pg_profile_call_fact_cache_call: %w", err)
 	}
 	return nil
 }
@@ -552,16 +602,17 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_profile_data_fingerprint() TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO gongmcp_reader;
-			GRANT EXECUTE ON FUNCTION gongmcp_governance_data_fingerprint() TO gongmcp_reader;
-			GRANT EXECUTE ON FUNCTION gongmcp_governance_policy_state(text) TO gongmcp_reader;
-				GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
-	`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
-	`+postgresSettingsReaderGrantStatementsSQL+`
-	`+postgresScorecardActivityReaderGrantStatementsSQL+`
-	`+postgresCRMInventoryReaderGrantStatementsSQL+`
-			END IF;
-		END;
-		$$;`)
+				GRANT EXECUTE ON FUNCTION gongmcp_governance_data_fingerprint() TO gongmcp_reader;
+				GRANT EXECUTE ON FUNCTION gongmcp_governance_policy_state(text) TO gongmcp_reader;
+					GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
+		`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
+		`+postgresSettingsReaderGrantStatementsSQL+`
+		`+postgresScorecardActivityReaderGrantStatementsSQL+`
+		`+postgresCRMInventoryReaderGrantStatementsSQL+`
+			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
+		END IF;
+	END;
+	$$;`)
 	if err != nil {
 		return fmt.Errorf("reconcile postgres reader grants: %w", err)
 	}
@@ -669,7 +720,7 @@ SELECT table_name
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-			   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'scorecard_activity')
+				   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'purged_call_ids', 'governance_policy_state', 'governance_suppressed_calls', 'scorecard_activity')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT') OR
 	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
@@ -816,7 +867,8 @@ SELECT r.table_name || '.' || r.column_name
 WITH required_functions(signature) AS (
 	VALUES
 		('public.gongmcp_scorecard_activity_summary(text, integer)'),
-		('public.gongmcp_scorecard_activity_totals()')
+		('public.gongmcp_scorecard_activity_totals()'),
+		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature
   FROM required_functions
@@ -896,6 +948,9 @@ func (s *Store) FinishSyncRun(ctx context.Context, runID int64, params sqlite.Fi
 		return err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return err
+	}
 	var scope, syncKey string
 	if err := tx.QueryRowContext(ctx, `SELECT scope, sync_key FROM sync_runs WHERE id = $1`, runID).Scan(&scope, &syncKey); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -967,6 +1022,12 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*sqlite.Ca
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err := ensurePostgresCallNotPurgedTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO calls(
 	call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
@@ -1059,6 +1120,12 @@ func (s *Store) UpsertTranscript(ctx context.Context, raw json.RawMessage) (*sql
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err := ensurePostgresCallNotPurgedTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO transcripts(call_id, raw_json, raw_sha256, segment_count, first_seen_at, updated_at)
 VALUES($1, $2::jsonb, $3, $4, $5, $6)
@@ -1477,6 +1544,142 @@ func (s *Store) CacheDiagnostics(ctx context.Context) (*CacheDiagnostics, error)
 		diagnostics.ReaderPrivilegeStatus = "not_valid_reader"
 	}
 	return diagnostics, nil
+}
+
+func (s *Store) PlanCachePurgeBefore(ctx context.Context, startedBefore string) (*sqlite.CachePurgePlan, error) {
+	startedBefore = strings.TrimSpace(startedBefore)
+	if startedBefore == "" {
+		return nil, errors.New("started_before is required")
+	}
+	plan := &sqlite.CachePurgePlan{StartedBefore: startedBefore}
+	if s.readOnly {
+		err := scanPostgresCachePurgePlan(ctx, s.db, plan, `SELECT call_count, transcript_count, transcript_segment_count, context_object_count, context_field_count, call_fact_count, read_model_diagnostic_count, profile_call_fact_count, scorecard_activity_count, governance_suppressed_call_count FROM gongmcp_cache_purge_plan($1)`, startedBefore)
+		return plan, err
+	}
+	if err := scanPostgresCachePurgePlan(ctx, s.db, plan, postgresCachePurgePlanSQL(`SELECT call_id FROM calls WHERE TRIM(started_at) <> '' AND started_at < $1`), startedBefore); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func (s *Store) PurgeCacheBefore(ctx context.Context, startedBefore string) (*sqlite.CachePurgePlan, error) {
+	if err := s.ensureWritable(); err != nil {
+		return nil, err
+	}
+	startedBefore = strings.TrimSpace(startedBefore)
+	if startedBefore == "" {
+		return nil, errors.New("started_before is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return nil, err
+	}
+	if err := createPostgresPurgeCallIDTable(ctx, tx, startedBefore); err != nil {
+		return nil, err
+	}
+	plan := &sqlite.CachePurgePlan{StartedBefore: startedBefore}
+	if err := scanPostgresCachePurgePlan(ctx, tx, plan, postgresCachePurgePlanSQL(`SELECT call_id FROM gongctl_purge_call_ids`)); err != nil {
+		return nil, err
+	}
+	if plan.CallCount == 0 {
+		return plan, tx.Commit()
+	}
+	purgedAt := nowUTC()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO purged_call_ids(call_id, started_at, purge_started_before, purged_at)
+SELECT call_id, started_at, $1, $2
+  FROM gongctl_purge_call_ids
+ON CONFLICT(call_id) DO UPDATE SET
+	started_at = excluded.started_at,
+	purge_started_before = excluded.purge_started_before,
+	purged_at = excluded.purged_at`, plan.StartedBefore, purgedAt); err != nil {
+		return nil, err
+	}
+
+	for _, query := range []string{
+		`DELETE FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM scorecard_activity WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM governance_suppressed_calls WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM call_read_model_diagnostics WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM call_facts WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM transcript_segments WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM transcripts WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM call_context_fields WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM call_context_objects WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM calls WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+	} {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE governance_policy_state gps
+   SET suppressed_call_count = COALESCE((SELECT COUNT(*) FROM governance_suppressed_calls gsc WHERE gsc.config_sha256 = gps.config_sha256), 0),
+       updated_at = $1`, nowUTC()); err != nil {
+		return nil, err
+	}
+	if err := updateReadModelStateTx(ctx, tx, nowUTC(), "", true); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func createPostgresPurgeCallIDTable(ctx context.Context, tx *sql.Tx, startedBefore string) error {
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE gongctl_purge_call_ids(call_id text PRIMARY KEY, started_at text NOT NULL DEFAULT '') ON COMMIT DROP`); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO gongctl_purge_call_ids(call_id, started_at)
+SELECT call_id, started_at
+  FROM calls
+ WHERE TRIM(started_at) <> ''
+   AND started_at < $1
+ ORDER BY call_id
+ FOR UPDATE`, startedBefore)
+	return err
+}
+
+type postgresPurgePlanScanner interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func scanPostgresCachePurgePlan(ctx context.Context, scanner postgresPurgePlanScanner, plan *sqlite.CachePurgePlan, query string, args ...any) error {
+	return scanner.QueryRowContext(ctx, query, args...).Scan(
+		&plan.CallCount,
+		&plan.TranscriptCount,
+		&plan.TranscriptSegmentCount,
+		&plan.ContextObjectCount,
+		&plan.ContextFieldCount,
+		&plan.CallFactCount,
+		&plan.ReadModelDiagnosticCount,
+		&plan.ProfileCallFactCount,
+		&plan.ScorecardActivityCount,
+		&plan.GovernanceSuppressedCallCount,
+	)
+}
+
+func postgresCachePurgePlanSQL(purgeCallsSQL string) string {
+	return `WITH purge_calls AS (` + purgeCallsSQL + `)
+SELECT
+	(SELECT COUNT(*) FROM purge_calls),
+	(SELECT COUNT(*) FROM transcripts WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM transcript_segments WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_context_objects WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_context_fields WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_facts WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM call_read_model_diagnostics WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM scorecard_activity WHERE call_id IN (SELECT call_id FROM purge_calls)),
+	(SELECT COUNT(*) FROM governance_suppressed_calls WHERE call_id IN (SELECT call_id FROM purge_calls))`
 }
 
 func postgresInventoryTables() []string {

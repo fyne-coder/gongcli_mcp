@@ -303,6 +303,9 @@ SELECT COUNT(*)
 		return 0, err
 	}
 	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return 0, err
+	}
 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO crm_schema_objects(
 	integration_id, object_type, display_name, field_count, raw_json, raw_sha256, first_seen_at, updated_at

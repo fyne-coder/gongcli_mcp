@@ -160,15 +160,12 @@ func cacheInventoryProfileStatus(backend string, readiness sqlite.ProfileReadine
 func (a *app) cachePurge(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("cache purge", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	olderThan := fs.String("older-than", "", "purge calls started before this YYYY-MM-DD date")
 	dryRun := fs.Bool("dry-run", false, "show purge plan without deleting data")
 	confirm := fs.Bool("confirm", false, "delete matching cache rows")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
-	}
-	if strings.TrimSpace(*dbPath) == "" {
-		return fmt.Errorf("--db is required")
 	}
 	cutoff := strings.TrimSpace(*olderThan)
 	if cutoff == "" {
@@ -181,30 +178,31 @@ func (a *app) cachePurge(ctx context.Context, args []string) error {
 		return fmt.Errorf("--dry-run and --confirm cannot be used together")
 	}
 
-	absPath, err := filepath.Abs(*dbPath)
-	if err != nil {
-		return err
-	}
-
 	var plan *sqlite.CachePurgePlan
+	var backend string
+	var dbPathForResponse string
 	executed := false
 	if *confirm {
-		store, err := openSQLiteStore(ctx, absPath)
+		store, selectedBackend, selectedPath, err := openCachePurgeWritableStore(ctx, *dbPath)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
+		backend = selectedBackend
+		dbPathForResponse = selectedPath
 		plan, err = store.PurgeCacheBefore(ctx, cutoff)
 		if err != nil {
 			return err
 		}
 		executed = true
 	} else {
-		store, err := sqlite.OpenReadOnly(ctx, absPath)
+		store, selectedBackend, selectedPath, err := openCachePurgePlanStore(ctx, *dbPath)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
+		backend = selectedBackend
+		dbPathForResponse = selectedPath
 		plan, err = store.PlanCachePurgeBefore(ctx, cutoff)
 		if err != nil {
 			return err
@@ -212,7 +210,9 @@ func (a *app) cachePurge(ctx context.Context, args []string) error {
 	}
 
 	return writeJSONValue(a.out, cachePurgeResponse{
-		DBPath:                   absPath,
+		Backend:                  backend,
+		DBPath:                   dbPathForResponse,
+		DBPathPolicy:             cacheInventoryPathPolicy(backend),
 		DryRun:                   !*confirm || *dryRun,
 		Executed:                 executed,
 		ConfirmationRequired:     !*confirm,
@@ -220,6 +220,53 @@ func (a *app) cachePurge(ctx context.Context, args []string) error {
 		SensitiveDataWarning:     cacheSensitiveDataWarning,
 		ConfirmationInstructions: cachePurgeConfirmationInstructions(!*confirm),
 	})
+}
+
+type cachePurgePlanStore interface {
+	PlanCachePurgeBefore(context.Context, string) (*sqlite.CachePurgePlan, error)
+	Close() error
+}
+
+type cachePurgeWritableStore interface {
+	cachePurgePlanStore
+	PurgeCacheBefore(context.Context, string) (*sqlite.CachePurgePlan, error)
+}
+
+func openCachePurgePlanStore(ctx context.Context, path string) (cachePurgePlanStore, string, string, error) {
+	if strings.TrimSpace(path) != "" {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, "", "", err
+		}
+		store, err := sqlite.OpenReadOnly(ctx, absPath)
+		return store, "sqlite", absPath, err
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, "", "", errors.New("--db is required")
+	}
+	store, err := postgres.OpenStatus(ctx, databaseURL)
+	return store, "postgres", "", err
+}
+
+func openCachePurgeWritableStore(ctx context.Context, path string) (cachePurgeWritableStore, string, string, error) {
+	if strings.TrimSpace(path) != "" {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, "", "", err
+		}
+		store, err := openSQLiteStore(ctx, absPath)
+		return store, "sqlite", absPath, err
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, "", "", errors.New("--db is required")
+	}
+	store, err := postgres.Open(ctx, databaseURL)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("open writable Postgres cache for confirmed purge: %w", err)
+	}
+	return store, "postgres", "", nil
 }
 
 func cachePurgeConfirmationInstructions(required bool) string {
@@ -291,7 +338,9 @@ type cacheInventoryResponse struct {
 }
 
 type cachePurgeResponse struct {
+	Backend                  string                 `json:"backend"`
 	DBPath                   string                 `json:"db_path"`
+	DBPathPolicy             string                 `json:"db_path_policy"`
 	DryRun                   bool                   `json:"dry_run"`
 	Executed                 bool                   `json:"executed"`
 	ConfirmationRequired     bool                   `json:"confirmation_required"`

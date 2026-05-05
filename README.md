@@ -305,6 +305,8 @@ gongctl sync run --config testdata/fixtures/sync-run-minimal.yaml --dry-run
 gongctl cache inventory --db ~/gongctl-data/gong.db
 GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache inventory
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01 --confirm
 ```
 
 ## Advanced Local Operator Commands
@@ -329,6 +331,8 @@ gongctl sync run --config ~/gongctl-data/company-sync.yaml
 gongctl sync status --db ~/gongctl-data/gong.db
 gongctl cache inventory --db ~/gongctl-data/gong.db
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01 --confirm
 gongctl profile discover --db ~/gongctl-data/gong.db --out ~/gongctl-data/gongctl-profile.yaml
 gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile import --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
@@ -389,7 +393,7 @@ The Agent E CLI flow is SQLite-backed:
 8. `gongctl sync run --config PATH [--dry-run]`
 9. `gongctl sync status --db PATH`
 10. `gongctl cache inventory --db PATH` for SQLite, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
-11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`
+11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
 12. `gongctl profile discover --db PATH --out PATH`
 13. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
 14. `gongctl profile validate --db PATH --profile PATH`
@@ -443,11 +447,19 @@ Rules:
   `GONG_DATABASE_URL` or `DATABASE_URL` and no `--db`, it opens Postgres
   read-only, reports safe table/version/readiness diagnostics, and never
   exports the database URL.
-- `cache purge --db PATH --older-than YYYY-MM-DD` is dry-run by default and
-  reports calls, transcripts, transcript segments, CRM context, and profile
-  fact-cache rows that would be deleted. Confirmed purges enable SQLite
-  `secure_delete`, checkpoint/truncate WAL state, and run `VACUUM`; still add
-  `--confirm` only after backup, retention, and legal-hold checks are complete.
+- `cache purge --db PATH --older-than YYYY-MM-DD` is dry-run by default for
+  SQLite. Omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` for
+  Postgres. A Postgres reader URL can preview metadata-only counts through the
+  read-only role; confirmed Postgres purges require a writable URL and delete
+  matching calls plus dependent transcript, CRM-context, read-model, profile
+  fact-cache, scorecard-activity, and governance-suppression rows. SQLite
+  confirmed purges additionally enable `secure_delete`, checkpoint/truncate WAL
+  state, and run `VACUUM`. Postgres WAL, replicas, snapshots, backups, transcript
+  files, sync history, profiles, CRM schema inventory, and settings inventory
+  remain operator-owned retention surfaces. Postgres keeps call-ID tombstones as
+  operational metadata to prevent later sync steps from accidentally
+  rehydrating purged call-scoped rows; add `--confirm` only after backup,
+  retention, and legal-hold checks are complete.
 - `profile discover` generates an editable YAML profile from cached CRM inventory and includes confidence plus evidence for discovered mappings. Discovery is an English-biased starter and may include CRM evidence values in the YAML, so write real-tenant output to a local file outside git rather than shared logs.
 - Discovered profiles are starter drafts, not universal truth. A human should review tenant lifecycle, object, field, and methodology mappings before relying on profile-aware separation of sales and post-sales calls.
 - `profile validate` reports malformed YAML, unsupported profile versions,

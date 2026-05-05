@@ -128,6 +128,7 @@ Cache purge is currently flag-driven:
 - `cache purge --older-than DATE`
 - `--dry-run`
 - `--confirm`
+- `--db PATH` for SQLite, or `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
 
 A YAML policy would help operators review and schedule retention decisions:
 
