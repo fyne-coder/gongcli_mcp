@@ -77,6 +77,7 @@ For company evaluation, start with the enterprise pilot packet:
 - [Developer orientation](docs/developer-orientation.md)
 - [Quickstart](docs/quickstart.md)
 - [Customer-hosted package](docs/customer-hosted-package.md)
+- [Postgres client pilot release packet](docs/postgres-client-pilot-release-packet.md)
 - [Data Boundary Statement](docs/data-boundary-statement.md)
 - [Support model](docs/support.md)
 - [Enterprise deployment](docs/enterprise-deployment.md)

@@ -20,6 +20,8 @@ This document defines the current enterprise pilot deployment shape for
 This is a pilot-candidate operating model, not a hosted service design.
 Customer identity, raw transcripts, secrets, and tenant-specific filesystem
 details should stay outside shared docs and outside the source repo.
+For controlled multi-container Postgres sharing, pair this document with the
+[Postgres client pilot release packet](postgres-client-pilot-release-packet.md).
 
 Security-review readers should also use
 [Data Boundary Statement](data-boundary-statement.md) for the customer-hosted

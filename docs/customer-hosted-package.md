@@ -28,6 +28,7 @@ of the package supports deployment, security review, support, and operations.
 | Upgrade and rollback instructions | [Release versioning](release.md), [Enterprise deployment](enterprise-deployment.md#backup-retention-and-decommissioning) |
 | Smoke-test scripts | `scripts/docker-smoke.sh`, `scripts/smoke-http-mcp.sh`, [Docker deployment](docker.md), [Customer implementation checklist](implementation-checklist.md#smoke-tests) |
 | Example security questionnaire answers | [Security questionnaire](security-questionnaire.md) |
+| Postgres shared-deployment pilot packet | [Postgres client pilot release packet](postgres-client-pilot-release-packet.md) |
 
 ## Data-Flow Diagram
 
@@ -61,6 +62,9 @@ Default enterprise posture:
 
 1. Review the Data Boundary Statement.
 2. Decide local stdio, private HTTP bearer pilot, or remote HTTPS/OAuth.
+   For multi-container Postgres pilots, review the
+   [Postgres client pilot release packet](postgres-client-pilot-release-packet.md)
+   before exposing business users.
 3. Create a protected customer data root outside the source checkout.
 4. Configure Gong credentials for the operator sync job only.
 5. Run a bounded sync and validate readiness.

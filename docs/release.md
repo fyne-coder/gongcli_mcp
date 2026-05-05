@@ -145,3 +145,9 @@ It proves dump/restore mechanics, migration/read-model repair, restored MCP
 startup, and read-only-role denials without using customer data. Customer
 production backup policy, PITR, replica rewind, encryption, and retention of
 backup media remain deployment-owned controls.
+
+For a controlled shared Postgres client pilot, use the
+[Postgres client pilot release packet](postgres-client-pilot-release-packet.md)
+as the handoff checklist. It narrows the supported pilot surface, evidence
+bundle, digest-pinning expectations, and non-GA limitations before business
+users connect.
