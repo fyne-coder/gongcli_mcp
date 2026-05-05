@@ -50,7 +50,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
 | Support bundle | SQLite sanitized support bundle | complete for metadata-only Postgres diagnostics | Sanitized Postgres diagnostics without secrets/customer payloads or database URLs | postgres-native equivalent | Phase 6a | support bundle fixture inspection; `scripts/postgres-smoke.sh` |
 | Cache inventory | SQLite file/table inventory | complete for Postgres table/version/readiness diagnostics | Postgres table counts, schema version, read-model/profile readiness, and reader-role diagnostics without database URL export | postgres-native equivalent | Phase 6a | `TestPostgresCacheInventoryAndDiagnostics`; `scripts/postgres-smoke.sh` |
-| Purge/retention | SQLite purge commands | complete for bounded call-scoped Postgres row cleanup | Reader-role dry-run plan plus writable confirmed purge for calls and dependent transcript, CRM-context, read-model, profile-cache, scorecard-activity, and governance-suppression rows; physical WAL/backups/replicas remain operator-owned | postgres-native equivalent | Phase 6b | purge dry-run/confirm tests and smoke |
+| Purge/retention | SQLite purge commands | complete for bounded call-scoped Postgres row cleanup plus scheduled policy YAML | Reader-role dry-run plan plus writable confirmed purge for calls and dependent transcript, CRM-context, read-model, profile-cache, scorecard-activity, and governance-suppression rows; config-driven approval metadata for scheduled retention; physical WAL/backups/replicas remain operator-owned | postgres-native equivalent | Phase 6b/8a | purge dry-run/confirm tests and smoke |
 | Backup/restore | SQLite file copy guidance | complete for synthetic Postgres restore smoke and operator guidance | Postgres dump/restore, read-model rebuild, read-only MCP verification, reader denial checks, and role-grant guidance; PITR/replica/customer backup policy remains operator-owned | postgres-native equivalent | Phase 7 | `scripts/postgres-backup-restore-smoke.sh` |
 | Release hardening | SQLite CI coverage plus release gates | complete for Postgres service tests plus backup/restore smoke in CI and image-publish gates | CI-backed Postgres service tests and versioned docs/images | must match release quality | Phase 7 | `.github/workflows/ci.yml`; `.github/workflows/publish-images.yml`; release checklist |
 
@@ -73,6 +73,9 @@ Postgres parity should be added deliberately, with each surface classified as
    diagnostics.
 8. **Phase 7 release hardening**: CI service tests, backup/restore, migration
    rollback, docs, and versioned release artifacts.
+9. **Phase 8 retention/release follow-through**: scheduled retention policy
+   YAML, customer-platform restore drills, and release hardening that depends on
+   customer-owned infrastructure.
 
 ## Phase 7 Risk Status
 
@@ -198,6 +201,14 @@ Postgres parity should be added deliberately, with each surface classified as
   and confirmed purge share a database advisory writer lock, but operators
   should still run destructive cleanup in a maintenance window with scheduled
   sync jobs stopped.
+- Closed for Phase 8a scheduled retention policy YAML: `cache purge --config`
+  accepts a reviewed policy file with cutoff, approval reference, approver,
+  approval date, data owner, backup reference, and legal-hold review metadata.
+  Config dry-runs require the Postgres reader role, confirmed config purges
+  require complete approval metadata plus a writable URL, and command output
+  includes policy SHA-256 plus sanitized approval metadata without local policy
+  paths. Scheduler installation, production PITR/replica retention, and
+  customer backup-policy enforcement remain deployment-owned.
 - Still queued: database-enforced governance filtering/RLS, analyst and
   all-readonly query parity, larger customer-scale load benchmarking for
   read-model counter write contention, customer-platform PITR/replica restore

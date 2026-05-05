@@ -74,7 +74,7 @@ with customer-specific deployment facts before submitting to a security team.
 | --- | --- |
 | How are upgrades handled? | Pin image tags or digests, back up the cache first, run `sync status`, run MCP `tools/list`, then promote. For Postgres, restore the backup into an isolated database, rebuild readiness with the writable role, and run read-only MCP smoke before promotion. |
 | How is rollback handled? | Revert to the prior pinned image and prior verified cache backup if the new binary/cache combination fails validation. Postgres production PITR, replica rewind, backup encryption, and retention are customer-platform controls. |
-| How are retention deletes handled? | Use `gongctl cache purge` dry-run first, then confirm only after backup, legal-hold, and owner approval checks. SQLite performs active-file cleanup with `secure_delete`/`VACUUM`; Postgres deletes approved call-scoped rows but WAL, replicas, snapshots, and backups remain under company retention controls. |
+| How are retention deletes handled? | Use `gongctl cache purge` dry-run first, then confirm only after backup, legal-hold, and owner approval checks. Scheduled jobs can use `cache purge --config` to tie cutoff and approval metadata to the dry-run plan. SQLite performs active-file cleanup with `secure_delete`/`VACUUM`; Postgres deletes approved call-scoped rows but WAL, replicas, snapshots, and backups remain under company retention controls. |
 | How is decommissioning handled? | Stop sync jobs, remove MCP host configs, revoke/rotate credentials, archive or destroy cache/transcript/profile data per policy, and remove unused images/volumes. |
 
 ## Known Limitations

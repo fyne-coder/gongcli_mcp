@@ -307,6 +307,8 @@ GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache inventory
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
 GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01
 GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01 --confirm
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --dry-run
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --confirm
 ```
 
 ## Advanced Local Operator Commands
@@ -333,6 +335,8 @@ gongctl cache inventory --db ~/gongctl-data/gong.db
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
 GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01
 GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01 --confirm
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --dry-run
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --confirm
 gongctl profile discover --db ~/gongctl-data/gong.db --out ~/gongctl-data/gongctl-profile.yaml
 gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile import --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
@@ -393,7 +397,7 @@ The Agent E CLI flow is SQLite-backed:
 8. `gongctl sync run --config PATH [--dry-run]`
 9. `gongctl sync status --db PATH`
 10. `gongctl cache inventory --db PATH` for SQLite, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
-11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
+11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres; scheduled retention jobs can use `gongctl cache purge --config PATH [--dry-run|--confirm]`
 12. `gongctl profile discover --db PATH --out PATH`
 13. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
 14. `gongctl profile validate --db PATH --profile PATH`
@@ -460,6 +464,14 @@ Rules:
   operational metadata to prevent later sync steps from accidentally
   rehydrating purged call-scoped rows; add `--confirm` only after backup,
   retention, and legal-hold checks are complete.
+- `cache purge --config PATH` reads a retention-policy YAML file for scheduled
+  purge jobs. The policy records `version: 1`, `older_than`, and approval
+  metadata for the change reference, approver, approval date, data owner, backup
+  reference, and legal-hold review. Dry-run output includes the policy SHA-256
+  and sanitized metadata, while confirmed config-driven purge fails closed until
+  required approval fields are present and `approval.approved_at` is a
+  non-future `YYYY-MM-DD` date. The YAML does not install a scheduler or
+  self-authorize deletion; `--confirm` and the writable URL are still required.
 - `profile discover` generates an editable YAML profile from cached CRM inventory and includes confidence plus evidence for discovered mappings. Discovery is an English-biased starter and may include CRM evidence values in the YAML, so write real-tenant output to a local file outside git rather than shared logs.
 - Discovered profiles are starter drafts, not universal truth. A human should review tenant lifecycle, object, field, and methodology mappings before relying on profile-aware separation of sales and post-sales calls.
 - `profile validate` reports malformed YAML, unsupported profile versions,

@@ -278,16 +278,90 @@ if grep -q 'synthetic-retention-old\|retentionpurgeunique\|postgres://\|gongmcp_
   echo "Postgres purge dry-run exposed raw identifiers, transcript text, or secrets" >&2
   exit 1
 fi
-if GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache purge --older-than 2026-01-01 --confirm >/tmp/gongctl-postgres-purge-reader-confirm-denied.txt 2>&1; then
+
+rm -f /tmp/gongctl-postgres-retention-policy-does-not-exist.yaml
+if GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy-does-not-exist.yaml --confirm >/tmp/gongctl-postgres-purge-policy-missing-config.txt 2>&1; then
+  echo "Postgres purge unexpectedly allowed missing retention-policy config" >&2
+  exit 1
+fi
+grep -q 'read retention policy config: unavailable' /tmp/gongctl-postgres-purge-policy-missing-config.txt
+if grep -q '/tmp/gongctl-postgres-retention-policy-does-not-exist.yaml\|postgres://\|gongmcp_reader_dev_password\|gongctl_dev_password' /tmp/gongctl-postgres-purge-policy-missing-config.txt; then
+  echo "Postgres policy purge missing-config error exposed local paths or secrets" >&2
+  exit 1
+fi
+
+cat >/tmp/gongctl-postgres-retention-policy-missing-approval.yaml <<'YAML'
+version: 1
+older_than: 2026-01-01
+approval:
+  reference: CHANGE-RETENTION-MISSING
+YAML
+if GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy-missing-approval.yaml --confirm >/tmp/gongctl-postgres-purge-policy-missing-approval.txt 2>&1; then
+  echo "Postgres purge unexpectedly allowed incomplete retention-policy approval" >&2
+  exit 1
+fi
+grep -q 'approval is incomplete' /tmp/gongctl-postgres-purge-policy-missing-approval.txt
+
+cat >/tmp/gongctl-postgres-retention-policy.yaml <<'YAML'
+version: 1
+older_than: 2026-01-01
+approval:
+  reference: CHANGE-RETENTION-SYNTHETIC
+  approved_by: revops-retention-reviewer
+  approved_at: 2024-01-01
+  data_owner: revenue-operations
+  backup_reference: backup-20240101-synthetic
+  legal_hold_reviewed: true
+YAML
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy.yaml --dry-run >/tmp/gongctl-postgres-purge-policy-dry-run.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-purge-policy-dry-run.json
+grep -q '"dry_run": true' /tmp/gongctl-postgres-purge-policy-dry-run.json
+grep -q '"configured": true' /tmp/gongctl-postgres-purge-policy-dry-run.json
+grep -q '"approval_complete": true' /tmp/gongctl-postgres-purge-policy-dry-run.json
+grep -q '"backup_reference": "backup-20240101-synthetic"' /tmp/gongctl-postgres-purge-policy-dry-run.json
+grep -q '"call_count": 1' /tmp/gongctl-postgres-purge-policy-dry-run.json
+if grep -q 'synthetic-retention-old\|retentionpurgeunique\|postgres://\|gongmcp_reader_dev_password\|gongctl_dev_password\|/tmp/gongctl-postgres-retention-policy' /tmp/gongctl-postgres-purge-policy-dry-run.json; then
+  echo "Postgres policy purge dry-run exposed raw identifiers, transcript text, secrets, or local policy paths" >&2
+  exit 1
+fi
+cat >/tmp/gongctl-postgres-retention-policy-unsafe-metadata.yaml <<'YAML'
+version: 1
+older_than: 2026-01-01
+approval:
+  reference: https://changes.example.invalid/CHANGE-RETENTION-SYNTHETIC
+  approved_by: reviewer@example.invalid
+  approved_at: 2024-01-01
+  data_owner: revenue-operations
+  backup_reference: /srv/backups/customer-retention.dump
+  legal_hold_reviewed: true
+YAML
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy-unsafe-metadata.yaml --dry-run >/tmp/gongctl-postgres-purge-policy-redacted-metadata.json
+grep -q '"approval_complete": true' /tmp/gongctl-postgres-purge-policy-redacted-metadata.json
+grep -q 'redacted:' /tmp/gongctl-postgres-purge-policy-redacted-metadata.json
+if grep -q 'https://changes.example.invalid\|reviewer@example.invalid\|/srv/backups/customer-retention.dump\|postgres://\|gongmcp_reader_dev_password\|gongctl_dev_password\|/tmp/gongctl-postgres-retention-policy' /tmp/gongctl-postgres-purge-policy-redacted-metadata.json; then
+  echo "Postgres policy purge dry-run exposed unsafe approval metadata, secrets, or local policy paths" >&2
+  exit 1
+fi
+if GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy.yaml --dry-run >/tmp/gongctl-postgres-purge-writer-policy-dry-run-denied.txt 2>&1; then
+  echo "Postgres policy purge unexpectedly allowed writer URL dry-run" >&2
+  exit 1
+fi
+if grep -q 'postgres://\|gongmcp_reader_dev_password\|gongctl_dev_password\|/tmp/gongctl-postgres-retention-policy' /tmp/gongctl-postgres-purge-writer-policy-dry-run-denied.txt; then
+  echo "Postgres policy purge writer dry-run denial exposed secrets or local policy paths" >&2
+  exit 1
+fi
+if GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy.yaml --confirm >/tmp/gongctl-postgres-purge-reader-confirm-denied.txt 2>&1; then
   echo "Postgres purge unexpectedly allowed reader URL confirmation" >&2
   exit 1
 fi
-GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache purge --older-than 2026-01-01 --confirm >/tmp/gongctl-postgres-purge-confirm.json
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache purge --config /tmp/gongctl-postgres-retention-policy.yaml --confirm >/tmp/gongctl-postgres-purge-confirm.json
 grep -q '"backend": "postgres"' /tmp/gongctl-postgres-purge-confirm.json
 grep -q '"executed": true' /tmp/gongctl-postgres-purge-confirm.json
+grep -q '"configured": true' /tmp/gongctl-postgres-purge-confirm.json
+grep -q '"approval_complete": true' /tmp/gongctl-postgres-purge-confirm.json
 grep -q '"call_count": 1' /tmp/gongctl-postgres-purge-confirm.json
-if grep -q 'synthetic-retention-old\|retentionpurgeunique\|postgres://\|gongctl_dev_password' /tmp/gongctl-postgres-purge-confirm.json; then
-  echo "Postgres purge confirm exposed raw identifiers, transcript text, or secrets" >&2
+if grep -q 'synthetic-retention-old\|retentionpurgeunique\|postgres://\|gongctl_dev_password\|/tmp/gongctl-postgres-retention-policy' /tmp/gongctl-postgres-purge-confirm.json; then
+  echo "Postgres policy purge confirm exposed raw identifiers, transcript text, secrets, or local policy paths" >&2
   exit 1
 fi
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT 'calls', COUNT(*) FROM calls WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'transcript_segments', COUNT(*) FROM transcript_segments WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'call_facts', COUNT(*) FROM call_facts WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'profile_call_fact_cache', COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'synthetic-retention-old' UNION ALL SELECT 'scorecard_activity', COUNT(*) FROM scorecard_activity WHERE call_id = 'synthetic-retention-old' ORDER BY 1" >/tmp/gongctl-postgres-purge-post-counts.txt
@@ -779,6 +853,11 @@ echo "support bundle directory: /tmp/gongctl-postgres-support-bundle"
 echo "purge fixture output: /tmp/gongctl-postgres-purge-fixture.txt"
 echo "purge fixture read model output: /tmp/gongctl-postgres-purge-fixture-read-model.json"
 echo "purge dry-run output: /tmp/gongctl-postgres-purge-dry-run.json"
+echo "purge policy missing-config output: /tmp/gongctl-postgres-purge-policy-missing-config.txt"
+echo "purge policy missing-approval output: /tmp/gongctl-postgres-purge-policy-missing-approval.txt"
+echo "purge policy dry-run output: /tmp/gongctl-postgres-purge-policy-dry-run.json"
+echo "purge policy redacted-metadata output: /tmp/gongctl-postgres-purge-policy-redacted-metadata.json"
+echo "purge policy writer dry-run denial output: /tmp/gongctl-postgres-purge-writer-policy-dry-run-denied.txt"
 echo "purge reader confirm denial output: /tmp/gongctl-postgres-purge-reader-confirm-denied.txt"
 echo "purge confirm output: /tmp/gongctl-postgres-purge-confirm.json"
 echo "purge post-counts output: /tmp/gongctl-postgres-purge-post-counts.txt"

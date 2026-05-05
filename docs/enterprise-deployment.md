@@ -380,17 +380,28 @@ GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" bin/gongctl cache purge --older
 
 The config runner resolves relative `db` and transcript `out_dir` paths from
 the config location, so one reviewed file can travel with the operator-managed
-job definition. `cache inventory` is the companion read-only governance check
-for DB size, primary table counts, date range, transcript/CRM-context presence,
-profile status, and last sync metadata. For Postgres shared deployments, omit
-`--db` and set `GONG_DATABASE_URL` or `DATABASE_URL`; the inventory reports
-schema/readiness/reader-role diagnostics without exporting the database URL.
+job definition. `cache inventory` is the companion read-only storage and
+operations check for DB size, primary table counts, date range,
+transcript/CRM-context presence, profile status, and last sync metadata. For
+Postgres shared deployments, omit `--db` and set `GONG_DATABASE_URL` or
+`DATABASE_URL`; the inventory reports schema/readiness/reader-role diagnostics
+without exporting the database URL.
 
 `cache purge` is dry-run by default. For Postgres shared deployments, use the
 reader URL for the metadata-only plan and a writable URL only for the approved
 `--confirm` run. Use it to preview retention cleanup, then run the same command
 with `--confirm` only after backup, legal-hold, and owner approval checks are
 complete.
+
+For scheduled retention, prefer `gongctl cache purge --config
+/srv/gongctl/retention-policy.yaml` over one-off flags. The YAML policy records
+the cutoff plus approval reference, approver, approval date, data owner, backup
+reference, and legal-hold review. Confirmed config-driven purge fails closed
+when any required approval field is absent, and command output includes a
+policy SHA-256 so the retained dry-run plan can be tied back to the reviewed
+policy file. Path-like approval metadata and URLs are redacted in command output;
+use stable ticket, owner, and backup labels rather than secrets or customer
+locations in the policy.
 
 ## Admin-Run Sync Contract
 
@@ -489,6 +500,10 @@ For Postgres, run the confirmed cleanup in a maintenance window with scheduled
 sync/write jobs stopped. The command takes the same database advisory writer
 lock as supported Postgres write paths and deletes only the call IDs
 materialized for that confirmed run.
+Use `cache purge --config retention-policy.yaml` for scheduled retention jobs
+so approval and backup metadata travel with the purge plan. The repo does not
+install the scheduler; cron, launchd, systemd, Kubernetes CronJob, or customer
+workflow automation remains deployment-owned.
 
 Decommissioning should include:
 

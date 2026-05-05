@@ -156,6 +156,12 @@ Implementation controls on the CLI side:
   Operators must still handle transcript files, snapshots, backups, sync
   history, profile definitions, CRM schema inventory, and settings inventory
   through company retention controls.
+- `gongctl cache purge --config PATH` is the scheduled-retention variant. It
+  records the cutoff plus approval, backup, and legal-hold metadata in a YAML
+  policy, requires the Postgres reader role for config dry-runs, and requires
+  complete approval metadata plus a writable URL for confirmed config purges.
+  Command output includes a policy SHA-256 and sanitized labels, not the local
+  policy path.
 
 ## High-Risk CLI Commands
 
@@ -180,7 +186,8 @@ not currently blocked by the restricted-mode gate.
 
 Cache-retention delete commands now use a reviewed dry-run/confirmation shape.
 They remain operator-only and should be paired with backup, legal-hold, and
-data-owner approval records.
+data-owner approval records. Scheduled jobs should use `cache purge --config`
+or an equivalent change-control record tied to the archived dry-run plan.
 For Postgres, run retention cleanup when scheduled sync/write jobs are not
 active. The command takes a database advisory writer lock and deletes only the
 call ID set materialized for that confirmed run, but the operating window should

@@ -503,6 +503,9 @@ CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_bucket
 CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_started
 	ON profile_call_fact_cache(profile_id, canonical_sha256, started_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_call
+	ON profile_call_fact_cache(call_id);
+
 DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
@@ -880,4 +883,8 @@ BEGIN
 END;
 $$;
 `,
+	`
+	CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_call
+		ON profile_call_fact_cache(call_id);
+	`,
 }

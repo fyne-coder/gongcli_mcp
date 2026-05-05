@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -337,5 +338,231 @@ func TestCachePurgeDryRunRequiresConfirmation(t *testing.T) {
 	}
 	if err := readOnly.Close(); err != nil {
 		t.Fatalf("Close read-only after confirm returned error: %v", err)
+	}
+}
+
+func TestCachePurgePolicyConfigValidatesApprovalAndConfirms(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gong.db")
+	store := openCLITestStore(t, dbPath)
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustMarshalJSON(t, map[string]any{
+		"id":       "call-policy-purge-old",
+		"title":    "Policy purge old call",
+		"started":  "2026-04-20T14:00:00Z",
+		"duration": 600,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+		"context": map[string]any{
+			"crmObjects": []map[string]any{
+				{
+					"type": "Opportunity",
+					"id":   "opp-policy-purge-old",
+					"name": "Policy purge opportunity",
+					"fields": []map[string]any{
+						{"name": "StageName", "label": "Stage", "value": "Discovery"},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall(old) returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustMarshalJSON(t, map[string]any{
+		"id":       "call-policy-purge-new",
+		"title":    "Policy purge new call",
+		"started":  "2026-04-24T14:00:00Z",
+		"duration": 600,
+		"metaData": map[string]any{
+			"system":    "Google Meet",
+			"direction": "Conference",
+			"scope":     "External",
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCall(new) returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	incompletePolicy := filepath.Join(dir, "retention-incomplete.yaml")
+	if err := os.WriteFile(incompletePolicy, []byte(`version: 1
+older_than: 2026-04-22
+approval:
+  reference: CHANGE-123
+`), 0o600); err != nil {
+		t.Fatalf("write incomplete policy: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", incompletePolicy, "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(config dry-run) code=%d stderr=%q", code, stderr.String())
+	}
+	var dryRunResp struct {
+		DryRun   bool `json:"dry_run"`
+		Executed bool `json:"executed"`
+		Plan     struct {
+			CallCount int64 `json:"call_count"`
+		} `json:"plan"`
+		RetentionPolicy *cacheRetentionPolicyMetadata `json:"retention_policy"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &dryRunResp); err != nil {
+		t.Fatalf("json.Unmarshal dry-run returned error: %v", err)
+	}
+	if !dryRunResp.DryRun || dryRunResp.Executed || dryRunResp.Plan.CallCount != 1 {
+		t.Fatalf("unexpected config dry-run response: %+v body=%s", dryRunResp, stdout.String())
+	}
+	if dryRunResp.RetentionPolicy == nil || !dryRunResp.RetentionPolicy.Configured || dryRunResp.RetentionPolicy.PolicySHA256 == "" {
+		t.Fatalf("missing retention policy metadata: %+v", dryRunResp.RetentionPolicy)
+	}
+	if dryRunResp.RetentionPolicy.OlderThan != "2026-04-22" || dryRunResp.RetentionPolicy.ApprovalComplete {
+		t.Fatalf("unexpected retention policy metadata: %+v", dryRunResp.RetentionPolicy)
+	}
+
+	missingPolicy := filepath.Join(dir, "retention-missing.yaml")
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", missingPolicy, "--confirm"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("Run(config missing file) succeeded unexpectedly: stdout=%q", stdout.String())
+	}
+	if strings.Contains(stderr.String(), missingPolicy) {
+		t.Fatalf("stderr=%q leaked missing retention policy path", stderr.String())
+	}
+
+	futurePolicy := filepath.Join(dir, "retention-future-approval.yaml")
+	if err := os.WriteFile(futurePolicy, []byte(`version: 1
+older_than: 2026-04-22
+approval:
+  reference: CHANGE-125
+  approved_by: revops-retention-reviewer
+  approved_at: 2999-01-01
+  data_owner: revenue-operations
+  backup_reference: backup-20240101-synthetic
+  legal_hold_reviewed: true
+`), 0o600); err != nil {
+		t.Fatalf("write future approval policy: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", futurePolicy, "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(config dry-run future approval) code=%d stderr=%q", code, stderr.String())
+	}
+	var futureResp struct {
+		RetentionPolicy *cacheRetentionPolicyMetadata `json:"retention_policy"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &futureResp); err != nil {
+		t.Fatalf("json.Unmarshal future dry-run returned error: %v", err)
+	}
+	if futureResp.RetentionPolicy == nil || futureResp.RetentionPolicy.ApprovalComplete {
+		t.Fatalf("future approval date should not be complete: %+v", futureResp.RetentionPolicy)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", futurePolicy, "--confirm"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("Run(config confirm future approval) succeeded unexpectedly: stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "must not be in the future") {
+		t.Fatalf("stderr=%q missing future approval validation", stderr.String())
+	}
+
+	unsafeMetadataPolicy := filepath.Join(dir, "retention-unsafe-metadata.yaml")
+	if err := os.WriteFile(unsafeMetadataPolicy, []byte(`version: 1
+older_than: 2026-04-22
+approval:
+  reference: https://changes.example.invalid/CHANGE-126
+  approved_by: reviewer@example.invalid
+  approved_at: 2024-01-01
+  data_owner: revenue-operations
+  backup_reference: /srv/backups/customer-retention.dump
+  legal_hold_reviewed: true
+`), 0o600); err != nil {
+		t.Fatalf("write unsafe metadata policy: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", unsafeMetadataPolicy, "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(config dry-run unsafe metadata) code=%d stderr=%q", code, stderr.String())
+	}
+	body := stdout.String()
+	for _, leaked := range []string{"https://changes.example.invalid", "reviewer@example.invalid", "/srv/backups/customer-retention.dump"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("config dry-run leaked unsafe metadata %q in body=%s", leaked, body)
+		}
+	}
+	if !strings.Contains(body, "redacted:") {
+		t.Fatalf("config dry-run body=%s missing redacted metadata marker", body)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", incompletePolicy, "--confirm"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("Run(config confirm missing approval) succeeded unexpectedly: stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "approval is incomplete") {
+		t.Fatalf("stderr=%q missing approval validation", stderr.String())
+	}
+
+	validPolicy := filepath.Join(dir, "retention-valid.yaml")
+	if err := os.WriteFile(validPolicy, []byte(`version: 1
+older_than: 2026-04-22
+approval:
+  reference: CHANGE-124
+  approved_by: revops-retention-reviewer
+  approved_at: 2024-01-01
+  data_owner: revenue-operations
+  backup_reference: backup-20240101-synthetic
+  legal_hold_reviewed: true
+`), 0o600); err != nil {
+		t.Fatalf("write valid policy: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"cache", "purge", "--db", dbPath, "--config", validPolicy, "--confirm"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(config confirm) code=%d stderr=%q", code, stderr.String())
+	}
+	var confirmResp struct {
+		DryRun   bool `json:"dry_run"`
+		Executed bool `json:"executed"`
+		Plan     struct {
+			CallCount int64 `json:"call_count"`
+		} `json:"plan"`
+		RetentionPolicy *cacheRetentionPolicyMetadata `json:"retention_policy"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &confirmResp); err != nil {
+		t.Fatalf("json.Unmarshal confirm returned error: %v", err)
+	}
+	if confirmResp.DryRun || !confirmResp.Executed || confirmResp.Plan.CallCount != 1 {
+		t.Fatalf("unexpected config confirm response: %+v", confirmResp)
+	}
+	if confirmResp.RetentionPolicy == nil || !confirmResp.RetentionPolicy.ApprovalComplete || confirmResp.RetentionPolicy.BackupReference != "backup-20240101-synthetic" {
+		t.Fatalf("unexpected confirmed retention policy metadata: %+v", confirmResp.RetentionPolicy)
+	}
+
+	readOnly, err := sqlite.OpenReadOnly(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly after config confirm returned error: %v", err)
+	}
+	inventory, err := readOnly.CacheInventory(context.Background())
+	if err != nil {
+		t.Fatalf("CacheInventory after config confirm returned error: %v", err)
+	}
+	if inventory.Summary.TotalCalls != 1 || inventory.OldestCallStartedAt != "2026-04-24T14:00:00Z" {
+		t.Fatalf("config confirm did not purge expected rows: %+v", inventory.Summary)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatalf("Close read-only returned error: %v", err)
 	}
 }

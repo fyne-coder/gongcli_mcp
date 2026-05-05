@@ -189,6 +189,39 @@ Notes:
   sync/write jobs stopped. The command takes a database advisory writer lock and
   deletes the materialized call ID set for that run, but operator scheduling is
   still the retention control of record.
+- For scheduled retention jobs, prefer a reviewed YAML policy instead of
+  re-encoding the cutoff and approval state in job flags:
+
+```yaml
+version: 1
+older_than: 2026-04-01
+approval:
+  reference: CHANGE-RETENTION-123
+  approved_by: revops-retention-reviewer
+  approved_at: 2026-05-05
+  data_owner: revenue-operations
+  backup_reference: backup-20260505-approved
+  legal_hold_reviewed: true
+```
+
+Run the policy in dry-run mode first and archive the JSON plan with the change
+record:
+
+```bash
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache purge --config <data-root>/configs/retention-policy.yaml --dry-run
+```
+
+Confirmed config-driven purge fails closed unless the approval reference,
+approver, approval date, data owner, backup reference, and legal-hold review are
+present. Use the writable URL only for the approved change window:
+
+```bash
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" bin/gongctl cache purge --config <data-root>/configs/retention-policy.yaml --confirm
+```
+
+The command returns the policy SHA-256 and sanitized approval metadata, but does
+not return database URLs, raw call IDs, transcript text, or the local policy
+file path for Postgres output.
 - If the pilot uses a reviewed business profile, validate and import it only
   from the protected profile path:
 
@@ -420,3 +453,5 @@ Before closing the change window, confirm:
 - for Postgres changes, backup/restore or restore-drill evidence exists and the
   restored read-only MCP smoke passed
 - any scheduled job change has a named owner and documented cadence
+- any scheduled retention job uses a reviewed `cache purge --config` policy or
+  has an equivalent approval record tied to the dry-run plan

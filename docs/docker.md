@@ -203,6 +203,7 @@ export GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL"
 gongctl cache inventory
 gongctl support bundle --out ./support-bundle
 gongctl cache purge --older-than 2026-04-01
+gongctl cache purge --config ./retention-policy.yaml --dry-run
 ```
 
 Run an approved Postgres retention cleanup with the writable operator role:
@@ -210,6 +211,7 @@ Run an approved Postgres retention cleanup with the writable operator role:
 ```bash
 export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
 gongctl cache purge --older-than 2026-04-01 --confirm
+gongctl cache purge --config ./retention-policy.yaml --confirm
 ```
 
 Run a local synthetic Postgres backup/restore drill before release promotion or
