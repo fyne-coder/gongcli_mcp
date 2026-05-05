@@ -72,12 +72,12 @@ type Result struct {
 	ParticipantCaptureStatus string
 }
 
-func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store *sqlite.Store, params CRMIntegrationsParams) (result Result, err error) {
+func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store storeiface.CRMIntegrationStore, params CRMIntegrationsParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 
 	result.Scope = scopeCRMIntegrations
@@ -113,12 +113,12 @@ func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store *sqlite
 	return result, nil
 }
 
-func SyncCRMSchema(ctx context.Context, client *gong.Client, store *sqlite.Store, params CRMSchemaParams) (result Result, err error) {
+func SyncCRMSchema(ctx context.Context, client *gong.Client, store storeiface.CRMSchemaStore, params CRMSchemaParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	integrationID := strings.TrimSpace(params.IntegrationID)
 	if integrationID == "" {

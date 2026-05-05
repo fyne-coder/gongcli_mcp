@@ -663,7 +663,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls", "gong_settings", "scorecard_activity"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -672,7 +672,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
-	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started"} {
+	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started", "idx_pg_crm_integrations_provider_name", "idx_pg_crm_schema_objects_type", "idx_pg_crm_schema_fields_object_name"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)`, index).Scan(&exists); err != nil {
 			t.Fatalf("check index %s: %v", index, err)
@@ -1049,6 +1049,191 @@ func TestPostgresScorecardActivityAggregatesMatchSQLiteRepresentativeSlice(t *te
 	if !reflect.DeepEqual(pgOverview, sqliteOverview) {
 		t.Fatalf("postgres overview=%+v want sqlite %+v", pgOverview, sqliteOverview)
 	}
+}
+
+func TestPostgresCRMInventoryMatchesSQLiteRepresentativeSlice(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	integrationRaw := json.RawMessage(`{"integrationId":"crm-int-parity-001","name":"Salesforce production","crmType":"Salesforce"}`)
+	schemaRaw := json.RawMessage(`{"requestId":"request-001","objectTypeToSelectedFields":{"DEAL":[{"fieldName":"Amount","label":"Amount","fieldType":"currency"},{"fieldName":"StageName","label":"Stage","fieldType":"picklist"}]}}`)
+	for _, store := range []interface {
+		UpsertCRMIntegration(context.Context, json.RawMessage) (*sqlite.CRMIntegrationRecord, error)
+		UpsertCRMSchema(context.Context, string, string, json.RawMessage) (int64, error)
+	}{pgStore, sqliteStore} {
+		if _, err := store.UpsertCRMIntegration(ctx, integrationRaw); err != nil {
+			t.Fatalf("UpsertCRMIntegration returned error: %v", err)
+		}
+		count, err := store.UpsertCRMSchema(ctx, "crm-int-parity-001", "DEAL", schemaRaw)
+		if err != nil {
+			t.Fatalf("UpsertCRMSchema returned error: %v", err)
+		}
+		if count != 2 {
+			t.Fatalf("schema field count=%d want 2", count)
+		}
+	}
+
+	pgIntegrations, err := pgStore.ListCRMIntegrations(ctx)
+	if err != nil {
+		t.Fatalf("postgres ListCRMIntegrations returned error: %v", err)
+	}
+	sqliteIntegrations, err := sqliteStore.ListCRMIntegrations(ctx)
+	if err != nil {
+		t.Fatalf("sqlite ListCRMIntegrations returned error: %v", err)
+	}
+	stripCRMIntegrationTimestamps(pgIntegrations)
+	stripCRMIntegrationTimestamps(sqliteIntegrations)
+	if !reflect.DeepEqual(pgIntegrations, sqliteIntegrations) {
+		t.Fatalf("postgres integrations=%+v want sqlite %+v", pgIntegrations, sqliteIntegrations)
+	}
+
+	pgObjects, err := pgStore.ListCRMSchemaObjects(ctx, "crm-int-parity-001")
+	if err != nil {
+		t.Fatalf("postgres ListCRMSchemaObjects returned error: %v", err)
+	}
+	sqliteObjects, err := sqliteStore.ListCRMSchemaObjects(ctx, "crm-int-parity-001")
+	if err != nil {
+		t.Fatalf("sqlite ListCRMSchemaObjects returned error: %v", err)
+	}
+	stripCRMSchemaObjectTimestamps(pgObjects)
+	stripCRMSchemaObjectTimestamps(sqliteObjects)
+	if !reflect.DeepEqual(pgObjects, sqliteObjects) {
+		t.Fatalf("postgres schema objects=%+v want sqlite %+v", pgObjects, sqliteObjects)
+	}
+
+	params := sqlite.CRMSchemaFieldListParams{IntegrationID: "crm-int-parity-001", ObjectType: "DEAL", Limit: 10}
+	pgFields, err := pgStore.ListCRMSchemaFields(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres ListCRMSchemaFields returned error: %v", err)
+	}
+	sqliteFields, err := sqliteStore.ListCRMSchemaFields(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite ListCRMSchemaFields returned error: %v", err)
+	}
+	stripCRMSchemaFieldTimestamps(pgFields)
+	stripCRMSchemaFieldTimestamps(sqliteFields)
+	if !reflect.DeepEqual(pgFields, sqliteFields) {
+		t.Fatalf("postgres schema fields=%+v want sqlite %+v", pgFields, sqliteFields)
+	}
+
+	summary, err := pgStore.SyncStatusSummary(ctx)
+	if err != nil {
+		t.Fatalf("postgres SyncStatusSummary returned error: %v", err)
+	}
+	if summary.TotalCRMIntegrations != 1 || summary.TotalCRMSchemaObjects != 1 || summary.TotalCRMSchemaFields != 2 {
+		t.Fatalf("unexpected CRM inventory counts: %+v", summary)
+	}
+}
+
+func TestPostgresProfileInventoryIncludesCachedCRMSchema(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCRMIntegration(ctx, postgresTestRaw(t, map[string]any{
+		"integrationId": "crm-schema-only",
+		"name":          "Schema Only",
+		"crmType":       "CustomCRM",
+	})); err != nil {
+		t.Fatalf("UpsertCRMIntegration returned error: %v", err)
+	}
+	if _, err := store.UpsertCRMSchema(ctx, "crm-schema-only", "Deal", postgresTestRaw(t, map[string]any{
+		"objectTypeToSelectedFields": map[string]any{
+			"Deal": []map[string]any{
+				{"fieldName": "DealStage", "label": "Stage", "fieldType": "picklist"},
+				{"fieldName": "Amount", "label": "Amount", "fieldType": "currency"},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("UpsertCRMSchema returned error: %v", err)
+	}
+
+	inventory, err := store.ProfileInventory(ctx)
+	if err != nil {
+		t.Fatalf("ProfileInventory returned error: %v", err)
+	}
+	if !postgresInventoryHasObject(inventory, "Deal") || !postgresInventoryHasField(inventory, "Deal", "DealStage") {
+		t.Fatalf("schema-only inventory missing Deal/DealStage: %+v", inventory)
+	}
+}
+
+func TestShouldBackfillReadModelAfterMigrations(t *testing.T) {
+	if !shouldBackfillReadModelAfterMigrations(0) {
+		t.Fatalf("new database should get an initial read-model backfill")
+	}
+	if !shouldBackfillReadModelAfterMigrations(postgresReadModelBackfillMigrationVersion - 1) {
+		t.Fatalf("database before read-model backfill migration should rebuild")
+	}
+	if shouldBackfillReadModelAfterMigrations(len(migrations) - 1) {
+		t.Fatalf("inventory-only migration should not force unrelated read-model rebuild")
+	}
+}
+
+func stripCRMIntegrationTimestamps(rows []sqlite.CRMIntegrationRecord) {
+	for idx := range rows {
+		rows[idx].UpdatedAt = ""
+	}
+}
+
+func stripCRMSchemaObjectTimestamps(rows []sqlite.CRMSchemaObjectRecord) {
+	for idx := range rows {
+		rows[idx].UpdatedAt = ""
+	}
+}
+
+func stripCRMSchemaFieldTimestamps(rows []sqlite.CRMSchemaFieldRecord) {
+	for idx := range rows {
+		rows[idx].UpdatedAt = ""
+	}
+}
+
+func postgresInventoryHasObject(inventory *profilepkg.Inventory, objectType string) bool {
+	if inventory == nil {
+		return false
+	}
+	for _, row := range inventory.Objects {
+		if row.ObjectType == objectType {
+			return true
+		}
+	}
+	return false
+}
+
+func postgresInventoryHasField(inventory *profilepkg.Inventory, objectType string, fieldName string) bool {
+	if inventory == nil {
+		return false
+	}
+	for _, row := range inventory.Fields {
+		if row.ObjectType == objectType && row.FieldName == fieldName {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
@@ -1729,7 +1914,7 @@ lists:
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE crm_schema_fields, crm_schema_objects, crm_integrations, scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

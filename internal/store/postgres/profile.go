@@ -43,6 +43,7 @@ func (s *Store) ProfileInventory(ctx context.Context) (*profilepkg.Inventory, er
 }
 
 func (s *Store) profileInventoryObjects(ctx context.Context) ([]profilepkg.ObjectInventory, error) {
+	byType := map[string]*profilepkg.ObjectInventory{}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT object_type,
        COUNT(DISTINCT object_key) AS object_count,
@@ -54,18 +55,56 @@ SELECT object_type,
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]profilepkg.ObjectInventory, 0)
 	for rows.Next() {
 		var row profilepkg.ObjectInventory
 		if err := rows.Scan(&row.ObjectType, &row.ObjectCount, &row.CallCount); err != nil {
 			return nil, err
 		}
-		out = append(out, row)
+		cp := row
+		byType[row.ObjectType] = &cp
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	schemaRows, err := s.db.QueryContext(ctx, `
+SELECT object_type
+  FROM crm_schema_objects
+ UNION
+SELECT object_type
+  FROM crm_schema_fields
+ ORDER BY object_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer schemaRows.Close()
+	for schemaRows.Next() {
+		var objectType string
+		if err := schemaRows.Scan(&objectType); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(objectType) == "" {
+			continue
+		}
+		if _, ok := byType[objectType]; !ok {
+			byType[objectType] = &profilepkg.ObjectInventory{ObjectType: objectType}
+		}
+	}
+	if err := schemaRows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]profilepkg.ObjectInventory, 0, len(byType))
+	for _, row := range byType {
+		out = append(out, *row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ObjectType < out[j].ObjectType })
+	return out, nil
 }
 
 func (s *Store) profileInventoryFields(ctx context.Context) ([]profilepkg.FieldInventory, error) {
+	byField := map[string]*profilepkg.FieldInventory{}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT o.object_type,
        f.field_name,
@@ -83,20 +122,82 @@ SELECT o.object_type,
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]profilepkg.FieldInventory, 0)
 	for rows.Next() {
 		var row profilepkg.FieldInventory
 		if err := rows.Scan(&row.ObjectType, &row.FieldName, &row.FieldLabel, &row.FieldType, &row.ObjectCount, &row.PopulatedCount); err != nil {
 			return nil, err
 		}
-		values, err := s.distinctFieldValues(ctx, row.ObjectType, row.FieldName, 50)
+		cp := row
+		byField[row.ObjectType+"."+row.FieldName] = &cp
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	schemaRows, err := s.db.QueryContext(ctx, `
+SELECT object_type,
+       field_name,
+       MAX(field_label) AS field_label,
+       MAX(field_type) AS field_type
+  FROM crm_schema_fields
+ GROUP BY object_type, field_name
+ ORDER BY object_type, field_name
+ LIMIT $1`, maxCRMFieldLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer schemaRows.Close()
+	for schemaRows.Next() {
+		var objectType, fieldName, fieldLabel, fieldType string
+		if err := schemaRows.Scan(&objectType, &fieldName, &fieldLabel, &fieldType); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(objectType) == "" || strings.TrimSpace(fieldName) == "" {
+			continue
+		}
+		key := objectType + "." + fieldName
+		if existing, ok := byField[key]; ok {
+			if existing.FieldLabel == "" {
+				existing.FieldLabel = fieldLabel
+			}
+			if existing.FieldType == "" {
+				existing.FieldType = fieldType
+			}
+			continue
+		}
+		byField[key] = &profilepkg.FieldInventory{
+			ObjectType: objectType,
+			FieldName:  fieldName,
+			FieldLabel: fieldLabel,
+			FieldType:  fieldType,
+		}
+	}
+	if err := schemaRows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]profilepkg.FieldInventory, 0, len(byField))
+	for _, row := range byField {
+		out = append(out, *row)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ObjectType != out[j].ObjectType {
+			return out[i].ObjectType < out[j].ObjectType
+		}
+		return out[i].FieldName < out[j].FieldName
+	})
+	for idx := range out {
+		if out[idx].ObjectCount == 0 && out[idx].PopulatedCount == 0 {
+			continue
+		}
+		values, err := s.distinctFieldValues(ctx, out[idx].ObjectType, out[idx].FieldName, 50)
 		if err != nil {
 			return nil, err
 		}
-		row.DistinctValues = values
-		out = append(out, row)
+		out[idx].DistinctValues = values
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) distinctFieldValues(ctx context.Context, objectType string, fieldName string, limit int) ([]string, error) {

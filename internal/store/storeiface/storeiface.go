@@ -32,6 +32,14 @@ type GongSettingWriter interface {
 	UpsertGongSetting(ctx context.Context, kind string, raw json.RawMessage) (*sqlite.GongSettingRecord, error)
 }
 
+type CRMIntegrationWriter interface {
+	UpsertCRMIntegration(ctx context.Context, raw json.RawMessage) (*sqlite.CRMIntegrationRecord, error)
+}
+
+type CRMSchemaWriter interface {
+	UpsertCRMSchema(ctx context.Context, integrationID string, objectType string, raw json.RawMessage) (int64, error)
+}
+
 type ScorecardActivityWriter interface {
 	UpsertScorecardActivity(ctx context.Context, raw json.RawMessage) (*sqlite.ScorecardActivityRecord, error)
 }
@@ -45,6 +53,16 @@ type SyncStore interface {
 type SettingsStore interface {
 	SyncRunStore
 	GongSettingWriter
+}
+
+type CRMIntegrationStore interface {
+	SyncRunStore
+	CRMIntegrationWriter
+}
+
+type CRMSchemaStore interface {
+	SyncRunStore
+	CRMSchemaWriter
 }
 
 type ScorecardActivityStore interface {

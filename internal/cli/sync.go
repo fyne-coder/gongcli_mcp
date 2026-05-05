@@ -331,12 +331,12 @@ func (a *app) syncUsers(ctx context.Context, args []string) error {
 func (a *app) syncCRMIntegrations(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync crm-integrations", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableCRMIntegrationStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -353,7 +353,7 @@ func (a *app) syncCRMIntegrations(ctx context.Context, args []string) error {
 		"synced crm integrations: seen=%d written=%d db=%s\n",
 		result.RecordsSeen,
 		result.RecordsWritten,
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -361,7 +361,7 @@ func (a *app) syncCRMIntegrations(ctx context.Context, args []string) error {
 func (a *app) syncCRMSchema(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync crm-schema", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	integrationID := fs.String("integration-id", "", "Gong CRM integration ID")
 	var objectTypes repeatedStringFlag
 	fs.Var(&objectTypes, "object-type", "CRM object type; repeat or pass comma-separated values such as ACCOUNT,DEAL")
@@ -369,7 +369,7 @@ func (a *app) syncCRMSchema(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableCRMSchemaStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -390,7 +390,7 @@ func (a *app) syncCRMSchema(ctx context.Context, args []string) error {
 		result.RecordsSeen,
 		result.RecordsWritten,
 		*integrationID,
-		*dbPath,
+		displayStoreTarget(*dbPath),
 	)
 	return err
 }
@@ -631,6 +631,31 @@ func (a *app) syncSynthetic(ctx context.Context, args []string) error {
 			written++
 		}
 	}
+	if crmIntegrationStore, ok := store.(interface {
+		UpsertCRMIntegration(context.Context, json.RawMessage) (*sqlite.CRMIntegrationRecord, error)
+	}); ok {
+		for _, raw := range syntheticCRMIntegrationPayloads() {
+			if _, err := crmIntegrationStore.UpsertCRMIntegration(ctx, raw); err != nil {
+				finishStatus = "error"
+				finishError = err.Error()
+				return err
+			}
+			written++
+		}
+	}
+	if crmSchemaStore, ok := store.(interface {
+		UpsertCRMSchema(context.Context, string, string, json.RawMessage) (int64, error)
+	}); ok {
+		for _, fixture := range syntheticCRMSchemaPayloads() {
+			fieldCount, err := crmSchemaStore.UpsertCRMSchema(ctx, fixture.integrationID, fixture.objectType, fixture.raw)
+			if err != nil {
+				finishStatus = "error"
+				finishError = err.Error()
+				return err
+			}
+			written += fieldCount
+		}
+	}
 
 	fmt.Fprintf(a.err, "synced synthetic fixture: records_written=%d db=%s\n", written, displayStoreTarget(*dbPath))
 	return writeJSONValue(a.out, map[string]any{
@@ -666,6 +691,16 @@ type writableTranscriptStore interface {
 
 type writableSettingsStore interface {
 	storeiface.SettingsStore
+	storeiface.Closer
+}
+
+type writableCRMIntegrationStore interface {
+	storeiface.CRMIntegrationStore
+	storeiface.Closer
+}
+
+type writableCRMSchemaStore interface {
+	storeiface.CRMSchemaStore
 	storeiface.Closer
 }
 
@@ -717,6 +752,28 @@ func openWritableTranscriptStore(ctx context.Context, path string) (writableTran
 }
 
 func openWritableSettingsStore(ctx context.Context, path string) (writableSettingsStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
+func openWritableCRMIntegrationStore(ctx context.Context, path string) (writableCRMIntegrationStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
+func openWritableCRMSchemaStore(ctx context.Context, path string) (writableCRMSchemaStore, error) {
 	if strings.TrimSpace(path) != "" {
 		return sqlite.Open(ctx, path)
 	}
@@ -822,6 +879,33 @@ func syntheticScorecardActivityPayloads() []json.RawMessage {
 	return []json.RawMessage{
 		json.RawMessage(`{"answeredScorecardId":"synthetic-answered-scorecard-001","scorecardId":"synthetic-scorecard-001","scorecardName":"Synthetic discovery quality","callId":"synthetic-call-001","callStartTime":"2026-01-15T15:00:00Z","reviewedUserId":"synthetic-user-001","reviewerUserId":"synthetic-reviewer-001","reviewMethod":"MANUAL","reviewTime":"2026-01-16T15:00:00Z","visibilityType":"PUBLIC","answers":[{"questionId":"synthetic-question-001","isOverall":true,"score":4,"notApplicable":false},{"questionId":"synthetic-question-002","score":5,"notApplicable":false}]}`),
 		json.RawMessage(`{"answeredScorecardId":"synthetic-answered-scorecard-002","scorecardId":"synthetic-scorecard-001","scorecardName":"Synthetic discovery quality","callId":"synthetic-call-002","callStartTime":"2026-01-16T15:00:00Z","reviewedUserId":"synthetic-user-002","reviewerUserId":"synthetic-reviewer-001","reviewMethod":"AUTOMATIC","reviewTime":"2026-01-17T15:00:00Z","visibilityType":"PUBLIC","answers":[{"questionId":"synthetic-question-001","isOverall":true,"score":3,"notApplicable":false},{"questionId":"synthetic-question-002","score":3,"notApplicable":false}]}`),
+	}
+}
+
+func syntheticCRMIntegrationPayloads() []json.RawMessage {
+	return []json.RawMessage{
+		json.RawMessage(`{"integrationId":"synthetic-crm-integration-001","name":"Synthetic Salesforce","crmType":"Salesforce","updated":"2026-01-03T00:00:00Z"}`),
+	}
+}
+
+type syntheticCRMSchemaPayload struct {
+	integrationID string
+	objectType    string
+	raw           json.RawMessage
+}
+
+func syntheticCRMSchemaPayloads() []syntheticCRMSchemaPayload {
+	return []syntheticCRMSchemaPayload{
+		{
+			integrationID: "synthetic-crm-integration-001",
+			objectType:    "Opportunity",
+			raw:           json.RawMessage(`{"displayName":"Opportunity","objectTypeToSelectedFields":{"Opportunity":[{"fieldName":"StageName","label":"Stage","fieldType":"picklist"},{"fieldName":"CloseDate","label":"Close Date","fieldType":"date"},{"fieldName":"Amount","label":"Amount","fieldType":"currency"}]}}`),
+		},
+		{
+			integrationID: "synthetic-crm-integration-001",
+			objectType:    "Account",
+			raw:           json.RawMessage(`{"displayName":"Account","objectTypeToSelectedFields":{"Account":[{"fieldName":"Industry","label":"Industry","fieldType":"picklist"},{"fieldName":"Account_Type__c","label":"Account Type","fieldType":"string"}]}}`),
+		},
 	}
 }
 

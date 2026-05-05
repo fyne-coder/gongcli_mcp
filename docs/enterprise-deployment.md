@@ -136,10 +136,12 @@ flowchart LR
   `summarize_calls_by_lifecycle`, and `rank_transcript_backlog`) plus narrow
   operator smoke/search allowlists for `search_calls`, `get_call`, and
   `search_transcript_segments`. `analyst-core` is the reviewed Postgres
-  starter analyst surface for core call/profile/lifecycle/CRM-context inventory
-  queries. `analyst-business-core` adds bounded transcript-evidence and
-  business-analysis workflows. Full `analyst` and `all-readonly` parity remains
-  a follow-up tracked in the [Postgres parity matrix](postgres-parity.md).
+  starter analyst surface for core call/profile/lifecycle/CRM-context
+  inventory queries, cached CRM schema/settings inventory, scorecard inventory,
+  and aggregate scorecard activity. `analyst-business-core` adds bounded
+  transcript-evidence and business-analysis workflows. Full `analyst` and
+  `all-readonly` parity remains a follow-up tracked in the
+  [Postgres parity matrix](postgres-parity.md).
 - AI governance filtered DB export remains SQLite-only. Postgres supports a
   prepared governance policy for the narrowed `governance-search` MCP slice;
   database-enforced governed views/RLS/snapshots remain a follow-up.

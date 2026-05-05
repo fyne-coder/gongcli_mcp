@@ -27,6 +27,8 @@ const (
 	maxCRMFieldLimit             = 1000
 )
 
+const postgresReadModelBackfillMigrationVersion = 2
+
 type Store struct {
 	db       *sql.DB
 	readOnly bool
@@ -243,12 +245,16 @@ ON CONFLICT(version) DO NOTHING`, idx+1, nowUTC()); err != nil {
 	if err := s.reconcileReaderGrants(ctx); err != nil {
 		return err
 	}
-	if startingVersion < len(migrations) {
+	if shouldBackfillReadModelAfterMigrations(startingVersion) {
 		if _, err := s.RebuildReadModel(ctx); err != nil {
 			return fmt.Errorf("backfill postgres read model: %w", err)
 		}
 	}
 	return nil
+}
+
+func shouldBackfillReadModelAfterMigrations(startingVersion int) bool {
+	return startingVersion < postgresReadModelBackfillMigrationVersion
 }
 
 func (s *Store) reconcileReaderGrants(ctx context.Context) error {
@@ -539,6 +545,7 @@ BEGIN
 	`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
 	`+postgresSettingsReaderGrantStatementsSQL+`
 	`+postgresScorecardActivityReaderGrantStatementsSQL+`
+	`+postgresCRMInventoryReaderGrantStatementsSQL+`
 			END IF;
 		END;
 		$$;`)
@@ -577,13 +584,16 @@ func (s *Store) validateSchema(ctx context.Context) error {
 					'governance_policy_state',
 					'governance_suppressed_calls',
 					'gong_settings',
-					'scorecard_activity'
+					'scorecard_activity',
+					'crm_integrations',
+					'crm_schema_objects',
+					'crm_schema_fields'
 				  ]) AS core_table(table_name)
 				 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 23 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/23 core tables", count)
+	if count != 26 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/26 core tables", count)
 	}
 	return nil
 }
@@ -614,7 +624,7 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-			   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'gong_settings', 'scorecard_activity')
+			   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'gong_settings', 'scorecard_activity', 'crm_integrations', 'crm_schema_objects', 'crm_schema_fields')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -702,7 +712,13 @@ WITH forbidden(table_name, column_name) AS (
 				('gong_settings', 'raw_json'),
 				('gong_settings', 'raw_sha256'),
 				('scorecard_activity', 'raw_json'),
-				('scorecard_activity', 'raw_sha256')
+				('scorecard_activity', 'raw_sha256'),
+				('crm_integrations', 'raw_json'),
+				('crm_integrations', 'raw_sha256'),
+				('crm_schema_objects', 'raw_json'),
+				('crm_schema_objects', 'raw_sha256'),
+				('crm_schema_fields', 'raw_json'),
+				('crm_schema_fields', 'raw_sha256')
 )
 SELECT c.table_name || '.' || c.column_name
   FROM information_schema.columns c
@@ -729,6 +745,59 @@ SELECT c.table_name || '.' || c.column_name
 	}
 	if len(readableForbiddenColumns) > 0 {
 		return fmt.Errorf("postgres read-only URL has forbidden column SELECT: %s", strings.Join(readableForbiddenColumns, ", "))
+	}
+	rows, err = s.db.QueryContext(ctx, `
+WITH required(table_name, column_name) AS (
+	VALUES
+		('gong_settings', 'kind'),
+		('gong_settings', 'object_id'),
+		('gong_settings', 'name'),
+		('gong_settings', 'active'),
+		('gong_settings', 'updated_at'),
+		('crm_integrations', 'integration_id'),
+		('crm_integrations', 'name'),
+		('crm_integrations', 'provider'),
+		('crm_integrations', 'first_seen_at'),
+		('crm_integrations', 'updated_at'),
+		('crm_schema_objects', 'integration_id'),
+		('crm_schema_objects', 'object_type'),
+		('crm_schema_objects', 'display_name'),
+		('crm_schema_objects', 'field_count'),
+		('crm_schema_objects', 'first_seen_at'),
+		('crm_schema_objects', 'updated_at'),
+		('crm_schema_fields', 'integration_id'),
+		('crm_schema_fields', 'object_type'),
+		('crm_schema_fields', 'field_name'),
+		('crm_schema_fields', 'field_label'),
+		('crm_schema_fields', 'field_type'),
+		('crm_schema_fields', 'first_seen_at'),
+		('crm_schema_fields', 'updated_at')
+)
+SELECT r.table_name || '.' || r.column_name
+  FROM required r
+  JOIN pg_attribute a
+    ON a.attrelid = to_regclass('public.' || quote_ident(r.table_name))
+   AND a.attname = r.column_name
+   AND NOT a.attisdropped
+ WHERE NOT has_column_privilege(current_user, 'public.' || quote_ident(r.table_name), r.column_name, 'SELECT')
+ ORDER BY r.table_name, r.column_name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var missingColumnGrants []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return err
+		}
+		missingColumnGrants = append(missingColumnGrants, column)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(missingColumnGrants) > 0 {
+		return fmt.Errorf("postgres read-only URL is missing required column SELECT grants: %s", strings.Join(missingColumnGrants, ", "))
 	}
 	rows, err = s.db.QueryContext(ctx, `
 WITH required_functions(signature) AS (
@@ -1248,6 +1317,9 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		{`SELECT COUNT(DISTINCT call_id) FROM call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
 		{`SELECT COUNT(*) FROM call_context_objects`, &summary.TotalEmbeddedCRMObjects},
 		{`SELECT COUNT(*) FROM gongmcp_call_context_fields`, &summary.TotalEmbeddedCRMFields},
+		{`SELECT COUNT(*) FROM crm_integrations`, &summary.TotalCRMIntegrations},
+		{`SELECT COUNT(*) FROM crm_schema_objects`, &summary.TotalCRMSchemaObjects},
+		{`SELECT COUNT(*) FROM crm_schema_fields`, &summary.TotalCRMSchemaFields},
 		{`SELECT COUNT(*) FROM gong_settings`, &summary.TotalGongSettings},
 		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &summary.TotalScorecards},
 		{`SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id WHERE t.call_id IS NULL`, &summary.MissingTranscripts},

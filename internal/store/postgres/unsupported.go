@@ -15,15 +15,6 @@ func unsupported() error { return errUnsupported }
 func (s *Store) SearchCRMFieldValues(ctx context.Context, params sqlite.CRMFieldValueSearchParams) ([]sqlite.CRMFieldValueMatch, error) {
 	return nil, unsupported()
 }
-func (s *Store) ListCRMIntegrations(ctx context.Context) ([]sqlite.CRMIntegrationRecord, error) {
-	return nil, unsupported()
-}
-func (s *Store) ListCRMSchemaObjects(ctx context.Context, integrationID string) ([]sqlite.CRMSchemaObjectRecord, error) {
-	return nil, unsupported()
-}
-func (s *Store) ListCRMSchemaFields(ctx context.Context, params sqlite.CRMSchemaFieldListParams) ([]sqlite.CRMSchemaFieldRecord, error) {
-	return nil, unsupported()
-}
 func (s *Store) ListUnmappedCRMFields(ctx context.Context, params sqlite.UnmappedCRMFieldParams) ([]sqlite.UnmappedCRMField, error) {
 	return nil, unsupported()
 }

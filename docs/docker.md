@@ -146,6 +146,9 @@ The first Postgres vertical slice supports:
 - `gongctl sync calls`
 - `gongctl sync users`
 - `gongctl sync transcripts`
+- `gongctl sync crm-integrations`
+- `gongctl sync crm-schema`
+- `gongctl sync settings --kind scorecards`
 - `gongctl sync status`
 - `gongctl sync read-model` and `gongctl sync read-model --rebuild` for
   Postgres builtin fact readiness and repair
@@ -159,19 +162,26 @@ The first Postgres vertical slice supports:
   read-model call metadata/detail; use explicit raw-export commands with
   `--allow-sensitive-export` for raw payload access
 - `gongctl search transcripts`
+- `gongctl analyze crm-schema`, `analyze settings --kind scorecards`,
+  `analyze scorecards`, `analyze scorecard`, and aggregate
+  `analyze scorecard-activity` over the read-only role
 - `gongmcp --tool-preset business-pilot`: `get_sync_status`,
   `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
   `rank_transcript_backlog`
 - `gongmcp --tool-preset operator-smoke`: `get_sync_status`, `search_calls`,
   `search_transcript_segments`, `get_call`, and `rank_transcript_backlog`
+- `gongmcp --tool-preset analyst-core`: supported CRM context inventory,
+  cached CRM schema/settings inventory, profile/lifecycle, scorecard
+  inventory, and aggregate scorecard activity tools
+- `gongmcp --tool-preset analyst-business-core`: bounded transcript-evidence
+  and business-analysis tools plus analyst-core
 - `gongmcp --tool-preset governance-search` with
   `GONGMCP_AI_GOVERNANCE_CONFIG` after a Postgres governance policy has been
   prepared; Postgres narrows this preset to supported search tools
 
 It does not yet provide full SQLite query parity for database-enforced
-governance snapshots/RLS, analyst/all-readonly presets, business-analysis views,
-support bundles, cache inventory, or broader CRM/lifecycle-heavy MCP tools. See
-the
+governance snapshots/RLS, full analyst/all-readonly presets, support bundles,
+cache inventory, or remaining CRM/lifecycle-heavy MCP tools. See the
 [Postgres parity matrix](postgres-parity.md) for the phased parity contract.
 
 Read-only `gongmcp` never rebuilds the Postgres read model. If startup reports a

@@ -15,12 +15,13 @@ metadata import/show/readiness, MCP profile reads, and profile-derived
 lifecycle facts when an active profile has a fresh profile fact cache. Postgres
 governance mode supports a prepared private policy for the narrowed
 `governance-search` MCP slice. `analyst-core` adds Postgres-supported call,
-CRM context inventory, profile, lifecycle, and transcript-search tools while
-`analyst-business-core` adds bounded Postgres transcript-evidence and
-business-analysis tools. Scorecard settings inventory and aggregate answered
-scorecard activity are available through the Postgres analyst-core surface,
-while full `analyst` and `all-readonly` remain gated until support/cache,
-broader settings/catalog, and remaining query parity are complete.
+CRM context inventory, cached CRM schema/settings inventory, profile,
+lifecycle, and transcript-search tools while `analyst-business-core` adds
+bounded Postgres transcript-evidence and business-analysis tools. Scorecard
+settings inventory and aggregate answered scorecard activity are available
+through the Postgres analyst-core surface, while full `analyst` and
+`all-readonly` remain gated until support/cache, remaining settings/catalog,
+and remaining query parity are complete.
 
 ## Positioning
 
@@ -75,8 +76,9 @@ gongctl profile schema
 ```
 
 Use `business-pilot` for first business-user access, `analyst-core` for the
-reviewed Postgres analyst starter surface including scorecard inventory and
-scorecard activity aggregates, `analyst-business-core` for bounded Postgres
+reviewed Postgres analyst starter surface including cached CRM schema/settings
+inventory, scorecard inventory, and scorecard activity aggregates,
+`analyst-business-core` for bounded Postgres
 transcript-evidence/business analysis workflows, and `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
@@ -208,11 +210,12 @@ scripts/postgres-smoke.sh
 
 The smoke uses synthetic data only. It initializes Postgres, writes the
 synthetic cache through `gongctl sync synthetic`, checks Postgres read-model
-state with `gongctl sync read-model`, starts `gongmcp` with a read-only
-Postgres role, calls the supported MCP tools, and proves the reader role cannot
-write or directly read raw/sensitive tables. It also prepares a synthetic
-Postgres AI governance policy and proves restricted synthetic records are absent
-from governed MCP search outputs.
+state with `gongctl sync read-model`, validates cached CRM schema/settings and
+scorecard inventory through the read-only role, starts `gongmcp`, calls the
+supported MCP tools, and proves the reader role cannot write or directly read
+raw/sensitive tables. It also prepares a synthetic Postgres AI governance
+policy and proves restricted synthetic records are absent from governed MCP
+search outputs.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 
@@ -337,7 +340,10 @@ gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity -
 gongctl calls show --db ~/gongctl-data/gong.db --call-id CALL_ID --json
 # With GONG_DATABASE_URL set, Postgres returns minimized call detail without --db.
 gongctl calls show --call-id CALL_ID --json
+gongctl sync crm-integrations
+gongctl sync crm-schema --integration-id CRM_INTEGRATION_ID --object-type Opportunity
 gongctl sync settings --kind scorecards
+gongctl analyze crm-schema --integration-id CRM_INTEGRATION_ID --object-type Opportunity
 gongctl analyze scorecards
 gongctl analyze scorecard --scorecard-id SCORECARD_ID
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --json
@@ -399,8 +405,14 @@ Rules:
 - `sync calls --preset minimal` does not request Gong context.
 - `sync calls --preset all` currently maps to `Extended` context as well; it is documented separately so it can diverge later without changing the CLI shape.
 - `sync calls --include-parties` requests Gong call participant fields such as names, emails, speaker IDs, and titles. Use it only for approved operator refreshes because returned participant payloads are cached in raw call JSON.
-- `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
-- `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
+- `sync crm-integrations` caches Gong CRM integration IDs needed by
+  `sync crm-schema`. With `GONG_DATABASE_URL` set and `--db` omitted, this
+  inventory can be written to Postgres for shared deployments.
+- `sync crm-schema` caches selected CRM field metadata by integration/object
+  type; it stores field names and labels, not CRM field values. With
+  `GONG_DATABASE_URL` set and `--db` omitted, this metadata can be written to
+  Postgres and read through `analyze crm-schema` or the reviewed MCP inventory
+  tools.
 - `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces. With `GONG_DATABASE_URL` set and `--db` omitted, this cache can be written to Postgres for shared deployments.
 - `sync scorecard-activity` caches answered scorecard activity from Gong's
   scorecard activity stats endpoint. It stores local raw JSON for operator

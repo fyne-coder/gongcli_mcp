@@ -41,7 +41,7 @@ func (a *app) analyze(ctx context.Context, args []string) error {
 func (a *app) analyzeScorecardActivity(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("analyze scorecard-activity", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	groupBy := fs.String("group-by", "scorecard", "dimension: scorecard, review_method, reviewed_user, lifecycle, transcript_status; Postgres read-only excludes reviewed_user")
 	limit := fs.Int("limit", 50, "maximum groups to return")
 	if err := fs.Parse(args); err != nil {
@@ -234,7 +234,7 @@ func (a *app) analyzeTranscriptBacklog(ctx context.Context, args []string) error
 func (a *app) analyzeCRMSchema(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("analyze crm-schema", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	integrationID := fs.String("integration-id", "", "optional CRM integration ID filter")
 	objectType := fs.String("object-type", "", "optional CRM object type filter")
 	limit := fs.Int("limit", 100, "maximum fields to return")
@@ -242,7 +242,7 @@ func (a *app) analyzeCRMSchema(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	store, err := openSQLiteReadOnlyStore(ctx, *dbPath)
+	store, err := openReadOnlyCRMSchemaInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -364,9 +364,32 @@ type readOnlySettingsInventoryStore interface {
 	storeiface.Closer
 }
 
+type readOnlyCRMSchemaInventoryStore interface {
+	ListCRMIntegrations(context.Context) ([]sqlite.CRMIntegrationRecord, error)
+	ListCRMSchemaObjects(context.Context, string) ([]sqlite.CRMSchemaObjectRecord, error)
+	ListCRMSchemaFields(context.Context, sqlite.CRMSchemaFieldListParams) ([]sqlite.CRMSchemaFieldRecord, error)
+	storeiface.Closer
+}
+
 type readOnlyScorecardActivityStore interface {
 	SummarizeScorecardActivity(context.Context, sqlite.ScorecardActivitySummaryParams) ([]sqlite.ScorecardActivitySummaryRow, error)
 	storeiface.Closer
+}
+
+func openReadOnlyCRMSchemaInventoryStore(ctx context.Context, path string) (readOnlyCRMSchemaInventoryStore, error) {
+	if path != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	store, err := openReadOnlyStatusStore(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	inventoryStore, ok := store.(readOnlyCRMSchemaInventoryStore)
+	if !ok {
+		_ = store.Close()
+		return nil, fmt.Errorf("selected store does not support CRM schema inventory")
+	}
+	return inventoryStore, nil
 }
 
 func openReadOnlyScorecardActivityStore(ctx context.Context, path string) (readOnlyScorecardActivityStore, error) {
