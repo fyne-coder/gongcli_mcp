@@ -409,7 +409,7 @@ func TestResolveToolAllowlistPresets(t *testing.T) {
 		{
 			name: "operator smoke preset",
 			in:   toolSelection{PresetEnv: "operator-smoke"},
-			want: []string{"get_sync_status", "search_calls", "search_transcript_segments", "rank_transcript_backlog"},
+			want: []string{"get_sync_status", "search_calls", "search_transcript_segments", "get_call", "rank_transcript_backlog"},
 		},
 		{
 			name: "all readonly expands to catalog",

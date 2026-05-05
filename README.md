@@ -9,7 +9,8 @@ sync status, cached calls, users, transcripts, transcript segments, and the
 read-only MCP `business-pilot` preset: `get_sync_status`,
 `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
 `rank_transcript_backlog`. Operator smoke deployments can also explicitly
-allow `search_calls`, `get_call`, and `search_transcript_segments`.
+allow `get_sync_status`, `search_calls`, `search_transcript_segments`,
+`get_call`, and `rank_transcript_backlog`.
 
 ## Positioning
 
@@ -233,7 +234,7 @@ When restricted mode is enabled, these commands are blocked unless you add
 `--allow-sensitive-export` or set `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`:
 
 - `gongctl api raw ...`
-- `gongctl calls show --json`
+- `gongctl calls show --db PATH --json` for raw SQLite cached call JSON
 - `gongctl calls list --context extended ...`
 - `gongctl calls export ...`
 - `gongctl calls transcript ...`
@@ -284,10 +285,10 @@ gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-ru
 ## Advanced Local Operator Commands
 
 These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
-When using Postgres, `gongctl search calls` returns minimized call metadata from
-the read model. Use explicit raw-export commands such as `calls show --json` or
-`calls export` with `--allow-sensitive-export` for operator-controlled raw
-payload access.
+When using Postgres, `gongctl search calls` and `gongctl calls show --json`
+return minimized read-model metadata. Use explicit SQLite/operator raw-export
+commands such as `calls export` with `--allow-sensitive-export` for
+operator-controlled raw payload access.
 
 ```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
@@ -314,6 +315,8 @@ gongctl analyze transcript-backlog --db ~/gongctl-data/gong.db --limit 25
 gongctl mcp tool-info list_gong_settings
 gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity --crm-object-id opp_001 --limit 10
 gongctl calls show --db ~/gongctl-data/gong.db --call-id CALL_ID --json
+# With GONG_DATABASE_URL set, Postgres returns minimized call detail without --db.
+gongctl calls show --call-id CALL_ID --json
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --json
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --out calls-with-crm-context.json --allow-sensitive-export
 gongctl calls export --from 2026-04-01 --to 2026-04-24 --out calls.jsonl
@@ -368,7 +371,7 @@ The Agent E CLI flow is SQLite-backed:
 
 Rules:
 
-- `--db` is required for all SQLite-backed `sync`, `search`, and `calls show` commands.
+- `--db` is required for all SQLite-backed `sync`, `search`, and `calls show` commands. With `GONG_DATABASE_URL` or `DATABASE_URL`, supported Postgres read-only commands use the shared database instead.
 - `sync calls --preset business` requests Gong `Extended` context.
 - `sync calls --preset minimal` does not request Gong context.
 - `sync calls --preset all` currently maps to `Extended` context as well; it is documented separately so it can diverge later without changing the CLI shape.
@@ -413,7 +416,7 @@ Rules:
 - `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
 - After upgrading to a build with new SQLite migrations, run a writable `gongctl sync ...` command before starting `gongmcp`; read-only MCP refuses older schema versions and tells the operator to run a sync command first.
 - `sync` commands write concise progress summaries to `stderr`.
-- `sync status`, `search ...`, and `calls show --json` write JSON to `stdout`.
+- `sync status`, `search ...`, and `calls show --json` write JSON to `stdout`. Postgres `calls show --json` returns minimized call detail rather than raw cached JSON.
 - `analyze ...` commands write metadata-only JSON summaries to `stdout`.
 - `search transcripts` returns segment metadata and snippets only; it does not emit full segment text.
 - `search calls` CRM filters only match rows that were synced with stored CRM context, so use `business` or `all` when those searches are needed.

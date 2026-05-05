@@ -102,12 +102,14 @@ Implementation controls on the MCP side:
 Implementation controls on the CLI side:
 
 - `GONGCTL_RESTRICTED=1` or `gongctl --restricted ...` turns on restricted/company mode.
-- In restricted mode, `api raw`, `calls show --json`, `calls export`,
-  `calls list --context extended`, `calls transcript`, `calls transcript-batch`,
-  `sync transcripts`, `sync calls --preset business|all`, and
-  `sync calls --include-parties` are blocked unless the operator adds
-  `--allow-sensitive-export` or sets
+- In restricted mode, `api raw`, SQLite `calls show --db PATH --json`,
+  `calls export`, `calls list --context extended`, `calls transcript`,
+  `calls transcript-batch`, `sync transcripts`, `sync calls --preset
+  business|all`, and `sync calls --include-parties` are blocked unless the
+  operator adds `--allow-sensitive-export` or sets
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`.
+- Postgres `calls show --json` through `GONG_DATABASE_URL` returns minimized
+  read-model detail and does not bypass into raw cached JSON.
 - `gongctl sync run --config ... --dry-run` validates staged operator refresh
   configs without calling Gong so reviewed schedules can be checked before
   execution. The config file cannot self-authorize sensitive steps; runtime
@@ -134,7 +136,8 @@ These commands are valid operator tools, but they should be treated as restricte
 | Command family | Why it is high risk | Control expectation |
 | --- | --- | --- |
 | `gongctl api raw ...` | Bypasses typed minimization and can return raw Gong payloads | Use only for operator debugging; keep output local |
-| `gongctl calls show --json` | Returns raw cached call detail | Do not paste into tickets, docs, or prompts |
+| `gongctl calls show --json` with SQLite `--db` | Returns raw cached call detail | Do not paste into tickets, docs, or prompts |
+| `gongctl calls show --json` with Postgres `GONG_DATABASE_URL` | Returns minimized call detail from the read model | Treat titles, IDs, and CRM object identifiers as customer data |
 | `gongctl calls list/export --context extended ...` | Can emit embedded CRM context and customer identifiers at scale | Restricted mode requires explicit override; write to external files only and review before sharing |
 | `gongctl calls transcript ...` and `gongctl calls transcript-batch ...` | Produces transcript payloads and transcript files | Store outside the repo and outside shared logs |
 | `gongctl sync transcripts ...` | Pulls transcript content into the local cache/filesystem | Use least-privilege data location and operator-owned storage |

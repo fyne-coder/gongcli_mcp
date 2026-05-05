@@ -432,14 +432,17 @@ fi
   printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_calls","arguments":{"limit":5,"transcript_status":"present"}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcript_segments","arguments":{"query":"shared Postgres deployment","limit":5}}}'
-  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_call","arguments":{"call_id":"load-call-000100"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"limit":5}}}'
 } | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=operator-smoke go run ./cmd/gongmcp >"$OPERATOR_SMOKE_OUT"
 
 grep -q '"get_sync_status"' "$OPERATOR_SMOKE_OUT"
 grep -q '"search_calls"' "$OPERATOR_SMOKE_OUT"
 grep -q '"search_transcript_segments"' "$OPERATOR_SMOKE_OUT"
+grep -q '"get_call"' "$OPERATOR_SMOKE_OUT"
 grep -q '"rank_transcript_backlog"' "$OPERATOR_SMOKE_OUT"
-assert_mcp_success "$OPERATOR_SMOKE_OUT" 3 4 5 6
+grep -q 'load-call-000100' "$OPERATOR_SMOKE_OUT"
+assert_mcp_success "$OPERATOR_SMOKE_OUT" 3 4 5 6 7
 if grep -q 'raw_json\|crmObjects' "$OPERATOR_SMOKE_OUT"; then
   echo "operator-smoke load MCP smoke exposed raw call payload fields" >&2
   exit 1

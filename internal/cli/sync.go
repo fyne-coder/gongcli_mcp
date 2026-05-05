@@ -655,6 +655,11 @@ type readOnlyCallSearchStore interface {
 	storeiface.Closer
 }
 
+type readOnlyCallDetailStore interface {
+	GetCallDetail(context.Context, string) (*sqlite.CallDetail, error)
+	storeiface.Closer
+}
+
 func openWritableCoreStore(ctx context.Context, path string) (writableCoreStore, error) {
 	if strings.TrimSpace(path) != "" {
 		return sqlite.Open(ctx, path)
@@ -700,6 +705,17 @@ func openReadOnlyTranscriptSearchStore(ctx context.Context, path string) (readOn
 }
 
 func openReadOnlyCallSearchStore(ctx context.Context, path string) (readOnlyCallSearchStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.OpenReadOnly(ctx, databaseURL)
+}
+
+func openReadOnlyCallDetailStore(ctx context.Context, path string) (readOnlyCallDetailStore, error) {
 	if strings.TrimSpace(path) != "" {
 		return sqlite.OpenReadOnly(ctx, path)
 	}

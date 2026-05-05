@@ -222,6 +222,65 @@ func TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext(t *testing.T) {
 	}
 }
 
+func TestPostgresTranscriptSearchUserVisibleFieldsMatchSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	for _, raw := range businessPilotCallPayloads() {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+	for _, raw := range businessPilotTranscriptPayloads() {
+		if _, err := pgStore.UpsertTranscript(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertTranscript returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertTranscript(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertTranscript returned error: %v", err)
+		}
+	}
+
+	got, err := pgStore.SearchTranscriptSegments(ctx, "contract review", 10)
+	if err != nil {
+		t.Fatalf("postgres SearchTranscriptSegments returned error: %v", err)
+	}
+	want, err := sqliteStore.SearchTranscriptSegments(ctx, "contract review", 10)
+	if err != nil {
+		t.Fatalf("sqlite SearchTranscriptSegments returned error: %v", err)
+	}
+	if len(got) != 1 || len(want) != 1 {
+		t.Fatalf("postgres rows=%+v sqlite rows=%+v want one row each", got, want)
+	}
+	if got[0].CallID != want[0].CallID || got[0].SpeakerID != want[0].SpeakerID || got[0].SegmentIndex != want[0].SegmentIndex || got[0].StartMS != want[0].StartMS || got[0].EndMS != want[0].EndMS {
+		t.Fatalf("postgres transcript metadata=%+v want sqlite %+v", got[0], want[0])
+	}
+	if got[0].Text != "" || want[0].Text != "" {
+		t.Fatalf("raw text leaked: postgres=%q sqlite=%q", got[0].Text, want[0].Text)
+	}
+	if got[0].Snippet == "" || want[0].Snippet == "" {
+		t.Fatalf("empty snippet: postgres=%+v sqlite=%+v", got[0], want[0])
+	}
+}
+
 func TestPostgresSearchCallsRawSafeFiltersMatchSQLite(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {

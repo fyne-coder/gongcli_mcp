@@ -39,7 +39,7 @@ preset_allowlist() {
       printf '%s\n' 'get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog'
       ;;
     operator-smoke)
-      printf '%s\n' 'get_sync_status,search_calls,search_transcript_segments,rank_transcript_backlog'
+      printf '%s\n' 'get_sync_status,search_calls,search_transcript_segments,get_call,rank_transcript_backlog'
       ;;
     analyst|analyst-expansion)
       printf '%s\n' 'get_sync_status,list_crm_object_types,list_crm_fields,get_business_profile,list_business_concepts,list_unmapped_crm_fields,analyze_late_stage_crm_signals,opportunities_missing_transcripts,search_transcripts_by_crm_context,opportunity_call_summary,crm_field_population_matrix,list_lifecycle_buckets,summarize_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,compare_lifecycle_crm_fields,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution'

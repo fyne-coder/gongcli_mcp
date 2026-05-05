@@ -254,6 +254,20 @@ func TestToolPresetCatalogAliasesAndGovernanceCompatibility(t *testing.T) {
 	if err := ValidateGovernanceAllowlist([]string{"search_crm_field_values"}); err == nil {
 		t.Fatal("governance validator accepted unsafe tool")
 	}
+	operatorSmoke, err := ExpandToolPreset("operator-smoke")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(operator-smoke) returned error: %v", err)
+	}
+	hasGetCall := false
+	for _, tool := range operatorSmoke {
+		if tool == "get_call" {
+			hasGetCall = true
+			break
+		}
+	}
+	if !hasGetCall {
+		t.Fatalf("operator-smoke tools=%v missing get_call", operatorSmoke)
+	}
 
 	seen := map[string]ToolPresetInfo{}
 	for _, preset := range ToolPresetCatalog() {

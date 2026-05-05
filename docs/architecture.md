@@ -61,6 +61,8 @@ Current public SQLite-backed commands:
 - `gongctl search transcripts --db PATH --query TEXT [--limit N]`
 - `gongctl search calls --db PATH [--crm-object-type TYPE] [--crm-object-id ID] [--limit N]`
 - `gongctl calls show --db PATH --call-id ID --json`
+- `gongctl calls show --call-id ID --json` with `GONG_DATABASE_URL` for
+  minimized Postgres call detail
 
 Behavioral rules:
 

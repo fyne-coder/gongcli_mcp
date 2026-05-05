@@ -208,6 +208,25 @@ func TestPostgresSearchCallsDoesNotRequireSensitiveExportOptIn(t *testing.T) {
 	}
 }
 
+func TestPostgresCallsShowUsesSafeDetailPathWithoutSensitiveExportOptIn(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongmcp_reader:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr, restricted: true}
+	err := a.callsShow(context.Background(), []string{"--call-id", "pg-call-001", "--json"})
+	if err == nil {
+		t.Fatalf("calls show error=nil, want unavailable Postgres connection error")
+	}
+	if got := err.Error(); got == "--db is required" || strings.Contains(got, "allow-sensitive-export") || strings.Contains(got, "raw cached call JSON") {
+		t.Fatalf("calls show error=%v, want postgres connection error without SQLite/raw-export fallback", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+}
+
 func TestReadOnlyCommandsMissingDBDoNotCreateDatabase(t *testing.T) {
 	tests := []struct {
 		name string

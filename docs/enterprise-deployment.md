@@ -330,7 +330,9 @@ In restricted mode, these commands require an explicit override
 
 - `api raw`
 - `calls list --context extended`
-- `calls show --json`
+- SQLite `calls show --db PATH --json` for raw cached call JSON; Postgres
+  `calls show --json` through `GONG_DATABASE_URL` returns minimized read-model
+  detail instead
 - `calls export`
 - `calls transcript`
 - `calls transcript-batch`

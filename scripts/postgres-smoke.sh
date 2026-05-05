@@ -75,6 +75,13 @@ grep -q '"status": "current"' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"call_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"fact_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"ready": true' /tmp/gongctl-postgres-read-model-state.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl calls show --call-id synthetic-call-001 --json >/tmp/gongctl-postgres-calls-show.json
+grep -q '"call_id": "synthetic-call-001"' /tmp/gongctl-postgres-calls-show.json
+grep -q '"title": "Pulsaris implementation kickoff"' /tmp/gongctl-postgres-calls-show.json
+if grep -q 'raw_json\|crmObjects\|speaker-1' /tmp/gongctl-postgres-calls-show.json; then
+  echo "postgres calls show exposed raw call payload fields" >&2
+  exit 1
+fi
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT 'call_context_objects', COUNT(*) FROM call_context_objects UNION ALL SELECT 'call_context_fields', COUNT(*) FROM call_context_fields UNION ALL SELECT 'call_facts', COUNT(*) FROM call_facts ORDER BY 1" >/tmp/gongctl-postgres-normalized-counts.txt
 grep -q 'call_facts|2' /tmp/gongctl-postgres-normalized-counts.txt
@@ -147,7 +154,7 @@ fi
   printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_calls","arguments":{"limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcript_segments","arguments":{"query":"shared Postgres","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_call","arguments":{"call_id":"synthetic-call-001"}}}'
-} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=get_sync_status,search_calls,search_transcript_segments,get_call go run ./cmd/gongmcp > /tmp/gongctl-postgres-mcp.jsonl
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=operator-smoke go run ./cmd/gongmcp > /tmp/gongctl-postgres-mcp.jsonl
 
 grep -q '"get_sync_status"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q '"search_calls"' /tmp/gongctl-postgres-mcp.jsonl
@@ -182,6 +189,7 @@ GONGCTL_TEST_POSTGRES_URL="$WRITER_URL" go test -count=1 ./internal/store/postgr
 echo "postgres smoke passed"
 echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
+echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"
 echo "reader raw-read denial output: /tmp/gongctl-postgres-reader-raw-read.txt"

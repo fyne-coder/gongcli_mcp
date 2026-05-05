@@ -149,14 +149,15 @@ The first Postgres vertical slice supports:
 - `gongctl sync status`
 - `gongctl sync read-model` and `gongctl sync read-model --rebuild` for
   Postgres builtin fact readiness and repair
-- `gongctl search calls` for minimized read-model call metadata; use explicit
-  raw-export commands with `--allow-sensitive-export` for raw payload access
+- `gongctl search calls` and `gongctl calls show --json` for minimized
+  read-model call metadata/detail; use explicit raw-export commands with
+  `--allow-sensitive-export` for raw payload access
 - `gongctl search transcripts`
 - `gongmcp --tool-preset business-pilot`: `get_sync_status`,
   `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
   `rank_transcript_backlog`
-- operator smoke/search allowlists for `search_calls`, `get_call`, and
-  `search_transcript_segments`
+- `gongmcp --tool-preset operator-smoke`: `get_sync_status`, `search_calls`,
+  `search_transcript_segments`, `get_call`, and `rank_transcript_backlog`
 
 It does not yet provide full SQLite query parity for governance filtered DB
 export, profile lifecycle source, analyst/all-readonly presets,

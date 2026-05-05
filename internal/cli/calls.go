@@ -11,6 +11,7 @@ import (
 	checkpointstore "github.com/fyne-coder/gongcli_mcp/internal/checkpoint"
 	exportjsonl "github.com/fyne-coder/gongcli_mcp/internal/export"
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 )
 
 func (a *app) calls(ctx context.Context, args []string) error {
@@ -193,6 +194,19 @@ func (a *app) callsShow(ctx context.Context, args []string) error {
 	}
 	if !*asJSON {
 		return fmt.Errorf("--json is required")
+	}
+	if strings.TrimSpace(*dbPath) == "" && postgres.URLFromEnv(os.Getenv) != "" {
+		store, err := openReadOnlyCallDetailStore(ctx, *dbPath)
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+
+		detail, err := store.GetCallDetail(ctx, *callID)
+		if err != nil {
+			return err
+		}
+		return writeJSONValue(a.out, detail)
 	}
 	if err := a.requireSensitiveExport("calls show --json", *allowSensitiveExport, "it can print raw cached call JSON"); err != nil {
 		return err
