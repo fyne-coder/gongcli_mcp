@@ -197,7 +197,13 @@ func (s *Store) ImportProfile(ctx context.Context, params sqlite.ProfileImportPa
 			if err := tx.Commit(); err != nil {
 				return nil, err
 			}
-			return &sqlite.ProfileImportResult{ProfileID: existing.ID, Imported: false, Activated: false, SourceSHA256: sourceSHA256, CanonicalSHA256: canonicalSHA256}, nil
+			result := &sqlite.ProfileImportResult{ProfileID: existing.ID, Imported: false, Activated: false, SourceSHA256: sourceSHA256, CanonicalSHA256: canonicalSHA256}
+			if !params.StageOnly {
+				if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+					return nil, err
+				}
+			}
+			return result, nil
 		}
 		if !params.StageOnly {
 			if _, err := tx.ExecContext(ctx, `UPDATE profile_meta SET is_active = false WHERE id <> $1`, existing.ID); err != nil {
@@ -227,7 +233,13 @@ UPDATE profile_meta
 		if err := tx.Commit(); err != nil {
 			return nil, err
 		}
-		return &sqlite.ProfileImportResult{ProfileID: existing.ID, Imported: false, Activated: activationChanged, SourceSHA256: sourceSHA256, CanonicalSHA256: canonicalSHA256}, nil
+		result := &sqlite.ProfileImportResult{ProfileID: existing.ID, Imported: false, Activated: activationChanged, SourceSHA256: sourceSHA256, CanonicalSHA256: canonicalSHA256}
+		if !params.StageOnly {
+			if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
 	case errors.Is(err, sql.ErrNoRows):
 	default:
 		return nil, err
@@ -265,7 +277,13 @@ RETURNING id`,
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &sqlite.ProfileImportResult{ProfileID: profileID, Imported: true, Activated: !params.StageOnly, SourceSHA256: sourceSHA256, CanonicalSHA256: canonicalSHA256}, nil
+	result := &sqlite.ProfileImportResult{ProfileID: profileID, Imported: true, Activated: !params.StageOnly, SourceSHA256: sourceSHA256, CanonicalSHA256: canonicalSHA256}
+	if !params.StageOnly {
+		if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 func profileByCanonicalTx(ctx context.Context, tx *sql.Tx, canonicalSHA256 string) (*profileMetaRecord, error) {
@@ -361,6 +379,9 @@ func (s *Store) ActivateProfile(ctx context.Context, ref string) (*sqlite.Profil
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+		return nil, err
+	}
 	return &sqlite.ProfileImportResult{
 		ProfileID:       doc.Meta.ProfileID,
 		Imported:        false,
@@ -450,10 +471,15 @@ func (s *Store) activeProfileViaMCPFunction(ctx context.Context) (*profileMetaRe
 		ImportedBy      string               `json:"imported_by"`
 		IsActive        bool                 `json:"is_active"`
 		CanonicalJSON   json.RawMessage      `json:"canonical_json"`
+		Profile         json.RawMessage      `json:"profile"`
 		Warnings        []profilepkg.Finding `json:"warnings"`
 	}
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return nil, nil, nil, err
+	}
+	profileJSON := decoded.Profile
+	if len(profileJSON) == 0 {
+		profileJSON = decoded.CanonicalJSON
 	}
 	meta := &profileMetaRecord{
 		ID:              decoded.ProfileID,
@@ -465,10 +491,10 @@ func (s *Store) activeProfileViaMCPFunction(ctx context.Context) (*profileMetaRe
 		ImportedAt:      decoded.ImportedAt,
 		ImportedBy:      decoded.ImportedBy,
 		IsActive:        decoded.IsActive,
-		CanonicalJSON:   []byte(decoded.CanonicalJSON),
+		CanonicalJSON:   []byte(profileJSON),
 	}
 	var p profilepkg.Profile
-	if err := json.Unmarshal(decoded.CanonicalJSON, &p); err != nil {
+	if err := json.Unmarshal(profileJSON, &p); err != nil {
 		return nil, nil, nil, err
 	}
 	return meta, &p, decoded.Warnings, nil
@@ -663,7 +689,7 @@ func businessProfileFrom(meta *profileMetaRecord, p *profilepkg.Profile, warning
 		IsActive:            meta.IsActive,
 		LifecycleCore:       append([]string(nil), profilepkg.RequiredLifecycleBuckets...),
 		Warnings:            warnings,
-		UnavailableConcepts: profileUnavailableConcepts(p),
+		UnavailableConcepts: profileUnavailableConcepts(p, ""),
 	}
 	for concept, mapping := range p.Objects {
 		out.ObjectConcepts = append(out.ObjectConcepts, sqlite.BusinessConcept{Kind: "object", Name: concept, ObjectTypes: append([]string(nil), mapping.ObjectTypes...)})
@@ -684,7 +710,7 @@ func businessProfileFrom(meta *profileMetaRecord, p *profilepkg.Profile, warning
 	return out
 }
 
-func profileUnavailableConcepts(p *profilepkg.Profile) []string {
+func profileUnavailableConcepts(p *profilepkg.Profile, groupBy string) []string {
 	if p == nil {
 		return nil
 	}
@@ -694,6 +720,13 @@ func profileUnavailableConcepts(p *profilepkg.Profile) []string {
 	}
 	if _, ok := p.Objects["account"]; !ok {
 		missing["account"] = struct{}{}
+	}
+	switch normalizeProfileGroupBy(groupBy) {
+	case "", "lifecycle", "scope", "system", "direction", "transcript_status", "duration_bucket", "month", "calendar":
+	default:
+		if _, ok := p.Fields[normalizeProfileGroupBy(groupBy)]; !ok {
+			missing[normalizeProfileGroupBy(groupBy)] = struct{}{}
+		}
 	}
 	out := make([]string, 0, len(missing))
 	for concept := range missing {
@@ -718,8 +751,8 @@ func (s *Store) profileReadiness(ctx context.Context) (sqlite.ProfileReadiness, 
 		return readiness, err
 	}
 	readiness.Active = true
-	readiness.Status = "needs_action"
-	readiness.Detail = "An active business profile is imported, but Postgres profile-derived lifecycle facts are not implemented in this slice."
+	readiness.Status = "ready"
+	readiness.Detail = "An active business profile is imported and Postgres profile-derived lifecycle facts are available when the profile read model cache is fresh."
 	readiness.Name = profile.Name
 	readiness.Version = profile.Version
 	readiness.CanonicalSHA256 = profile.CanonicalSHA256
@@ -729,8 +762,47 @@ func (s *Store) profileReadiness(ctx context.Context) (sqlite.ProfileReadiness, 
 	readiness.MethodologyConceptCount = len(profile.MethodologyConcepts)
 	readiness.WarningCount = len(profile.Warnings)
 	readiness.UnavailableConcepts = profile.UnavailableConcepts
-	readiness.CacheStatus = "not_implemented"
-	readiness.CacheFresh = false
-	readiness.Blocking = []string{"profile-derived lifecycle facts are queued for Postgres Phase 3b; use lifecycle_source=builtin for Postgres until then"}
+	fingerprint, err := s.profileDataFingerprint(ctx)
+	if err != nil {
+		return readiness, err
+	}
+	var canonicalSHA256, dataFingerprint string
+	metaQuery := `
+SELECT canonical_sha256, data_fingerprint
+  FROM profile_call_fact_cache_meta
+ WHERE profile_id = $1`
+	metaArgs := []any{profile.ProfileID}
+	if s.readOnly {
+		metaQuery = `SELECT canonical_sha256, data_fingerprint FROM gongmcp_profile_call_fact_cache_meta($1, $2)`
+		metaArgs = []any{profile.ProfileID, profile.CanonicalSHA256}
+	}
+	if err := s.db.QueryRowContext(ctx, metaQuery, metaArgs...).Scan(&canonicalSHA256, &dataFingerprint); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			readiness.Status = "needs_action"
+			readiness.Detail = "An active business profile is imported, but the Postgres profile read model cache has not been warmed."
+			readiness.CacheStatus = "missing"
+			readiness.CacheFresh = false
+			readiness.Blocking = []string{"run gongctl sync read-model --rebuild with a writable Postgres URL"}
+			return readiness, nil
+		}
+		return readiness, err
+	}
+	readiness.CacheFresh = canonicalSHA256 == profile.CanonicalSHA256 && dataFingerprint == fingerprint
+	if readiness.CacheFresh {
+		readiness.CacheStatus = "fresh"
+		readiness.Blocking = nil
+		if len(readiness.UnavailableConcepts) > 0 || len(profile.Warnings) > 0 {
+			readiness.Status = "partial"
+			readiness.Detail = "An active business profile is available, with warnings or unavailable concepts to review."
+			return readiness, nil
+		}
+		readiness.Status = "ready"
+		readiness.Detail = "An active reviewed business profile and fresh read model are available for profile-aware analysis."
+		return readiness, nil
+	}
+	readiness.Status = "needs_action"
+	readiness.Detail = "An active business profile is imported, but the Postgres profile read model cache is stale."
+	readiness.CacheStatus = "stale"
+	readiness.Blocking = []string{"run gongctl sync read-model --rebuild with a writable Postgres URL"}
 	return readiness, nil
 }

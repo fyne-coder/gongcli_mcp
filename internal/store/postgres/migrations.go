@@ -472,37 +472,190 @@ CREATE TABLE IF NOT EXISTS profile_call_fact_cache_meta (
 	call_count BIGINT NOT NULL DEFAULT 0
 );
 
-CREATE OR REPLACE FUNCTION gongmcp_active_business_profile()
-RETURNS TABLE(profile_json jsonb)
+`,
+	`
+CREATE TABLE IF NOT EXISTS profile_call_fact_cache (
+	profile_id BIGINT NOT NULL,
+	canonical_sha256 TEXT NOT NULL,
+	call_id TEXT NOT NULL,
+	title TEXT NOT NULL DEFAULT '',
+	started_at TEXT NOT NULL DEFAULT '',
+	duration_seconds BIGINT NOT NULL DEFAULT 0,
+	system TEXT NOT NULL DEFAULT '',
+	direction TEXT NOT NULL DEFAULT '',
+	scope TEXT NOT NULL DEFAULT '',
+	purpose TEXT NOT NULL DEFAULT '',
+	calendar_event_present BOOLEAN NOT NULL DEFAULT false,
+	transcript_present BOOLEAN NOT NULL DEFAULT false,
+	lifecycle_bucket TEXT NOT NULL DEFAULT 'unknown',
+	lifecycle_confidence TEXT NOT NULL DEFAULT 'low',
+	lifecycle_reason TEXT NOT NULL DEFAULT '',
+	evidence_fields_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+	deal_count BIGINT NOT NULL DEFAULT 0,
+	account_count BIGINT NOT NULL DEFAULT 0,
+	field_values_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	PRIMARY KEY(profile_id, canonical_sha256, call_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_bucket
+	ON profile_call_fact_cache(profile_id, canonical_sha256, lifecycle_bucket, transcript_present);
+
+CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_started
+	ON profile_call_fact_cache(profile_id, canonical_sha256, started_at DESC);
+
+DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
+RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
-SELECT jsonb_build_object(
-	'profile_id', p.id,
-	'name', p.name,
-	'version', p.version,
-	'source_path', p.source_path,
-	'source_sha256', p.source_sha256,
-	'canonical_sha256', p.canonical_sha256,
-	'imported_at', p.imported_at,
-	'imported_by', p.imported_by,
-	'is_active', p.is_active,
-	'canonical_json', p.canonical_json,
-	'warnings', COALESCE((
-		SELECT jsonb_agg(jsonb_build_object('severity', w.severity, 'code', w.code, 'message', w.message, 'path', w.path)
-			ORDER BY CASE w.severity WHEN 'error' THEN 1 WHEN 'warn' THEN 2 ELSE 3 END, w.path, w.code)
-		  FROM profile_validation_warning w
-		 WHERE w.profile_id = p.id
-	), '[]'::jsonb)
-) AS profile_json
-  FROM profile_meta p
+SELECT m.canonical_sha256, m.data_fingerprint, m.built_at, m.call_count
+  FROM profile_call_fact_cache_meta m
+  JOIN profile_meta p
+    ON p.id = m.profile_id
  WHERE p.is_active = true
- ORDER BY p.id DESC
- LIMIT 1
+   AND m.profile_id = profile_id_arg
+   AND m.canonical_sha256 = canonical_sha_arg
 $function$;
 
-REVOKE ALL ON FUNCTION gongmcp_active_business_profile() FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_meta(bigint, text) FROM PUBLIC;
+
+DROP FUNCTION IF EXISTS gongmcp_profile_data_fingerprint();
+CREATE OR REPLACE FUNCTION gongmcp_profile_data_fingerprint()
+RETURNS TABLE(fingerprint text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT 'calls:' || (SELECT COUNT(*) FROM calls)::text || ':' || COALESCE((SELECT MAX(updated_at) FROM calls), '') ||
+       '|objects:' || (SELECT COUNT(*) FROM call_context_objects)::text || ':' || COALESCE((SELECT md5(COALESCE(string_agg(call_id || E'\x1f' || object_key || E'\x1f' || object_type || E'\x1f' || object_id || E'\x1f' || object_name, E'\x1e' ORDER BY call_id, object_key), '')) FROM call_context_objects), '') ||
+       '|fields:' || (SELECT COUNT(*) FROM call_context_fields)::text || ':' || COALESCE((SELECT md5(COALESCE(string_agg(call_id || E'\x1f' || object_key || E'\x1f' || field_name || E'\x1f' || field_label || E'\x1f' || field_type || E'\x1f' || field_value_text, E'\x1e' ORDER BY call_id, object_key, field_name), '')) FROM call_context_fields), '') ||
+       '|transcripts:' || (SELECT COUNT(*) FROM transcripts)::text || ':' || COALESCE((SELECT MAX(updated_at) FROM transcripts), '') AS fingerprint
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_profile_data_fingerprint() FROM PUBLIC;
+
+DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache(bigint, text);
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache(profile_id_arg bigint, canonical_sha_arg text)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	duration_seconds bigint,
+	system text,
+	direction text,
+	scope text,
+	purpose text,
+	calendar_event_present boolean,
+	transcript_present boolean,
+	lifecycle_bucket text,
+	lifecycle_confidence text,
+	lifecycle_reason text,
+	evidence_fields_json jsonb,
+	deal_count bigint,
+	account_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT c.call_id,
+       c.title,
+       c.started_at,
+       c.duration_seconds,
+       c.system,
+       c.direction,
+       c.scope,
+       c.purpose,
+       c.calendar_event_present,
+       c.transcript_present,
+       c.lifecycle_bucket,
+       c.lifecycle_confidence,
+       c.lifecycle_reason,
+       c.evidence_fields_json,
+       c.deal_count,
+       c.account_count
+  FROM profile_call_fact_cache c
+  JOIN profile_meta p
+    ON p.id = c.profile_id
+ WHERE p.is_active = true
+   AND c.profile_id = profile_id_arg
+   AND c.canonical_sha256 = canonical_sha_arg
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) FROM PUBLIC;
+
+DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer);
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_summary(profile_id_arg bigint, canonical_sha_arg text, group_by_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, row_limit integer)
+RETURNS TABLE(
+	group_by text,
+	group_value text,
+	call_count bigint,
+	transcript_count bigint,
+	missing_transcript_count bigint,
+	opportunity_call_count bigint,
+	account_call_count bigint,
+	external_call_count bigint,
+	internal_call_count bigint,
+	unknown_scope_call_count bigint,
+	total_duration_seconds bigint,
+	avg_duration_seconds double precision,
+	latest_call_at text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH filtered AS (
+	SELECT c.*,
+	       CASE group_by_arg
+		       WHEN 'lifecycle' THEN COALESCE(NULLIF(c.lifecycle_bucket, ''), '<blank>')
+		       WHEN 'scope' THEN COALESCE(NULLIF(c.scope, ''), '<blank>')
+		       WHEN 'system' THEN COALESCE(NULLIF(c.system, ''), '<blank>')
+		       WHEN 'direction' THEN COALESCE(NULLIF(c.direction, ''), '<blank>')
+		       WHEN 'transcript_status' THEN CASE WHEN c.transcript_present THEN 'present' ELSE 'missing' END
+		       WHEN 'duration_bucket' THEN CASE WHEN c.duration_seconds < 60 THEN 'under_1m' WHEN c.duration_seconds < 300 THEN '1_5m' WHEN c.duration_seconds < 900 THEN '5_15m' WHEN c.duration_seconds < 1800 THEN '15_30m' WHEN c.duration_seconds < 2700 THEN '30_45m' ELSE '45m_plus' END
+		       WHEN 'month' THEN COALESCE(NULLIF(left(c.started_at, 7), ''), '<blank>')
+		       WHEN 'calendar' THEN CASE WHEN c.calendar_event_present THEN 'calendar' ELSE 'no_calendar' END
+		       ELSE COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, group_by_arg, '0'), ''), '<blank>')
+	       END AS group_value
+	  FROM profile_call_fact_cache c
+	  JOIN profile_meta p
+	    ON p.id = c.profile_id
+	 WHERE p.is_active = true
+	   AND c.profile_id = profile_id_arg
+	   AND c.canonical_sha256 = canonical_sha_arg
+	   AND (lifecycle_bucket_arg = '' OR c.lifecycle_bucket = lifecycle_bucket_arg)
+	   AND (scope_arg = '' OR c.scope = scope_arg)
+	   AND (system_arg = '' OR c.system = system_arg)
+	   AND (direction_arg = '' OR c.direction = direction_arg)
+	   AND (transcript_status_arg = '' OR (transcript_status_arg = 'present' AND c.transcript_present) OR (transcript_status_arg = 'missing' AND NOT c.transcript_present))
+)
+SELECT group_by_arg AS group_by,
+       group_value,
+       COUNT(*) AS call_count,
+       COALESCE(SUM(CASE WHEN transcript_present THEN 1 ELSE 0 END), 0) AS transcript_count,
+       COALESCE(SUM(CASE WHEN NOT transcript_present THEN 1 ELSE 0 END), 0) AS missing_transcript_count,
+       COALESCE(SUM(CASE WHEN deal_count > 0 THEN 1 ELSE 0 END), 0) AS opportunity_call_count,
+       COALESCE(SUM(CASE WHEN account_count > 0 THEN 1 ELSE 0 END), 0) AS account_call_count,
+       COALESCE(SUM(CASE WHEN scope = 'External' THEN 1 ELSE 0 END), 0) AS external_call_count,
+       COALESCE(SUM(CASE WHEN scope = 'Internal' THEN 1 ELSE 0 END), 0) AS internal_call_count,
+       COALESCE(SUM(CASE WHEN scope NOT IN ('External', 'Internal') THEN 1 ELSE 0 END), 0) AS unknown_scope_call_count,
+       COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds,
+       COALESCE(AVG(duration_seconds), 0) AS avg_duration_seconds,
+       COALESCE(MAX(started_at), '') AS latest_call_at
+  FROM filtered
+ GROUP BY group_value
+ ORDER BY call_count DESC, group_value
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+
 `,
 }

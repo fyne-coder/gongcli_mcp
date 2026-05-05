@@ -60,7 +60,7 @@ reviewed profile is imported.
    gongctl profile show --db ~/gongctl-data/gong.db
    ```
 
-6. Use profile-aware CLI or MCP analysis. `auto` uses the active profile when present and falls back to builtin compatibility behavior otherwise.
+6. Use profile-aware CLI or MCP analysis. `auto` uses the active profile when present and falls back to builtin compatibility behavior otherwise. For Postgres read-only MCP/CLI users, an active profile also requires a fresh profile fact cache; stale or missing cache state fails closed until a writable operator runs `gongctl sync read-model --rebuild` or a writable profile import/activate refreshes it.
 
    ```bash
    gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle --lifecycle-source auto

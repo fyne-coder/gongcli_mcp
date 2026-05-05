@@ -415,6 +415,9 @@ func (s *Store) RebuildReadModel(ctx context.Context) (*ReadModelStatus, error) 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	if err := s.RefreshActiveProfileReadModel(ctx); err != nil {
+		return nil, err
+	}
 	return s.ReadModelStatus(ctx)
 }
 

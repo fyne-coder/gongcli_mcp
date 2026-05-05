@@ -39,8 +39,8 @@ Postgres parity should be added deliberately, with each surface classified as
 | `governance-search` MCP preset | SQLite governed search | queued | Governed Postgres search or explicit unsupported state | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst` MCP preset | SQLite analyst/cohort tools | rejected in Postgres | Enable only after backing queries and governance are ready | must match before enablement | Phase 5 | preset parity tests |
 | `all-readonly` MCP preset | SQLite full read-only catalog | rejected in Postgres | Enable only after full read-only query parity | must match before enablement | Phase 5 | catalog parity tests |
-| Profile import/show | SQLite profile tables/cache | complete for metadata/import/show/readiness; profile fact cache queued | Postgres profile metadata, active-state storage, business-profile MCP reads, and sync-status readiness | must match for metadata; cache queued | Phase 3 | `TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata` |
-| Profile lifecycle source | `lifecycle_source=auto|profile|builtin` with `profile_call_fact_cache` | fails closed for `profile`; `auto` remains builtin-safe | Profile cache parity and stale-cache read-only semantics | must match | Phase 3b | profile lifecycle cache parity tests |
+| Profile import/show | SQLite profile tables/cache | complete for metadata/import/show/readiness and profile fact-cache freshness | Postgres profile metadata, active-state storage, business-profile MCP reads, and sync-status readiness | must match for metadata; cache freshness complete for first profile slice | Phase 3/3b | `TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata` |
+| Profile lifecycle source | `lifecycle_source=auto|profile|builtin` with `profile_call_fact_cache` | complete for first business-pilot slice when active profile cache is fresh | `profile` requires an active fresh profile cache; `auto` falls back to builtin only when no profile exists and otherwise fails closed on missing/stale read-only cache | must match | Phase 3b | profile lifecycle cache parity tests; `scripts/postgres-smoke.sh` |
 | Business-analysis calls/evidence | SQLite `business_analysis.go` helpers | queued | Equivalent read APIs over normalized context/facts/transcripts | must match | Phase 5 | business-analysis parity fixtures |
 | CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | queued for Postgres | Same cached metadata read surfaces | must match | Phase 5 | inventory/query tests |
 | Scorecard activity | SQLite `scorecard_activity` | queued for Postgres | Same aggregate/read-only scorecard activity surfaces | must match | Phase 5 | scorecard activity parity tests |
@@ -60,8 +60,8 @@ Postgres parity should be added deliberately, with each surface classified as
    context/readiness risks first, then continue call/search/transcript/lifecycle
    output comparisons.
 3. **Phase 3 profile metadata parity**: profile storage, import/show,
-   active-state, MCP profile reads, and explicit fail-closed profile lifecycle
-   cache status.
+   active-state, MCP profile reads, and explicit profile lifecycle cache
+   status.
 4. **Phase 3b profile lifecycle cache parity**: profile-derived call-fact cache
    warming/freshness and `lifecycle_source=profile`.
 5. **Phase 4 governance parity**: governed Postgres read surfaces and audit.
@@ -72,6 +72,28 @@ Postgres parity should be added deliberately, with each surface classified as
 8. **Phase 7 release hardening**: CI service tests, backup/restore, migration
    rollback, docs, and versioned release artifacts.
 
+## Phase 3b Risk Status
+
+- Closed for first profile lifecycle slice: Postgres now has
+  `profile_call_fact_cache` plus active-profile/canonical-hash/data-fingerprint
+  freshness checks. Writable `profile import`, `profile activate`, and
+  `gongctl sync read-model --rebuild` warm the cache.
+- Closed for supported business-pilot surfaces: `lifecycle_source=profile`
+  works for lifecycle bucket definitions, lifecycle summary, lifecycle call
+  search, transcript backlog ranking, call-fact summary, and coverage when the
+  cache is fresh.
+- Closed for read-only stale semantics: read-only Postgres/MCP never rebuilds
+  profile facts. Missing or stale active-profile cache fails closed with an
+  operator repair message.
+- Closed for direct reader table boundary: `gongmcp_reader` cannot read raw
+  profile YAML, canonical profile JSON columns, profile projection tables, or
+  the physical profile fact-cache table. Profile field grouping uses an
+  aggregate-only security-definer function; the per-call reader helper does not
+  return mapped CRM `field_values_json`.
+- Still queued: SQL-pushed profile search/backlog optimization for large
+  tenants, profile cache logic-version invalidation, governance-aware profile
+  filtering, and broader analyst/all-readonly profile surfaces.
+
 ## Phase 3 Risk Status
 
 - Closed for metadata: Postgres now stores imported business profiles in
@@ -81,15 +103,12 @@ Postgres parity should be added deliberately, with each surface classified as
   execute-only reader helper function without granting direct reads on raw YAML,
   canonical JSON, or profile projection tables.
 - Closed for operator visibility: Postgres `sync status` reports active profile
-  readiness and marks profile lifecycle cache as `not_implemented` /
-  `needs_action` instead of implying profile-aware analysis is ready.
-- Intentionally fail-closed: Postgres `lifecycle_source=profile` still returns
-  an explicit unsupported error. `auto` and omitted lifecycle source continue to
-  use builtin facts until Phase 3b implements and tests a profile fact cache.
-- Still queued: profile-derived lifecycle fact cache, read-only stale-cache
-  denial for that cache, profile-aware business-pilot parity, admin UX for
-  profile MCP exposure, large-cache profile inventory optimization, and larger
-  governance/analyst profile interactions.
+  readiness and profile cache status (`fresh`, `missing`, or `stale`).
+- Closed by Phase 3b: Postgres `lifecycle_source=profile` is enabled for the
+  first business-pilot profile slice. `auto` uses the active profile when the
+  profile cache is fresh; with no active profile it uses builtin facts.
+- Still queued: admin UX for profile MCP exposure, large-cache profile
+  inventory optimization, and larger governance/analyst profile interactions.
 
 ## Phase 2 Risk Status
 

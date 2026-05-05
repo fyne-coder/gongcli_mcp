@@ -11,8 +11,8 @@ read-only MCP `business-pilot` preset: `get_sync_status`,
 `rank_transcript_backlog`. Operator smoke deployments can also explicitly
 allow `get_sync_status`, `search_calls`, `search_transcript_segments`,
 `get_call`, and `rank_transcript_backlog`. Postgres also supports profile
-metadata import/show/readiness and MCP profile reads; profile-derived lifecycle
-facts are still fail-closed until the profile cache parity slice.
+metadata import/show/readiness, MCP profile reads, and profile-derived
+lifecycle facts when an active profile has a fresh profile fact cache.
 
 ## Positioning
 
@@ -429,7 +429,7 @@ Rules:
 - `analyze calls` groups the normalized `call_facts` view by safe dimensions such as `lifecycle`, `opportunity_stage`, `account_industry`, `scope`, `system`, `direction`, `transcript_status`, `duration_bucket`, `month`, `lead_source`, and `forecast_category`.
 - `analyze coverage` includes lifecycle, scope, system, and direction summaries so transcript coverage gaps can be understood by conversation type.
 - `analyze transcript-backlog` prioritizes External and Conference-style customer conversations ahead of short dialer-style events by default.
-- With an active SQLite profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model. In Postgres, omitted or `auto` lifecycle source remains builtin-safe and explicit `profile` fails closed until profile fact cache parity lands.
+- With an active profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model. In Postgres, `auto` falls back to builtin only when no active profile exists; when a profile is active, read-only Postgres requires a fresh profile fact cache and fails closed until a writable `gongctl sync read-model --rebuild`, `profile import`, or `profile activate` warms it.
 
 For non-client-specific business prompt examples, see [docs/public-readiness.md](docs/public-readiness.md). Public examples should avoid tenant field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs.
 

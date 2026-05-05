@@ -66,14 +66,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+cleanup
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" up -d postgres
 
-for _ in $(seq 1 60); do
-  if docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres pg_isready -U gongctl -d gongctl >/dev/null 2>&1; then
+for _ in $(seq 1 90); do
+  if docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tAc "SELECT 1" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -tAc "SELECT 1" >/dev/null
 
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync synthetic >/tmp/gongctl-postgres-sync.json
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model >/tmp/gongctl-postgres-read-model-state.json
@@ -81,6 +83,10 @@ grep -q '"status": "current"' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"call_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"fact_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"ready": true' /tmp/gongctl-postgres-read-model-state.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DELETE FROM calls WHERE call_id = 'synthetic-profile-call-001'; INSERT INTO calls(call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('synthetic-profile-call-001', 'Profile lifecycle proposal review', '2026-02-14T15:00:00Z', 1800, 2, true, '{\"id\":\"synthetic-profile-call-001\",\"title\":\"Profile lifecycle proposal review\",\"started\":\"2026-02-14T15:00:00Z\",\"duration\":1800,\"metaData\":{\"scope\":\"External\",\"system\":\"Zoom\",\"direction\":\"Conference\"},\"context\":{\"crmObjects\":[{\"type\":\"Opportunity\",\"id\":\"opp-profile-001\",\"name\":\"Profile Opportunity\",\"fields\":{\"StageName\":\"Proposal\",\"Type\":\"New Business\"}},{\"type\":\"Account\",\"id\":\"acct-profile-001\",\"name\":\"Profile Account\",\"fields\":{\"Account_Type__c\":\"Prospect\",\"Industry\":\"Manufacturing\"}}]}}'::jsonb, 'synthetic-profile-sha', now()::text, now()::text)" >/dev/null
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-profile-fixture-read-model.json
+grep -q '"call_count": 3' /tmp/gongctl-postgres-profile-fixture-read-model.json
+grep -q '"fact_count": 3' /tmp/gongctl-postgres-profile-fixture-read-model.json
 cat >/tmp/gongctl-postgres-profile.yaml <<'YAML'
 version: 1
 name: Synthetic Postgres profile
@@ -89,9 +95,20 @@ objects:
     object_types: [Opportunity]
   account:
     object_types: [Account]
+fields:
+  deal_stage:
+    object: deal
+    names: [StageName]
+  account_type:
+    object: account
+    names: [Account_Type__c]
 lifecycle:
   open:
     order: 10
+    rules:
+      - field: deal_stage
+        op: equals
+        value: Proposal
   closed_won:
     order: 20
   closed_lost:
@@ -114,7 +131,7 @@ grep -q '"name": "Synthetic Postgres profile"' /tmp/gongctl-postgres-profile-his
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl profile show >/tmp/gongctl-postgres-profile-show.json
 grep -q '"name": "Synthetic Postgres profile"' /tmp/gongctl-postgres-profile-show.json
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl sync status >/tmp/gongctl-postgres-status-with-profile.json
-grep -q '"cache_status": "not_implemented"' /tmp/gongctl-postgres-status-with-profile.json
+grep -q '"cache_status": "fresh"' /tmp/gongctl-postgres-status-with-profile.json
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl calls show --call-id synthetic-call-001 --json >/tmp/gongctl-postgres-calls-show.json
 grep -q '"call_id": "synthetic-call-001"' /tmp/gongctl-postgres-calls-show.json
 grep -q '"title": "Pulsaris implementation kickoff"' /tmp/gongctl-postgres-calls-show.json
@@ -124,12 +141,14 @@ if grep -q 'raw_json\|crmObjects\|speaker-1' /tmp/gongctl-postgres-calls-show.js
 fi
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT 'call_context_objects', COUNT(*) FROM call_context_objects UNION ALL SELECT 'call_context_fields', COUNT(*) FROM call_context_fields UNION ALL SELECT 'call_facts', COUNT(*) FROM call_facts ORDER BY 1" >/tmp/gongctl-postgres-normalized-counts.txt
-grep -q 'call_facts|2' /tmp/gongctl-postgres-normalized-counts.txt
+grep -q 'call_facts|3' /tmp/gongctl-postgres-normalized-counts.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT call_id, transcript_present, transcript_status, lifecycle_bucket FROM call_facts ORDER BY call_id" >/tmp/gongctl-postgres-call-facts.txt
 grep -q 'synthetic-call-001|t|present|' /tmp/gongctl-postgres-call-facts.txt
+grep -q 'synthetic-profile-call-001|f|missing|' /tmp/gongctl-postgres-call-facts.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT call_id, object_count, field_count, object_limit_exceeded, field_limit_exceeded, last_error FROM call_read_model_diagnostics ORDER BY call_id" >/tmp/gongctl-postgres-read-model-diagnostics.txt
 grep -q 'synthetic-call-001|0|0|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
 grep -q 'synthetic-call-002|0|0|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
+grep -q 'synthetic-profile-call-001|2|4|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "DELETE FROM call_facts WHERE call_id = 'synthetic-call-002'" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "INSERT INTO call_facts(call_id, title, updated_at) VALUES('synthetic-orphan-fact', 'orphan fact', now()::text)" >/dev/null
@@ -189,6 +208,10 @@ if reader_psql -c "SELECT canonical_json FROM profile_meta LIMIT 1" >>/tmp/gongc
   echo "reader role unexpectedly read canonical profile JSON" >&2
   exit 1
 fi
+if reader_psql -tA -c "SELECT profile_json ? 'canonical_json' FROM gongmcp_active_business_profile()" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1 && tail -n 1 /tmp/gongctl-postgres-reader-sensitive-read.txt | grep -q '^t$'; then
+  echo "reader role unexpectedly read canonical profile JSON from active-profile function" >&2
+  exit 1
+fi
 if reader_psql -c "SELECT * FROM profile_object_alias LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
   echo "reader role unexpectedly read profile object projection table" >&2
   exit 1
@@ -199,6 +222,18 @@ if reader_psql -c "SELECT * FROM profile_lifecycle_rule LIMIT 1" >>/tmp/gongctl-
 fi
 if reader_psql -c "SELECT * FROM profile_validation_warning LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
   echo "reader role unexpectedly read profile warning table" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT * FROM profile_call_fact_cache LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read profile fact-cache table" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_values_json FROM gongmcp_profile_call_fact_cache(1, 'not-a-real-sha') LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read profile field values through cache helper" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_values_json FROM gongmcp_profile_call_fact_cache((SELECT id FROM profile_meta WHERE is_active = true LIMIT 1), (SELECT canonical_sha256 FROM profile_meta WHERE is_active = true LIMIT 1)) LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read mapped CRM values from profile fact-cache function" >&2
   exit 1
 fi
 
@@ -235,6 +270,9 @@ fi
   printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"transcript_status","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"deal_stage","lifecycle_source":"profile","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{"lifecycle_source":"profile"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"lifecycle_source":"profile","limit":5}}}'
 } | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp > /tmp/gongctl-postgres-business-pilot.jsonl
 
 grep -q '"get_sync_status"' /tmp/gongctl-postgres-business-pilot.jsonl
@@ -242,7 +280,20 @@ grep -q '"summarize_call_facts"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q '"rank_transcript_backlog"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q 'transcript_status' /tmp/gongctl-postgres-business-pilot.jsonl
-assert_mcp_success /tmp/gongctl-postgres-business-pilot.jsonl 6 7 8 9
+grep -q 'deal_stage' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q 'Proposal' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q 'lifecycle_source' /tmp/gongctl-postgres-business-pilot.jsonl
+grep -q 'profile' /tmp/gongctl-postgres-business-pilot.jsonl
+assert_mcp_success /tmp/gongctl-postgres-business-pilot.jsonl 6 7 8 9 10 11 12
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "UPDATE calls SET updated_at = '2099-01-01T00:00:00Z' WHERE call_id = 'synthetic-profile-call-001'" >/dev/null
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"deal_stage","lifecycle_source":"profile","limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp > /tmp/gongctl-postgres-profile-stale-reader.jsonl
+grep -q 'profile read model is missing or stale' /tmp/gongctl-postgres-profile-stale-reader.jsonl
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-profile-cache-rewarm.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-profile-cache-rewarm.json
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -259,6 +310,15 @@ if grep -q 'raw_yaml\|canonical_json' /tmp/gongctl-postgres-profile-mcp.jsonl; t
   echo "profile MCP smoke exposed raw profile storage fields" >&2
   exit 1
 fi
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT ON profile_call_fact_cache TO gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-select-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started with direct SELECT on profile cache table" >&2
+  exit 1
+fi
+grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-select-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-select-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-select-drift-repaired.json
 
 GONGCTL_TEST_POSTGRES_URL="$WRITER_URL" go test -count=1 ./internal/store/postgres
 
@@ -284,3 +344,8 @@ echo "profile history output: /tmp/gongctl-postgres-profile-history.json"
 echo "profile show output: /tmp/gongctl-postgres-profile-show.json"
 echo "profile status output: /tmp/gongctl-postgres-status-with-profile.json"
 echo "profile mcp output: /tmp/gongctl-postgres-profile-mcp.jsonl"
+echo "profile fixture read model output: /tmp/gongctl-postgres-profile-fixture-read-model.json"
+echo "profile stale reader output: /tmp/gongctl-postgres-profile-stale-reader.jsonl"
+echo "profile cache rewarm output: /tmp/gongctl-postgres-profile-cache-rewarm.json"
+echo "reader select-drift denial output: /tmp/gongctl-postgres-reader-select-drift.txt"
+echo "reader select-drift repair output: /tmp/gongctl-postgres-reader-select-drift-repaired.json"

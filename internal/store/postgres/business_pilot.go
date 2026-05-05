@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,12 +23,31 @@ func (s *Store) ListLifecycleBucketDefinitions(ctx context.Context) ([]sqlite.Li
 }
 
 func (s *Store) ListLifecycleBucketDefinitionsWithSource(ctx context.Context, requested string) ([]sqlite.LifecycleBucketDefinition, *sqlite.ProfileQueryInfo, error) {
-	info, err := postgresBuiltinLifecycleInfo(requested)
+	source, businessProfile, err := s.ResolveLifecycleSource(ctx, requested)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.ListLifecycleBucketDefinitions(ctx)
-	return rows, info, err
+	info := &sqlite.ProfileQueryInfo{LifecycleSource: source, Profile: businessProfile}
+	if source == sqlite.LifecycleSourceBuiltin {
+		rows, err := s.ListLifecycleBucketDefinitions(ctx)
+		return rows, info, err
+	}
+	_, p, err := s.profileFactsReady(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	info.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	out := make([]sqlite.LifecycleBucketDefinition, 0, len(p.Lifecycle))
+	for _, bucket := range orderedLifecycleBuckets(p) {
+		definition := p.Lifecycle[bucket]
+		out = append(out, sqlite.LifecycleBucketDefinition{
+			Bucket:         bucket,
+			Label:          definition.Label,
+			Description:    definition.Description,
+			PrimarySignals: lifecycleRuleSignals(definition.Rules),
+		})
+	}
+	return out, info, nil
 }
 
 func (s *Store) SummarizeCallsByLifecycle(ctx context.Context, params sqlite.LifecycleSummaryParams) ([]sqlite.LifecycleBucketSummary, error) {
@@ -76,12 +96,69 @@ SELECT lifecycle_bucket,
 }
 
 func (s *Store) SummarizeCallsByLifecycleWithSource(ctx context.Context, params sqlite.LifecycleSummaryParams) ([]sqlite.LifecycleBucketSummary, *sqlite.ProfileQueryInfo, error) {
-	info, err := postgresBuiltinLifecycleInfo(params.LifecycleSource)
+	source, businessProfile, err := s.ResolveLifecycleSource(ctx, params.LifecycleSource)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.SummarizeCallsByLifecycle(ctx, sqlite.LifecycleSummaryParams{Bucket: params.Bucket, LifecycleSource: "builtin"})
-	return rows, info, err
+	info := &sqlite.ProfileQueryInfo{LifecycleSource: source, Profile: businessProfile}
+	if source == sqlite.LifecycleSourceBuiltin {
+		rows, err := s.SummarizeCallsByLifecycle(ctx, sqlite.LifecycleSummaryParams{Bucket: params.Bucket, LifecycleSource: sqlite.LifecycleSourceBuiltin})
+		return rows, info, err
+	}
+	facts, p, err := s.profileCallFacts(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	info.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	bucketFilter := strings.TrimSpace(params.Bucket)
+	groups := map[string]*sqlite.LifecycleBucketSummary{}
+	for _, fact := range facts {
+		if bucketFilter != "" && fact.LifecycleBucket != bucketFilter {
+			continue
+		}
+		row := groups[fact.LifecycleBucket]
+		if row == nil {
+			row = &sqlite.LifecycleBucketSummary{Bucket: fact.LifecycleBucket}
+			groups[fact.LifecycleBucket] = row
+		}
+		row.CallCount++
+		if fact.TranscriptPresent {
+			row.TranscriptCount++
+		} else {
+			row.MissingTranscriptCount++
+		}
+		if fact.DealCount > 0 {
+			row.OpportunityCallCount++
+		}
+		if fact.AccountCount > 0 {
+			row.AccountCallCount++
+		}
+		row.TotalDurationSeconds += fact.DurationSeconds
+		if fact.StartedAt > row.LatestCallAt {
+			row.LatestCallAt = fact.StartedAt
+			row.LatestCallID = fact.CallID
+		}
+		switch fact.LifecycleConfidence {
+		case "high":
+			row.HighConfidenceCalls++
+		case "medium":
+			row.MediumConfidenceCalls++
+		default:
+			row.LowConfidenceCalls++
+		}
+	}
+	out := make([]sqlite.LifecycleBucketSummary, 0, len(groups))
+	for _, row := range groups {
+		out = append(out, *row)
+	}
+	order := lifecycleOrderMap(p)
+	sort.Slice(out, func(i, j int) bool {
+		if order[out[i].Bucket] != order[out[j].Bucket] {
+			return order[out[i].Bucket] < order[out[j].Bucket]
+		}
+		return out[i].CallCount > out[j].CallCount
+	})
+	return out, info, nil
 }
 
 func (s *Store) SearchCallsByLifecycle(ctx context.Context, params sqlite.LifecycleCallSearchParams) ([]sqlite.LifecycleCallSearchResult, error) {
@@ -130,12 +207,36 @@ SELECT call_id, title, started_at, duration_seconds, lifecycle_bucket, lifecycle
 }
 
 func (s *Store) SearchCallsByLifecycleWithSource(ctx context.Context, params sqlite.LifecycleCallSearchParams) ([]sqlite.LifecycleCallSearchResult, *sqlite.ProfileQueryInfo, error) {
-	info, err := postgresBuiltinLifecycleInfo(params.LifecycleSource)
+	source, businessProfile, err := s.ResolveLifecycleSource(ctx, params.LifecycleSource)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.SearchCallsByLifecycle(ctx, params)
-	return rows, info, err
+	info := &sqlite.ProfileQueryInfo{LifecycleSource: source, Profile: businessProfile}
+	if source == sqlite.LifecycleSourceBuiltin {
+		rows, err := s.SearchCallsByLifecycle(ctx, params)
+		return rows, info, err
+	}
+	facts, p, err := s.profileCallFacts(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	info.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	limit := boundedLimit(params.Limit, defaultLifecycleLimit, maxLifecycleLimit)
+	bucket := strings.TrimSpace(params.Bucket)
+	out := make([]sqlite.LifecycleCallSearchResult, 0)
+	for _, fact := range facts {
+		if bucket != "" && fact.LifecycleBucket != bucket {
+			continue
+		}
+		if params.MissingTranscriptsOnly && fact.TranscriptPresent {
+			continue
+		}
+		out = append(out, lifecycleSearchResultFromProfileFact(fact))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, info, nil
 }
 
 func (s *Store) PrioritizeTranscriptsByLifecycle(ctx context.Context, params sqlite.LifecycleTranscriptPriorityParams) ([]sqlite.LifecycleTranscriptPriority, error) {
@@ -237,12 +338,104 @@ SELECT call_id,
 }
 
 func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, params sqlite.LifecycleTranscriptPriorityParams) ([]sqlite.LifecycleTranscriptPriority, *sqlite.ProfileQueryInfo, error) {
-	info, err := postgresBuiltinLifecycleInfo(params.LifecycleSource)
+	source, businessProfile, err := s.ResolveLifecycleSource(ctx, params.LifecycleSource)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.PrioritizeTranscriptsByLifecycle(ctx, params)
-	return rows, info, err
+	info := &sqlite.ProfileQueryInfo{LifecycleSource: source, Profile: businessProfile}
+	if source == sqlite.LifecycleSourceBuiltin {
+		rows, err := s.PrioritizeTranscriptsByLifecycle(ctx, params)
+		return rows, info, err
+	}
+	facts, p, err := s.profileCallFacts(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	info.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	limit := boundedLimit(params.Limit, defaultLifecycleLimit, maxLifecycleLimit)
+	bucket := strings.TrimSpace(params.Bucket)
+	var fromDate, toDate string
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "from_date")
+		if err != nil {
+			return nil, nil, err
+		}
+		fromDate = date
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "to_date")
+		if err != nil {
+			return nil, nil, err
+		}
+		toDate = date
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, nil, errors.New("from_date must be on or before to_date")
+	}
+	scope := strings.TrimSpace(params.Scope)
+	if scope != "" {
+		normalized, ok := normalizePostgresScope(scope)
+		if !ok {
+			return nil, nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		scope = normalized
+	}
+	order := lifecycleOrderMap(p)
+	out := make([]sqlite.LifecycleTranscriptPriority, 0)
+	for _, fact := range facts {
+		if fact.TranscriptPresent {
+			continue
+		}
+		if bucket != "" && fact.LifecycleBucket != bucket {
+			continue
+		}
+		callDate := ""
+		if len(fact.StartedAt) >= 10 {
+			callDate = fact.StartedAt[:10]
+		}
+		if fromDate != "" && callDate < fromDate {
+			continue
+		}
+		if toDate != "" && callDate > toDate {
+			continue
+		}
+		if scope != "" && fact.Scope != scope {
+			continue
+		}
+		if strings.TrimSpace(params.System) != "" && fact.System != strings.TrimSpace(params.System) {
+			continue
+		}
+		if strings.TrimSpace(params.Direction) != "" && fact.Direction != strings.TrimSpace(params.Direction) {
+			continue
+		}
+		out = append(out, sqlite.LifecycleTranscriptPriority{
+			CallID:          fact.CallID,
+			Title:           fact.Title,
+			StartedAt:       fact.StartedAt,
+			DurationSeconds: fact.DurationSeconds,
+			System:          fact.System,
+			Direction:       fact.Direction,
+			Scope:           fact.Scope,
+			Bucket:          fact.LifecycleBucket,
+			Confidence:      fact.LifecycleConfidence,
+			Reason:          fact.LifecycleReason,
+			EvidenceFields:  fact.EvidenceFields,
+			PriorityScore:   profilePriorityScore(fact, order),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PriorityScore != out[j].PriorityScore {
+			return out[i].PriorityScore > out[j].PriorityScore
+		}
+		if out[i].StartedAt != out[j].StartedAt {
+			return out[i].StartedAt > out[j].StartedAt
+		}
+		return out[i].CallID < out[j].CallID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, info, nil
 }
 
 func (s *Store) SummarizeCallFacts(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, error) {
@@ -299,11 +492,17 @@ SELECT '`+groupBy+`' AS group_by,
 }
 
 func (s *Store) SummarizeCallFactsWithSource(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, *sqlite.ProfileQueryInfo, error) {
-	info, err := postgresBuiltinLifecycleInfo(params.LifecycleSource)
+	source, businessProfile, err := s.ResolveLifecycleSource(ctx, params.LifecycleSource)
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err := s.SummarizeCallFacts(ctx, params)
+	info := &sqlite.ProfileQueryInfo{LifecycleSource: source, Profile: businessProfile}
+	if source == sqlite.LifecycleSourceBuiltin {
+		rows, err := s.SummarizeCallFacts(ctx, params)
+		return rows, info, err
+	}
+	rows, unavailable, err := s.summarizeProfileCallFacts(ctx, params)
+	info.UnavailableConcepts = unavailable
 	return rows, info, err
 }
 
@@ -333,16 +532,27 @@ SELECT COUNT(*) AS total_calls,
 }
 
 func (s *Store) CallFactsCoverageWithSource(ctx context.Context, sourceArg string) (*sqlite.CallFactsCoverage, []sqlite.CallFactsSummaryRow, *sqlite.ProfileQueryInfo, error) {
-	info, err := postgresBuiltinLifecycleInfo(sourceArg)
+	source, businessProfile, err := s.ResolveLifecycleSource(ctx, sourceArg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	coverage, err := s.CallFactsCoverage(ctx)
+	info := &sqlite.ProfileQueryInfo{LifecycleSource: source, Profile: businessProfile}
+	if source == sqlite.LifecycleSourceBuiltin {
+		coverage, err := s.CallFactsCoverage(ctx)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		rows, err := s.SummarizeCallFacts(ctx, sqlite.CallFactsSummaryParams{GroupBy: "lifecycle", LifecycleSource: sqlite.LifecycleSourceBuiltin, Limit: 50})
+		return coverage, rows, info, err
+	}
+	facts, p, err := s.profileCallFacts(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	rows, err := s.SummarizeCallFacts(ctx, sqlite.CallFactsSummaryParams{GroupBy: "lifecycle", LifecycleSource: "builtin", Limit: 50})
-	return coverage, rows, info, err
+	info.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	coverage := coverageFromProfileFacts(facts)
+	rows := summarizeProfileFactsRows(facts, "lifecycle", "", "", "", "", "", 50)
+	return coverage, rows, info, nil
 }
 
 func postgresCallFactsSQL() string {
@@ -605,17 +815,6 @@ SELECT c.call_id,
        c.opportunity_forecast_category,
        CASE WHEN c.duration_seconds < 60 THEN 'under_1m' WHEN c.duration_seconds < 300 THEN '1_5m' WHEN c.duration_seconds < 900 THEN '5_15m' WHEN c.duration_seconds < 1800 THEN '15_30m' WHEN c.duration_seconds < 2700 THEN '30_45m' ELSE '45m_plus' END AS duration_bucket
   FROM signals c`
-}
-
-func postgresBuiltinLifecycleInfo(requested string) (*sqlite.ProfileQueryInfo, error) {
-	switch strings.ToLower(strings.TrimSpace(requested)) {
-	case "", "auto", "builtin":
-		return &sqlite.ProfileQueryInfo{LifecycleSource: "builtin"}, nil
-	case "profile":
-		return nil, errors.New("postgres profile lifecycle source is not implemented in this slice")
-	default:
-		return nil, fmt.Errorf("lifecycle_source must be one of: auto, builtin, profile")
-	}
 }
 
 func postgresCallFactGroupColumn(groupBy string) (string, string, error) {

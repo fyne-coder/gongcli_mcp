@@ -428,11 +428,65 @@ methodology:
 	if err != nil {
 		t.Fatalf("postgres SyncStatusSummary returned error: %v", err)
 	}
-	if !summary.ProfileReadiness.Active || summary.ProfileReadiness.CacheStatus != "not_implemented" || summary.ProfileReadiness.Status != "needs_action" {
+	if !summary.ProfileReadiness.Active || summary.ProfileReadiness.CacheStatus != "fresh" || summary.ProfileReadiness.Status != "partial" {
 		t.Fatalf("unexpected postgres profile readiness: %+v", summary.ProfileReadiness)
 	}
-	if _, _, err := pgStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{LifecycleSource: sqlite.LifecycleSourceProfile}); err == nil || !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("profile lifecycle source error=%v, want fail-closed not implemented", err)
+	if rows, info, err := pgStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{LifecycleSource: sqlite.LifecycleSourceProfile}); err != nil || info == nil || info.LifecycleSource != sqlite.LifecycleSourceProfile || len(rows) == 0 {
+		t.Fatalf("profile lifecycle source rows=%+v info=%+v err=%v, want profile-backed result", rows, info, err)
+	}
+	pgRows, pgInfo, err := pgStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{GroupBy: "deal_stage", LifecycleSource: sqlite.LifecycleSourceProfile, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres profile deal_stage summary returned error: %v", err)
+	}
+	sqliteRows, sqliteInfo, err := sqliteStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{GroupBy: "deal_stage", LifecycleSource: sqlite.LifecycleSourceProfile, Limit: 10})
+	if err != nil {
+		t.Fatalf("sqlite profile deal_stage summary returned error: %v", err)
+	}
+	if pgInfo.LifecycleSource != sqlite.LifecycleSourceProfile || sqliteInfo.LifecycleSource != sqlite.LifecycleSourceProfile || len(pgRows) != len(sqliteRows) {
+		t.Fatalf("profile source/row count mismatch: postgres rows=%+v info=%+v sqlite rows=%+v info=%+v", pgRows, pgInfo, sqliteRows, sqliteInfo)
+	}
+	if !reflect.DeepEqual(pgRows, sqliteRows) {
+		t.Fatalf("postgres profile deal_stage rows=%+v want sqlite %+v", pgRows, sqliteRows)
+	}
+	readOnlyView := &Store{db: pgStore.DB(), readOnly: true}
+	readOnlyRows, readOnlyInfo, err := readOnlyView.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{GroupBy: "deal_stage", LifecycleSource: sqlite.LifecycleSourceProfile, Limit: 10})
+	if err != nil {
+		t.Fatalf("read-only postgres profile deal_stage summary returned error: %v", err)
+	}
+	if readOnlyInfo.LifecycleSource != sqlite.LifecycleSourceProfile || !reflect.DeepEqual(readOnlyRows, sqliteRows) {
+		t.Fatalf("read-only postgres profile rows=%+v info=%+v want sqlite rows %+v", readOnlyRows, readOnlyInfo, sqliteRows)
+	}
+	pgOpen, pgOpenInfo, err := pgStore.SearchCallsByLifecycleWithSource(ctx, sqlite.LifecycleCallSearchParams{Bucket: "open", LifecycleSource: sqlite.LifecycleSourceAuto, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres auto profile lifecycle search returned error: %v", err)
+	}
+	if pgOpenInfo.LifecycleSource != sqlite.LifecycleSourceProfile || len(pgOpen) == 0 {
+		t.Fatalf("postgres auto profile lifecycle rows=%+v info=%+v, want profile-backed rows", pgOpen, pgOpenInfo)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `UPDATE profile_call_fact_cache SET lifecycle_bucket = 'unknown', lifecycle_confidence = 'low' WHERE call_id = $1`, pgOpen[0].CallID); err != nil {
+		t.Fatalf("corrupt profile cache row: %v", err)
+	}
+	if _, err := pgStore.RebuildReadModel(ctx); err != nil {
+		t.Fatalf("RebuildReadModel after profile cache corruption returned error: %v", err)
+	}
+	pgOpenAfterRebuild, _, err := pgStore.SearchCallsByLifecycleWithSource(ctx, sqlite.LifecycleCallSearchParams{Bucket: "open", LifecycleSource: sqlite.LifecycleSourceProfile, Limit: 10})
+	if err != nil {
+		t.Fatalf("profile lifecycle search after read-model rebuild returned error: %v", err)
+	}
+	if len(pgOpenAfterRebuild) == 0 || pgOpenAfterRebuild[0].CallID != pgOpen[0].CallID {
+		t.Fatalf("profile cache was not force-rebuilt: before=%+v after=%+v", pgOpen, pgOpenAfterRebuild)
+	}
+	if _, _, err := pgStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{LifecycleSource: sqlite.LifecycleSourceProfile, Scope: "bad-scope"}); err == nil || !strings.Contains(err.Error(), "scope must be one of") {
+		t.Fatalf("bad profile scope error=%v, want validation error", err)
+	}
+	if _, _, err := pgStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{LifecycleSource: sqlite.LifecycleSourceProfile, TranscriptStatus: "all"}); err == nil || !strings.Contains(err.Error(), "transcript_status must be one of") {
+		t.Fatalf("bad profile transcript_status error=%v, want validation error", err)
+	}
+	if _, err := pgStore.UpsertCall(ctx, json.RawMessage(`{"id":"pg-profile-stale-001","title":"Stale profile cache","started":"2026-03-01T12:00:00Z","duration":120}`)); err != nil {
+		t.Fatalf("postgres stale UpsertCall returned error: %v", err)
+	}
+	if _, _, err := readOnlyView.SearchCallsByLifecycleWithSource(ctx, sqlite.LifecycleCallSearchParams{LifecycleSource: sqlite.LifecycleSourceProfile, Limit: 10}); err == nil || !strings.Contains(err.Error(), "profile read model is missing or stale") {
+		t.Fatalf("read-only stale profile cache error=%v, want fail-closed stale cache", err)
 	}
 }
 
@@ -551,7 +605,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -560,13 +614,28 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
-	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value"} {
+	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)`, index).Scan(&exists); err != nil {
 			t.Fatalf("check index %s: %v", index, err)
 		}
 		if !exists {
 			t.Fatalf("index %s does not exist", index)
+		}
+	}
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint"} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
+	SELECT 1
+	  FROM pg_proc p
+	  JOIN pg_namespace n ON n.oid = p.pronamespace
+	 WHERE n.nspname = current_schema()
+	   AND p.proname = $1
+)`, function).Scan(&exists); err != nil {
+			t.Fatalf("check function %s: %v", function, err)
+		}
+		if !exists {
+			t.Fatalf("function %s does not exist", function)
 		}
 	}
 	for _, column := range []string{"missing_fact_call_count", "orphan_fact_count"} {
@@ -1246,7 +1315,7 @@ func TestPostgresPrioritizeTranscriptsByLifecycle(t *testing.T) {
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}
