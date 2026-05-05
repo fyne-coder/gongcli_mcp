@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -281,6 +282,169 @@ func TestPostgresTranscriptSearchUserVisibleFieldsMatchSQLite(t *testing.T) {
 	}
 }
 
+func TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	for _, raw := range businessPilotCallPayloads() {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	profileBody := []byte(`
+version: 1
+name: Synthetic profile parity
+objects:
+  deal:
+    object_types: [Opportunity]
+  account:
+    object_types: [Account]
+fields:
+  deal_stage:
+    object: deal
+    names: [StageName]
+  account_type:
+    object: account
+    names: [Account_Type__c]
+lifecycle:
+  open:
+    order: 10
+    label: Open
+    rules:
+      - object: deal
+        field_name: StageName
+        op: in
+        values: ["Discovery & Demo (SQO)", "Demo & Business Case"]
+  closed_won:
+    order: 20
+  closed_lost:
+    order: 30
+  post_sales:
+    order: 40
+    rules:
+      - field: account_type
+        op: iprefix
+        value: customer
+  unknown:
+    order: 999
+methodology:
+  pain:
+    description: Discovery pain
+    aliases: [pain]
+  empty_methodology:
+    description: Empty methodology stays visible
+`)
+	pgInventory, err := pgStore.ProfileInventory(ctx)
+	if err != nil {
+		t.Fatalf("postgres ProfileInventory returned error: %v", err)
+	}
+	p, validation, err := profilepkg.ValidateBytes(profileBody, pgInventory)
+	if err != nil {
+		t.Fatalf("ValidateBytes returned error: %v", err)
+	}
+	if !validation.Valid {
+		t.Fatalf("profile validation failed: %+v", validation.Findings)
+	}
+	canonical, err := profilepkg.CanonicalJSON(p)
+	if err != nil {
+		t.Fatalf("CanonicalJSON returned error: %v", err)
+	}
+	params := sqlite.ProfileImportParams{
+		SourcePath:      "synthetic-profile.yaml",
+		SourceSHA256:    validation.SourceSHA256,
+		CanonicalSHA256: validation.CanonicalSHA256,
+		RawYAML:         profileBody,
+		CanonicalJSON:   canonical,
+		Profile:         p,
+		Findings:        validation.Findings,
+		ImportedBy:      "test",
+	}
+	badParams := params
+	badParams.CanonicalSHA256 = strings.Repeat("0", 64)
+	if _, err := pgStore.ImportProfile(ctx, badParams); err == nil || !strings.Contains(err.Error(), "canonical_sha256 does not match") {
+		t.Fatalf("bad canonical_sha256 error=%v, want mismatch", err)
+	}
+	pgImport, err := pgStore.ImportProfile(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres ImportProfile returned error: %v", err)
+	}
+	sqliteImport, err := sqliteStore.ImportProfile(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite ImportProfile returned error: %v", err)
+	}
+	if !pgImport.Imported || !pgImport.Activated || !sqliteImport.Imported || !sqliteImport.Activated {
+		t.Fatalf("unexpected import results: postgres=%+v sqlite=%+v", pgImport, sqliteImport)
+	}
+
+	pgProfile, err := pgStore.ActiveBusinessProfile(ctx)
+	if err != nil {
+		t.Fatalf("postgres ActiveBusinessProfile returned error: %v", err)
+	}
+	sqliteProfile, err := sqliteStore.ActiveBusinessProfile(ctx)
+	if err != nil {
+		t.Fatalf("sqlite ActiveBusinessProfile returned error: %v", err)
+	}
+	if pgProfile.Name != sqliteProfile.Name || pgProfile.CanonicalSHA256 != sqliteProfile.CanonicalSHA256 || len(pgProfile.ObjectConcepts) != len(sqliteProfile.ObjectConcepts) || len(pgProfile.FieldConcepts) != len(sqliteProfile.FieldConcepts) || len(pgProfile.LifecycleBuckets) != len(sqliteProfile.LifecycleBuckets) || len(pgProfile.MethodologyConcepts) != len(sqliteProfile.MethodologyConcepts) {
+		t.Fatalf("postgres profile=%+v want sqlite metadata %+v", pgProfile, sqliteProfile)
+	}
+	if !hasBusinessConcept(pgProfile.MethodologyConcepts, "empty_methodology") {
+		t.Fatalf("postgres profile dropped empty-but-valid methodology concept: %+v", pgProfile.MethodologyConcepts)
+	}
+	doc, err := pgStore.ProfileDocument(ctx, "active")
+	if err != nil {
+		t.Fatalf("postgres ProfileDocument returned error: %v", err)
+	}
+	if doc.Meta.CanonicalSHA256 != validation.CanonicalSHA256 || doc.Profile.Name != "Synthetic profile parity" {
+		t.Fatalf("unexpected postgres profile document: %+v", doc)
+	}
+	concepts, err := pgStore.ListBusinessConcepts(ctx)
+	if err != nil {
+		t.Fatalf("postgres ListBusinessConcepts returned error: %v", err)
+	}
+	if len(concepts) != len(pgProfile.ObjectConcepts)+len(pgProfile.FieldConcepts)+len(pgProfile.LifecycleBuckets)+len(pgProfile.MethodologyConcepts) {
+		t.Fatalf("business concept count=%d profile=%+v", len(concepts), pgProfile)
+	}
+	summary, err := pgStore.SyncStatusSummary(ctx)
+	if err != nil {
+		t.Fatalf("postgres SyncStatusSummary returned error: %v", err)
+	}
+	if !summary.ProfileReadiness.Active || summary.ProfileReadiness.CacheStatus != "not_implemented" || summary.ProfileReadiness.Status != "needs_action" {
+		t.Fatalf("unexpected postgres profile readiness: %+v", summary.ProfileReadiness)
+	}
+	if _, _, err := pgStore.SummarizeCallFactsWithSource(ctx, sqlite.CallFactsSummaryParams{LifecycleSource: sqlite.LifecycleSourceProfile}); err == nil || !strings.Contains(err.Error(), "not implemented") {
+		t.Fatalf("profile lifecycle source error=%v, want fail-closed not implemented", err)
+	}
+}
+
+func hasBusinessConcept(concepts []sqlite.BusinessConcept, name string) bool {
+	for _, concept := range concepts {
+		if concept.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPostgresSearchCallsRawSafeFiltersMatchSQLite(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -387,7 +551,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -1082,7 +1246,7 @@ func TestPostgresPrioritizeTranscriptsByLifecycle(t *testing.T) {
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

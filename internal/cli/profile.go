@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -58,6 +60,47 @@ func (a *app) profileUsage() {
 `)
 }
 
+type profileInventoryStore interface {
+	ProfileInventory(context.Context) (*profilepkg.Inventory, error)
+	Close() error
+}
+
+type writableProfileStore interface {
+	profileInventoryStore
+	ImportProfile(context.Context, sqlite.ProfileImportParams) (*sqlite.ProfileImportResult, error)
+	ListProfiles(context.Context) ([]sqlite.ProfileHistoryEntry, error)
+	ProfileDocument(context.Context, string) (*sqlite.StoredProfileDocument, error)
+	ActivateProfile(context.Context, string) (*sqlite.ProfileImportResult, error)
+	ActiveBusinessProfile(context.Context) (*sqlite.BusinessProfile, error)
+	ActiveProfileDocument(context.Context) (*profilepkg.Profile, error)
+}
+
+type profileDocumentStore interface {
+	ProfileDocument(context.Context, string) (*sqlite.StoredProfileDocument, error)
+}
+
+func openProfileInventoryStore(ctx context.Context, path string) (profileInventoryStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.OpenProfileInventory(ctx, databaseURL)
+}
+
+func openWritableProfileStore(ctx context.Context, path string) (writableProfileStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
 func (a *app) profileDiscover(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("profile discover", flag.ContinueOnError)
 	fs.SetOutput(a.err)
@@ -69,7 +112,7 @@ func (a *app) profileDiscover(ctx context.Context, args []string) error {
 		}
 		return errUsage
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openProfileInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -131,7 +174,7 @@ func (a *app) profileImport(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -165,7 +208,7 @@ func (a *app) profileHistory(ctx context.Context, args []string) error {
 		}
 		return errUsage
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -203,7 +246,7 @@ func (a *app) profileActivate(ctx context.Context, args []string) error {
 	if ref == "" || (strings.TrimSpace(*id) != "" && strings.TrimSpace(*canonicalSHA) != "") {
 		return fmt.Errorf("set exactly one of --id or --canonical-sha")
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -234,7 +277,7 @@ func (a *app) profileDiff(ctx context.Context, args []string) error {
 	if strings.TrimSpace(*toRef) == "" {
 		return fmt.Errorf("--to is required")
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -277,7 +320,7 @@ func (a *app) profileShow(ctx context.Context, args []string) error {
 		}
 		return errUsage
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -313,7 +356,7 @@ func (a *app) validateProfileFile(ctx context.Context, dbPath string, profilePat
 	if err != nil {
 		return nil, profilepkg.ValidationResult{}, err
 	}
-	store, err := openSQLiteStore(ctx, dbPath)
+	store, err := openProfileInventoryStore(ctx, dbPath)
 	if err != nil {
 		return nil, profilepkg.ValidationResult{}, err
 	}
@@ -351,7 +394,7 @@ type profileSectionDiff struct {
 	Changed []string `json:"changed,omitempty"`
 }
 
-func loadProfileDiffSide(ctx context.Context, store *sqlite.Store, ref string) (profileDiffSide, error) {
+func loadProfileDiffSide(ctx context.Context, store profileDocumentStore, ref string) (profileDiffSide, error) {
 	trimmed := strings.TrimSpace(ref)
 	if trimmed == "" {
 		trimmed = "active"

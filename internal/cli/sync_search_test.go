@@ -208,6 +208,30 @@ func TestPostgresSearchCallsDoesNotRequireSensitiveExportOptIn(t *testing.T) {
 	}
 }
 
+func TestPostgresProfileValidateUsesReadOnlyInventoryOpen(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongmcp_reader:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
+
+	profilePath := filepath.Join(t.TempDir(), "profile.yaml")
+	if err := os.WriteFile(profilePath, []byte("version: 1\nlifecycle: {}\n"), 0o600); err != nil {
+		t.Fatalf("write profile fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	err := a.profile(context.Background(), []string{"validate", "--profile", profilePath})
+	if err == nil {
+		t.Fatalf("profile validate error=nil, want unavailable Postgres connection error")
+	}
+	if got := err.Error(); got == "--db is required" || strings.Contains(got, "write privileges") {
+		t.Fatalf("profile validate error=%v, want read-only inventory connection path", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+}
+
 func TestPostgresCallsShowUsesSafeDetailPathWithoutSensitiveExportOptIn(t *testing.T) {
 	t.Setenv("GONG_DATABASE_URL", "postgres://gongmcp_reader:secret@127.0.0.1:1/gongctl?sslmode=disable")
 	t.Setenv("DATABASE_URL", "")

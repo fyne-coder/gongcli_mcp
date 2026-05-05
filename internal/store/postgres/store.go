@@ -137,6 +137,33 @@ func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
 	return store, nil
 }
 
+func OpenProfileInventory(ctx context.Context, databaseURL string) (*Store, error) {
+	if strings.TrimSpace(databaseURL) == "" {
+		return nil, errors.New("postgres database URL is required")
+	}
+	db, err := sql.Open("pgx", readOnlyDatabaseURL(databaseURL))
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(2)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	store := &Store{db: db, readOnly: true}
+	if err := store.validateSchema(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := store.validateMigrationVersion(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `SET default_transaction_read_only = on`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable postgres profile-inventory read-only session mode: %w", err)
+	}
+	return store, nil
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -234,6 +261,37 @@ SELECT ts.call_id,
  LIMIT (SELECT limit_value FROM bounded)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments(text, integer) FROM PUBLIC;
+CREATE OR REPLACE FUNCTION gongmcp_active_business_profile()
+RETURNS TABLE(profile_json jsonb)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT jsonb_build_object(
+	'profile_id', p.id,
+	'name', p.name,
+	'version', p.version,
+	'source_path', p.source_path,
+	'source_sha256', p.source_sha256,
+	'canonical_sha256', p.canonical_sha256,
+	'imported_at', p.imported_at,
+	'imported_by', p.imported_by,
+	'is_active', p.is_active,
+	'canonical_json', p.canonical_json,
+	'warnings', COALESCE((
+		SELECT jsonb_agg(jsonb_build_object('severity', w.severity, 'code', w.code, 'message', w.message, 'path', w.path)
+			ORDER BY CASE w.severity WHEN 'error' THEN 1 WHEN 'warn' THEN 2 ELSE 3 END, w.path, w.code)
+		  FROM profile_validation_warning w
+		 WHERE w.profile_id = p.id
+	), '[]'::jsonb)
+) AS profile_json
+  FROM profile_meta p
+ WHERE p.is_active = true
+ ORDER BY p.id DESC
+ LIMIT 1
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_active_business_profile() FROM PUBLIC;
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
@@ -253,6 +311,7 @@ BEGIN
 		GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader;
 		GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader;
 		GRANT SELECT ON TABLE call_read_model_diagnostics TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_active_business_profile() TO gongmcp_reader;
 	END IF;
 END;
 $$;`)
@@ -279,13 +338,20 @@ func (s *Store) validateSchema(ctx context.Context) error {
 		'call_context_fields',
 		'call_facts',
 		'postgres_read_model_state',
-		'call_read_model_diagnostics'
+		'call_read_model_diagnostics',
+		'profile_meta',
+		'profile_object_alias',
+		'profile_field_concept',
+		'profile_lifecycle_rule',
+		'profile_methodology_concept',
+		'profile_validation_warning',
+		'profile_call_fact_cache_meta'
 	  ]) AS core_table(table_name)
 	 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 11 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/11 core tables", count)
+	if count != 18 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/18 core tables", count)
 	}
 	return nil
 }
@@ -309,7 +375,7 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = current_schema()
-   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics')
+   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -851,8 +917,20 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		return nil, err
 	}
 	summary.States = states
+	profileReadiness, err := s.profileReadiness(ctx)
+	if err != nil {
+		return nil, err
+	}
+	summary.ProfileReadiness = profileReadiness
 	if summary.MissingTranscripts == 0 && summary.TotalCalls > 0 {
 		summary.PublicReadiness.TranscriptCoverage = sqlite.ReadinessFlag{Ready: true, Status: "ready", Detail: "all cached calls have transcripts"}
+	}
+	if !profileReadiness.Active {
+		summary.PublicReadiness.LifecycleSeparation = sqlite.ReadinessFlag{Ready: false, Status: "needs_profile", Detail: profileReadiness.Detail, Requirements: profileReadiness.Blocking}
+	} else if profileReadiness.CacheFresh {
+		summary.PublicReadiness.LifecycleSeparation = sqlite.ReadinessFlag{Ready: true, Status: "ready", Detail: "profile lifecycle facts are available"}
+	} else {
+		summary.PublicReadiness.LifecycleSeparation = sqlite.ReadinessFlag{Ready: false, Status: "needs_action", Detail: profileReadiness.Detail, Requirements: profileReadiness.Blocking}
 	}
 	return summary, nil
 }

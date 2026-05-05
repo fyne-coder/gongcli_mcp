@@ -39,8 +39,8 @@ Postgres parity should be added deliberately, with each surface classified as
 | `governance-search` MCP preset | SQLite governed search | queued | Governed Postgres search or explicit unsupported state | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst` MCP preset | SQLite analyst/cohort tools | rejected in Postgres | Enable only after backing queries and governance are ready | must match before enablement | Phase 5 | preset parity tests |
 | `all-readonly` MCP preset | SQLite full read-only catalog | rejected in Postgres | Enable only after full read-only query parity | must match before enablement | Phase 5 | catalog parity tests |
-| Profile import/show | SQLite profile tables/cache | queued | Postgres profile metadata and active-state storage | must match | Phase 3 | profile import/show tests |
-| Profile lifecycle source | `lifecycle_source=auto|profile|builtin` with `profile_call_fact_cache` | Postgres supports builtin/auto-as-builtin only | Profile cache parity and stale-cache read-only semantics | must match | Phase 3 | profile lifecycle parity tests |
+| Profile import/show | SQLite profile tables/cache | complete for metadata/import/show/readiness; profile fact cache queued | Postgres profile metadata, active-state storage, business-profile MCP reads, and sync-status readiness | must match for metadata; cache queued | Phase 3 | `TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata` |
+| Profile lifecycle source | `lifecycle_source=auto|profile|builtin` with `profile_call_fact_cache` | fails closed for `profile`; `auto` remains builtin-safe | Profile cache parity and stale-cache read-only semantics | must match | Phase 3b | profile lifecycle cache parity tests |
 | Business-analysis calls/evidence | SQLite `business_analysis.go` helpers | queued | Equivalent read APIs over normalized context/facts/transcripts | must match | Phase 5 | business-analysis parity fixtures |
 | CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | queued for Postgres | Same cached metadata read surfaces | must match | Phase 5 | inventory/query tests |
 | Scorecard activity | SQLite `scorecard_activity` | queued for Postgres | Same aggregate/read-only scorecard activity surfaces | must match | Phase 5 | scorecard activity parity tests |
@@ -59,15 +59,37 @@ Postgres parity should be added deliberately, with each surface classified as
 2. **Phase 2 read-model hardening and core query parity**: close normalized
    context/readiness risks first, then continue call/search/transcript/lifecycle
    output comparisons.
-3. **Phase 3 profile parity**: profile storage, cache warming, and
-   `lifecycle_source=profile`.
-4. **Phase 4 governance parity**: governed Postgres read surfaces and audit.
-5. **Phase 5 analyst/all-readonly parity**: broader MCP and business-analysis
+3. **Phase 3 profile metadata parity**: profile storage, import/show,
+   active-state, MCP profile reads, and explicit fail-closed profile lifecycle
+   cache status.
+4. **Phase 3b profile lifecycle cache parity**: profile-derived call-fact cache
+   warming/freshness and `lifecycle_source=profile`.
+5. **Phase 4 governance parity**: governed Postgres read surfaces and audit.
+6. **Phase 5 analyst/all-readonly parity**: broader MCP and business-analysis
    surfaces.
-6. **Phase 6 operations parity**: support bundle, cache inventory, purge, and
+7. **Phase 6 operations parity**: support bundle, cache inventory, purge, and
    diagnostics.
-7. **Phase 7 release hardening**: CI service tests, backup/restore, migration
+8. **Phase 7 release hardening**: CI service tests, backup/restore, migration
    rollback, docs, and versioned release artifacts.
+
+## Phase 3 Risk Status
+
+- Closed for metadata: Postgres now stores imported business profiles in
+  profile metadata/mapping/warning tables, supports CLI import/history/activate
+  and show when `--db` is omitted and a writer `GONG_DATABASE_URL` is set, and
+  supports MCP `get_business_profile` / `list_business_concepts` through an
+  execute-only reader helper function without granting direct reads on raw YAML,
+  canonical JSON, or profile projection tables.
+- Closed for operator visibility: Postgres `sync status` reports active profile
+  readiness and marks profile lifecycle cache as `not_implemented` /
+  `needs_action` instead of implying profile-aware analysis is ready.
+- Intentionally fail-closed: Postgres `lifecycle_source=profile` still returns
+  an explicit unsupported error. `auto` and omitted lifecycle source continue to
+  use builtin facts until Phase 3b implements and tests a profile fact cache.
+- Still queued: profile-derived lifecycle fact cache, read-only stale-cache
+  denial for that cache, profile-aware business-pilot parity, admin UX for
+  profile MCP exposure, large-cache profile inventory optimization, and larger
+  governance/analyst profile interactions.
 
 ## Phase 2 Risk Status
 
@@ -94,7 +116,7 @@ Postgres parity should be added deliberately, with each surface classified as
   presets after rebuild, proves the reader role cannot write or directly read
   raw JSON payload columns, and proves stale startup denial. Keep a larger
   customer-scale benchmark queued before GA.
-- Still queued: profile cache parity, governance filtering/RLS, analyst and
+- Still queued: profile lifecycle cache parity, governance filtering/RLS, analyst and
   all-readonly query parity, support/cache inventory, purge/retention, larger
   customer-scale load benchmarking for read-model counter write contention, and
   release rollback/backup hardening.

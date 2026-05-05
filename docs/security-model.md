@@ -110,6 +110,14 @@ Implementation controls on the CLI side:
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`.
 - Postgres `calls show --json` through `GONG_DATABASE_URL` returns minimized
   read-model detail and does not bypass into raw cached JSON.
+- Postgres profile support stores raw YAML/canonical JSON for operator CLI
+  show/diff workflows, but the `gongmcp_reader` role is granted only execute
+  access to the profile MCP helper function rather than direct table reads for
+  profile documents or mapping projection tables.
+- MCP profile tools return tenant business terminology, lifecycle labels,
+  methodology aliases, and validation warning text. They are intentionally not
+  in the default Postgres `business-pilot` or `operator-smoke` presets; expose
+  them only through an explicit admin/operator allowlist after profile review.
 - `gongctl sync run --config ... --dry-run` validates staged operator refresh
   configs without calling Gong so reviewed schedules can be checked before
   execution. The config file cannot self-authorize sensitive steps; runtime

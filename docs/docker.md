@@ -149,6 +149,9 @@ The first Postgres vertical slice supports:
 - `gongctl sync status`
 - `gongctl sync read-model` and `gongctl sync read-model --rebuild` for
   Postgres builtin fact readiness and repair
+- `gongctl profile discover`, `profile validate`, `profile import`,
+  `profile history`, `profile activate`, and `profile show` when `--db` is
+  omitted and the operator sets a writer `GONG_DATABASE_URL`
 - `gongctl search calls` and `gongctl calls show --json` for minimized
   read-model call metadata/detail; use explicit raw-export commands with
   `--allow-sensitive-export` for raw payload access
@@ -160,8 +163,9 @@ The first Postgres vertical slice supports:
   `search_transcript_segments`, `get_call`, and `rank_transcript_backlog`
 
 It does not yet provide full SQLite query parity for governance filtered DB
-export, profile lifecycle source, analyst/all-readonly presets,
-business-analysis views, support bundles, cache inventory, or broader
+export, profile-derived lifecycle facts (`lifecycle_source=profile` fails
+closed for Postgres until the profile fact cache slice), analyst/all-readonly
+presets, business-analysis views, support bundles, cache inventory, or broader
 CRM/lifecycle-heavy MCP tools. See the
 [Postgres parity matrix](postgres-parity.md) for the phased parity contract.
 

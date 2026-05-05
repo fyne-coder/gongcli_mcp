@@ -5,10 +5,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT/docker-compose.postgres.yml"
 PROJECT="${GONGCTL_POSTGRES_COMPOSE_PROJECT:-gongctl-postgres-smoke}"
 PORT="${GONGCTL_POSTGRES_PORT:-55432}"
+export GONGCTL_POSTGRES_USER="${GONGCTL_POSTGRES_USER:-gongctl}"
 export GONGCTL_POSTGRES_PASSWORD="${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}"
 export GONGMCP_READER_PASSWORD="${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}"
-WRITER_URL="postgres://gongctl:${GONGCTL_POSTGRES_PASSWORD}@127.0.0.1:${PORT}/gongctl?sslmode=disable"
-READER_URL="postgres://gongmcp_reader:${GONGMCP_READER_PASSWORD}@127.0.0.1:${PORT}/gongctl?sslmode=disable"
+
+urlencode() {
+  python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$1"
+}
+
+WRITER_URL="postgres://$(urlencode "$GONGCTL_POSTGRES_USER"):$(urlencode "$GONGCTL_POSTGRES_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
+READER_URL="postgres://gongmcp_reader:$(urlencode "$GONGMCP_READER_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
 
 cd "$ROOT"
 
@@ -75,6 +81,40 @@ grep -q '"status": "current"' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"call_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"fact_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"ready": true' /tmp/gongctl-postgres-read-model-state.json
+cat >/tmp/gongctl-postgres-profile.yaml <<'YAML'
+version: 1
+name: Synthetic Postgres profile
+objects:
+  deal:
+    object_types: [Opportunity]
+  account:
+    object_types: [Account]
+lifecycle:
+  open:
+    order: 10
+  closed_won:
+    order: 20
+  closed_lost:
+    order: 30
+  post_sales:
+    order: 40
+  unknown:
+    order: 999
+methodology:
+  pain:
+    description: Discovery pain
+    aliases: [pain]
+YAML
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl profile validate --profile /tmp/gongctl-postgres-profile.yaml >/tmp/gongctl-postgres-profile-validate.json
+grep -q '"valid": true' /tmp/gongctl-postgres-profile-validate.json
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl profile import --profile /tmp/gongctl-postgres-profile.yaml >/tmp/gongctl-postgres-profile-import.json
+grep -q '"imported": true' /tmp/gongctl-postgres-profile-import.json
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl profile history >/tmp/gongctl-postgres-profile-history.json
+grep -q '"name": "Synthetic Postgres profile"' /tmp/gongctl-postgres-profile-history.json
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl profile show >/tmp/gongctl-postgres-profile-show.json
+grep -q '"name": "Synthetic Postgres profile"' /tmp/gongctl-postgres-profile-show.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl sync status >/tmp/gongctl-postgres-status-with-profile.json
+grep -q '"cache_status": "not_implemented"' /tmp/gongctl-postgres-status-with-profile.json
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl calls show --call-id synthetic-call-001 --json >/tmp/gongctl-postgres-calls-show.json
 grep -q '"call_id": "synthetic-call-001"' /tmp/gongctl-postgres-calls-show.json
 grep -q '"title": "Pulsaris implementation kickoff"' /tmp/gongctl-postgres-calls-show.json
@@ -141,6 +181,26 @@ if reader_psql -c "SELECT opportunity_amount FROM call_facts LIMIT 1" >>/tmp/gon
   echo "reader role unexpectedly read sensitive opportunity amount" >&2
   exit 1
 fi
+if reader_psql -c "SELECT raw_yaml FROM profile_meta LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read raw profile YAML" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT canonical_json FROM profile_meta LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read canonical profile JSON" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT * FROM profile_object_alias LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read profile object projection table" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT * FROM profile_lifecycle_rule LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read profile lifecycle projection table" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT * FROM profile_validation_warning LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read profile warning table" >&2
+  exit 1
+fi
 
 if reader_psql -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('should-fail', '{}'::jsonb, 'x', now()::text, now()::text)" >/tmp/gongctl-postgres-reader-write.txt 2>&1; then
   echo "reader role unexpectedly wrote to Postgres" >&2
@@ -184,6 +244,22 @@ grep -q '"rank_transcript_backlog"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q 'transcript_status' /tmp/gongctl-postgres-business-pilot.jsonl
 assert_mcp_success /tmp/gongctl-postgres-business-pilot.jsonl 6 7 8 9
 
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_business_profile","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_business_concepts","arguments":{}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=get_business_profile,list_business_concepts go run ./cmd/gongmcp > /tmp/gongctl-postgres-profile-mcp.jsonl
+
+grep -q '"get_business_profile"' /tmp/gongctl-postgres-profile-mcp.jsonl
+grep -q '"list_business_concepts"' /tmp/gongctl-postgres-profile-mcp.jsonl
+grep -q 'Synthetic Postgres profile' /tmp/gongctl-postgres-profile-mcp.jsonl
+assert_mcp_success /tmp/gongctl-postgres-profile-mcp.jsonl 3 4
+if grep -q 'raw_yaml\|canonical_json' /tmp/gongctl-postgres-profile-mcp.jsonl; then
+  echo "profile MCP smoke exposed raw profile storage fields" >&2
+  exit 1
+fi
+
 GONGCTL_TEST_POSTGRES_URL="$WRITER_URL" go test -count=1 ./internal/store/postgres
 
 echo "postgres smoke passed"
@@ -202,3 +278,9 @@ echo "read model diagnostics output: /tmp/gongctl-postgres-read-model-diagnostic
 echo "integrity gap output: /tmp/gongctl-postgres-integrity-gap.json"
 echo "stale MCP denial output: /tmp/gongctl-postgres-stale-mcp.txt"
 echo "read model rebuild output: /tmp/gongctl-postgres-read-model-rebuild.json"
+echo "profile validate output: /tmp/gongctl-postgres-profile-validate.json"
+echo "profile import output: /tmp/gongctl-postgres-profile-import.json"
+echo "profile history output: /tmp/gongctl-postgres-profile-history.json"
+echo "profile show output: /tmp/gongctl-postgres-profile-show.json"
+echo "profile status output: /tmp/gongctl-postgres-status-with-profile.json"
+echo "profile mcp output: /tmp/gongctl-postgres-profile-mcp.jsonl"

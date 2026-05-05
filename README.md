@@ -10,7 +10,9 @@ read-only MCP `business-pilot` preset: `get_sync_status`,
 `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
 `rank_transcript_backlog`. Operator smoke deployments can also explicitly
 allow `get_sync_status`, `search_calls`, `search_transcript_segments`,
-`get_call`, and `rank_transcript_backlog`.
+`get_call`, and `rank_transcript_backlog`. Postgres also supports profile
+metadata import/show/readiness and MCP profile reads; profile-derived lifecycle
+facts are still fail-closed until the profile cache parity slice.
 
 ## Positioning
 
@@ -289,6 +291,10 @@ When using Postgres, `gongctl search calls` and `gongctl calls show --json`
 return minimized read-model metadata. Use explicit SQLite/operator raw-export
 commands such as `calls export` with `--allow-sensitive-export` for
 operator-controlled raw payload access.
+With `GONG_DATABASE_URL` set, `gongctl profile discover/validate/import/show`
+can operate on the shared Postgres cache when `--db` is omitted; keep generated
+profile YAML outside git because discovery evidence can contain tenant CRM
+field names and values.
 
 ```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
@@ -409,8 +415,8 @@ Rules:
   JSON validation report; for semantic validity gates, inspect the report's
   `valid` field. `profile import` is the command that refuses `valid:false`
   profiles before writing.
-- `profile import` stores the active profile in SQLite in one transaction. Re-importing identical profile content is a no-op; changed source metadata for the same canonical profile updates metadata without changing profile meaning.
-- Profile-aware analysis uses a materialized SQLite read model keyed by active profile and canonical hash. Writable CLI sync/profile commands rebuild or warm it; read-only MCP requires that cache to be current and reports a stale-cache error instead of writing to SQLite.
+- `profile import` stores the active profile in SQLite or Postgres in one transaction. Re-importing identical profile content is a no-op; changed source metadata for the same canonical profile updates metadata without changing profile meaning.
+- Profile-aware analysis uses a materialized SQLite read model keyed by active profile and canonical hash. Writable SQLite CLI sync/profile commands rebuild or warm it; read-only SQLite MCP requires that cache to be current and reports a stale-cache error instead of writing to SQLite. Postgres currently exposes profile metadata/readiness but rejects `lifecycle_source=profile` until the Postgres profile fact cache is implemented.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.
 - `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads.
 - `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
@@ -423,7 +429,7 @@ Rules:
 - `analyze calls` groups the normalized `call_facts` view by safe dimensions such as `lifecycle`, `opportunity_stage`, `account_industry`, `scope`, `system`, `direction`, `transcript_status`, `duration_bucket`, `month`, `lead_source`, and `forecast_category`.
 - `analyze coverage` includes lifecycle, scope, system, and direction summaries so transcript coverage gaps can be understood by conversation type.
 - `analyze transcript-backlog` prioritizes External and Conference-style customer conversations ahead of short dialer-style events by default.
-- With an active profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model.
+- With an active SQLite profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model. In Postgres, omitted or `auto` lifecycle source remains builtin-safe and explicit `profile` fails closed until profile fact cache parity lands.
 
 For non-client-specific business prompt examples, see [docs/public-readiness.md](docs/public-readiness.md). Public examples should avoid tenant field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs.
 

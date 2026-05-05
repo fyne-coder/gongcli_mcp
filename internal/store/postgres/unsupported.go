@@ -42,12 +42,6 @@ func (s *Store) GetScorecardDetail(ctx context.Context, scorecardID string) (*sq
 func (s *Store) ScorecardActivityOverview(ctx context.Context, limit int) (*sqlite.ScorecardActivityOverview, error) {
 	return nil, unsupported()
 }
-func (s *Store) ActiveBusinessProfile(ctx context.Context) (*sqlite.BusinessProfile, error) {
-	return nil, unsupported()
-}
-func (s *Store) ListBusinessConcepts(ctx context.Context) ([]sqlite.BusinessConcept, error) {
-	return nil, unsupported()
-}
 func (s *Store) ListUnmappedCRMFields(ctx context.Context, params sqlite.UnmappedCRMFieldParams) ([]sqlite.UnmappedCRMField, error) {
 	return nil, unsupported()
 }
