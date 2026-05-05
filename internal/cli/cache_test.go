@@ -98,6 +98,8 @@ func TestCacheInventoryReportsSummaryAndWarnings(t *testing.T) {
 		t.Fatalf("Close returned error: %v", err)
 	}
 
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongctl:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := Run(context.Background(), []string{"cache", "inventory", "--db", dbPath}, &stdout, &stderr)
@@ -109,7 +111,9 @@ func TestCacheInventoryReportsSummaryAndWarnings(t *testing.T) {
 	}
 
 	var resp struct {
+		Backend             string `json:"backend"`
 		DBPath              string `json:"db_path"`
+		DBPathPolicy        string `json:"db_path_policy"`
 		DBSizeBytes         int64  `json:"db_size_bytes"`
 		OldestCallStartedAt string `json:"oldest_call_started_at"`
 		NewestCallStartedAt string `json:"newest_call_started_at"`
@@ -149,6 +153,9 @@ func TestCacheInventoryReportsSummaryAndWarnings(t *testing.T) {
 		t.Fatalf("json.Unmarshal returned error: %v", err)
 	}
 
+	if resp.Backend != "sqlite" || resp.DBPathPolicy != "local_path_reported_for_operator" {
+		t.Fatalf("unexpected backend/path policy: %+v", resp)
+	}
 	if resp.DBPath == "" || resp.DBSizeBytes <= 0 {
 		t.Fatalf("unexpected db metadata: %+v", resp)
 	}

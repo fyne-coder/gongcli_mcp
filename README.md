@@ -95,11 +95,16 @@ sharing logs or payloads:
 
 ```bash
 gongctl support bundle --db "$HOME/gongctl-data/gong-mcp-governed.db" --out "$HOME/gongctl-data/support-bundle"
+# Postgres shared deployment:
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl support bundle --out "$HOME/gongctl-data/support-bundle"
 ```
 
-The command opens SQLite read-only, does not need Gong credentials, and does
-not make network calls. See [Support model](docs/support.md) for what the
-bundle includes and excludes.
+The command opens the configured cache read-only, does not need Gong
+credentials, and does not make network calls. SQLite uses `--db PATH`;
+Postgres uses `GONG_DATABASE_URL` or `DATABASE_URL` and does not export the
+database URL. The `--out` directory must be new or empty so stale files are not
+included by accident. See [Support model](docs/support.md) for what the bundle
+includes and excludes.
 
 Current pilot hardening in this worktree includes a restricted/company CLI mode
 for high-risk commands. Enable it with `GONGCTL_RESTRICTED=1` or
@@ -298,6 +303,7 @@ them before the scheduled job uses the same file:
 ```bash
 gongctl sync run --config testdata/fixtures/sync-run-minimal.yaml --dry-run
 gongctl cache inventory --db ~/gongctl-data/gong.db
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache inventory
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
 ```
 
@@ -382,7 +388,7 @@ The Agent E CLI flow is SQLite-backed:
 7. `gongctl sync scorecard-activity --db PATH --call-from DATE --call-to DATE [--review-method AUTOMATIC|MANUAL|BOTH]`
 8. `gongctl sync run --config PATH [--dry-run]`
 9. `gongctl sync status --db PATH`
-10. `gongctl cache inventory --db PATH`
+10. `gongctl cache inventory --db PATH` for SQLite, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
 11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`
 12. `gongctl profile discover --db PATH --out PATH`
 13. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
@@ -431,10 +437,12 @@ Rules:
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.
-- `cache inventory --db PATH` opens the database read-only and reports file
-  size, primary table counts, call date range, transcript and CRM-context
-  presence, profile status, and last sync metadata with a sensitive-data
-  warning.
+- `cache inventory --db PATH` opens SQLite read-only and reports file size,
+  primary table counts, call date range, transcript and CRM-context presence,
+  profile status, and last sync metadata with a sensitive-data warning. With
+  `GONG_DATABASE_URL` or `DATABASE_URL` and no `--db`, it opens Postgres
+  read-only, reports safe table/version/readiness diagnostics, and never
+  exports the database URL.
 - `cache purge --db PATH --older-than YYYY-MM-DD` is dry-run by default and
   reports calls, transcripts, transcript segments, CRM context, and profile
   fact-cache rows that would be deleted. Confirmed purges enable SQLite

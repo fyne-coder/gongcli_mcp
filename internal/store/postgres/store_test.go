@@ -100,6 +100,90 @@ func TestStoreSyntheticVerticalSlice(t *testing.T) {
 	}
 }
 
+func TestPostgresCacheInventoryAndDiagnostics(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{Scope: "synthetic", SyncKey: "synthetic:cache-inventory"})
+	if err != nil {
+		t.Fatalf("StartSyncRun returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-cache-001","title":"Postgres cache inventory","started":"2026-04-20T14:00:00Z","duration":1200,"parties":[{"id":"seller-1"}]}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-cache-001","transcript":[{"speakerId":"seller-1","sentences":[{"start":0,"end":1000,"text":"Inventory diagnostics should count transcript segments."}]}]}`)); err != nil {
+		t.Fatalf("UpsertTranscript returned error: %v", err)
+	}
+	if _, err := store.UpsertUser(ctx, json.RawMessage(`{"id":"pg-cache-user-001","emailAddress":"cache@example.invalid","name":"Cache User","title":"Operator","active":true}`)); err != nil {
+		t.Fatalf("UpsertUser returned error: %v", err)
+	}
+	if _, err := store.UpsertCRMIntegration(ctx, json.RawMessage(`{"integrationId":"pg-cache-crm-001","name":"Cache CRM","crmType":"Salesforce"}`)); err != nil {
+		t.Fatalf("UpsertCRMIntegration returned error: %v", err)
+	}
+	if count, err := store.UpsertCRMSchema(ctx, "pg-cache-crm-001", "Opportunity", json.RawMessage(`{"objectTypeToSelectedFields":{"Opportunity":[{"fieldName":"StageName","label":"Stage","fieldType":"picklist"},{"fieldName":"Amount","label":"Amount","fieldType":"currency"}]}}`)); err != nil {
+		t.Fatalf("UpsertCRMSchema returned error: %v", err)
+	} else if count != 2 {
+		t.Fatalf("UpsertCRMSchema count=%d want 2", count)
+	}
+	if _, err := store.UpsertGongSetting(ctx, "scorecards", json.RawMessage(`{"scorecardId":"pg-cache-scorecard-001","scorecardName":"Cache scorecard","enabled":true,"questions":[{"questionId":"question-001","questionText":"Was the cache checked?","minRange":1,"maxRange":5}]}`)); err != nil {
+		t.Fatalf("UpsertGongSetting returned error: %v", err)
+	}
+	if _, err := store.UpsertScorecardActivity(ctx, json.RawMessage(`{"answeredScorecardId":"pg-cache-answered-001","scorecardId":"pg-cache-scorecard-001","scorecardName":"Cache scorecard","callId":"pg-cache-001","callStartTime":"2026-04-20T14:00:00Z","reviewMethod":"MANUAL","reviewTime":"2026-04-21T14:00:00Z","answers":[{"isOverall":true,"score":4,"notApplicable":false}]}`)); err != nil {
+		t.Fatalf("UpsertScorecardActivity returned error: %v", err)
+	}
+	if err := store.FinishSyncRun(ctx, run.ID, sqlite.FinishSyncRunParams{Status: "success", RecordsSeen: 1, RecordsWritten: 1}); err != nil {
+		t.Fatalf("FinishSyncRun returned error: %v", err)
+	}
+
+	inventory, err := store.CacheInventory(ctx)
+	if err != nil {
+		t.Fatalf("CacheInventory returned error: %v", err)
+	}
+	if inventory.Summary.TotalCalls != 1 || inventory.Summary.TotalUsers != 1 || inventory.Summary.TotalTranscripts != 1 || inventory.Summary.TotalTranscriptSegments != 1 {
+		t.Fatalf("unexpected summary counts: %+v", inventory.Summary)
+	}
+	if inventory.Summary.TotalCRMIntegrations != 1 || inventory.Summary.TotalCRMSchemaObjects != 1 || inventory.Summary.TotalCRMSchemaFields != 2 || inventory.Summary.TotalGongSettings != 1 || inventory.Summary.TotalScorecardActivity != 1 {
+		t.Fatalf("unexpected inventory extension counts: %+v", inventory.Summary)
+	}
+	counts := postgresTableCounts(inventory.TableCounts)
+	if counts["calls"] != 1 || counts["users"] != 1 || counts["transcript_segments"] != 1 || counts["crm_schema_fields"] != 2 || counts["gong_settings"] != 1 || counts["scorecard_activity"] != 1 {
+		t.Fatalf("unexpected table counts: %+v", counts)
+	}
+
+	diagnostics, err := store.CacheDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("CacheDiagnostics returned error: %v", err)
+	}
+	if diagnostics.Backend != "postgres" ||
+		diagnostics.SchemaVersion != len(migrations) ||
+		diagnostics.SupportedSchemaVersion != len(migrations) ||
+		!diagnostics.ReadModelReady ||
+		diagnostics.ReadModelStatus != "current" ||
+		diagnostics.ProfileCacheStatus != "not_applicable" ||
+		diagnostics.ReaderPrivilegeStatus != "not_valid_reader" {
+		t.Fatalf("unexpected diagnostics: %+v", diagnostics)
+	}
+
+	statusStore, err := OpenStatus(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("OpenStatus returned error: %v", err)
+	}
+	defer statusStore.Close()
+	if _, err := statusStore.DB().ExecContext(ctx, `INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('pg-cache-should-not-write', '{}'::jsonb, 'x', now()::text, now()::text)`); err == nil {
+		t.Fatal("OpenStatus allowed a write with a writer URL")
+	}
+}
+
 func TestBusinessPilotAggregatesMatchSQLite(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -1940,6 +2024,14 @@ func assertPostgresCount(t *testing.T, ctx context.Context, store *Store, query 
 	if got != want {
 		t.Fatalf("count query got %d want %d: %s", got, want, query)
 	}
+}
+
+func postgresTableCounts(rows []sqlite.CacheTableCount) map[string]int64 {
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.Table] = row.Rows
+	}
+	return out
 }
 
 type phase5BStore interface {

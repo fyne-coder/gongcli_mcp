@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -34,20 +36,11 @@ func (a *app) cache(ctx context.Context, args []string) error {
 func (a *app) cacheInventory(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("cache inventory", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
-	if strings.TrimSpace(*dbPath) == "" {
-		return fmt.Errorf("--db is required")
-	}
-
-	absPath, err := filepath.Abs(*dbPath)
-	if err != nil {
-		return err
-	}
-
-	store, err := sqlite.OpenReadOnly(ctx, absPath)
+	store, backend, dbPathForResponse, err := openCacheInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -58,9 +51,14 @@ func (a *app) cacheInventory(ctx context.Context, args []string) error {
 		return err
 	}
 
-	dbSize, walSize, shmSize := statSQLiteFiles(absPath)
+	var dbSize, walSize, shmSize int64
+	if backend == "sqlite" {
+		dbSize, walSize, shmSize = statSQLiteFiles(dbPathForResponse)
+	}
 	response := cacheInventoryResponse{
-		DBPath:               absPath,
+		Backend:              backend,
+		DBPath:               dbPathForResponse,
+		DBPathPolicy:         cacheInventoryPathPolicy(backend),
 		DBSizeBytes:          dbSize,
 		WALSizeBytes:         walSize,
 		SHMSizeBytes:         shmSize,
@@ -69,11 +67,18 @@ func (a *app) cacheInventory(ctx context.Context, args []string) error {
 		NewestCallStartedAt:  inventory.NewestCallStartedAt,
 		TranscriptPresence:   newCacheTranscriptPresence(inventory.Summary),
 		CRMContextPresence:   newCacheCRMContextPresence(inventory.Summary),
-		ProfileStatus:        inventory.Summary.ProfileReadiness,
+		ProfileStatus:        cacheInventoryProfileStatus(backend, inventory.Summary.ProfileReadiness),
 		LastRun:              newSyncRunJSON(inventory.Summary.LastRun),
 		LastSuccessfulRun:    newSyncRunJSON(inventory.Summary.LastSuccessfulRun),
 		SyncStates:           []syncStateJSON{},
 		SensitiveDataWarning: cacheSensitiveDataWarning,
+	}
+	if diagnosticsStore, ok := store.(cacheDiagnosticsStore); ok {
+		diagnostics, err := diagnosticsStore.CacheDiagnostics(ctx)
+		if err != nil {
+			return err
+		}
+		response.Diagnostics = diagnostics
 	}
 	response.Summary = cacheInventorySummaryJSON{
 		TotalCalls:                   inventory.Summary.TotalCalls,
@@ -105,6 +110,51 @@ func (a *app) cacheInventory(ctx context.Context, args []string) error {
 		})
 	}
 	return writeJSONValue(a.out, response)
+}
+
+type cacheInventoryStore interface {
+	CacheInventory(context.Context) (*sqlite.CacheInventory, error)
+	Close() error
+}
+
+type cacheDiagnosticsStore interface {
+	CacheDiagnostics(context.Context) (*postgres.CacheDiagnostics, error)
+}
+
+func openCacheInventoryStore(ctx context.Context, path string) (cacheInventoryStore, string, string, error) {
+	if strings.TrimSpace(path) != "" {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return nil, "", "", err
+		}
+		store, err := sqlite.OpenReadOnly(ctx, absPath)
+		return store, "sqlite", absPath, err
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, "", "", errors.New("--db is required")
+	}
+	store, err := postgres.OpenStatus(ctx, databaseURL)
+	return store, "postgres", "", err
+}
+
+func cacheInventoryPathPolicy(backend string) string {
+	if backend == "postgres" {
+		return "database_url_not_exported"
+	}
+	return "local_path_reported_for_operator"
+}
+
+func cacheInventoryProfileStatus(backend string, readiness sqlite.ProfileReadiness) any {
+	if backend == "postgres" {
+		return supportProfileStatus{
+			Active:      readiness.Active,
+			Status:      readiness.Status,
+			CacheFresh:  readiness.CacheFresh,
+			CacheStatus: readiness.CacheStatus,
+		}
+	}
+	return readiness
 }
 
 func (a *app) cachePurge(ctx context.Context, args []string) error {
@@ -220,7 +270,9 @@ func newCacheCRMContextPresence(summary *sqlite.SyncStatusSummary) cacheCRMConte
 }
 
 type cacheInventoryResponse struct {
+	Backend              string                      `json:"backend"`
 	DBPath               string                      `json:"db_path"`
+	DBPathPolicy         string                      `json:"db_path_policy"`
 	DBSizeBytes          int64                       `json:"db_size_bytes"`
 	WALSizeBytes         int64                       `json:"wal_size_bytes,omitempty"`
 	SHMSizeBytes         int64                       `json:"shm_size_bytes,omitempty"`
@@ -230,10 +282,11 @@ type cacheInventoryResponse struct {
 	NewestCallStartedAt  string                      `json:"newest_call_started_at,omitempty"`
 	TranscriptPresence   cacheTranscriptPresenceJSON `json:"transcript_presence"`
 	CRMContextPresence   cacheCRMContextPresenceJSON `json:"crm_context_presence"`
-	ProfileStatus        sqlite.ProfileReadiness     `json:"profile_status"`
+	ProfileStatus        any                         `json:"profile_status"`
 	LastRun              *syncRunJSON                `json:"last_run,omitempty"`
 	LastSuccessfulRun    *syncRunJSON                `json:"last_successful_run,omitempty"`
 	SyncStates           []syncStateJSON             `json:"sync_states"`
+	Diagnostics          any                         `json:"diagnostics,omitempty"`
 	SensitiveDataWarning string                      `json:"sensitive_data_warning"`
 }
 

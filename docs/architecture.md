@@ -19,11 +19,11 @@ For a faster source-first onboarding path, start with
 - `internal/profile`: tenant profile parsing, canonicalization, discovery, validation, and closed rule evaluation.
 - `internal/store/sqlite`: local cache for calls, users, transcripts, CRM schema/settings inventory, search indexes, and sync state.
 - `internal/store/postgres`: first shared-deployment vertical slice for sync
-  status, calls, users, transcripts, transcript segments, and read-only MCP
-  `business-pilot` plus core operator search/detail tools. It is not full
-  query parity with SQLite yet:
-  profile lifecycle source, governance-filtered views, analyst/all-readonly
-  tools, support bundles, and cache inventory remain follow-ups.
+  status, calls, users, transcripts, transcript segments, metadata-only support
+  diagnostics, cache inventory, and read-only MCP `business-pilot` plus core
+  operator search/detail tools. It is not full query parity with SQLite yet:
+  database-enforced governance snapshots/RLS, purge/retention, backup/restore,
+  and full analyst/all-readonly tools remain follow-ups.
   [Postgres parity matrix](postgres-parity.md) tracks the full parity contract.
 - `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus the configured cache store.
 - `internal/transcripts`: transcript sync/search helpers on top of the store interface plus the Gong client.
@@ -155,9 +155,9 @@ Local SQLite state remains the complete proving ground and source of truth for
 MCP query tools. The Postgres backend is intentionally narrower: it proves the
 shared store path for sync status, call/transcript search, and the
 `business-pilot` MCP preset using `GONG_DATABASE_URL` / `DATABASE_URL` and a
-read-only database role. Full parity for profile/business-analysis,
-CRM JSON-derived views, support bundle/cache inventory, and governance filtered
-exports remains follow-up work.
+read-only database role. Full parity for database-enforced governance
+snapshots/RLS, purge/retention, backup/restore, and broad analyst/all-readonly
+query surfaces remains follow-up work.
 
 Postgres materializes builtin call/context facts because it cannot lean on
 SQLite views at read time. The writable CLI owns read-model refresh and repair;

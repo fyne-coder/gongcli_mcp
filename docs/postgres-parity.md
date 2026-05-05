@@ -48,8 +48,8 @@ Postgres parity should be added deliberately, with each surface classified as
 | Scorecard activity | SQLite `scorecard_activity` | complete for aggregate Postgres slice | Same aggregate/read-only scorecard activity surfaces except raw reviewed-user grouping is rejected for Postgres read-only deployments; raw activity payloads and raw hashes are denied to the reader role | must match for aggregate surfaces | Phase 5d | scorecard activity parity tests; `scripts/postgres-smoke.sh` |
 | Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | Postgres policy-backed MCP suppression implemented for narrowed search slice; physical filtered export remains SQLite-only | Governed views, row-level security, or materialized governed snapshots before broad analyst/all-readonly GA | postgres-native equivalent | Phase 4 | restricted synthetic account absent from governed MCP search outputs |
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
-| Support bundle | SQLite sanitized support bundle | queued | Sanitized Postgres diagnostics without secrets/customer payloads | postgres-native equivalent | Phase 6 | support bundle fixture inspection |
-| Cache inventory | SQLite file/table inventory | queued | Postgres DB/table/index/version/readiness inventory | postgres-native equivalent | Phase 6 | `cache inventory` Postgres tests |
+| Support bundle | SQLite sanitized support bundle | complete for metadata-only Postgres diagnostics | Sanitized Postgres diagnostics without secrets/customer payloads or database URLs | postgres-native equivalent | Phase 6a | support bundle fixture inspection; `scripts/postgres-smoke.sh` |
+| Cache inventory | SQLite file/table inventory | complete for Postgres table/version/readiness diagnostics | Postgres table counts, schema version, read-model/profile readiness, and reader-role diagnostics without database URL export | postgres-native equivalent | Phase 6a | `TestPostgresCacheInventoryAndDiagnostics`; `scripts/postgres-smoke.sh` |
 | Purge/retention | SQLite purge commands | queued | Postgres retention diagnostics and dry-run/confirm semantics | postgres-native equivalent | Phase 6 | purge dry-run tests |
 | Backup/restore | SQLite file copy guidance | queued | Postgres dump/restore, migration rollback, and role-grant guidance | postgres-native equivalent | Phase 7 | documented operator smoke |
 | Release hardening | SQLite CI coverage plus release gates | queued for Postgres service tests | CI-backed Postgres service tests and versioned docs/images | must match release quality | Phase 7 | CI service test + release checklist |
@@ -163,7 +163,12 @@ Postgres parity should be added deliberately, with each surface classified as
   presets after rebuild, proves the reader role cannot write or directly read
   raw JSON payload columns, and proves stale startup denial. Keep a larger
   customer-scale benchmark queued before GA.
+- Closed for Phase 6a operations diagnostics: `cache inventory` and
+  `support bundle` can run against Postgres through `GONG_DATABASE_URL` /
+  `DATABASE_URL`, including read-only-reader smoke coverage, schema/readiness
+  diagnostics, table counts, and support artifact checks that reject database
+  URL, path, secret, raw payload, transcript, and raw CRM value leakage.
 - Still queued: database-enforced governance filtering/RLS, analyst and
-  all-readonly query parity, support/cache inventory, purge/retention, larger
+  all-readonly query parity, purge/retention, larger
   customer-scale load benchmarking for read-model counter write contention, and
   release rollback/backup hardening.

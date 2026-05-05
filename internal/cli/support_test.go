@@ -71,6 +71,8 @@ func TestSupportBundleWritesMetadataOnlyBundle(t *testing.T) {
 		t.Fatalf("Close returned error: %v", err)
 	}
 
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongctl:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
 	t.Setenv("GONG_ACCESS_KEY_SECRET", "support-secret-value")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -127,6 +129,9 @@ func TestSupportBundleWritesMetadataOnlyBundle(t *testing.T) {
 	if !strings.Contains(body, `"total_calls": 1`) || !strings.Contains(body, `"total_transcripts": 1`) {
 		t.Fatalf("support bundle missing expected counts:\n%s", body)
 	}
+	if !strings.Contains(body, `"backend": "sqlite"`) || !strings.Contains(body, `"path_policy": "no_path_or_filename_exported"`) {
+		t.Fatalf("support bundle missing SQLite backend/path policy:\n%s", body)
+	}
 	if !strings.Contains(body, `"GONG_ACCESS_KEY_SECRET": true`) {
 		t.Fatalf("support bundle missing env presence boolean:\n%s", body)
 	}
@@ -135,6 +140,31 @@ func TestSupportBundleWritesMetadataOnlyBundle(t *testing.T) {
 	}
 	if strings.Contains(body, "no_identifiers") {
 		t.Fatalf("support bundle overstates identifier exclusion:\n%s", body)
+	}
+}
+
+func TestSupportBundleRequiresEmptyOutputDirectory(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	outDir := filepath.Join(t.TempDir(), "support-bundle")
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, "old-debug.txt"), []byte("stale raw debug output"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	store := openCLITestStore(t, dbPath)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"support", "bundle", "--db", dbPath, "--out", outDir}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("Run(support bundle) unexpectedly succeeded stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "empty directory") {
+		t.Fatalf("stderr=%q want empty-directory guidance", stderr.String())
 	}
 }
 

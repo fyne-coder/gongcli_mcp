@@ -127,7 +127,7 @@ func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, errors.New("postgres database URL is required")
 	}
-	db, err := sql.Open("pgx", databaseURL)
+	db, err := sql.Open("pgx", readOnlyDatabaseURL(databaseURL))
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +146,19 @@ func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
 	if err := store.validateSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if _, err := db.ExecContext(ctx, `SET default_transaction_read_only = on`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable postgres status read-only session mode: %w", err)
+	}
+	var readOnlyMode string
+	if err := db.QueryRowContext(ctx, `SHOW default_transaction_read_only`).Scan(&readOnlyMode); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("verify postgres status read-only session mode: %w", err)
+	}
+	if strings.ToLower(strings.TrimSpace(readOnlyMode)) != "on" {
+		_ = db.Close()
+		return nil, fmt.Errorf("postgres status read-only session mode is %q, want on", readOnlyMode)
 	}
 	return store, nil
 }
@@ -1371,6 +1384,141 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		summary.PublicReadiness.LifecycleSeparation = sqlite.ReadinessFlag{Ready: false, Status: "needs_action", Detail: profileReadiness.Detail, Requirements: profileReadiness.Blocking}
 	}
 	return summary, nil
+}
+
+func (s *Store) CacheInventory(ctx context.Context) (*sqlite.CacheInventory, error) {
+	summary, err := s.SyncStatusSummary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &sqlite.CacheInventory{
+		Summary:     summary,
+		TableCounts: []sqlite.CacheTableCount{},
+	}
+	fallbackCounts := postgresInventoryFallbackCounts(summary)
+	if readModelStatus, err := s.ReadModelStatus(ctx); err == nil {
+		fallbackCounts["call_facts"] = readModelStatus.FactCount
+		fallbackCounts["postgres_read_model_state"] = 1
+		fallbackCounts["call_read_model_diagnostics"] = readModelStatus.DiagnosticsCallCount
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(MIN(started_at), ''), COALESCE(MAX(started_at), '')
+  FROM calls
+ WHERE TRIM(started_at) <> ''`).Scan(&out.OldestCallStartedAt, &out.NewestCallStartedAt); err != nil {
+		return nil, err
+	}
+	for _, tableName := range postgresInventoryTables() {
+		var exists bool
+		if err := s.db.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, "public."+tableName).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		if s.readOnly {
+			if fallback, ok := fallbackCounts[tableName]; ok {
+				out.TableCounts = append(out.TableCounts, sqlite.CacheTableCount{Table: tableName, Rows: fallback})
+				continue
+			}
+		}
+		var count int64
+		query := `SELECT COUNT(*) FROM public.` + quotePostgresIdent(tableName)
+		if err := s.db.QueryRowContext(ctx, query).Scan(&count); err != nil {
+			if fallback, ok := fallbackCounts[tableName]; ok {
+				out.TableCounts = append(out.TableCounts, sqlite.CacheTableCount{Table: tableName, Rows: fallback})
+				continue
+			}
+			return nil, fmt.Errorf("count postgres inventory table %s: %w", tableName, err)
+		}
+		out.TableCounts = append(out.TableCounts, sqlite.CacheTableCount{Table: tableName, Rows: count})
+	}
+	return out, nil
+}
+
+type CacheDiagnostics struct {
+	Backend                string `json:"backend"`
+	SchemaVersion          int    `json:"schema_version"`
+	SupportedSchemaVersion int    `json:"supported_schema_version"`
+	ReadModelReady         bool   `json:"read_model_ready"`
+	ReadModelStatus        string `json:"read_model_status"`
+	ReadModelStaleReason   string `json:"read_model_stale_reason,omitempty"`
+	ProfileCacheStatus     string `json:"profile_cache_status"`
+	ReaderPrivilegeStatus  string `json:"reader_privilege_status"`
+}
+
+func (s *Store) CacheDiagnostics(ctx context.Context) (*CacheDiagnostics, error) {
+	diagnostics := &CacheDiagnostics{
+		Backend:                "postgres",
+		SupportedSchemaVersion: len(migrations),
+		ReaderPrivilegeStatus:  "not_checked",
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM gongctl_schema_migrations`).Scan(&diagnostics.SchemaVersion); err != nil {
+		return nil, err
+	}
+	if status, err := s.ReadModelStatus(ctx); err == nil {
+		diagnostics.ReadModelReady = status.Ready
+		if status.Ready {
+			diagnostics.ReadModelStatus = "current"
+		} else {
+			diagnostics.ReadModelStatus = "stale"
+		}
+		diagnostics.ReadModelStaleReason = status.StaleReason
+	} else {
+		diagnostics.ReadModelStatus = "unavailable"
+	}
+	if readiness, err := s.profileReadiness(ctx); err == nil {
+		diagnostics.ProfileCacheStatus = readiness.CacheStatus
+	} else {
+		diagnostics.ProfileCacheStatus = "unavailable"
+	}
+	if err := s.validateReadOnlyPrivileges(ctx); err == nil {
+		diagnostics.ReaderPrivilegeStatus = "valid_reader"
+	} else {
+		diagnostics.ReaderPrivilegeStatus = "not_valid_reader"
+	}
+	return diagnostics, nil
+}
+
+func postgresInventoryTables() []string {
+	return []string{
+		"calls",
+		"users",
+		"transcripts",
+		"transcript_segments",
+		"call_context_objects",
+		"call_context_fields",
+		"call_facts",
+		"postgres_read_model_state",
+		"call_read_model_diagnostics",
+		"gong_settings",
+		"scorecard_activity",
+		"crm_integrations",
+		"crm_schema_objects",
+		"crm_schema_fields",
+	}
+}
+
+func postgresInventoryFallbackCounts(summary *sqlite.SyncStatusSummary) map[string]int64 {
+	if summary == nil {
+		return map[string]int64{}
+	}
+	return map[string]int64{
+		"calls":                summary.TotalCalls,
+		"users":                summary.TotalUsers,
+		"transcripts":          summary.TotalTranscripts,
+		"transcript_segments":  summary.TotalTranscriptSegments,
+		"call_context_objects": summary.TotalEmbeddedCRMObjects,
+		"call_context_fields":  summary.TotalEmbeddedCRMFields,
+		"crm_integrations":     summary.TotalCRMIntegrations,
+		"crm_schema_objects":   summary.TotalCRMSchemaObjects,
+		"crm_schema_fields":    summary.TotalCRMSchemaFields,
+		"gong_settings":        summary.TotalGongSettings,
+		"scorecard_activity":   summary.TotalScorecardActivity,
+	}
+}
+
+func quotePostgresIdent(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func (s *Store) callByID(ctx context.Context, callID string) (*sqlite.CallRecord, error) {

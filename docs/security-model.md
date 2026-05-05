@@ -134,9 +134,11 @@ Implementation controls on the CLI side:
   sync history. If Gong rejects that selector and the job retries without
   parties, the run records `include_parties_result=omitted_fallback`.
 - `gongctl cache inventory --db ...` is read-only and returns cache metadata,
-  sync history, profile status, and a sensitive-data warning. Even though it
-  avoids transcript bodies and raw payload dumps, its output should still be
-  handled as tenant operational metadata.
+  sync history, profile status, and a sensitive-data warning. With Postgres,
+  omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL`; the command adds
+  schema/readiness/reader-role diagnostics and does not export the database
+  URL. Even though it avoids transcript bodies and raw payload dumps, its
+  output should still be handled as tenant operational metadata.
 - `gongctl cache purge --db ... --older-than YYYY-MM-DD` is dry-run by default.
   Confirmed purges delete matching call rows and dependent cached transcripts,
   transcript segments, embedded CRM context, and profile call-fact cache rows,

@@ -180,9 +180,11 @@ The first Postgres vertical slice supports:
   prepared; Postgres narrows this preset to supported search tools
 
 It does not yet provide full SQLite query parity for database-enforced
-governance snapshots/RLS, full analyst/all-readonly presets, support bundles,
-cache inventory, or remaining CRM/lifecycle-heavy MCP tools. See the
-[Postgres parity matrix](postgres-parity.md) for the phased parity contract.
+governance snapshots/RLS, full analyst/all-readonly presets, purge/retention,
+backup/restore, or remaining CRM/lifecycle-heavy MCP tools. Postgres support
+bundles and cache inventory are available as metadata-only diagnostics that do
+not export the database URL. See the [Postgres parity matrix](postgres-parity.md)
+for the phased parity contract.
 
 Read-only `gongmcp` never rebuilds the Postgres read model. If startup reports a
 missing or stale Postgres read model, run the writable operator command first:
@@ -190,6 +192,14 @@ missing or stale Postgres read model, run the writable operator command first:
 ```bash
 export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
 gongctl sync read-model --rebuild
+```
+
+Run metadata-only diagnostics against the read-only Postgres role:
+
+```bash
+export GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL"
+gongctl cache inventory
+gongctl support bundle --out ./support-bundle
 ```
 
 Run the local synthetic smoke:

@@ -45,17 +45,26 @@ docker run --rm \
 ```
 
 Add `--include-env` only when support needs environment-variable presence
-checks. The command runs offline against local SQLite, opens the database
-read-only, does not need Gong credentials, and does not make network calls.
+checks. The command runs offline against the configured cache, opens the
+database read-only, does not need Gong credentials, and does not make network
+calls. SQLite uses `--db PATH`; Postgres shared deployments omit `--db` and set
+`GONG_DATABASE_URL` or `DATABASE_URL`. Postgres bundles do not export the
+database URL, host, username, password, or local output path.
+
+The output directory must be new or empty. The command fails on non-empty
+directories so stale debug files or older support artifacts are not accidentally
+shared with the generated bundle.
 
 Current `gongctl support bundle` files:
 
 - `manifest.json`: product version, build metadata, Go runtime, database path
   class, path policy, file sizes, modified timestamp, cache call-date range,
-  and read-only open mode
+  backend, and read-only open mode
 - `cache-summary.json`: table counts, transcript/CRM-context presence,
   aggregate cache counts, public readiness, profile readiness status, and sync
   run summaries without sync keys, cursors, raw errors, or request context
+- `diagnostics.json`: Postgres-only schema version, supported version,
+  read-model status, profile cache status, and reader-role validation status
 - `mcp-tools.json`: MCP tool catalog names, descriptions, and input schemas
 - `redaction-policy.json`: excluded data classes and the default support policy
 - `environment.json`: optional `--include-env` file containing presence

@@ -367,6 +367,7 @@ dry-run mode before enabling the scheduler:
 bin/gongctl sync run --config /srv/gongctl/company-sync.yaml --dry-run
 bin/gongctl sync run --config /srv/gongctl/company-sync.yaml
 bin/gongctl cache inventory --db /srv/gongctl/cache/gong.db
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache inventory
 bin/gongctl cache purge --db /srv/gongctl/cache/gong.db --older-than 2026-04-01 --dry-run
 ```
 
@@ -374,7 +375,9 @@ The config runner resolves relative `db` and transcript `out_dir` paths from
 the config location, so one reviewed file can travel with the operator-managed
 job definition. `cache inventory` is the companion read-only governance check
 for DB size, primary table counts, date range, transcript/CRM-context presence,
-profile status, and last sync metadata.
+profile status, and last sync metadata. For Postgres shared deployments, omit
+`--db` and set `GONG_DATABASE_URL` or `DATABASE_URL`; the inventory reports
+schema/readiness/reader-role diagnostics without exporting the database URL.
 
 `cache purge` is dry-run by default. Use it to preview retention cleanup, then
 run the same command with `--confirm` only after backup, legal-hold, and owner
@@ -424,6 +427,9 @@ Backup policy should be owned by the company operating the pilot:
 - include transcript and profile storage in the same backup plan
 - review `cache inventory` output alongside backup logs so unusual DB growth or
   missing sync metadata is caught early
+- for Postgres deployments, generate metadata-only support diagnostics with the
+  read-only database URL:
+  `GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl support bundle --out /srv/gongctl/support-bundle`
 - verify that restores can be mounted back into a read-only MCP runtime before
   treating the backup as valid
 

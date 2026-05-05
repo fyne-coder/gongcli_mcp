@@ -209,6 +209,46 @@ if grep -q 'raw_json\|raw_sha256\|raw_payload\|Proposal\|Manufacturing\|Profile 
   exit 1
 fi
 
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl cache inventory >/tmp/gongctl-postgres-cache-inventory.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-cache-inventory.json
+grep -q '"db_path_policy": "database_url_not_exported"' /tmp/gongctl-postgres-cache-inventory.json
+grep -q '"reader_privilege_status": "valid_reader"' /tmp/gongctl-postgres-cache-inventory.json
+grep -q '"read_model_status": "current"' /tmp/gongctl-postgres-cache-inventory.json
+grep -q '"total_crm_schema_fields": 5' /tmp/gongctl-postgres-cache-inventory.json
+grep -q '"table": "crm_schema_fields"' /tmp/gongctl-postgres-cache-inventory.json
+if grep -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|127.0.0.1\|raw_json\|raw_sha256\|raw_payload' /tmp/gongctl-postgres-cache-inventory.json; then
+  echo "Postgres cache inventory exposed DB URL, secrets, host, or raw storage fields" >&2
+  exit 1
+fi
+if grep -q 'Synthetic Postgres profile\|canonical_sha256\|unavailable_concepts' /tmp/gongctl-postgres-cache-inventory.json; then
+  echo "Postgres cache inventory exposed profile identifiers or detailed concepts" >&2
+  exit 1
+fi
+
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl cache inventory >/tmp/gongctl-postgres-cache-inventory-writer-url.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-cache-inventory-writer-url.json
+grep -q '"reader_privilege_status": "not_valid_reader"' /tmp/gongctl-postgres-cache-inventory-writer-url.json
+if grep -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|127.0.0.1\|Synthetic Postgres profile\|canonical_sha256\|unavailable_concepts' /tmp/gongctl-postgres-cache-inventory-writer-url.json; then
+  echo "Postgres cache inventory with writer URL exposed URL, secrets, host, or profile identifiers" >&2
+  exit 1
+fi
+
+rm -rf /tmp/gongctl-postgres-support-bundle
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl support bundle --out /tmp/gongctl-postgres-support-bundle >/tmp/gongctl-postgres-support-bundle.json
+grep -q '"path_policy": "local_path_not_exported"' /tmp/gongctl-postgres-support-bundle.json
+grep -q '"contains_raw_customer_data": false' /tmp/gongctl-postgres-support-bundle.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-support-bundle/manifest.json
+grep -q '"path_policy": "database_url_not_exported"' /tmp/gongctl-postgres-support-bundle/manifest.json
+grep -q '"reader_privilege_status": "valid_reader"' /tmp/gongctl-postgres-support-bundle/diagnostics.json
+grep -q '"read_model_status": "current"' /tmp/gongctl-postgres-support-bundle/diagnostics.json
+grep -q '"schema_version":' /tmp/gongctl-postgres-support-bundle/diagnostics.json
+grep -q '"total_crm_schema_fields": 5' /tmp/gongctl-postgres-support-bundle/cache-summary.json
+grep -q '"table": "crm_schema_fields"' /tmp/gongctl-postgres-support-bundle/cache-summary.json
+if grep -R -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|127.0.0.1\|/tmp/gongctl-postgres-support-bundle\|synthetic-call-\|speaker-1\|crmObjects\|raw_json\|raw_sha256\|raw_payload\|Proposal\|Manufacturing\|Profile Account\|Synthetic Postgres profile\|canonical_sha256\|unavailable_concepts' /tmp/gongctl-postgres-support-bundle /tmp/gongctl-postgres-support-bundle.json; then
+  echo "Postgres support bundle exposed DB URL, paths, secrets, raw fields, or customer-like fixture values" >&2
+  exit 1
+fi
+
 if reader_psql -c "SELECT raw_json FROM calls LIMIT 1" >/tmp/gongctl-postgres-reader-raw-read.txt 2>&1; then
 	echo "reader role unexpectedly read raw call JSON" >&2
   exit 1
@@ -679,6 +719,10 @@ echo "CRM integrations count output: /tmp/gongctl-postgres-crm-integrations-coun
 echo "CRM schema objects count output: /tmp/gongctl-postgres-crm-schema-objects-count.txt"
 echo "CRM schema fields count output: /tmp/gongctl-postgres-crm-schema-fields-count.txt"
 echo "CRM schema analysis output: /tmp/gongctl-postgres-crm-schema.json"
+echo "cache inventory output: /tmp/gongctl-postgres-cache-inventory.json"
+echo "cache inventory writer URL output: /tmp/gongctl-postgres-cache-inventory-writer-url.json"
+echo "support bundle response output: /tmp/gongctl-postgres-support-bundle.json"
+echo "support bundle directory: /tmp/gongctl-postgres-support-bundle"
 echo "governance fixture output: /tmp/gongctl-postgres-governance-fixture.txt"
 echo "governance read model output: /tmp/gongctl-postgres-governance-read-model.json"
 echo "governance audit output: /tmp/gongctl-postgres-governance-audit.json"

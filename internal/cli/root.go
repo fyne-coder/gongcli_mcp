@@ -108,7 +108,7 @@ func (a *app) usage() {
   gongctl analyze scorecard-activity --db gong.db [--group-by scorecard|review_method|reviewed_user|lifecycle|transcript_status]
       (Postgres read-only supports aggregate groupings only and rejects reviewed_user)
   gongctl auth check
-  gongctl cache inventory --db gong.db
+  gongctl cache inventory --db gong.db  # or omit --db with GONG_DATABASE_URL for Postgres
   gongctl cache purge --db gong.db --older-than YYYY-MM-DD [--dry-run|--confirm]
   gongctl profile discover --db gong.db --out gongctl-profile.yaml
   gongctl profile validate --db gong.db --profile gongctl-profile.yaml
@@ -120,7 +120,7 @@ func (a *app) usage() {
   gongctl profile schema
   gongctl governance audit --db gong.db --config ai-governance.yaml [--json]
   gongctl governance export-filtered-db --db gong.db --config ai-governance.yaml --out governed.db [--overwrite]
-  gongctl support bundle --db gong.db --out support-bundle [--include-env]
+  gongctl support bundle --db gong.db --out support-bundle [--include-env]  # or omit --db with GONG_DATABASE_URL for Postgres
   gongctl sync run --config company-sync.yaml [--dry-run]
   gongctl sync calls --db gong.db --from YYYY-MM-DD --to YYYY-MM-DD --preset business|minimal|all [--max-pages N] [--allow-sensitive-export]
   gongctl sync users --db gong.db [--max-pages N]
