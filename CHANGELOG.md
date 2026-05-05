@@ -3,6 +3,11 @@
 ## Unreleased
 
 - Added development-branch Postgres explicit allowlist support for
+  `search_transcripts_by_crm_context`, returning CRM-constrained transcript
+  snippets through a reader-executable function while redacting CRM object
+  IDs/names, call titles, raw CRM values, raw JSON, raw hashes, and full
+  transcript text from the SQL result shape.
+- Added development-branch Postgres explicit allowlist support for
   `opportunity_call_summary`, returning redacted Opportunity call coverage
   aggregates through a reader-executable function without exposing Opportunity
   IDs/names, owner IDs, amount, close date, latest call IDs, or raw CRM values.

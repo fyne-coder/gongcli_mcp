@@ -608,6 +608,135 @@ func TestPostgresTranscriptSearchUserVisibleFieldsMatchSQLite(t *testing.T) {
 	}
 }
 
+func TestPostgresSearchTranscriptSegmentsByCRMContextMatchesSQLiteAfterRedaction(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	calls := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-crm-transcript-001","title":"CRM context target call","started":"2026-04-24T12:00:00Z","duration":900,"context":[{"objectType":"Opportunity","id":"opp-crm-context-a","name":"CRM Context A","fields":[{"name":"StageName","value":"Contract Review"}]},{"objectType":"Opportunity","id":"opp-crm-context-b","name":"CRM Context B","fields":[{"name":"StageName","value":"Proposal"}]},{"objectType":"Account","id":"acct-crm-context","name":"CRM Context Account","fields":[{"name":"Industry","value":"Manufacturing"}]}]}`),
+		json.RawMessage(`{"id":"pg-crm-transcript-002","title":"CRM context other call","started":"2026-04-25T12:00:00Z","duration":600,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-crm-context-other","name":"CRM Context Other","fields":{"StageName":"Discovery"}}]}}`),
+	}
+	transcripts := []json.RawMessage{
+		json.RawMessage(`{"callId":"pg-crm-transcript-001","transcript":[{"speakerId":"buyer-crm","sentences":[{"start":1000,"end":3000,"text":"Pricing appears once in the CRM context target."}]}]}`),
+		json.RawMessage(`{"callId":"pg-crm-transcript-002","transcript":[{"speakerId":"seller-crm","sentences":[{"start":1000,"end":3000,"text":"Pricing appears in the other opportunity."}]}]}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+		UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+	}{pgStore, sqliteStore} {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("UpsertCall returned error: %v", err)
+			}
+		}
+		for _, raw := range transcripts {
+			if _, err := store.UpsertTranscript(ctx, raw); err != nil {
+				t.Fatalf("UpsertTranscript returned error: %v", err)
+			}
+		}
+	}
+
+	params := sqlite.TranscriptCRMSearchParams{Query: "pricing", ObjectType: "Opportunity", ObjectID: "opp-crm-context-a", Limit: 10}
+	got, err := pgStore.SearchTranscriptSegmentsByCRMContext(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres SearchTranscriptSegmentsByCRMContext returned error: %v", err)
+	}
+	want, err := sqliteStore.SearchTranscriptSegmentsByCRMContext(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite SearchTranscriptSegmentsByCRMContext returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].ObjectType != "Opportunity" || got[0].MatchingObjectCount != 1 {
+		t.Fatalf("unexpected CRM transcript result: %+v", got)
+	}
+	if got[0].Title != "" || got[0].ObjectID != "" || got[0].ObjectName != "" {
+		t.Fatalf("postgres function leaked object/title fields before MCP redaction: %+v", got[0])
+	}
+	redactTranscriptCRMSearchResults(got)
+	redactTranscriptCRMSearchResults(want)
+	if len(got) != len(want) {
+		t.Fatalf("postgres CRM transcript row count=%d want sqlite %d: got=%+v want=%+v", len(got), len(want), got, want)
+	}
+	for idx := range got {
+		gotSnippet := got[idx].Snippet
+		wantSnippet := want[idx].Snippet
+		got[idx].Snippet = ""
+		want[idx].Snippet = ""
+		if !reflect.DeepEqual(got[idx], want[idx]) {
+			t.Fatalf("postgres CRM transcript row=%+v want sqlite redacted %+v", got[idx], want[idx])
+		}
+		if gotSnippet == "" || wantSnippet == "" {
+			t.Fatalf("empty CRM transcript snippet: postgres=%q sqlite=%q", gotSnippet, wantSnippet)
+		}
+	}
+	if len(got) != 1 || got[0].ObjectType != "Opportunity" || got[0].MatchingObjectCount != 1 {
+		t.Fatalf("unexpected CRM transcript result: %+v", got)
+	}
+
+	allObjects, err := pgStore.SearchTranscriptSegmentsByCRMContext(ctx, sqlite.TranscriptCRMSearchParams{Query: "pricing", ObjectType: "Opportunity", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres all-object CRM transcript search returned error: %v", err)
+	}
+	if len(allObjects) != 2 {
+		t.Fatalf("all-object result count=%d want 2: %+v", len(allObjects), allObjects)
+	}
+	for _, row := range allObjects {
+		if row.CallID == "pg-crm-transcript-001" && row.MatchingObjectCount != 2 {
+			t.Fatalf("multi-object matching count=%d want 2: %+v", row.MatchingObjectCount, row)
+		}
+	}
+
+	if _, err := pgStore.SearchTranscriptSegmentsByCRMContext(ctx, sqlite.TranscriptCRMSearchParams{Query: "", ObjectType: "Opportunity", Limit: 10}); err == nil {
+		t.Fatal("expected missing query to fail")
+	}
+	if _, err := pgStore.SearchTranscriptSegmentsByCRMContext(ctx, sqlite.TranscriptCRMSearchParams{Query: "pricing", ObjectType: "", Limit: 10}); err == nil {
+		t.Fatal("expected missing object type to fail")
+	}
+
+	for _, column := range []string{"call_id", "title", "object_id", "object_name", "object_key", "speaker_id", "field_value_text", "raw_json", "raw_sha256", "text"} {
+		if _, err := pgStore.DB().ExecContext(ctx, `SELECT `+column+` FROM gongmcp_search_transcript_segments_by_crm_context('pricing', 'Opportunity', 'opp-crm-context-a', 10)`); err == nil {
+			t.Fatalf("CRM transcript search function exposed %s column", column)
+		}
+	}
+
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT started_at, object_type, matching_object_count, segment_index, start_ms, end_ms, snippet FROM gongmcp_search_transcript_segments_by_crm_context('pricing', 'Opportunity', 'opp-crm-context-a', 10)`)
+	if err != nil {
+		t.Fatalf("direct CRM transcript search function returned error: %v", err)
+	}
+	defer directRows.Close()
+	var directText strings.Builder
+	for directRows.Next() {
+		var startedAt, objectType, snippet string
+		var matchingObjectCount, startMS, endMS int64
+		var segmentIndex int
+		if err := directRows.Scan(&startedAt, &objectType, &matchingObjectCount, &segmentIndex, &startMS, &endMS, &snippet); err != nil {
+			t.Fatalf("scan direct CRM transcript row: %v", err)
+		}
+		directText.WriteString(fmt.Sprintf("%s|%s|%d|%d|%d|%d|%s", startedAt, objectType, matchingObjectCount, segmentIndex, startMS, endMS, snippet))
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("direct CRM transcript rows error: %v", err)
+	}
+	if strings.Contains(directText.String(), "buyer-crm") || strings.Contains(directText.String(), "CRM context target call") || strings.Contains(directText.String(), "opp-crm-context") || strings.Contains(directText.String(), "CRM Context A") {
+		t.Fatalf("direct CRM transcript function leaked title/object fields: %s", directText.String())
+	}
+}
+
 func TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -949,7 +1078,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -3295,6 +3424,16 @@ func redactOpportunityCallSummaries(rows []sqlite.OpportunityCallSummary) {
 		rows[idx].CloseDate = ""
 		rows[idx].OwnerID = ""
 		rows[idx].LatestCallID = ""
+	}
+}
+
+func redactTranscriptCRMSearchResults(rows []sqlite.TranscriptCRMSearchResult) {
+	for idx := range rows {
+		rows[idx].CallID = ""
+		rows[idx].Title = ""
+		rows[idx].ObjectID = ""
+		rows[idx].ObjectName = ""
+		rows[idx].SpeakerID = ""
 	}
 }
 

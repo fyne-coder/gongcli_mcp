@@ -969,6 +969,100 @@ func TestGovernanceSuppressionSearchCallsOverfetchesBeforeLimit(t *testing.T) {
 	}
 }
 
+func TestGovernanceSuppressionCRMContextSearchOverfetchesBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	for _, call := range []map[string]any{
+		{
+			"id":      "call-governance-crm-blocked",
+			"title":   "Blocked governance CRM transcript",
+			"started": "2026-05-02T13:00:00Z",
+			"context": map[string]any{"crmObjects": []any{map[string]any{
+				"type": "Opportunity",
+				"id":   "opp-governance-crm",
+				"name": "Suppressed CRM Opportunity",
+				"fields": map[string]any{
+					"StageName": "Proposal",
+				},
+			}}},
+		},
+		{
+			"id":      "call-governance-crm-allowed",
+			"title":   "Allowed governance CRM transcript",
+			"started": "2026-05-02T12:00:00Z",
+			"context": map[string]any{"crmObjects": []any{map[string]any{
+				"type": "Opportunity",
+				"id":   "opp-governance-crm",
+				"name": "Allowed CRM Opportunity",
+				"fields": map[string]any{
+					"StageName": "Proposal",
+				},
+			}}},
+		},
+	} {
+		if _, err := store.UpsertCall(ctx, mustJSON(t, call)); err != nil {
+			t.Fatalf("upsert call: %v", err)
+		}
+	}
+	for _, transcript := range []map[string]any{
+		{
+			"callId": "call-governance-crm-blocked",
+			"transcript": []any{map[string]any{
+				"speakerId": "blocked-speaker",
+				"sentences": []any{map[string]any{"start": 0, "end": 1000, "text": "pricing governance crm limit marker"}},
+			}},
+		},
+		{
+			"callId": "call-governance-crm-allowed",
+			"transcript": []any{map[string]any{
+				"speakerId": "allowed-speaker",
+				"sentences": []any{map[string]any{"start": 0, "end": 1000, "text": "pricing governance crm limit marker"}},
+			}},
+		},
+	} {
+		if _, err := store.UpsertTranscript(ctx, mustJSON(t, transcript)); err != nil {
+			t.Fatalf("upsert transcript: %v", err)
+		}
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-governance-crm-blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "search",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcripts_by_crm_context",
+			"arguments": map[string]any{
+				"query":       "pricing governance crm",
+				"object_type": "Opportunity",
+				"object_id":   "opp-governance-crm",
+				"limit":       1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("search_transcripts_by_crm_context returned error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call-governance-crm-blocked") || strings.Contains(text, "Suppressed CRM Opportunity") {
+		t.Fatalf("governance CRM-context response leaked blocked row: %s", text)
+	}
+	if !strings.Contains(text, "pricing") {
+		t.Fatalf("governance CRM-context response missed allowed snippet after filtered limit: %s", text)
+	}
+}
+
 func TestGovernanceSuppressionFailsClosedForAggregateTool(t *testing.T) {
 	t.Parallel()
 

@@ -599,6 +599,55 @@ if grep -q 'raw_json\|field_value_text' /tmp/gongctl-postgres-analyst-business-c
   exit 1
 fi
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/tmp/gongctl-postgres-crm-context-fixture.txt <<'SQL'
+INSERT INTO call_context_objects(call_id, object_key, object_type, object_id, object_name, raw_json)
+VALUES ('synthetic-call-001', 'Opportunity:opp-crm-context-private', 'Opportunity', 'opp-crm-context-private', 'CRM Context Private Opportunity', '{"type":"Opportunity"}'::jsonb)
+ON CONFLICT (call_id, object_key) DO UPDATE
+   SET object_type = EXCLUDED.object_type,
+       object_id = EXCLUDED.object_id,
+       object_name = EXCLUDED.object_name,
+       raw_json = EXCLUDED.raw_json;
+SQL
+reader_psql -tA -F '|' -c "SELECT started_at, object_type, matching_object_count, segment_index, start_ms, end_ms, snippet FROM gongmcp_search_transcript_segments_by_crm_context('shared Postgres', 'Opportunity', 'opp-crm-context-private', 5)" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context.txt
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_transcripts_by_crm_context","arguments":{"query":"shared Postgres","object_type":"Opportunity","object_id":"opp-crm-context-private","limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=search_transcripts_by_crm_context go run ./cmd/gongmcp > /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl
+grep -q '"search_transcripts_by_crm_context"' /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl
+grep -q 'shared.*Postgres' /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl
+grep -q 'object_type.*Opportunity' /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl
+grep -q 'matching_object_count.*1' /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl
+assert_mcp_success /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl 3
+if grep -q 'synthetic-call-001\|Pulsaris implementation kickoff\|opp-crm-context-private\|CRM Context Private Opportunity\|speaker-1\|raw_json\|raw_sha256\|search_vector\|field_value_text' /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl; then
+  echo "Postgres CRM-context transcript MCP output exposed identifiers, titles, speakers, or raw storage fields" >&2
+  exit 1
+fi
+grep -q '2026-01-15T15:00:00Z|Opportunity|1|0|0|5000|' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context.txt
+grep -q 'shared.*Postgres' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context.txt
+if grep -q 'synthetic-call-001\|speaker-1\|Pulsaris implementation kickoff\|opp-crm-context-private\|CRM Context Private Opportunity\|raw_json\|raw_sha256\|search_vector\|field_value_text' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context.txt; then
+  echo "Postgres CRM-context transcript function exposed title, object identifiers, or raw storage fields" >&2
+  exit 1
+fi
+for column in call_id title object_id object_name object_key speaker_id field_value_text raw_json raw_sha256 text; do
+  if reader_psql -c "SELECT ${column} FROM gongmcp_search_transcript_segments_by_crm_context('shared Postgres', 'Opportunity', 'opp-crm-context-private', 5)" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-${column}.txt 2>&1; then
+    echo "Postgres CRM-context transcript function exposed ${column} column" >&2
+    exit 1
+  fi
+done
+if reader_psql -c "SELECT text FROM transcript_segments LIMIT 1" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-transcript-text.txt 2>&1; then
+  echo "Postgres reader can directly select transcript segment text" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_id FROM call_context_objects LIMIT 1" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-object-id.txt 2>&1; then
+  echo "Postgres reader can directly select CRM object IDs" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_value_text FROM call_context_fields LIMIT 1" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-field-value-text.txt 2>&1; then
+  echo "Postgres reader can directly select CRM field values" >&2
+  exit 1
+fi
+
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -872,7 +921,16 @@ grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-
 grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=search_transcripts_by_crm_context go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started without search_transcripts_by_crm_context function grant" >&2
+  exit 1
+fi
+grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift.txt
+grep -q 'gongmcp_search_transcript_segments_by_crm_context' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift-repaired.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-public-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started with public function EXECUTE drift" >&2
   exit 1
@@ -881,6 +939,7 @@ grep -q 'over-broad function EXECUTE grants' /tmp/gongctl-postgres-reader-functi
 grep -q 'gongmcp_opportunities_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_opportunity_call_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-function-public-drift.txt
+grep -q 'gongmcp_search_transcript_segments_by_crm_context' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_object_type_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-function-public-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-function-public-drift-repaired.json
@@ -1061,7 +1120,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -1121,6 +1180,14 @@ echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
 echo "analyst-core output: /tmp/gongctl-postgres-analyst-core.jsonl"
 echo "analyst-business-core output: /tmp/gongctl-postgres-analyst-business-core.jsonl"
+echo "CRM-context transcript fixture output: /tmp/gongctl-postgres-crm-context-fixture.txt"
+echo "CRM-context transcript MCP output: /tmp/gongctl-postgres-search-transcripts-by-crm-context.jsonl"
+echo "CRM-context transcript reader output: /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context.txt"
+echo "CRM-context transcript text denial output: /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-transcript-text.txt"
+echo "CRM-context object-id denial output: /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-object-id.txt"
+echo "CRM-context field-value denial output: /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-field-value-text.txt"
+echo "CRM-context function-grant drift denial output: /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift.txt"
+echo "CRM-context function-grant drift repair output: /tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-function-grant-drift-repaired.json"
 echo "unmapped CRM fields output: /tmp/gongctl-postgres-unmapped-crm-fields.jsonl"
 echo "reader unmapped CRM function fields output: /tmp/gongctl-postgres-reader-unmapped-crm-function-fields.txt"
 echo "reader unmapped CRM function value-column denial output: /tmp/gongctl-postgres-reader-unmapped-crm-function-value-column.txt"

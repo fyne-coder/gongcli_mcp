@@ -406,6 +406,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_opportunities_missing_transcripts(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_opportunity_call_summary(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_population_matrix(text, text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
@@ -413,6 +414,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresOpportunitiesMissingTranscriptsFunctionSQL+`
 	`+postgresOpportunityCallSummaryFunctionSQL+`
 	`+postgresCRMFieldPopulationMatrixFunctionSQL+`
+	`+postgresTranscriptCRMContextSearchFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -677,6 +679,7 @@ BEGIN
 		GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader;
 		GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader;
 		GRANT SELECT (id, call_id, object_key, object_type) ON call_context_objects TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader;
 		GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader;
@@ -976,6 +979,7 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_late_stage_stage_counts(text, text, text)'),
 		('public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)'),
 		('public.gongmcp_crm_object_type_summary()'),
+		('public.gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer)'),
 		('public.gongmcp_opportunities_missing_transcripts(text, integer)'),
 		('public.gongmcp_opportunity_call_summary(text, integer)'),
 		('public.gongmcp_crm_field_population_matrix(text, text, integer)'),

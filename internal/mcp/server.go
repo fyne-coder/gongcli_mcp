@@ -1559,11 +1559,13 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.SearchLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().SearchResults)
 	rows, err := s.store.SearchTranscriptSegmentsByCRMContext(ctx, sqlite.TranscriptCRMSearchParams{
 		Query:      args.Query,
 		ObjectType: args.ObjectType,
 		ObjectID:   args.ObjectID,
-		Limit:      s.limitPolicy.SearchLimit(args.Limit),
+		Limit:      queryLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1578,7 +1580,7 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 		out = append(out, row)
 	}
 	results := mcpTranscriptCRMSearchResults(out)
-	return s.newCappedToolResult("search_transcripts_by_crm_context", results, len(results), s.limitPolicy.SearchLimit(args.Limit), filtered, crmTranscriptRefinements(args))
+	return s.newCappedToolResult("search_transcripts_by_crm_context", results, len(results), limit, filtered, crmTranscriptRefinements(args))
 }
 
 func mcpOpportunityMissingTranscriptSummaries(rows []sqlite.OpportunityMissingTranscriptSummary) []sqlite.OpportunityMissingTranscriptSummary {

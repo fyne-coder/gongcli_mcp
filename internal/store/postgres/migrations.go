@@ -961,4 +961,15 @@ BEGIN
 END;
 $$;
 `,
+	`
+DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
+` + postgresTranscriptCRMContextSearchFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }

@@ -105,6 +105,97 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_crm_object_type_summary() FROM PUBLIC;
 `
 
+const postgresTranscriptCRMContextSearchFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_by_crm_context(search_text text, object_type_arg text, object_id_arg text, row_limit integer)
+RETURNS TABLE(
+	started_at text,
+	object_type text,
+	matching_object_count bigint,
+	segment_index integer,
+	start_ms bigint,
+	end_ms bigint,
+	snippet text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH input AS (
+	SELECT TRIM(COALESCE(search_text, '')) AS search_value,
+	       TRIM(COALESCE(object_type_arg, '')) AS object_type_value,
+	       TRIM(COALESCE(object_id_arg, '')) AS object_id_value
+),
+q AS (
+	SELECT websearch_to_tsquery('simple', left(search_value, 160)) AS query
+	  FROM input
+	 WHERE search_value <> ''
+	   AND object_type_value <> ''
+	   AND length(search_value) <= 160
+	   AND search_value ~ '^[[:alnum:][:space:]_''"/.,;:-]+$'
+),
+bounded AS (
+	SELECT LEAST(GREATEST(COALESCE(row_limit, 20), 1), 1000) AS limit_value
+),
+matching_objects AS (
+	SELECT o.call_id,
+	       o.object_key,
+	       o.object_type
+	  FROM call_context_objects
+	       o
+	  CROSS JOIN input
+	 WHERE o.object_type = input.object_type_value
+	   AND (input.object_id_value = '' OR o.object_id = input.object_id_value)
+),
+matched_segments AS (
+	SELECT ts.call_id,
+	       c.started_at,
+	       ts.segment_index,
+	       ts.start_ms,
+	       ts.end_ms,
+	       ts_rank_cd(ts.search_vector, q.query) AS rank
+	  FROM transcript_segments ts
+	  JOIN calls c
+	    ON c.call_id = ts.call_id,
+	       q
+	WHERE ts.search_vector @@ q.query
+	   AND EXISTS (
+		SELECT 1
+		  FROM matching_objects mo
+		 WHERE mo.call_id = ts.call_id
+	   )
+	   AND NOT EXISTS (
+		SELECT 1
+		  FROM governance_suppressed_calls suppressed
+		 WHERE suppressed.call_id = ts.call_id
+	   )
+	 ORDER BY rank DESC, c.started_at DESC, ts.call_id, ts.segment_index
+	 LIMIT (SELECT limit_value FROM bounded)
+)
+SELECT m.started_at,
+       COALESCE((SELECT mo.object_type
+                   FROM matching_objects mo
+                  WHERE mo.call_id = m.call_id
+                  ORDER BY mo.object_key
+                  LIMIT 1), '') AS object_type,
+       COALESCE((SELECT COUNT(DISTINCT mo.object_key)
+                   FROM matching_objects mo
+                  WHERE mo.call_id = m.call_id), 0)::bigint AS matching_object_count,
+       m.segment_index,
+       m.start_ms,
+       m.end_ms,
+       COALESCE(NULLIF(ts_headline('simple', ts.text, q.query, 'StartSel=[, StopSel=], MaxWords=12, MinWords=4, ShortWord=2'), ''), LEFT(ts.text, 240)) AS snippet
+  FROM matched_segments m
+  JOIN transcript_segments ts
+    ON ts.call_id = m.call_id
+   AND ts.segment_index = m.segment_index,
+       q
+ ORDER BY m.rank DESC, m.started_at DESC, m.call_id, m.segment_index
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM PUBLIC;
+`
+
 const postgresCRMFieldValueSearchFunctionSQL = `
 CREATE OR REPLACE FUNCTION gongmcp_crm_field_value_search(object_type_arg text, field_name_arg text, value_query_arg text, row_limit integer, include_call_ids_arg boolean, include_value_snippets_arg boolean)
 RETURNS TABLE(
@@ -674,6 +765,52 @@ type postgresCRMSchemaFieldPayload struct {
 	FieldType  string
 	RawJSON    []byte
 	RawSHA256  string
+}
+
+func (s *Store) SearchTranscriptSegmentsByCRMContext(ctx context.Context, params sqlite.TranscriptCRMSearchParams) ([]sqlite.TranscriptCRMSearchResult, error) {
+	queryText := strings.TrimSpace(params.Query)
+	if queryText == "" {
+		return nil, errors.New("search query is required")
+	}
+	if err := validatePostgresBusinessAnalysisSearchText(queryText, "query"); err != nil {
+		return nil, err
+	}
+	objectType := strings.TrimSpace(params.ObjectType)
+	if objectType == "" {
+		return nil, errors.New("object type is required")
+	}
+	objectID := strings.TrimSpace(params.ObjectID)
+	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
+
+	rows, err := s.db.QueryContext(ctx, `SELECT ''::text AS call_id, ''::text AS title, started_at, object_type, ''::text AS object_id, ''::text AS object_name, matching_object_count, ''::text AS speaker_id, segment_index, start_ms, end_ms, snippet
+  FROM gongmcp_search_transcript_segments_by_crm_context($1, $2, $3, $4)`, queryText, objectType, objectID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []sqlite.TranscriptCRMSearchResult{}
+	for rows.Next() {
+		var row sqlite.TranscriptCRMSearchResult
+		if err := rows.Scan(
+			&row.CallID,
+			&row.Title,
+			&row.StartedAt,
+			&row.ObjectType,
+			&row.ObjectID,
+			&row.ObjectName,
+			&row.MatchingObjectCount,
+			&row.SpeakerID,
+			&row.SegmentIndex,
+			&row.StartMS,
+			&row.EndMS,
+			&row.Snippet,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListCRMObjectTypes(ctx context.Context) ([]sqlite.CRMObjectTypeSummary, error) {

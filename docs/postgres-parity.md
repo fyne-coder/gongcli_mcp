@@ -51,6 +51,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | MCP `opportunities_missing_transcripts` | SQLite Opportunity transcript coverage aggregate | complete for explicit Postgres allowlists with SQL-boundary identifier redaction | Security-definer aggregate groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; the function/MCP output does not return Opportunity IDs/names, latest call IDs, object names, owner IDs, amount/close date, raw values, transcript text, or raw storage fields | must match redacted MCP contract | Phase 9d | store parity test; MCP smoke; reader function/table denial smoke |
 | MCP `opportunity_call_summary` | SQLite Opportunity call aggregate | complete for explicit Postgres allowlists with SQL-boundary identifier redaction | Security-definer aggregate groups by Opportunity internally but returns only stage, call counts, transcript/missing-transcript counts, total duration, and latest-call timing; the function/MCP output does not return Opportunity IDs/names, latest call IDs, object names, owner IDs, amount/close date, raw values, transcript text, or raw storage fields | must match redacted MCP contract | Phase 9e | store parity test; MCP smoke; reader function/table denial smoke |
 | MCP `crm_field_population_matrix` | SQLite CRM field population aggregate | complete for explicit Postgres allowlists with safe categorical object/field grouping | Security-definer aggregate over normalized CRM context returns group value, field name/label, object count, call count, and populated count only; MCP/store output derives population rate from those counts; unsafe object/field pairs are rejected before execution, the group-by field is excluded from cells, and object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, raw hashes, titles, and transcript text remain denied | must match aggregate MCP contract with explicit Postgres grouping allowlist | Phase 9f | store parity test; MCP smoke; reader function/table denial smoke |
+| MCP `search_transcripts_by_crm_context` | SQLite CRM-context transcript snippet search | complete for explicit Postgres allowlists with SQL-boundary identifier redaction | Security-definer snippet search intersects Postgres full-text transcript matches with normalized CRM context by object type and optional object ID; the SQL result omits call IDs, call titles, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, and full transcript text; Postgres uses `ts_rank_cd`/`ts_headline`, so SQLite FTS5 ranking and snippet text can differ | must match redacted MCP contract with documented FTS ranking differences | Phase 9g | store parity test; MCP smoke; reader function/table denial smoke |
 | Scorecard activity | SQLite `scorecard_activity` | complete for aggregate Postgres slice | Same aggregate/read-only scorecard activity surfaces except raw reviewed-user grouping is rejected for Postgres read-only deployments; raw activity payloads and raw hashes are denied to the reader role | must match for aggregate surfaces | Phase 5d | scorecard activity parity tests; `scripts/postgres-smoke.sh` |
 | Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | Postgres policy-backed MCP suppression implemented for narrowed search slice; physical filtered export remains SQLite-only | Governed views, row-level security, or materialized governed snapshots before broad analyst/all-readonly GA | postgres-native equivalent | Phase 4 | restricted synthetic account absent from governed MCP search outputs |
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
@@ -100,6 +101,25 @@ Postgres parity should be added deliberately, with each surface classified as
 15. **Phase 9f targeted CRM field population matrix**: explicit Postgres
     `crm_field_population_matrix` allowlist parity with approved categorical
     grouping before broader full-preset enablement.
+16. **Phase 9g targeted CRM-context transcript search**: explicit Postgres
+    `search_transcripts_by_crm_context` allowlist parity with SQL-boundary CRM
+    identifier redaction before broader full-preset enablement.
+
+## Phase 9g Risk Status
+
+- Closed for the explicit allowlist slice: Postgres serves
+  `search_transcripts_by_crm_context` through an execute-only reader function
+  that joins transcript full-text matches to normalized CRM context and returns
+  bounded snippets plus offsets without call titles, CRM object IDs/names,
+  object keys, call IDs, speaker IDs, raw CRM values, raw JSON, raw hashes, or
+  full transcript text in the SQL result shape. Governance-suppressed calls are
+  excluded inside the reader function before MCP redaction.
+- Still queued: broad `analyst` / `all-readonly` enablement, governance-safe
+  aggregate/snippet variants, customer-scale ranking/performance testing,
+  minimum-cell/coarser-time controls for CRM-context snippet searches, and
+  per-surface reader roles. Snippets remain customer transcript content, and
+  exact object-type/object-ID filtering can reveal the presence of a sensitive
+  CRM-linked conversation when used by a trusted operator.
 
 ## Phase 9f Risk Status
 

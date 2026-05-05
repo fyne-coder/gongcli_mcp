@@ -177,11 +177,13 @@ The first Postgres vertical slice supports:
   and business-analysis tools plus analyst-core
 - explicit `gongmcp --tool-allowlist list_unmapped_crm_fields`,
   `search_crm_field_values`, `analyze_late_stage_crm_signals`,
-  `opportunities_missing_transcripts`, `opportunity_call_summary`, or
-  `crm_field_population_matrix` for directed CRM field discovery, value
-  lookup, aggregate late-stage signal review, redacted Opportunity transcript
-  coverage gaps, redacted Opportunity call aggregates, or aggregate CRM
-  field-population diagnostics
+  `opportunities_missing_transcripts`, `opportunity_call_summary`,
+  `crm_field_population_matrix`, or `search_transcripts_by_crm_context` for
+  directed CRM field discovery, value lookup, aggregate late-stage signal
+  review, redacted Opportunity transcript coverage gaps, redacted Opportunity
+  call aggregates, aggregate CRM field-population diagnostics, or
+  CRM-constrained transcript snippets. `search_transcripts_by_crm_context` is
+  development-branch work after `v0.3.3` until a tagged release includes it.
 - `gongmcp --tool-preset governance-search` with
   `GONGMCP_AI_GOVERNANCE_CONFIG` after a Postgres governance policy has been
   prepared; Postgres narrows this preset to supported search tools

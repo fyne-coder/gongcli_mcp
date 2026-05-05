@@ -30,9 +30,11 @@ call aggregates. Explicit `crm_field_population_matrix` support is also
 available for aggregate field-population diagnostics by approved object/field
 pairs: `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`,
 `Opportunity.Forecast_Category_AE__c`, `Account.Industry`,
-`Account.Account_Type__c`, and `Account.Revenue_Range_f__c`, while full
-`analyst` and `all-readonly` remain gated until the remaining full-catalog
-query parity is complete.
+`Account.Account_Type__c`, and `Account.Revenue_Range_f__c`. Explicit
+`search_transcripts_by_crm_context` support is available for CRM-constrained
+transcript snippet search with default MCP redaction of call, title, object,
+and speaker identifiers. Full `analyst` and `all-readonly` remain gated until
+the remaining full-catalog query parity is complete.
 
 ## Positioning
 
@@ -102,7 +104,10 @@ coverage gaps, use an explicit `opportunities_missing_transcripts` allowlist.
 For redacted Opportunity call aggregates, use an explicit
 `opportunity_call_summary` allowlist. For Postgres CRM field-population
 diagnostics, use an explicit `crm_field_population_matrix` allowlist and keep
-grouping to the approved object/field pairs listed below.
+grouping to the approved object/field pairs listed below. For targeted
+transcript snippets tied to a CRM object type or record, use an explicit
+`search_transcripts_by_crm_context` allowlist and keep snippet exposure
+reviewed.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
@@ -633,9 +638,9 @@ so the server can reject unexpected browser `Origin` headers.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
 JSON-RPC traffic.
 
-SQLite/full catalog tools. Postgres availability is limited to the supported
+Full SQLite catalog tools. Postgres availability is limited to the supported
 presets and explicit allowlists described above; unsupported Postgres tools and
-the full `analyst` / `all-readonly` presets fail closed.
+the full Postgres `analyst` / `all-readonly` presets fail closed.
 
 - `get_sync_status`
 - `search_calls`
@@ -680,7 +685,8 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `opportunities_missing_transcripts` returns redacted per-Opportunity transcript coverage metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; Opportunity IDs/names, latest call IDs, raw CRM values, and raw storage fields are not returned.
 `opportunity_call_summary` returns redacted per-Opportunity call aggregate metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call count, transcript/missing-transcript counts, total duration, and latest-call timing; Opportunity IDs/names, latest call IDs, owner IDs, amount/close date, raw CRM values, and raw storage fields are not returned.
 `crm_field_population_matrix` returns aggregate field-population cells grouped by approved categorical fields. Approved group values are intentionally exposed as aggregate labels. The Postgres reader function returns only group value, field name/label, object count, call count, and populated count; MCP/store output derives `population_rate` from those counts. Object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, raw hashes, titles, and transcript text are not returned.
-The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values and object names remain denied.
+`search_transcripts_by_crm_context` returns CRM-constrained transcript snippets. MCP output redacts call IDs, call titles, speaker IDs, CRM object IDs/names, and object keys. The Postgres reader function filters governance-suppressed calls inside SQL and returns only started time, object type, matching-object count, segment timing, and snippet; it omits call IDs, call titles, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, and full transcript text.
+The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values, object names, and transcript text remain denied.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 

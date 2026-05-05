@@ -34,7 +34,11 @@ local database files. Those workflows stay with the pilot operator.
   Wider SQLite/full-catalog presets such as `analyst` and `all-readonly`
   require operator/sponsor approval and are not the business-user default.
   Postgres expansion uses reviewed Postgres presets such as `analyst-core`,
-  `analyst-business-core`, `governance-search`, or explicit tool allowlists.
+  `analyst-business-core`, `governance-search`, or explicit tool allowlists
+  such as `search_transcripts_by_crm_context` for reviewed CRM-constrained
+  snippet investigations. The `search_transcripts_by_crm_context` Postgres
+  slice is development-branch work after `v0.3.3` until a tagged release
+  includes it.
 
 For the first-session handoff, use
 [Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).

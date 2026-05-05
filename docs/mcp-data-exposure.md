@@ -30,7 +30,9 @@ Current fixed boundaries:
 		  available for `list_unmapped_crm_fields`, `search_crm_field_values`,
 		  `analyze_late_stage_crm_signals`,
 		  `opportunities_missing_transcripts`, `opportunity_call_summary`, and
-		  `crm_field_population_matrix`; the late-stage Postgres slice is
+		  `crm_field_population_matrix`; `search_transcripts_by_crm_context` is
+		  available as an explicit CRM-constrained transcript snippet allowlist
+		  with default MCP identifier redaction. The late-stage Postgres slice is
 		  limited to `Opportunity.StageName`, the Opportunity aggregate slices
 		  return only redacted coverage and call-summary metadata, and the CRM
 		  matrix slice groups only by approved object/field pairs:
@@ -43,7 +45,8 @@ Current fixed boundaries:
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool
   surface; HTTP mode requires an explicit preset or allowlist. When neither is
-  set, the full read-only catalog remains available only for stdio.
+  set, the full read-only catalog remains available only for SQLite stdio;
+  Postgres stdio defaults to the bounded vertical-slice surface.
 - `gongmcp --ai-governance-config` and `GONGMCP_AI_GOVERNANCE_CONFIG` can
 	  suppress calls linked to private restricted-customer name/alias matches before
 	  MCP output reaches an LLM. The preferred SQLite blocklist path is
@@ -86,7 +89,7 @@ Current fixed boundaries:
 | `search_transcripts_by_call_facts` | Restricted | Snippet | No call IDs, titles, or speaker IDs in the result shape | Still returns bounded transcript/context excerpts plus lifecycle/scope/system/direction metadata |
 | `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
-| `search_transcripts_by_crm_context` | Restricted | Snippet | Server blanks call ID, title, object ID, object name, and speaker ID | Still returns transcript-derived snippets tied to an object type and call time |
+| `search_transcripts_by_crm_context` | Restricted | Snippet | Server blanks call ID, title, object ID, object name, and speaker ID; the Postgres reader function filters governance-suppressed calls in SQL and does not return call IDs, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, or full transcript text | Still returns transcript-derived snippets tied to an object type and call time |
 | `search_calls`, `search_calls_by_lifecycle`, `missing_transcripts` | Admin-only | Record reference | Return minimized call metadata rather than raw JSON | Exposes call IDs, titles, timestamps, and durations |
 | `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; Postgres read-only also redacts CRM object IDs | Still exposes call ID/title plus CRM object/field shape for one call; SQLite/full-catalog mode can include CRM object IDs |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
@@ -209,8 +212,8 @@ How to open up the surface intentionally:
   `governance-search`, or explicit allowlists such as
   `analyze_late_stage_crm_signals` and
   `opportunities_missing_transcripts`, `opportunity_call_summary`, or
-  `crm_field_population_matrix`; full Postgres `all-readonly` is not yet
-  supported.
+  `crm_field_population_matrix`, or `search_transcripts_by_crm_context`; full
+  Postgres `analyst` and `all-readonly` are not yet supported.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.
