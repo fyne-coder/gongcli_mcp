@@ -40,6 +40,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Business-pilot scoped grant SQL handoff | Manual role/grant notes | complete for first Postgres business-pilot scoped role | `gongctl mcp postgres-reader-sql --preset business-pilot` is the canonical print-only operator command; `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is the MCP-only compatibility path. Both emit deterministic, secret-free grant SQL from the same reviewed function and column maps used by startup validation; profile-backed only until a sanitized builtin SQL surface exists | postgres-native operator handoff | Phase 9l | `TestPrintPostgresReaderGrantsForBusinessPilot`; `TestMCPPostgresReaderSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
 | Business-pilot scoped grant reconciliation | Manual SQL apply/stale grant repair | complete for existing Postgres business-pilot scoped roles | `gongctl mcp postgres-reader-apply --preset business-pilot` dry-runs the reviewed SQL by default and applies it only with `--apply` plus a writable `GONG_DATABASE_URL` / `DATABASE_URL`; role credentials remain external, output never includes database URLs or passwords, and smoke proves stale grants are repaired while scoped startup and direct-denial checks still pass | postgres-native operator lifecycle | Phase 9p | `TestMCPPostgresReaderApplySuccessJSONOmitsURL`; `scripts/postgres-smoke.sh` |
 | Business-pilot sanitized profile-cache grants | SQLite filesystem read-only boundary | complete for first Postgres business-pilot scoped role | Exact `business-pilot` scoped roles grant `gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)` instead of the identifier-bearing or unbounded sanitized profile-cache helpers; direct SQL through the scoped role is denied on both unbounded helpers and receives blank call IDs/titles from the capped helper | postgres-native hardening | Phase 9m/9o | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `TestBuildScopedReaderGrantSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
+| Business-pilot scoped profile aggregate helpers | SQLite profile-cache aggregation | in progress for exact Postgres business-pilot scoped role | Exact `business-pilot` scoped role grants sanitized lifecycle-summary and transcript-backlog helpers so profile aggregate MCP tools aggregate/filter in SQL before applying output limits instead of aggregating over the 1,000-row direct cache helper cap | postgres-native hardening | Phase 9q | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
@@ -137,6 +138,9 @@ Postgres parity should be added deliberately, with each surface classified as
 25. **Phase 9p scoped reader grant reconciliation**: dry-run/apply operator
     command reconciles the reviewed business-pilot grant block for an existing
     role without managing credentials.
+26. **Phase 9q scoped profile aggregate helpers**: move exact business-pilot
+    profile lifecycle summary and transcript backlog reads onto sanitized SQL
+    aggregate helpers so they do not depend on the capped direct row helper.
 
 ## Phase 9l Risk Status
 
@@ -164,8 +168,22 @@ Postgres parity should be added deliberately, with each surface classified as
   or passwords and the synthetic smoke proves it can repair stale helper grants.
 - Remaining risk: the command expects an existing customer-managed role and does
   not create LOGIN credentials, rotate passwords, or manage per-environment
-  secret stores. It remains business-pilot-only until other preset maps receive
-  the same table/column/function review.
+  secret stores. It clears current public table/function grants but cannot clear
+  default privileges created by other grantors, so operators should avoid
+  default grants to the scoped service role and keep MCP startup privilege
+  enforcement enabled. It remains business-pilot-only until other preset maps
+  receive the same table/column/function review.
+
+## Phase 9q Risk Status
+
+- In progress: exact `business-pilot` scoped validation grants sanitized
+  profile lifecycle-summary and transcript-backlog helpers. These helpers
+  aggregate/filter against the full active profile cache in SQL and keep direct
+  SQL outputs identifier-minimized, while the direct row helper remains capped
+  at 1,000 rows.
+- Remaining risk until closeout: this covers the first two aggregate tools
+  called by `business-pilot`; other profile-backed surfaces still need their
+  own reviewed SQL helpers before broad scoped role expansion.
 
 ## Phase 9m/9n/9o Risk Status
 

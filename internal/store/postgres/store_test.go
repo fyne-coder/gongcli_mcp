@@ -1122,7 +1122,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_active_business_profile_sanitized", "gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_sanitized_limited", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_cache_meta_sanitized", "gongmcp_profile_call_fact_summary", "gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_active_business_profile_sanitized", "gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_sanitized_limited", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_cache_meta_sanitized", "gongmcp_profile_call_fact_summary", "gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_lifecycle_summary_sanitized", "gongmcp_profile_transcript_backlog_sanitized", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -1209,6 +1209,58 @@ func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
 	}()
 	if _, err := OpenStatus(ctx, databaseURL); err == nil || !strings.Contains(err.Error(), "schema version") {
 		t.Fatalf("OpenStatus stale migration error=%v, want schema version guidance", err)
+	}
+}
+
+func TestPostgresMigrationAppendsBusinessPilotScopedHelpers(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+
+	helperMigrationVersion := 0
+	for idx, migration := range migrations {
+		if strings.Contains(migration, "gongmcp_profile_transcript_backlog_sanitized") {
+			helperMigrationVersion = idx + 1
+		}
+	}
+	if helperMigrationVersion == 0 {
+		t.Fatal("business-pilot scoped helper migration not found")
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version >= $1`, helperMigrationVersion); err != nil {
+		t.Fatalf("delete helper migration versions: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `
+DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text);
+DROP FUNCTION IF EXISTS gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer);
+`); err != nil {
+		t.Fatalf("drop scoped helper functions: %v", err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("rerun migrations returned error: %v", err)
+	}
+	for _, function := range []string{"gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_lifecycle_summary_sanitized", "gongmcp_profile_transcript_backlog_sanitized"} {
+		var exists bool
+		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1
+		  FROM pg_proc p
+		  JOIN pg_namespace n ON n.oid = p.pronamespace
+		 WHERE n.nspname = current_schema()
+		   AND p.proname = $1
+	)`, function).Scan(&exists); err != nil {
+			t.Fatalf("check function %s: %v", function, err)
+		}
+		if !exists {
+			t.Fatalf("function %s does not exist after appended migration", function)
+		}
 	}
 }
 

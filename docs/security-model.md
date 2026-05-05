@@ -142,8 +142,11 @@ Implementation controls on the CLI side:
   `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
   compatibility path for MCP-only images. It intentionally excludes role
   credentials and database URLs. Create LOGIN credentials through the deployment
-  secret manager; the apply command does not manage passwords or create roles.
-  This first scoped role is profile-backed;
+	  secret manager; the apply command does not manage passwords or create roles.
+	  Do not configure default privileges that grant future public tables or
+	  functions to the scoped service role; keep MCP startup privilege enforcement
+	  enabled so stale grants fail closed.
+	  This first scoped role is profile-backed;
   explicit `lifecycle_source=builtin` still requires the broader compatibility
   reader until a sanitized builtin SQL surface exists.
   The scoped reader URL remains a service secret because selected functions and

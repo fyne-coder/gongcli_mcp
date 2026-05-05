@@ -631,8 +631,10 @@ The generated SQL and apply JSON do not create credentials or print database
 URLs. Create the LOGIN role and password through your normal secret management
 process. Then dry-run/review the grant block and use `--apply` with a writable
 operator URL to reconcile grants for that existing role. The apply command is
-safe to rerun for stale-helper repair, but it is not a password or role-creation
-manager. Run `gongmcp` with the scoped reader URL and
+safe to rerun to clear stale public table/function grants and regrant the
+reviewed surface, but it is not a password or role-creation manager and it
+cannot clear default privileges created by other grantors. Avoid default grants
+to this scoped service role. Run `gongmcp` with the scoped reader URL and
 `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a `gongmcp` service
 credential, not an analyst SQL login. The scoped active-profile and
 profile-cache helpers redact source metadata and call IDs/titles, but selected

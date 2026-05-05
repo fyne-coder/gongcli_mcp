@@ -845,7 +845,27 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
+DECLARE
+	safe_group_by text;
 BEGIN
+safe_group_by := CASE lower(trim(COALESCE(group_by_arg, '')))
+	WHEN '' THEN 'lifecycle'
+	WHEN 'lifecycle_bucket' THEN 'lifecycle'
+	WHEN 'lifecycle' THEN 'lifecycle'
+	WHEN 'scope' THEN 'scope'
+	WHEN 'system' THEN 'system'
+	WHEN 'direction' THEN 'direction'
+	WHEN 'transcript_status' THEN 'transcript_status'
+	WHEN 'calendar' THEN 'calendar'
+	WHEN 'calendar_event_status' THEN 'calendar'
+	WHEN 'duration_bucket' THEN 'duration_bucket'
+	WHEN 'month' THEN 'month'
+	WHEN 'call_month' THEN 'month'
+	ELSE ''
+END;
+IF safe_group_by = '' THEN
+	RAISE EXCEPTION 'group_by % is not supported by the business-pilot scoped Postgres reader', group_by_arg;
+END IF;
 RETURN QUERY
 SELECT s.group_by,
        s.group_value,
@@ -863,21 +883,7 @@ SELECT s.group_by,
   FROM gongmcp_profile_call_fact_summary(
 	profile_id_arg,
 	canonical_sha_arg,
-	CASE lower(trim(COALESCE(group_by_arg, '')))
-		WHEN '' THEN 'lifecycle'
-		WHEN 'lifecycle_bucket' THEN 'lifecycle'
-		WHEN 'lifecycle' THEN 'lifecycle'
-		WHEN 'scope' THEN 'scope'
-		WHEN 'system' THEN 'system'
-		WHEN 'direction' THEN 'direction'
-		WHEN 'transcript_status' THEN 'transcript_status'
-		WHEN 'calendar' THEN 'calendar'
-		WHEN 'calendar_event_status' THEN 'calendar'
-		WHEN 'duration_bucket' THEN 'duration_bucket'
-		WHEN 'month' THEN 'month'
-		WHEN 'call_month' THEN 'month'
-		ELSE '__unsupported_scoped_group__'
-	END,
+	safe_group_by,
 	lifecycle_bucket_arg,
 	scope_arg,
 	system_arg,
@@ -888,6 +894,121 @@ SELECT s.group_by,
 END
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_profile_lifecycle_summary_sanitized(profile_id_arg bigint, canonical_sha_arg text, bucket_arg text)
+RETURNS TABLE(
+	bucket text,
+	call_count bigint,
+	transcript_count bigint,
+	missing_transcript_count bigint,
+	opportunity_call_count bigint,
+	account_call_count bigint,
+	total_duration_seconds bigint,
+	latest_call_id text,
+	latest_call_at text,
+	high_confidence_calls bigint,
+	medium_confidence_calls bigint,
+	low_confidence_calls bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT c.lifecycle_bucket AS bucket,
+       COUNT(*) AS call_count,
+       COALESCE(SUM(CASE WHEN c.transcript_present THEN 1 ELSE 0 END), 0) AS transcript_count,
+       COALESCE(SUM(CASE WHEN NOT c.transcript_present THEN 1 ELSE 0 END), 0) AS missing_transcript_count,
+       COALESCE(SUM(CASE WHEN c.deal_count > 0 THEN 1 ELSE 0 END), 0) AS opportunity_call_count,
+       COALESCE(SUM(CASE WHEN c.account_count > 0 THEN 1 ELSE 0 END), 0) AS account_call_count,
+       COALESCE(SUM(c.duration_seconds), 0) AS total_duration_seconds,
+       ''::text AS latest_call_id,
+       COALESCE(MAX(c.started_at), '') AS latest_call_at,
+       COALESCE(SUM(CASE WHEN c.lifecycle_confidence = 'high' THEN 1 ELSE 0 END), 0) AS high_confidence_calls,
+       COALESCE(SUM(CASE WHEN c.lifecycle_confidence = 'medium' THEN 1 ELSE 0 END), 0) AS medium_confidence_calls,
+       COALESCE(SUM(CASE WHEN c.lifecycle_confidence NOT IN ('high', 'medium') THEN 1 ELSE 0 END), 0) AS low_confidence_calls
+  FROM profile_call_fact_cache c
+  JOIN profile_meta p
+    ON p.id = c.profile_id
+ WHERE p.is_active = true
+   AND c.profile_id = profile_id_arg
+   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
+   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
+ GROUP BY c.lifecycle_bucket
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_profile_transcript_backlog_sanitized(profile_id_arg bigint, canonical_sha_arg text, bucket_arg text, from_date_arg text, to_date_arg text, scope_arg text, system_arg text, direction_arg text, row_limit integer)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	duration_seconds bigint,
+	system text,
+	direction text,
+	scope text,
+	bucket text,
+	confidence text,
+	reason text,
+	evidence_fields_json jsonb,
+	priority_score bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH lifecycle_order AS (
+	SELECT bucket, COALESCE(MAX(ordinal), 500) AS ordinal
+	  FROM profile_lifecycle_rule
+	 WHERE profile_id = profile_id_arg
+	 GROUP BY bucket
+),
+ranked AS (
+	SELECT ''::text AS call_id,
+	       ''::text AS title,
+	       c.started_at,
+	       c.duration_seconds,
+	       c.system,
+	       c.direction,
+	       c.scope,
+	       c.lifecycle_bucket AS bucket,
+	       c.lifecycle_confidence AS confidence,
+	       c.lifecycle_reason AS reason,
+	       c.evidence_fields_json,
+	       (
+	         (100 - COALESCE(lo.ordinal, 500))
+	         + CASE WHEN c.lifecycle_bucket IN ('closed_won', 'closed_lost', 'post_sales') THEN 50 ELSE 0 END
+	         + CASE WHEN c.lifecycle_confidence = 'high' THEN 20 ELSE 0 END
+	         + CASE WHEN c.scope = 'External' THEN 25 ELSE 0 END
+	         + CASE WHEN c.direction = 'Conference' THEN 20 ELSE 0 END
+	         + CASE WHEN c.duration_seconds >= 1800 THEN 20 WHEN c.duration_seconds >= 600 THEN 10 ELSE 0 END
+	         + CASE WHEN c.deal_count > 0 THEN 10 ELSE 0 END
+	         - CASE WHEN c.duration_seconds > 0 AND c.duration_seconds < 300 AND c.direction <> 'Conference' THEN 20 ELSE 0 END
+	       )::bigint AS priority_score
+	  FROM profile_call_fact_cache c
+	  JOIN profile_meta p
+	    ON p.id = c.profile_id
+	  LEFT JOIN lifecycle_order lo
+	    ON lo.bucket = c.lifecycle_bucket
+	 WHERE p.is_active = true
+	   AND c.profile_id = profile_id_arg
+	   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
+	   AND NOT c.transcript_present
+	   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
+	   AND (from_date_arg = '' OR left(c.started_at, 10) >= from_date_arg)
+	   AND (to_date_arg = '' OR left(c.started_at, 10) <= to_date_arg)
+	   AND (scope_arg = '' OR c.scope = scope_arg)
+	   AND (system_arg = '' OR c.system = system_arg)
+	   AND (direction_arg = '' OR c.direction = direction_arg)
+)
+SELECT call_id, title, started_at, duration_seconds, system, direction, scope,
+       bucket, confidence, reason, evidence_fields_json, priority_score
+  FROM ranked
+ ORDER BY priority_score DESC, started_at DESC, call_id
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 
 `,
 	`
@@ -1343,5 +1464,191 @@ SELECT ''::text AS call_id,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 1000), 1), 1000)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_summary_sanitized(profile_id_arg bigint, canonical_sha_arg text, group_by_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, row_limit integer)
+RETURNS TABLE(
+	group_by text,
+	group_value text,
+	call_count bigint,
+	transcript_count bigint,
+	missing_transcript_count bigint,
+	opportunity_call_count bigint,
+	account_call_count bigint,
+	external_call_count bigint,
+	internal_call_count bigint,
+	unknown_scope_call_count bigint,
+	total_duration_seconds bigint,
+	avg_duration_seconds double precision,
+	latest_call_at text
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+	safe_group_by text;
+BEGIN
+safe_group_by := CASE lower(trim(COALESCE(group_by_arg, '')))
+	WHEN '' THEN 'lifecycle'
+	WHEN 'lifecycle_bucket' THEN 'lifecycle'
+	WHEN 'lifecycle' THEN 'lifecycle'
+	WHEN 'scope' THEN 'scope'
+	WHEN 'system' THEN 'system'
+	WHEN 'direction' THEN 'direction'
+	WHEN 'transcript_status' THEN 'transcript_status'
+	WHEN 'calendar' THEN 'calendar'
+	WHEN 'calendar_event_status' THEN 'calendar'
+	WHEN 'duration_bucket' THEN 'duration_bucket'
+	WHEN 'month' THEN 'month'
+	WHEN 'call_month' THEN 'month'
+	ELSE ''
+END;
+IF safe_group_by = '' THEN
+	RAISE EXCEPTION 'group_by % is not supported by the business-pilot scoped Postgres reader', group_by_arg;
+END IF;
+RETURN QUERY
+SELECT s.group_by,
+       s.group_value,
+       s.call_count,
+       s.transcript_count,
+       s.missing_transcript_count,
+       s.opportunity_call_count,
+       s.account_call_count,
+       s.external_call_count,
+       s.internal_call_count,
+       s.unknown_scope_call_count,
+       s.total_duration_seconds,
+       s.avg_duration_seconds,
+       s.latest_call_at
+  FROM gongmcp_profile_call_fact_summary(
+	profile_id_arg,
+	canonical_sha_arg,
+	safe_group_by,
+	lifecycle_bucket_arg,
+	scope_arg,
+	system_arg,
+	direction_arg,
+	transcript_status_arg,
+	row_limit
+  ) AS s;
+END
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_profile_lifecycle_summary_sanitized(profile_id_arg bigint, canonical_sha_arg text, bucket_arg text)
+RETURNS TABLE(
+	bucket text,
+	call_count bigint,
+	transcript_count bigint,
+	missing_transcript_count bigint,
+	opportunity_call_count bigint,
+	account_call_count bigint,
+	total_duration_seconds bigint,
+	latest_call_id text,
+	latest_call_at text,
+	high_confidence_calls bigint,
+	medium_confidence_calls bigint,
+	low_confidence_calls bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT c.lifecycle_bucket AS bucket,
+       COUNT(*) AS call_count,
+       COALESCE(SUM(CASE WHEN c.transcript_present THEN 1 ELSE 0 END), 0) AS transcript_count,
+       COALESCE(SUM(CASE WHEN NOT c.transcript_present THEN 1 ELSE 0 END), 0) AS missing_transcript_count,
+       COALESCE(SUM(CASE WHEN c.deal_count > 0 THEN 1 ELSE 0 END), 0) AS opportunity_call_count,
+       COALESCE(SUM(CASE WHEN c.account_count > 0 THEN 1 ELSE 0 END), 0) AS account_call_count,
+       COALESCE(SUM(c.duration_seconds), 0) AS total_duration_seconds,
+       ''::text AS latest_call_id,
+       COALESCE(MAX(c.started_at), '') AS latest_call_at,
+       COALESCE(SUM(CASE WHEN c.lifecycle_confidence = 'high' THEN 1 ELSE 0 END), 0) AS high_confidence_calls,
+       COALESCE(SUM(CASE WHEN c.lifecycle_confidence = 'medium' THEN 1 ELSE 0 END), 0) AS medium_confidence_calls,
+       COALESCE(SUM(CASE WHEN c.lifecycle_confidence NOT IN ('high', 'medium') THEN 1 ELSE 0 END), 0) AS low_confidence_calls
+  FROM profile_call_fact_cache c
+  JOIN profile_meta p
+    ON p.id = c.profile_id
+ WHERE p.is_active = true
+   AND c.profile_id = profile_id_arg
+   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
+   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
+ GROUP BY c.lifecycle_bucket
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_profile_transcript_backlog_sanitized(profile_id_arg bigint, canonical_sha_arg text, bucket_arg text, from_date_arg text, to_date_arg text, scope_arg text, system_arg text, direction_arg text, row_limit integer)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	duration_seconds bigint,
+	system text,
+	direction text,
+	scope text,
+	bucket text,
+	confidence text,
+	reason text,
+	evidence_fields_json jsonb,
+	priority_score bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH lifecycle_order AS (
+	SELECT bucket, COALESCE(MAX(ordinal), 500) AS ordinal
+	  FROM profile_lifecycle_rule
+	 WHERE profile_id = profile_id_arg
+	 GROUP BY bucket
+),
+ranked AS (
+	SELECT ''::text AS call_id,
+	       ''::text AS title,
+	       c.started_at,
+	       c.duration_seconds,
+	       c.system,
+	       c.direction,
+	       c.scope,
+	       c.lifecycle_bucket AS bucket,
+	       c.lifecycle_confidence AS confidence,
+	       c.lifecycle_reason AS reason,
+	       c.evidence_fields_json,
+	       (
+	         (100 - COALESCE(lo.ordinal, 500))
+	         + CASE WHEN c.lifecycle_bucket IN ('closed_won', 'closed_lost', 'post_sales') THEN 50 ELSE 0 END
+	         + CASE WHEN c.lifecycle_confidence = 'high' THEN 20 ELSE 0 END
+	         + CASE WHEN c.scope = 'External' THEN 25 ELSE 0 END
+	         + CASE WHEN c.direction = 'Conference' THEN 20 ELSE 0 END
+	         + CASE WHEN c.duration_seconds >= 1800 THEN 20 WHEN c.duration_seconds >= 600 THEN 10 ELSE 0 END
+	         + CASE WHEN c.deal_count > 0 THEN 10 ELSE 0 END
+	         - CASE WHEN c.duration_seconds > 0 AND c.duration_seconds < 300 AND c.direction <> 'Conference' THEN 20 ELSE 0 END
+	       )::bigint AS priority_score
+	  FROM profile_call_fact_cache c
+	  JOIN profile_meta p
+	    ON p.id = c.profile_id
+	  LEFT JOIN lifecycle_order lo
+	    ON lo.bucket = c.lifecycle_bucket
+	 WHERE p.is_active = true
+	   AND c.profile_id = profile_id_arg
+	   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
+	   AND NOT c.transcript_present
+	   AND (bucket_arg = '' OR c.lifecycle_bucket = bucket_arg)
+	   AND (from_date_arg = '' OR left(c.started_at, 10) >= from_date_arg)
+	   AND (to_date_arg = '' OR left(c.started_at, 10) <= to_date_arg)
+	   AND (scope_arg = '' OR c.scope = scope_arg)
+	   AND (system_arg = '' OR c.system = system_arg)
+	   AND (direction_arg = '' OR c.direction = direction_arg)
+)
+SELECT call_id, title, started_at, duration_seconds, system, direction, scope,
+       bucket, confidence, reason, evidence_fields_json, priority_score
+  FROM ranked
+ ORDER BY priority_score DESC, started_at DESC, call_id
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 `,
 }

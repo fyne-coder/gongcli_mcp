@@ -714,6 +714,9 @@ func (s *Store) summarizeProfileFactsRowsSQL(ctx context.Context, profileID int6
 	}
 	functionName := "gongmcp_profile_call_fact_summary"
 	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		if !businessPilotScopedSummaryGroupBy(groupBy) {
+			return nil, fmt.Errorf("group_by %q is not supported by the business-pilot scoped Postgres reader; use lifecycle, scope, system, direction, transcript_status, calendar, duration_bucket, or month", groupBy)
+		}
 		functionName = "gongmcp_profile_call_fact_summary_sanitized"
 	}
 	rows, err := s.db.QueryContext(ctx, `
@@ -755,6 +758,15 @@ SELECT group_by,
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+func businessPilotScopedSummaryGroupBy(groupBy string) bool {
+	switch normalizeProfileGroupBy(groupBy) {
+	case "", "lifecycle", "scope", "system", "direction", "transcript_status", "calendar", "duration_bucket", "month":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateProfileSummaryFilters(params sqlite.CallFactsSummaryParams) error {

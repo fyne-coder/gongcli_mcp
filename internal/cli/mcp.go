@@ -139,7 +139,7 @@ func (a *app) mcpPostgresReaderApply(ctx context.Context, args []string) error {
 	}
 	appliedSQL, err := mcpApplyScopedReaderGrants(ctx, databaseURL, params)
 	if err != nil {
-		return err
+		return fmt.Errorf("apply scoped Postgres reader grants failed; verify the writable Postgres URL, network path, role/database names, and operator privileges")
 	}
 	sum := sha256.Sum256([]byte(appliedSQL))
 	return writeJSONValue(a.out, postgresReaderApplyResponse{

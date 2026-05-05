@@ -2,12 +2,14 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -105,11 +107,19 @@ func (s *Store) SummarizeCallsByLifecycleWithSource(ctx context.Context, params 
 		rows, err := s.SummarizeCallsByLifecycle(ctx, sqlite.LifecycleSummaryParams{Bucket: params.Bucket, LifecycleSource: sqlite.LifecycleSourceBuiltin})
 		return rows, info, err
 	}
-	facts, p, err := s.profileCallFacts(ctx)
+	meta, p, err := s.profileFactsReady(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	info.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		rows, err := s.summarizeProfileLifecycleRowsSQL(ctx, meta.ID, meta.CanonicalSHA256, params.Bucket, p)
+		return rows, info, err
+	}
+	facts, _, err := s.profileCallFacts(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
 	bucketFilter := strings.TrimSpace(params.Bucket)
 	groups := map[string]*sqlite.LifecycleBucketSummary{}
 	for _, fact := range facts {
@@ -347,7 +357,7 @@ func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, 
 		rows, err := s.PrioritizeTranscriptsByLifecycle(ctx, params)
 		return rows, info, err
 	}
-	facts, p, err := s.profileCallFacts(ctx)
+	meta, p, err := s.profileFactsReady(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -379,6 +389,14 @@ func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, 
 			return nil, nil, errors.New("scope must be one of: External, Internal, Unknown")
 		}
 		scope = normalized
+	}
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		rows, err := s.profileTranscriptBacklogRowsSQL(ctx, meta.ID, meta.CanonicalSHA256, bucket, fromDate, toDate, scope, strings.TrimSpace(params.System), strings.TrimSpace(params.Direction), limit)
+		return rows, info, err
+	}
+	facts, _, err := s.profileCallFacts(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 	order := lifecycleOrderMap(p)
 	out := make([]sqlite.LifecycleTranscriptPriority, 0)
@@ -436,6 +454,96 @@ func (s *Store) PrioritizeTranscriptsByLifecycleWithSource(ctx context.Context, 
 		out = out[:limit]
 	}
 	return out, info, nil
+}
+
+func (s *Store) summarizeProfileLifecycleRowsSQL(ctx context.Context, profileID int64, canonicalSHA256 string, bucket string, p *profilepkg.Profile) ([]sqlite.LifecycleBucketSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT bucket,
+       call_count,
+       transcript_count,
+       missing_transcript_count,
+       opportunity_call_count,
+       account_call_count,
+       total_duration_seconds,
+       latest_call_id,
+       latest_call_at,
+       high_confidence_calls,
+       medium_confidence_calls,
+       low_confidence_calls
+  FROM gongmcp_profile_lifecycle_summary_sanitized($1, $2, $3)`,
+		profileID,
+		canonicalSHA256,
+		strings.TrimSpace(bucket),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]sqlite.LifecycleBucketSummary, 0)
+	for rows.Next() {
+		var row sqlite.LifecycleBucketSummary
+		if err := rows.Scan(&row.Bucket, &row.CallCount, &row.TranscriptCount, &row.MissingTranscriptCount, &row.OpportunityCallCount, &row.AccountCallCount, &row.TotalDurationSeconds, &row.LatestCallID, &row.LatestCallAt, &row.HighConfidenceCalls, &row.MediumConfidenceCalls, &row.LowConfidenceCalls); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	order := lifecycleOrderMap(p)
+	sort.Slice(out, func(i, j int) bool {
+		if order[out[i].Bucket] != order[out[j].Bucket] {
+			return order[out[i].Bucket] < order[out[j].Bucket]
+		}
+		return out[i].CallCount > out[j].CallCount
+	})
+	return out, nil
+}
+
+func (s *Store) profileTranscriptBacklogRowsSQL(ctx context.Context, profileID int64, canonicalSHA256 string, bucket string, fromDate string, toDate string, scope string, system string, direction string, limit int) ([]sqlite.LifecycleTranscriptPriority, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT call_id,
+       title,
+       started_at,
+       duration_seconds,
+       system,
+       direction,
+       scope,
+       bucket,
+       confidence,
+       reason,
+       evidence_fields_json::text,
+       priority_score
+  FROM gongmcp_profile_transcript_backlog_sanitized($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		profileID,
+		canonicalSHA256,
+		bucket,
+		fromDate,
+		toDate,
+		scope,
+		system,
+		direction,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]sqlite.LifecycleTranscriptPriority, 0)
+	for rows.Next() {
+		var row sqlite.LifecycleTranscriptPriority
+		var evidenceJSON string
+		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.DurationSeconds, &row.System, &row.Direction, &row.Scope, &row.Bucket, &row.Confidence, &row.Reason, &evidenceJSON, &row.PriorityScore); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(evidenceJSON) != "" {
+			if err := json.Unmarshal([]byte(evidenceJSON), &row.EvidenceFields); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) SummarizeCallFacts(ctx context.Context, params sqlite.CallFactsSummaryParams) ([]sqlite.CallFactsSummaryRow, error) {

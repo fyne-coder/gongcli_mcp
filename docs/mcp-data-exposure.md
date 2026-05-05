@@ -200,17 +200,23 @@ What the conservative defaults give you:
   boundary that denies direct reads of `calls.call_id`, `calls.title`,
   `call_facts.call_id`, and `call_facts.title`. The reviewed business-pilot
   grant block is printable with the canonical `gongctl mcp
-  postgres-reader-sql --preset business-pilot` operator command;
-  `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
-  compatibility path for MCP-only images. The SQL does not include credentials
-  or connection URLs. Apply it to a fresh `NOINHERIT` role, or revoke stale
-  grants before reuse. This first scoped role is profile-backed; explicit
+  postgres-reader-sql --preset business-pilot` operator command. Operators can
+  also run `gongctl mcp postgres-reader-apply --preset business-pilot` as a
+  dry-run to emit the same reviewed SQL, then add `--apply` with a writable
+  `GONG_DATABASE_URL` or `DATABASE_URL` to clear stale public table/function
+  privileges and regrant the reviewed surface for an existing role. Neither
+  path prints credentials or connection URLs, and role/password creation stays
+  in the deployment secret manager. `gongmcp --print-postgres-reader-grants
+  --tool-preset business-pilot` remains a compatibility path for MCP-only
+  images. This first scoped role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader
   until a sanitized builtin SQL surface exists. The scoped reader URL remains
   a service secret because selected functions and sanitized views can still
   expose minimized call metadata, timings, counts, tenant terminology. The
   scoped active-profile and profile-cache helpers redact source metadata and
-  call IDs/titles, and the direct profile-cache helper is capped at 1,000 rows per direct helper call.
+  call IDs/titles; profile aggregate helpers summarize/rank in SQL before
+  output limits; and the direct profile-cache helper is capped at 1,000 rows per
+  direct helper call.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes
