@@ -1487,6 +1487,7 @@ func (s *Server) searchCRMFieldValues(ctx context.Context, raw json.RawMessage) 
 		ValueQuery:          args.ValueQuery,
 		Limit:               capLimit(args.Limit, defaultCRMFieldValueRequestLimit, s.limitPolicy.Normalize().SearchResults),
 		IncludeValueSnippet: args.IncludeValueSnippets,
+		IncludeCallIDs:      args.IncludeCallIDs,
 	})
 	if err != nil {
 		return toolCallResult{}, err

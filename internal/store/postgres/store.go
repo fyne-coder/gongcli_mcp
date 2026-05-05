@@ -25,6 +25,8 @@ const (
 	maxCallSearchLimit           = 1000
 	defaultCRMFieldLimit         = 50
 	maxCRMFieldLimit             = 1000
+	defaultCRMFieldValueLimit    = 20
+	maxCRMFieldValueLimit        = 1000
 	postgresWriterLockKey        = "gongctl_postgres_writer_v1"
 )
 
@@ -330,6 +332,9 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
 	DROP VIEW IF EXISTS gongmcp_transcript_segments;
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
+	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -609,6 +614,7 @@ BEGIN
 		`+postgresSettingsReaderGrantStatementsSQL+`
 		`+postgresScorecardActivityReaderGrantStatementsSQL+`
 		`+postgresCRMInventoryReaderGrantStatementsSQL+`
+			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -868,6 +874,7 @@ WITH required_functions(signature) AS (
 	VALUES
 		('public.gongmcp_scorecard_activity_summary(text, integer)'),
 		('public.gongmcp_scorecard_activity_totals()'),
+		('public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature

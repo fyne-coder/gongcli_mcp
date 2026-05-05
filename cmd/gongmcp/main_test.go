@@ -58,8 +58,18 @@ func TestPostgresToolAllowlistAcceptsCoreQueryParityTools(t *testing.T) {
 }
 
 func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
-	if _, err := postgresToolAllowlist([]string{"search_crm_field_values"}, false, ""); err == nil {
+	if _, err := postgresToolAllowlist([]string{"list_unmapped_crm_fields"}, false, ""); err == nil {
 		t.Fatal("postgresToolAllowlist accepted unsupported tool")
+	}
+}
+
+func TestPostgresToolAllowlistAcceptsCRMFieldValueSearch(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"search_crm_field_values"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"search_crm_field_values"}) {
+		t.Fatalf("allowlist=%v want search_crm_field_values", allowlist)
 	}
 }
 

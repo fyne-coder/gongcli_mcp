@@ -45,6 +45,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Profile lifecycle source | `lifecycle_source=auto|profile|builtin` with `profile_call_fact_cache` | complete for first business-pilot slice when active profile cache is fresh | `profile` requires an active fresh profile cache; `auto` falls back to builtin only when no profile exists and otherwise fails closed on missing/stale read-only cache | must match | Phase 3b | profile lifecycle cache parity tests; `scripts/postgres-smoke.sh` |
 | Business-analysis calls/evidence | SQLite `business_analysis.go` helpers | complete for bounded Postgres starter slice | Equivalent read APIs over normalized context/facts/transcripts with Postgres-native FTS ranking/snippets | postgres-native equivalent | Phase 5b | business-analysis parity fixtures; analyst-business-core smoke |
 | CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | complete for bounded Postgres analyst-core slice: embedded CRM object/field aggregates, cached CRM integrations/schema fields, Gong settings, scorecards, and scorecard activity aggregates | Same cached metadata read surfaces without raw CRM values or raw settings payloads; broader settings/catalog query parity remains queued before full `analyst`/`all-readonly` | must match for implemented inventory surfaces | Phase 5a/5c/5d/5e | inventory/query tests; `scripts/postgres-smoke.sh` |
+| MCP `search_crm_field_values` | SQLite explicit CRM value lookup | complete for explicit Postgres allowlists | Security-definer lookup over normalized CRM context with default redaction for call IDs, titles, object IDs/names, and values; explicit opt-ins return call IDs and bounded snippets/titles; the reader function never returns object IDs/names and direct table reads remain denied | must match at MCP contract | Phase 9a | store parity test; redacted/opt-in MCP smoke; reader function/table denial smoke |
 | Scorecard activity | SQLite `scorecard_activity` | complete for aggregate Postgres slice | Same aggregate/read-only scorecard activity surfaces except raw reviewed-user grouping is rejected for Postgres read-only deployments; raw activity payloads and raw hashes are denied to the reader role | must match for aggregate surfaces | Phase 5d | scorecard activity parity tests; `scripts/postgres-smoke.sh` |
 | Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | Postgres policy-backed MCP suppression implemented for narrowed search slice; physical filtered export remains SQLite-only | Governed views, row-level security, or materialized governed snapshots before broad analyst/all-readonly GA | postgres-native equivalent | Phase 4 | restricted synthetic account absent from governed MCP search outputs |
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
@@ -76,6 +77,9 @@ Postgres parity should be added deliberately, with each surface classified as
 9. **Phase 8 retention/release follow-through**: scheduled retention policy
    YAML, customer-platform restore drills, and release hardening that depends on
    customer-owned infrastructure.
+10. **Phase 9a targeted CRM value lookup**: explicit Postgres
+    `search_crm_field_values` allowlist parity before broader full-preset
+    enablement.
 
 ## Phase 7 Risk Status
 
@@ -220,6 +224,13 @@ Postgres parity should be added deliberately, with each surface classified as
   includes policy SHA-256 plus sanitized approval metadata without local policy
   paths. Scheduler installation, production PITR/replica retention, and
   customer backup-policy enforcement remain deployment-owned.
-- Still queued: database-enforced governance filtering/RLS, analyst and
+- Closed for Phase 9a CRM field-value search parity: Postgres implements
+  explicit `search_crm_field_values` allowlists through a security-definer
+  function over normalized CRM context. MCP defaults redact call IDs, titles,
+  object IDs/names, and value snippets; explicit opt-ins return call IDs plus
+  bounded snippets/titles. The reader function enforces those flags, never
+  returns object IDs/names, and the reader role still cannot directly select
+  raw CRM field values.
+- Still queued: database-enforced governance filtering/RLS, full analyst and
   all-readonly query parity, customer-platform PITR/replica restore drills, and
   cross-version customer-data restore validation before GA.

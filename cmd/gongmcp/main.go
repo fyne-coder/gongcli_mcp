@@ -339,6 +339,7 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		"rank_transcript_backlog":                   {},
 		"search_calls":                              {},
 		"search_calls_by_lifecycle":                 {},
+		"search_crm_field_values":                   {},
 		"search_transcript_segments":                {},
 		"search_transcript_quotes_with_attribution": {},
 		"search_transcripts_by_call_facts":          {},

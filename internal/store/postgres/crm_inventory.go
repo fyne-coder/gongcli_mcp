@@ -73,6 +73,45 @@ END;
 $$;
 `
 
+const postgresCRMFieldValueSearchFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_crm_field_value_search(object_type_arg text, field_name_arg text, value_query_arg text, row_limit integer, include_call_ids_arg boolean, include_value_snippets_arg boolean)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	object_type text,
+	field_name text,
+	field_label text,
+	value_snippet text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT CASE WHEN COALESCE(include_call_ids_arg, false) THEN c.call_id ELSE ''::text END AS call_id,
+       CASE WHEN COALESCE(include_value_snippets_arg, false) THEN c.title ELSE ''::text END AS title,
+       c.started_at,
+       o.object_type,
+       f.field_name,
+       f.field_label,
+       CASE WHEN COALESCE(include_value_snippets_arg, false) THEN LEFT(TRIM(f.field_value_text), 240) ELSE ''::text END AS value_snippet
+  FROM call_context_fields f
+  JOIN call_context_objects o
+    ON o.call_id = f.call_id
+   AND o.object_key = f.object_key
+  JOIN calls c
+    ON c.call_id = f.call_id
+ WHERE o.object_type = object_type_arg
+   AND f.field_name = field_name_arg
+   AND LOWER(f.field_value_text) LIKE '%' || LOWER(value_query_arg) || '%'
+ ORDER BY c.started_at DESC, c.call_id
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 20), 1), 1000)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM PUBLIC;
+`
+
 type postgresCRMIntegrationPayload struct {
 	IntegrationID string
 	Name          string
@@ -202,6 +241,54 @@ SELECT object_type,
 			&row.CallCount,
 			&row.PopulatedCount,
 			&row.DistinctValueCount,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SearchCRMFieldValues(ctx context.Context, params sqlite.CRMFieldValueSearchParams) ([]sqlite.CRMFieldValueMatch, error) {
+	objectType := strings.TrimSpace(params.ObjectType)
+	fieldName := strings.TrimSpace(params.FieldName)
+	valueQuery := strings.TrimSpace(params.ValueQuery)
+	if objectType == "" {
+		return nil, errors.New("object type is required")
+	}
+	if fieldName == "" {
+		return nil, errors.New("field name is required")
+	}
+	if valueQuery == "" {
+		return nil, errors.New("value query is required")
+	}
+	limit := boundedLimit(params.Limit, defaultCRMFieldValueLimit, maxCRMFieldValueLimit)
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT call_id,
+       title,
+       started_at,
+       object_type,
+       field_name,
+       field_label,
+       value_snippet
+  FROM gongmcp_crm_field_value_search($1, $2, $3, $4, $5, $6)`, objectType, fieldName, valueQuery, limit, params.IncludeCallIDs, params.IncludeValueSnippet)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []sqlite.CRMFieldValueMatch
+	for rows.Next() {
+		var row sqlite.CRMFieldValueMatch
+		if err := rows.Scan(
+			&row.CallID,
+			&row.Title,
+			&row.StartedAt,
+			&row.ObjectType,
+			&row.FieldName,
+			&row.FieldLabel,
+			&row.ValueSnippet,
 		); err != nil {
 			return nil, err
 		}

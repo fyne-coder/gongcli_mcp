@@ -887,4 +887,16 @@ $$;
 	CREATE INDEX IF NOT EXISTS idx_pg_profile_call_fact_cache_call
 		ON profile_call_fact_cache(call_id);
 	`,
+	`
+DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
+` + postgresCRMFieldValueSearchFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }

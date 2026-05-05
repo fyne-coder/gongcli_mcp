@@ -574,6 +574,43 @@ if grep -q 'raw_json\|field_value_text' /tmp/gongctl-postgres-analyst-business-c
   exit 1
 fi
 
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_crm_field_values","arguments":{"object_type":"Opportunity","field_name":"StageName","value_query":"Proposal","limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=search_crm_field_values go run ./cmd/gongmcp > /tmp/gongctl-postgres-crm-field-values-redacted.jsonl
+grep -q '"search_crm_field_values"' /tmp/gongctl-postgres-crm-field-values-redacted.jsonl
+grep -q 'field_name.*StageName' /tmp/gongctl-postgres-crm-field-values-redacted.jsonl
+assert_mcp_success /tmp/gongctl-postgres-crm-field-values-redacted.jsonl 3
+if grep -q 'Proposal\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|field_value_text\|raw_json\|raw_sha256' /tmp/gongctl-postgres-crm-field-values-redacted.jsonl; then
+  echo "Postgres CRM field-value default output exposed identifiers, titles, values, or raw fields" >&2
+  exit 1
+fi
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_crm_field_values","arguments":{"object_type":"Opportunity","field_name":"StageName","value_query":"Proposal","limit":5,"include_call_ids":true,"include_value_snippets":true}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=search_crm_field_values go run ./cmd/gongmcp > /tmp/gongctl-postgres-crm-field-values-optin.jsonl
+grep -q '"search_crm_field_values"' /tmp/gongctl-postgres-crm-field-values-optin.jsonl
+grep -q 'synthetic-profile-call-001' /tmp/gongctl-postgres-crm-field-values-optin.jsonl
+grep -q 'Proposal' /tmp/gongctl-postgres-crm-field-values-optin.jsonl
+grep -q 'Profile lifecycle proposal review' /tmp/gongctl-postgres-crm-field-values-optin.jsonl
+assert_mcp_success /tmp/gongctl-postgres-crm-field-values-optin.jsonl 3
+if grep -q 'opp-profile-001\|Profile Opportunity\|field_value_text\|raw_json\|raw_sha256' /tmp/gongctl-postgres-crm-field-values-optin.jsonl; then
+  echo "Postgres CRM field-value opt-in output exposed object identifiers/names or raw fields" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT call_id || '|' || title || '|' || value_snippet FROM gongmcp_crm_field_value_search('Opportunity', 'StageName', 'Proposal', 5, false, false)" >/tmp/gongctl-postgres-reader-crm-field-value-function-redacted.txt
+if grep -q 'Proposal\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity' /tmp/gongctl-postgres-reader-crm-field-value-function-redacted.txt; then
+  echo "Postgres CRM field-value reader function default exposed identifiers, titles, or values" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_name FROM gongmcp_crm_field_value_search('Opportunity', 'StageName', 'Proposal', 5, true, true)" >/tmp/gongctl-postgres-reader-crm-field-value-function-object-name.txt 2>&1; then
+  echo "Postgres CRM field-value reader function exposed object_name column" >&2
+  exit 1
+fi
+
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-analyst-rejected.txt 2>&1; then
   echo "postgres unexpectedly accepted full analyst preset" >&2
   exit 1
@@ -750,7 +787,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -803,6 +840,8 @@ echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
 echo "analyst-core output: /tmp/gongctl-postgres-analyst-core.jsonl"
 echo "analyst-business-core output: /tmp/gongctl-postgres-analyst-business-core.jsonl"
+echo "CRM field values redacted output: /tmp/gongctl-postgres-crm-field-values-redacted.jsonl"
+echo "CRM field values opt-in output: /tmp/gongctl-postgres-crm-field-values-optin.jsonl"
 echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"
 echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"

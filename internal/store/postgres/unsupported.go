@@ -12,9 +12,6 @@ var errUnsupported = errors.New("postgres store does not support this tool in th
 
 func unsupported() error { return errUnsupported }
 
-func (s *Store) SearchCRMFieldValues(ctx context.Context, params sqlite.CRMFieldValueSearchParams) ([]sqlite.CRMFieldValueMatch, error) {
-	return nil, unsupported()
-}
 func (s *Store) ListUnmappedCRMFields(ctx context.Context, params sqlite.UnmappedCRMFieldParams) ([]sqlite.UnmappedCRMField, error) {
 	return nil, unsupported()
 }

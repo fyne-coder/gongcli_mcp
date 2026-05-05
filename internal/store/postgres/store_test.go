@@ -947,7 +947,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -1692,6 +1692,119 @@ func TestPostgresNormalizedRowsMatchSQLiteForRepresentativeContextShapes(t *test
 
 	if got, want := postgresNormalizedRows(t, ctx, pgStore), sqliteNormalizedRows(t, ctx, sqliteStore); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("postgres normalized rows differ\npostgres:\n%s\nsqlite:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestPostgresSearchCRMFieldValuesMatchesSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	longValue := strings.Repeat("procurement approval ", 20)
+	fixtures := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-crm-value-001","title":"Latest procurement review","started":"2026-03-02T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-value-1","name":"Procurement Opp","fields":{"ISSUE__c":"Need procurement approval","StageName":"Contract Review"}}]}}`),
+		json.RawMessage(fmt.Sprintf(`{"id":"pg-crm-value-002","title":"Long procurement review","started":"2026-03-03T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-value-2","name":"Long Procurement Opp","fields":{"ISSUE__c":%q,"StageName":"Proposal"}}]}}`, longValue)),
+		json.RawMessage(`{"id":"pg-crm-value-003","title":"Pricing review","started":"2026-03-01T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-value-3","name":"Pricing Opp","fields":{"ISSUE__c":"Pricing approval","StageName":"Proposal"}}]}}`),
+	}
+	for _, raw := range fixtures {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	params := sqlite.CRMFieldValueSearchParams{
+		ObjectType:          "Opportunity",
+		FieldName:           "ISSUE__c",
+		ValueQuery:          "procurement",
+		Limit:               10,
+		IncludeValueSnippet: true,
+		IncludeCallIDs:      true,
+	}
+	got, err := pgStore.SearchCRMFieldValues(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres SearchCRMFieldValues returned error: %v", err)
+	}
+	want, err := sqliteStore.SearchCRMFieldValues(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite SearchCRMFieldValues returned error: %v", err)
+	}
+	for idx := range want {
+		want[idx].ObjectID = ""
+		want[idx].ObjectName = ""
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres CRM field value matches=%+v want sqlite %+v", got, want)
+	}
+	if len(got) != 2 || got[0].CallID != "pg-crm-value-002" || got[1].CallID != "pg-crm-value-001" {
+		t.Fatalf("unexpected Postgres ordering/results: %+v", got)
+	}
+	if len(got[0].ValueSnippet) != 240 {
+		t.Fatalf("value snippet length=%d want 240", len(got[0].ValueSnippet))
+	}
+
+	withoutSnippet, err := pgStore.SearchCRMFieldValues(ctx, sqlite.CRMFieldValueSearchParams{
+		ObjectType:     "Opportunity",
+		FieldName:      "ISSUE__c",
+		ValueQuery:     "procurement",
+		Limit:          1,
+		IncludeCallIDs: true,
+	})
+	if err != nil {
+		t.Fatalf("postgres SearchCRMFieldValues without snippets returned error: %v", err)
+	}
+	if len(withoutSnippet) != 1 || withoutSnippet[0].ValueSnippet != "" || withoutSnippet[0].CallID != "pg-crm-value-002" {
+		t.Fatalf("unexpected no-snippet result: %+v", withoutSnippet)
+	}
+
+	noMatches, err := pgStore.SearchCRMFieldValues(ctx, sqlite.CRMFieldValueSearchParams{
+		ObjectType:     "Opportunity",
+		FieldName:      "ISSUE__c",
+		ValueQuery:     "not-present",
+		IncludeCallIDs: true,
+	})
+	if err != nil {
+		t.Fatalf("postgres SearchCRMFieldValues no-match returned error: %v", err)
+	}
+	wantNoMatches, err := sqliteStore.SearchCRMFieldValues(ctx, sqlite.CRMFieldValueSearchParams{
+		ObjectType:          "Opportunity",
+		FieldName:           "ISSUE__c",
+		ValueQuery:          "not-present",
+		IncludeValueSnippet: true,
+		IncludeCallIDs:      true,
+	})
+	if err != nil {
+		t.Fatalf("sqlite SearchCRMFieldValues no-match returned error: %v", err)
+	}
+	if !reflect.DeepEqual(noMatches, wantNoMatches) {
+		t.Fatalf("postgres no-match result=%+v want sqlite %+v", noMatches, wantNoMatches)
+	}
+
+	for name, params := range map[string]sqlite.CRMFieldValueSearchParams{
+		"missing object": {FieldName: "ISSUE__c", ValueQuery: "procurement"},
+		"missing field":  {ObjectType: "Opportunity", ValueQuery: "procurement"},
+		"missing value":  {ObjectType: "Opportunity", FieldName: "ISSUE__c"},
+	} {
+		if _, err := pgStore.SearchCRMFieldValues(ctx, params); err == nil {
+			t.Fatalf("%s: SearchCRMFieldValues returned nil error", name)
+		}
 	}
 }
 

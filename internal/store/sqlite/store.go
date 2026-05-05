@@ -225,6 +225,7 @@ type CRMFieldValueSearchParams struct {
 	ValueQuery          string
 	Limit               int
 	IncludeValueSnippet bool
+	IncludeCallIDs      bool
 }
 
 type CRMFieldValueMatch struct {

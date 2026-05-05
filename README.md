@@ -19,9 +19,11 @@ CRM context inventory, cached CRM schema/settings inventory, profile,
 lifecycle, and transcript-search tools while `analyst-business-core` adds
 bounded Postgres transcript-evidence and business-analysis tools. Scorecard
 settings inventory and aggregate answered scorecard activity are available
-through the Postgres analyst-core surface, while full `analyst` and
-`all-readonly` remain gated until support/cache, remaining settings/catalog,
-and remaining query parity are complete.
+through the Postgres analyst-core surface. Postgres also supports the explicit
+`search_crm_field_values` value-lookup tool by allowlist with the same
+redaction defaults and opt-ins as SQLite, while full `analyst` and
+`all-readonly` remain gated until the remaining full-catalog query parity is
+complete.
 
 ## Positioning
 
@@ -79,7 +81,9 @@ Use `business-pilot` for first business-user access, `analyst-core` for the
 reviewed Postgres analyst starter surface including cached CRM schema/settings
 inventory, scorecard inventory, and scorecard activity aggregates,
 `analyst-business-core` for bounded Postgres
-transcript-evidence/business analysis workflows, and `all-readonly` only for
+transcript-evidence/business analysis workflows. For directed Postgres CRM
+value lookup, use an explicit `search_crm_field_values` allowlist.
+Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
 
@@ -644,6 +648,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `summarize_scorecard_activity` returns aggregate answered-scorecard counts and scores only. By default it does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw scorecard activity payloads.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
+The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values and object names remain denied.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 
