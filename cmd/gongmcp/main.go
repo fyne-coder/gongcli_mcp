@@ -322,6 +322,7 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
 	}
 	supported := map[string]struct{}{
+		"analyze_late_stage_crm_signals":            {},
 		"get_sync_status":                           {},
 		"get_business_profile":                      {},
 		"get_scorecard":                             {},

@@ -910,4 +910,19 @@ BEGIN
 END;
 $$;
 `,
+	`
+DROP FUNCTION IF EXISTS gongmcp_late_stage_call_counts(text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_late_stage_stage_counts(text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean);
+` + postgresLateStageSignalFunctionsSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }

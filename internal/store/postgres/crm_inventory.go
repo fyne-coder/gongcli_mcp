@@ -186,6 +186,154 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM PUBLIC;
 `
 
+const postgresLateStageSignalFunctionsSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_late_stage_call_counts(object_type_arg text, stage_field_arg text, late_values_json_arg text)
+RETURNS TABLE(late_calls bigint, non_late_calls bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH late_values_json AS (
+	SELECT COALESCE(NULLIF(late_values_json_arg, ''), '[]') AS raw_json
+	 WHERE CHAR_LENGTH(COALESCE(late_values_json_arg, '')) <= 4096
+),
+late_values AS (
+	SELECT LOWER(TRIM(value)) AS value
+	  FROM late_values_json,
+	       jsonb_array_elements_text(raw_json::jsonb) AS value
+	 WHERE TRIM(value) <> ''
+	 LIMIT 25
+),
+classified AS (
+	SELECT f.call_id,
+	       MAX(CASE WHEN LOWER(TRIM(f.field_value_text)) IN (SELECT value FROM late_values) THEN 1 ELSE 0 END) AS is_late
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE object_type_arg = 'Opportunity'
+	   AND stage_field_arg = 'StageName'
+	   AND o.object_type = 'Opportunity'
+	   AND f.field_name = 'StageName'
+	   AND TRIM(f.field_value_text) <> ''
+	 GROUP BY f.call_id
+)
+SELECT COUNT(*) FILTER (WHERE is_late = 1)::bigint AS late_calls,
+       COUNT(*) FILTER (WHERE is_late = 0)::bigint AS non_late_calls
+  FROM classified
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_late_stage_stage_counts(object_type_arg text, stage_field_arg text, late_values_json_arg text)
+RETURNS TABLE(stage_value text, call_count bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH stage_rows AS (
+	SELECT f.call_id,
+	       LOWER(TRIM(f.field_value_text)) AS stage_key,
+	       MIN(TRIM(f.field_value_text)) AS stage_value
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE object_type_arg = 'Opportunity'
+	   AND stage_field_arg = 'StageName'
+	   AND CHAR_LENGTH(COALESCE(late_values_json_arg, '')) <= 4096
+	   AND o.object_type = 'Opportunity'
+	   AND f.field_name = 'StageName'
+	   AND TRIM(f.field_value_text) <> ''
+	 GROUP BY f.call_id, LOWER(TRIM(f.field_value_text))
+)
+SELECT MIN(stage_value) AS stage_value,
+       COUNT(DISTINCT call_id)::bigint AS call_count
+  FROM stage_rows
+ GROUP BY stage_key
+ ORDER BY stage_value
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_late_stage_signal_inventory(object_type_arg text, stage_field_arg text, late_values_json_arg text, row_limit integer, include_stage_proxies_arg boolean)
+RETURNS TABLE(field_name text, field_label text, late_populated_calls bigint, non_late_populated_calls bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH late_values_json AS (
+	SELECT COALESCE(NULLIF(late_values_json_arg, ''), '[]') AS raw_json
+	 WHERE CHAR_LENGTH(COALESCE(late_values_json_arg, '')) <= 4096
+),
+late_values AS (
+	SELECT LOWER(TRIM(value)) AS value
+	  FROM late_values_json,
+	       jsonb_array_elements_text(raw_json::jsonb) AS value
+	 WHERE TRIM(value) <> ''
+	 LIMIT 25
+),
+classified AS (
+	SELECT f.call_id,
+	       MAX(CASE WHEN LOWER(TRIM(f.field_value_text)) IN (SELECT value FROM late_values) THEN 1 ELSE 0 END) AS is_late
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE object_type_arg = 'Opportunity'
+	   AND stage_field_arg = 'StageName'
+	   AND o.object_type = 'Opportunity'
+	   AND f.field_name = 'StageName'
+	   AND TRIM(f.field_value_text) <> ''
+	 GROUP BY f.call_id
+),
+field_presence AS (
+	SELECT DISTINCT f.call_id,
+	       c.is_late,
+	       f.field_name,
+	       f.field_label
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	  JOIN classified c
+	    ON c.call_id = f.call_id
+	 WHERE object_type_arg = 'Opportunity'
+	   AND stage_field_arg = 'StageName'
+	   AND o.object_type = 'Opportunity'
+	   AND TRIM(f.field_value_text) <> ''
+	   AND (
+		COALESCE(include_stage_proxies_arg, false)
+		OR LOWER(f.field_name) NOT IN (
+			LOWER(stage_field_arg),
+			'probability',
+			'forecast_category_vp__c',
+			'forecast_category_ae__c',
+			'forecastcategory',
+			'forecast_category',
+			'forecast_category_name',
+			'forecast_category_name__c',
+			'forecastcategoryname',
+			'forecast_category_vp_formula__c',
+			'forecast_category_ae_formula__c',
+			'forecast_category_formula__c'
+		)
+	   )
+)
+SELECT field_name,
+       MAX(field_label) AS field_label,
+       COUNT(DISTINCT CASE WHEN is_late = 1 THEN call_id END)::bigint AS late_populated_calls,
+       COUNT(DISTINCT CASE WHEN is_late = 0 THEN call_id END)::bigint AS non_late_populated_calls
+  FROM field_presence
+ GROUP BY field_name
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM PUBLIC;
+`
+
 type postgresCRMIntegrationPayload struct {
 	IntegrationID string
 	Name          string
@@ -430,6 +578,136 @@ SELECT object_type,
 		}
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) AnalyzeLateStageSignals(ctx context.Context, params sqlite.LateStageSignalParams) (*sqlite.LateStageSignalsReport, error) {
+	objectType := strings.TrimSpace(params.ObjectType)
+	if objectType == "" {
+		objectType = "Opportunity"
+	}
+	stageField := strings.TrimSpace(params.StageField)
+	if stageField == "" {
+		stageField = "StageName"
+	}
+	if objectType != "Opportunity" || stageField != "StageName" {
+		return nil, errors.New("postgres late-stage CRM signal analysis supports Opportunity.StageName only")
+	}
+	lateValues := cleanStringList(params.LateStageValues)
+	if len(lateValues) == 0 {
+		lateValues = []string{"Demo & Business Case", "Business Case", "SOW & Proposal", "Contract Review", "Contract Signing", "Crucible/Last Mile", "Closed Won"}
+	}
+	if len(lateValues) > maxLateStageValueCount {
+		return nil, fmt.Errorf("late_stage_values supports at most %d entries", maxLateStageValueCount)
+	}
+	for _, value := range lateValues {
+		if len(value) > maxLateStageValueLength {
+			return nil, fmt.Errorf("late_stage_values entries must be at most %d bytes", maxLateStageValueLength)
+		}
+	}
+	limit := boundedLimit(params.Limit, defaultLateStageSignalLimit, maxLateStageSignalLimit)
+	lateValuesJSON, err := json.Marshal(lateValues)
+	if err != nil {
+		return nil, err
+	}
+	lateValuesArg := string(lateValuesJSON)
+
+	var lateCalls int64
+	var nonLateCalls int64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT late_calls,
+       non_late_calls
+  FROM gongmcp_late_stage_call_counts($1, $2, $3)`, objectType, stageField, lateValuesArg).Scan(&lateCalls, &nonLateCalls); err != nil {
+		return nil, err
+	}
+
+	stageLabels := make(map[string]string, len(lateValues))
+	for _, value := range lateValues {
+		clean := strings.TrimSpace(value)
+		if clean != "" {
+			stageLabels[strings.ToLower(clean)] = clean
+		}
+	}
+	stageCounts := make(map[string]int64)
+	stageRows, err := s.db.QueryContext(ctx, `
+SELECT stage_value,
+       call_count
+  FROM gongmcp_late_stage_stage_counts($1, $2, $3)`, objectType, stageField, lateValuesArg)
+	if err != nil {
+		return nil, err
+	}
+	defer stageRows.Close()
+	for stageRows.Next() {
+		var stageValue string
+		var callCount int64
+		if err := stageRows.Scan(&stageValue, &callCount); err != nil {
+			return nil, err
+		}
+		stageValue = strings.TrimSpace(stageValue)
+		if stageValue == "" {
+			continue
+		}
+		stageKey := strings.ToLower(stageValue)
+		stageLabel, ok := stageLabels[stageKey]
+		if !ok {
+			stageLabel = stageValue
+			stageLabels[stageKey] = stageValue
+		}
+		stageCounts[stageLabel] += callCount
+	}
+	if err := stageRows.Err(); err != nil {
+		return nil, err
+	}
+
+	totalCalls := lateCalls + nonLateCalls
+	if totalCalls == 0 {
+		return &sqlite.LateStageSignalsReport{
+			ObjectType:      objectType,
+			StageField:      stageField,
+			LateStageValues: lateValues,
+			StageCounts:     stageCounts,
+		}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT field_name,
+       field_label,
+       late_populated_calls,
+       non_late_populated_calls
+  FROM gongmcp_late_stage_signal_inventory($1, $2, $3, $4, $5)`, objectType, stageField, lateValuesArg, limit, params.IncludeStageProxies)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	signals := make([]sqlite.LateStageSignal, 0)
+	for rows.Next() {
+		var row sqlite.LateStageSignal
+		if err := rows.Scan(&row.FieldName, &row.FieldLabel, &row.LatePopulatedCalls, &row.NonLatePopulatedCalls); err != nil {
+			return nil, err
+		}
+		row.LateRate = rate(row.LatePopulatedCalls, lateCalls)
+		row.NonLateRate = rate(row.NonLatePopulatedCalls, nonLateCalls)
+		row.Lift = row.LateRate - row.NonLateRate
+		signals = append(signals, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sortLateStageSignals(signals)
+	if len(signals) > limit {
+		signals = signals[:limit]
+	}
+
+	return &sqlite.LateStageSignalsReport{
+		ObjectType:      objectType,
+		StageField:      stageField,
+		LateStageValues: lateValues,
+		TotalCalls:      totalCalls,
+		LateCalls:       lateCalls,
+		NonLateCalls:    nonLateCalls,
+		StageCounts:     stageCounts,
+		Signals:         signals,
+	}, nil
 }
 
 func (s *Store) UpsertCRMIntegration(ctx context.Context, raw json.RawMessage) (*sqlite.CRMIntegrationRecord, error) {

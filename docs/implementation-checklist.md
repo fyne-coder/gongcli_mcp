@@ -53,10 +53,10 @@ gongmcp --list-tool-presets
 | `operator-smoke` | `get_sync_status,search_calls,search_transcript_segments,get_call,rank_transcript_backlog` | operator-only install validation |
 | `analyst-core` | core Postgres-supported call/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and scorecard activity aggregate tools | reviewed Postgres analyst starter surface |
 | `analyst-business-core` | bounded Postgres transcript-evidence and business-analysis tools plus analyst-core tools | reviewed Postgres analyst business-analysis surface before full parity |
-| `analyst` | broader evidence surface excluding admin-only record lookup, CRM value search, and unreviewed schema/settings/activity inventory | trusted analyst sessions after sponsor approval |
+| `analyst` | broader SQLite/full-catalog evidence surface excluding admin-only record lookup, CRM value search, and unreviewed schema/settings/activity inventory | trusted SQLite analyst sessions after sponsor approval; Postgres still rejects this preset |
 | `analyst-expansion` | alias for `analyst` | backward-compatible docs/scripts alias |
 | `governance-search` | governance-compatible search/snippet tools only | raw-DB AI governance fallback when a filtered DB is not available |
-| `all-readonly` | every current read-only MCP tool in `tools/list` | trusted single-user admin/analyst or fully reviewed filtered-DB deployments |
+| `all-readonly` | every current read-only MCP tool in `tools/list` | trusted SQLite single-user admin/analyst or fully reviewed SQLite filtered-DB deployments; Postgres still rejects this preset |
 
 Do not expose `operator-smoke`, `analyst-core`, `analyst-business-core`,
 `analyst`, `governance-search`, or `all-readonly` as the default business-user
@@ -98,9 +98,11 @@ Then verify that the selected deployment actually returns the expected tools in
 `tools/list`. If a tool is missing, stop and check the deployed binary version,
 image tag, preset, and allowlist before testing analyst prompts.
 
-Use `all-readonly` only when the analyst also needs every other read-only
-operator/admin tool. For most approved business analysis, prefer `analyst` plus
-safe per-tool defaults over `all-readonly`.
+Use `all-readonly` only when the SQLite analyst also needs every other
+read-only operator/admin tool. For most approved SQLite business analysis,
+prefer `analyst` plus safe per-tool defaults over `all-readonly`. For Postgres,
+use the reviewed Postgres presets or explicit allowlists; full `analyst` and
+`all-readonly` are intentionally rejected until full parity is complete.
 
 ## Smoke Tests
 

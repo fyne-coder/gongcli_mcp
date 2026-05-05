@@ -47,6 +47,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | complete for bounded Postgres analyst-core slice: embedded CRM object/field aggregates, cached CRM integrations/schema fields, Gong settings, scorecards, and scorecard activity aggregates | Same cached metadata read surfaces without raw CRM values or raw settings payloads; broader settings/catalog query parity remains queued before full `analyst`/`all-readonly` | must match for implemented inventory surfaces | Phase 5a/5c/5d/5e | inventory/query tests; `scripts/postgres-smoke.sh` |
 | MCP `list_unmapped_crm_fields` | SQLite profile-aware unmapped CRM field inventory | complete for explicit Postgres allowlists | Security-definer aggregate over normalized CRM context returns field metadata/counts/length stats only; mapped fields are filtered through the active profile and raw values remain denied | must match at MCP contract | Phase 9b | store parity test; MCP smoke; reader table/function denial smoke |
 | MCP `search_crm_field_values` | SQLite explicit CRM value lookup | complete for explicit Postgres allowlists | Security-definer lookup over normalized CRM context with default redaction for call IDs, titles, object IDs/names, and values; explicit opt-ins return call IDs and bounded snippets/titles; the reader function never returns object IDs/names and direct table reads remain denied | must match at MCP contract | Phase 9a | store parity test; redacted/opt-in MCP smoke; reader function/table denial smoke |
+| MCP `analyze_late_stage_crm_signals` | SQLite late-stage aggregate signal analysis | complete for explicit Postgres allowlists with `Opportunity.StageName` only | Security-definer aggregate over normalized CRM context returns stage counts, field names, population rates, and lift only; custom stage fields are rejected/empty to avoid raw value-distribution leakage, and raw arbitrary CRM values, CRM object IDs/names, call IDs, call titles, transcript text, and profile payloads remain denied | must match default MCP contract with safer Postgres field boundary | Phase 9c | store parity test; MCP smoke; reader table/function denial smoke |
 | Scorecard activity | SQLite `scorecard_activity` | complete for aggregate Postgres slice | Same aggregate/read-only scorecard activity surfaces except raw reviewed-user grouping is rejected for Postgres read-only deployments; raw activity payloads and raw hashes are denied to the reader role | must match for aggregate surfaces | Phase 5d | scorecard activity parity tests; `scripts/postgres-smoke.sh` |
 | Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | Postgres policy-backed MCP suppression implemented for narrowed search slice; physical filtered export remains SQLite-only | Governed views, row-level security, or materialized governed snapshots before broad analyst/all-readonly GA | postgres-native equivalent | Phase 4 | restricted synthetic account absent from governed MCP search outputs |
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
@@ -84,6 +85,22 @@ Postgres parity should be added deliberately, with each surface classified as
 11. **Phase 9b targeted unmapped CRM field discovery**: explicit Postgres
     `list_unmapped_crm_fields` allowlist parity before broader full-preset
     enablement.
+12. **Phase 9c targeted late-stage CRM signals**: explicit Postgres
+    `analyze_late_stage_crm_signals` allowlist parity before broader
+    full-preset enablement.
+
+## Phase 9c Risk Status
+
+- Closed for the explicit allowlist slice: Postgres serves
+  `analyze_late_stage_crm_signals` through execute-only reader functions that
+  classify late/non-late calls, count stage buckets, and return aggregate field
+  lift without exposing raw arbitrary CRM values or identifiers. The Postgres
+  slice is intentionally restricted to `Opportunity.StageName`; custom
+  `stage_field` values are not enabled until a reviewed field-governance model
+  exists.
+- Still queued: broad `analyst` / `all-readonly` enablement, the remaining
+  CRM-heavy tools, governance-safe aggregate variants, and customer-scale
+  aggregate performance testing.
 
 ## Phase 7 Risk Status
 

@@ -26,7 +26,11 @@ Current fixed boundaries:
 		  websites, close dates, or probabilities from those functions.
 		  `analyst-core` also includes aggregate answered-scorecard activity
 		  summaries without answered-scorecard IDs, call IDs, user IDs, answer
-		  text, or raw activity payloads. Broader
+		  text, or raw activity payloads. Explicit Postgres allowlists are also
+		  available for `list_unmapped_crm_fields`, `search_crm_field_values`,
+		  and `analyze_late_stage_crm_signals`; the late-stage Postgres slice is
+		  limited to `Opportunity.StageName`. These stay outside the full
+		  `analyst` preset until the remaining catalog is ready. Broader
 		  `analyst` and `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
@@ -163,10 +167,11 @@ where deeper, identifier-bearing questions matter.
 
 What the conservative defaults give you:
 
-- In stdio mode, `gongmcp` exposes the full read-only catalog when no preset or
-  allowlist is set, but most identifier-bearing fields are blanked, snippet
-  tools redact call IDs and speaker IDs, and CRM-value lookups require explicit
-  opt-in flags.
+- In SQLite stdio mode, `gongmcp` exposes the full read-only catalog when no
+  preset or allowlist is set, but most identifier-bearing fields are blanked,
+  snippet tools redact call IDs and speaker IDs, and CRM-value lookups require
+  explicit opt-in flags. Postgres stdio defaults to the narrower vertical-slice
+  allowlist, and full Postgres `analyst` / `all-readonly` remains rejected.
 - Pilot deployments are expected to layer `--tool-preset business-pilot` or a
   custom allowlist on top so business users see only the approved subset rather
   than the full catalog.
@@ -186,11 +191,15 @@ When opening up the surface is the right call:
 
 How to open up the surface intentionally:
 
-- In stdio mode, skip `--tool-preset` and `--tool-allowlist`, or use
+- In SQLite stdio mode, skip `--tool-preset` and `--tool-allowlist`, or use
   `--tool-preset all-readonly`, so the full read-only catalog is visible to the
   connected host. HTTP mode requires an explicit preset or allowlist; use
-  `--tool-preset all-readonly` only for trusted admin/analyst sessions or
-  fully reviewed filtered-DB deployments.
+  `--tool-preset all-readonly` only for trusted SQLite admin/analyst sessions
+  or fully reviewed SQLite filtered-DB deployments. For Postgres, use
+  `business-pilot`, `operator-smoke`, `analyst-core`, `analyst-business-core`,
+  `governance-search`, or explicit allowlists such as
+  `analyze_late_stage_crm_signals`; full Postgres `all-readonly` is not yet
+  supported.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.

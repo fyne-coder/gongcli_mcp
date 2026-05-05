@@ -636,6 +636,41 @@ if reader_psql -c "SELECT object_name FROM gongmcp_crm_field_value_search('Oppor
   exit 1
 fi
 
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analyze_late_stage_crm_signals","arguments":{"object_type":"Opportunity","late_stage_values":["Proposal"],"limit":10}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=analyze_late_stage_crm_signals go run ./cmd/gongmcp > /tmp/gongctl-postgres-late-stage-crm-signals.jsonl
+grep -q '"analyze_late_stage_crm_signals"' /tmp/gongctl-postgres-late-stage-crm-signals.jsonl
+grep -q 'late_calls.*1' /tmp/gongctl-postgres-late-stage-crm-signals.jsonl
+grep -q 'field_name.*Type' /tmp/gongctl-postgres-late-stage-crm-signals.jsonl
+assert_mcp_success /tmp/gongctl-postgres-late-stage-crm-signals.jsonl 3
+if grep -q 'New Business\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|acct-profile-001\|Profile Opportunity\|Profile Account\|field_value_text\|raw_json\|raw_sha256\|canonical_sha256\|Synthetic Postgres profile' /tmp/gongctl-postgres-late-stage-crm-signals.jsonl; then
+  echo "Postgres late-stage CRM signals output exposed raw values, identifiers, profile details, or raw storage fields" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT field_name || '|' || late_populated_calls || '|' || non_late_populated_calls FROM gongmcp_late_stage_signal_inventory('Opportunity', 'StageName', '[\"Proposal\"]', 10, false) ORDER BY field_name" >/tmp/gongctl-postgres-reader-late-stage-function-fields.txt
+grep -q 'Type|1|0' /tmp/gongctl-postgres-reader-late-stage-function-fields.txt
+if grep -q 'StageName\|Probability\|New Business\|synthetic-profile-call-001\|opp-profile-001\|Profile Opportunity' /tmp/gongctl-postgres-reader-late-stage-function-fields.txt; then
+  echo "Postgres late-stage function returned proxy fields, raw values, or identifiers" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_value_text FROM gongmcp_late_stage_signal_inventory('Opportunity', 'StageName', '[\"Proposal\"]', 10, false)" >/tmp/gongctl-postgres-reader-late-stage-function-value-column.txt 2>&1; then
+  echo "Postgres late-stage function exposed field_value_text column" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT COUNT(*) FROM gongmcp_late_stage_stage_counts('Opportunity', 'Type', '[\"New Business\"]')" >/tmp/gongctl-postgres-reader-late-stage-custom-stage-denial.txt
+grep -q '^0$' /tmp/gongctl-postgres-reader-late-stage-custom-stage-denial.txt
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analyze_late_stage_crm_signals","arguments":{"object_type":"Opportunity","stage_field":"Type","late_stage_values":["New Business"],"limit":10}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=analyze_late_stage_crm_signals go run ./cmd/gongmcp > /tmp/gongctl-postgres-late-stage-custom-stage-denial.jsonl
+grep -q 'Opportunity.StageName only' /tmp/gongctl-postgres-late-stage-custom-stage-denial.jsonl
+if grep -q 'New Business\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity' /tmp/gongctl-postgres-late-stage-custom-stage-denial.jsonl /tmp/gongctl-postgres-reader-late-stage-custom-stage-denial.txt; then
+  echo "Postgres late-stage custom stage denial exposed raw CRM values or identifiers" >&2
+  exit 1
+fi
+
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-analyst-rejected.txt 2>&1; then
   echo "postgres unexpectedly accepted full analyst preset" >&2
   exit 1
@@ -812,7 +847,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -870,6 +905,11 @@ echo "reader unmapped CRM function fields output: /tmp/gongctl-postgres-reader-u
 echo "reader unmapped CRM function value-column denial output: /tmp/gongctl-postgres-reader-unmapped-crm-function-value-column.txt"
 echo "CRM field values redacted output: /tmp/gongctl-postgres-crm-field-values-redacted.jsonl"
 echo "CRM field values opt-in output: /tmp/gongctl-postgres-crm-field-values-optin.jsonl"
+echo "late-stage CRM signals output: /tmp/gongctl-postgres-late-stage-crm-signals.jsonl"
+echo "reader late-stage function fields output: /tmp/gongctl-postgres-reader-late-stage-function-fields.txt"
+echo "reader late-stage function value-column denial output: /tmp/gongctl-postgres-reader-late-stage-function-value-column.txt"
+echo "reader late-stage custom-stage denial output: /tmp/gongctl-postgres-reader-late-stage-custom-stage-denial.txt"
+echo "MCP late-stage custom-stage denial output: /tmp/gongctl-postgres-late-stage-custom-stage-denial.jsonl"
 echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"
 echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"

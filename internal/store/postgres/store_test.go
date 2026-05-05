@@ -949,7 +949,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -1966,6 +1966,114 @@ lifecycle:
 	}
 }
 
+func TestPostgresAnalyzeLateStageSignalsMatchesSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	fixtures := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-late-signal-001","title":"Late stage contract call","started":"2026-04-24T12:00:00Z","context":{"crmObjects":[{"type":"Opportunity","id":"opp-late-signal-001","name":"Late signal opportunity","fields":{"StageName":" contract signing ","ISSUE__c":"Need procurement approval","Amount":"50000","Probability":"90","COMMON__c":"present"}}]}}`),
+		json.RawMessage(`{"id":"pg-late-signal-002","title":"Early discovery call","started":"2026-04-23T12:00:00Z","context":{"crmObjects":[{"type":"Opportunity","id":"opp-late-signal-002","name":"Early signal opportunity","fields":{"StageName":"MQL","Amount":"0","COMMON__c":"present"}}]}}`),
+		json.RawMessage(`{"id":"pg-late-signal-003","title":"Multi opportunity call","started":"2026-04-25T12:00:00Z","context":{"crmObjects":[{"type":"Opportunity","id":"opp-late-signal-early","fields":{"StageName":"MQL","MULTI__c":"yes","COMMON__c":"present"}},{"type":"Opportunity","id":"opp-late-signal-late","fields":{"StageName":" Contract Signing ","MULTI__c":"yes","COMMON__c":"present"}}]}}`),
+	}
+	for _, raw := range fixtures {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	params := sqlite.LateStageSignalParams{
+		ObjectType:      "Opportunity",
+		LateStageValues: []string{"Contract Signing"},
+		Limit:           10,
+	}
+	got, err := pgStore.AnalyzeLateStageSignals(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres AnalyzeLateStageSignals returned error: %v", err)
+	}
+	want, err := sqliteStore.AnalyzeLateStageSignals(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite AnalyzeLateStageSignals returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres late-stage report=%+v want sqlite %+v", got, want)
+	}
+	for _, signal := range got.Signals {
+		if signal.FieldName == "StageName" || signal.FieldName == "Probability" {
+			t.Fatalf("stage proxy leaked into default signals: %+v", got.Signals)
+		}
+		if signal.FieldName == "MULTI__c" && (signal.LatePopulatedCalls != 1 || signal.NonLatePopulatedCalls != 0) {
+			t.Fatalf("multi-opportunity field was counted in both buckets: %+v", signal)
+		}
+	}
+	if got.LateCalls != 2 || got.NonLateCalls != 1 || got.StageCounts["Contract Signing"] != 2 || got.StageCounts["MQL"] != 2 {
+		t.Fatalf("unexpected late-stage counts: %+v", got)
+	}
+	limited, err := pgStore.AnalyzeLateStageSignals(ctx, sqlite.LateStageSignalParams{
+		ObjectType:      "Opportunity",
+		LateStageValues: []string{"Contract Signing"},
+		Limit:           1,
+	})
+	if err != nil {
+		t.Fatalf("postgres limited AnalyzeLateStageSignals returned error: %v", err)
+	}
+	if len(limited.Signals) != 1 || limited.Signals[0].FieldName == "COMMON__c" {
+		t.Fatalf("limit was applied before lift sort: %+v", limited.Signals)
+	}
+
+	withProxies, err := pgStore.AnalyzeLateStageSignals(ctx, sqlite.LateStageSignalParams{
+		ObjectType:          "Opportunity",
+		LateStageValues:     []string{"Contract Signing"},
+		IncludeStageProxies: true,
+		Limit:               10,
+	})
+	if err != nil {
+		t.Fatalf("postgres AnalyzeLateStageSignals with proxies returned error: %v", err)
+	}
+	signalNames := lateStageSignalNames(withProxies.Signals)
+	for _, name := range []string{"StageName", "Probability"} {
+		if _, ok := signalNames[name]; !ok {
+			t.Fatalf("include_stage_proxies=true missing %s in %+v", name, withProxies.Signals)
+		}
+	}
+
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT field_value_text FROM gongmcp_late_stage_signal_inventory('Opportunity', 'StageName', '["Contract Signing"]', 10, false)`); err == nil {
+		t.Fatal("late-stage signal inventory exposed field_value_text column")
+	}
+	if _, err := pgStore.AnalyzeLateStageSignals(ctx, sqlite.LateStageSignalParams{
+		ObjectType:      "Opportunity",
+		StageField:      "Type",
+		LateStageValues: []string{"New Business"},
+	}); err == nil || !strings.Contains(err.Error(), "Opportunity.StageName only") {
+		t.Fatalf("custom stage_field error=%v, want Opportunity.StageName-only rejection", err)
+	}
+	var directTypeStageCount int64
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_late_stage_stage_counts('Opportunity', 'Type', '["New Business"]')`).Scan(&directTypeStageCount); err != nil {
+		t.Fatalf("direct Type stage count query returned error: %v", err)
+	}
+	if directTypeStageCount != 0 {
+		t.Fatalf("direct Type stage count returned %d rows, want 0", directTypeStageCount)
+	}
+}
+
 func TestPostgresReadModelExtractionCapsRecordDiagnostics(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -2486,6 +2594,14 @@ func stringSliceContains(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func lateStageSignalNames(signals []sqlite.LateStageSignal) map[string]struct{} {
+	out := make(map[string]struct{}, len(signals))
+	for _, signal := range signals {
+		out[signal.FieldName] = struct{}{}
+	}
+	return out
 }
 
 func postgresTableCounts(rows []sqlite.CacheTableCount) map[string]int64 {

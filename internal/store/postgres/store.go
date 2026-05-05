@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +28,10 @@ const (
 	maxCRMFieldLimit             = 1000
 	defaultCRMFieldValueLimit    = 20
 	maxCRMFieldValueLimit        = 1000
+	defaultLateStageSignalLimit  = 25
+	maxLateStageSignalLimit      = 500
+	maxLateStageValueCount       = 25
+	maxLateStageValueLength      = 200
 	postgresWriterLockKey        = "gongctl_postgres_writer_v1"
 )
 
@@ -329,6 +334,52 @@ func rate(part int64, total int64) float64 {
 	return float64(part) / float64(total)
 }
 
+func cleanStringList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		clean := strings.TrimSpace(value)
+		if clean == "" {
+			continue
+		}
+		key := strings.ToLower(clean)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, clean)
+	}
+	return out
+}
+
+func normalizedStringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if key != "" {
+			set[key] = struct{}{}
+		}
+	}
+	return set
+}
+
+func sortLateStageSignals(signals []sqlite.LateStageSignal) {
+	sort.Slice(signals, func(i, j int) bool {
+		left := signals[i]
+		right := signals[j]
+		if left.Lift != right.Lift {
+			return left.Lift > right.Lift
+		}
+		if left.LateRate != right.LateRate {
+			return left.LateRate > right.LateRate
+		}
+		if left.LatePopulatedCalls != right.LatePopulatedCalls {
+			return left.LatePopulatedCalls > right.LatePopulatedCalls
+		}
+		return left.FieldName < right.FieldName
+	})
+}
+
 func (s *Store) reconcileReaderGrants(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("postgres store is not open")
@@ -342,8 +393,12 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
 	DROP FUNCTION IF EXISTS gongmcp_unmapped_crm_field_inventory(integer);
+	DROP FUNCTION IF EXISTS gongmcp_late_stage_call_counts(text, text, text);
+	DROP FUNCTION IF EXISTS gongmcp_late_stage_stage_counts(text, text, text);
+	DROP FUNCTION IF EXISTS gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean);
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
+	`+postgresLateStageSignalFunctionsSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -625,6 +680,9 @@ BEGIN
 		`+postgresCRMInventoryReaderGrantStatementsSQL+`
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -886,6 +944,9 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_scorecard_activity_totals()'),
 		('public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean)'),
 		('public.gongmcp_unmapped_crm_field_inventory(integer)'),
+		('public.gongmcp_late_stage_call_counts(text, text, text)'),
+		('public.gongmcp_late_stage_stage_counts(text, text, text)'),
+		('public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature

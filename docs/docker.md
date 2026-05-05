@@ -175,15 +175,19 @@ The first Postgres vertical slice supports:
   inventory, and aggregate scorecard activity tools
 - `gongmcp --tool-preset analyst-business-core`: bounded transcript-evidence
   and business-analysis tools plus analyst-core
+- explicit `gongmcp --tool-allowlist list_unmapped_crm_fields`,
+  `search_crm_field_values`, or `analyze_late_stage_crm_signals` for directed
+  CRM field discovery, value lookup, or aggregate late-stage signal review
 - `gongmcp --tool-preset governance-search` with
   `GONGMCP_AI_GOVERNANCE_CONFIG` after a Postgres governance policy has been
   prepared; Postgres narrows this preset to supported search tools
 
 It does not yet provide full SQLite query parity for database-enforced
 governance snapshots/RLS, full analyst/all-readonly presets, production PITR
-policy, or remaining CRM/lifecycle-heavy MCP tools. Postgres support bundles,
-cache inventory, retention purge planning, and synthetic backup/restore smoke
-are available as operator diagnostics that do not export the database URL.
+policy, or the remaining CRM/lifecycle-heavy MCP tools. Postgres support
+bundles, cache inventory, retention purge planning, and synthetic
+backup/restore smoke are available as operator diagnostics that do not export
+the database URL.
 Confirmed Postgres purge is call-scoped row cleanup with a writable URL, not
 physical erasure of WAL, replicas, snapshots, or backups. See the
 [Postgres parity matrix](postgres-parity.md) for the phased parity contract.

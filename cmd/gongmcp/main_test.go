@@ -58,8 +58,18 @@ func TestPostgresToolAllowlistAcceptsCoreQueryParityTools(t *testing.T) {
 }
 
 func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
-	if _, err := postgresToolAllowlist([]string{"analyze_late_stage_crm_signals"}, false, ""); err == nil {
+	if _, err := postgresToolAllowlist([]string{"opportunities_missing_transcripts"}, false, ""); err == nil {
 		t.Fatal("postgresToolAllowlist accepted unsupported tool")
+	}
+}
+
+func TestPostgresToolAllowlistAcceptsLateStageCRMSignals(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"analyze_late_stage_crm_signals"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"analyze_late_stage_crm_signals"}) {
+		t.Fatalf("allowlist=%v want analyze_late_stage_crm_signals", allowlist)
 	}
 }
 
