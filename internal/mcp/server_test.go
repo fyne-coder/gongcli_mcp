@@ -452,6 +452,66 @@ func TestBusinessAnalysisToolsRedactDefaultsAndReportLimitations(t *testing.T) {
 	}
 }
 
+func TestBusinessAnalysisSmallCellSuppressionOmitsLowCountDimensionBuckets(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithBusinessAnalysisSmallCellMin(3))
+	response := businessAnalysisResponse{
+		Tool:        "summarize_themes_by_persona",
+		Status:      "cache_derived",
+		Limitations: []string{"participant_title_coverage_limited"},
+		Summaries: []sqlite.BusinessAnalysisDimensionRow{
+			{Dimension: "persona", Value: "participant_title_present", CallCount: 1},
+			{Dimension: "persona", Value: "larger_segment", CallCount: 3},
+			{Dimension: "persona", Value: "unknown", CallCount: 0},
+		},
+	}
+
+	server.applyBusinessAnalysisSmallCellSuppression(&response)
+
+	if len(response.Summaries) != 2 {
+		t.Fatalf("summary count=%d want 2 after suppression: %+v", len(response.Summaries), response.Summaries)
+	}
+	if response.Summaries[0].Value != "larger_segment" || response.Summaries[1].Value != "unknown" {
+		t.Fatalf("unexpected kept summaries: %+v", response.Summaries)
+	}
+	warnings := mustJSONText(t, response.Warnings)
+	if !strings.Contains(warnings, "small_cell_suppression_applied") {
+		t.Fatalf("missing suppression warning: %+v", response.Warnings)
+	}
+	limitations := mustJSONText(t, response.Limitations)
+	if !strings.Contains(limitations, "small_cell_suppression_min_3") {
+		t.Fatalf("missing suppression limitation: %+v", response.Limitations)
+	}
+	suppression, ok := response.SynthesisInputs["small_cell_suppression"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing machine-readable suppression inputs: %+v", response.SynthesisInputs)
+	}
+	if intField(suppression, "minimum_call_count") != 3 || intField(suppression, "suppressed_bucket_count") != 1 || intField(suppression, "suppressed_call_count") != 1 {
+		t.Fatalf("unexpected suppression inputs: %+v", suppression)
+	}
+}
+
+func TestBusinessAnalysisSmallCellSuppressionDefaultsDisabled(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "gongmcp", "test")
+	response := businessAnalysisResponse{
+		Summaries: []sqlite.BusinessAnalysisDimensionRow{
+			{Dimension: "persona", Value: "participant_title_present", CallCount: 1},
+		},
+	}
+
+	server.applyBusinessAnalysisSmallCellSuppression(&response)
+
+	if len(response.Summaries) != 1 || response.Summaries[0].Value != "participant_title_present" {
+		t.Fatalf("default suppression changed summaries: %+v", response.Summaries)
+	}
+	if strings.Contains(mustJSONText(t, response.Warnings), "small_cell_suppression") {
+		t.Fatalf("default suppression emitted warning: %+v", response.Warnings)
+	}
+}
+
 func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
 	t.Parallel()
 

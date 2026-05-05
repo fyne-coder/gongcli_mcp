@@ -86,6 +86,7 @@ type Server struct {
 	tools                        []tool
 	limitPolicy                  LimitPolicy
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
+	businessAnalysisSmallCellMin int
 	allowedToolNames             map[string]struct{}
 	suppressedCallIDs            map[string]struct{}
 	governanceCheck              func(context.Context) error
@@ -532,6 +533,14 @@ func WithLimitPolicy(policy LimitPolicy) ServerOption {
 func WithTranscriptEvidenceProvenance(provenance TranscriptEvidenceProvenance) ServerOption {
 	return func(s *Server) {
 		s.transcriptEvidenceProvenance = normalizeTranscriptEvidenceProvenance(provenance)
+	}
+}
+
+func WithBusinessAnalysisSmallCellMin(min int) ServerOption {
+	return func(s *Server) {
+		if min > 1 {
+			s.businessAnalysisSmallCellMin = min
+		}
 	}
 }
 

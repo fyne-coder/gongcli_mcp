@@ -1576,6 +1576,8 @@ grep -q '"compare_lifecycle_crm_fields"' /tmp/gongctl-postgres-analyst.jsonl
 grep -q 'lifecycle_source' /tmp/gongctl-postgres-analyst.jsonl
 grep -q 'cohort_id' /tmp/gongctl-postgres-analyst.jsonl
 grep -q 'shared.*Postgres' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'small_cell_suppression_applied' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'small_cell_suppression_min_3' /tmp/gongctl-postgres-analyst.jsonl
 assert_mcp_success /tmp/gongctl-postgres-analyst.jsonl 3 4 5 6 7 8 9 10 11 12
 if grep -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|raw_json\|raw_sha256\|field_value_text\|VP Operations\|LossReason raw sentinel\|synthetic-call-001\|speaker-1\|contact-analyst-private\|Analyst Private Contact\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|opp-crm-context-private\|CRM Context Private Opportunity\|This synthetic segment validates' /tmp/gongctl-postgres-analyst.jsonl; then
   echo "postgres analyst preset output exposed connection, raw storage, identifier, or synthetic transcript markers" >&2

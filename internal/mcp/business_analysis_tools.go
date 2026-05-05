@@ -534,6 +534,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if response.Count == 0 {
 		response.Warnings = append(response.Warnings, "empty_cohort: no calls matched the normalized filter")
 	}
+	s.applyBusinessAnalysisSmallCellSuppression(&response)
 	if cohort.Summary.ParticipantTitleCallCount == 0 {
 		response.Warnings = append(response.Warnings, "participant_title_missing_or_unmapped")
 	}
@@ -556,6 +557,38 @@ func (s *Server) businessAnalysisDimension(ctx context.Context, filter callFilte
 		ThemeQuery: themeQuery,
 		Limit:      limit,
 	})
+}
+
+func (s *Server) applyBusinessAnalysisSmallCellSuppression(response *businessAnalysisResponse) {
+	min := s.businessAnalysisSmallCellMin
+	if min <= 1 || len(response.Summaries) == 0 {
+		return
+	}
+	kept := response.Summaries[:0]
+	suppressedBuckets := 0
+	var suppressedCalls int64
+	for _, row := range response.Summaries {
+		if row.CallCount > 0 && row.CallCount < int64(min) {
+			suppressedBuckets++
+			suppressedCalls += row.CallCount
+			continue
+		}
+		kept = append(kept, row)
+	}
+	response.Summaries = kept
+	if suppressedBuckets == 0 {
+		return
+	}
+	response.Warnings = append(response.Warnings, fmt.Sprintf("small_cell_suppression_applied: hidden %d dimension bucket(s) below minimum cohort size %d", suppressedBuckets, min))
+	response.Limitations = append(response.Limitations, fmt.Sprintf("small_cell_suppression_min_%d", min))
+	if response.SynthesisInputs == nil {
+		response.SynthesisInputs = make(map[string]any)
+	}
+	response.SynthesisInputs["small_cell_suppression"] = map[string]any{
+		"minimum_call_count":      min,
+		"suppressed_bucket_count": suppressedBuckets,
+		"suppressed_call_count":   suppressedCalls,
+	}
 }
 
 func (s *Server) businessAnalysisEvidence(ctx context.Context, filter callFilter, query string, limit int, args businessAnalysisArgs) ([]businessAnalysisItem, []businessAnalysisQuote, error) {

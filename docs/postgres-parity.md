@@ -42,6 +42,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Business-pilot sanitized profile-cache grants | SQLite filesystem read-only boundary | complete for first Postgres business-pilot scoped role | Exact `business-pilot` scoped roles grant `gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)` instead of the identifier-bearing or unbounded sanitized profile-cache helpers; direct SQL through the scoped role is denied on both unbounded helpers and receives blank call IDs/titles from the capped helper | postgres-native hardening | Phase 9m/9o | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `TestBuildScopedReaderGrantSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
 | Business-pilot scoped profile aggregate helpers | SQLite profile-cache aggregation | complete for exact Postgres business-pilot scoped role | Exact `business-pilot` scoped role grants sanitized lifecycle-summary and transcript-backlog helpers so profile aggregate MCP tools aggregate/filter in SQL before applying output limits instead of aggregating over the 1,000-row direct cache helper cap; bounded load smoke captures EXPLAIN for sanitized helper calls plus an equivalent profile-cache index probe and proves high-priority backlog rows outside the direct cap are still returned redacted | postgres-native hardening | Phase 9q/9s | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh`; `scripts/postgres-load-smoke.sh` |
 | Analyst presence dimensions | SQLite dimension helpers derive from cached JSON/context at read time | complete for materialized Postgres presence buckets | `call_facts` stores non-sensitive `participant_title_present` and `loss_reason_present` booleans; `gongmcp_business_analysis_dimension` uses those booleans for persona/title and loss-reason buckets, while raw title/loss-reason strings remain absent from analyst outputs | postgres-native hardening | Phase 9w | `TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice`; `scripts/postgres-load-smoke.sh` |
+| Analyst aggregate small-cell suppression | SQLite analyst output remains unchanged | complete for enforced scoped Postgres analyst presets | `gongmcp` enables MCP-layer suppression for Postgres `analyst` / `analyst-expansion` only when tool-scoped DB grants are enforced; dimension buckets below 3 calls are omitted with explicit warning/limitation metadata | postgres-native pilot governance hardening | Phase 9x | `TestBusinessAnalysisSmallCellSuppressionOmitsLowCountDimensionBuckets`; `TestPostgresAnalystSmallCellMinOnlyForEnforcedScopedAnalyst`; `scripts/postgres-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
@@ -157,6 +158,9 @@ Postgres parity should be added deliberately, with each surface classified as
     persona/loss-reason dimension buckets through those booleans, and extend
     the bounded load smoke with analyst scoped-reader MCP plus direct EXPLAIN
     evidence for those dimension functions.
+30. **Phase 9x governed analyst aggregate sharing gate**: enable small-cell
+    suppression for enforced scoped Postgres analyst presets without changing
+    SQLite or non-analyst Postgres defaults.
 
 ## Phase 9l Risk Status
 
@@ -264,6 +268,19 @@ Postgres parity should be added deliberately, with each surface classified as
   Participant-title text filtering is now presence-backed in the Postgres
   aggregate path; exact title-text filtering remains a follow-up if customers
   need it without raw JSON/context scans.
+
+## Phase 9x Risk Status
+
+- Closed for the first client-sharing aggregate guard: enforced scoped Postgres
+  `analyst` and `analyst-expansion` MCP sessions suppress business-analysis
+  dimension buckets below 3 calls and emit `small_cell_suppression_applied` plus
+  `small_cell_suppression_min_3` metadata. The default remains disabled for
+  SQLite, unenforced Postgres sessions, and non-analyst presets.
+- Remaining risk after 9x: this is MCP-layer suppression for reviewed analyst
+  dimension outputs, not database-enforced RLS, materialized governed
+  snapshots, differential privacy, or a full anonymity model. Keep
+  customer-platform statement-timeout/index profiling and governed aggregate
+  variants queued before broad GA sharing.
 
 ## Phase 9m/9n/9o Risk Status
 

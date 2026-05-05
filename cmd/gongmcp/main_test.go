@@ -579,6 +579,59 @@ func TestPostgresToolAllowlistAcceptsAnalystPreset(t *testing.T) {
 	}
 }
 
+func TestPostgresAnalystSmallCellMinOnlyForEnforcedScopedAnalyst(t *testing.T) {
+	tests := []struct {
+		name                  string
+		postgresMode          bool
+		presetName            string
+		enforceScopedDBGrants bool
+		want                  int
+	}{
+		{
+			name:                  "enforced analyst",
+			postgresMode:          true,
+			presetName:            "analyst",
+			enforceScopedDBGrants: true,
+			want:                  3,
+		},
+		{
+			name:                  "enforced analyst expansion",
+			postgresMode:          true,
+			presetName:            "analyst-expansion",
+			enforceScopedDBGrants: true,
+			want:                  3,
+		},
+		{
+			name:                  "unenforced analyst",
+			postgresMode:          true,
+			presetName:            "analyst",
+			enforceScopedDBGrants: false,
+			want:                  0,
+		},
+		{
+			name:                  "business pilot",
+			postgresMode:          true,
+			presetName:            "business-pilot",
+			enforceScopedDBGrants: true,
+			want:                  0,
+		},
+		{
+			name:                  "sqlite analyst",
+			postgresMode:          false,
+			presetName:            "analyst",
+			enforceScopedDBGrants: true,
+			want:                  0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := postgresAnalystSmallCellMin(tt.postgresMode, tt.presetName, tt.enforceScopedDBGrants); got != tt.want {
+				t.Fatalf("postgresAnalystSmallCellMin()=%d want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPostgresToolAllowlistRejectsUnreviewedAnalystExpansion(t *testing.T) {
 	expanded, err := mcp.ExpandToolPreset("analyst")
 	if err != nil {

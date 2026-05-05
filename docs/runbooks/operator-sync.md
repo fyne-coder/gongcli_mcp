@@ -209,6 +209,12 @@ Notes:
   customer-platform benchmark using the approved Postgres service class,
   backup/PITR settings, concurrency target, retention window, and real
   deployment limits.
+- For client pilot analyst sessions, use a scoped analyst reader with
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. The MCP server then suppresses
+  business-analysis dimension buckets below 3 calls and reports
+  `small_cell_suppression_applied` in the tool response. If a pilot needs a
+  different minimum, a database-enforced governed aggregate design should be
+  reviewed before sharing broader analyst outputs.
 
 ```bash
 # Default bounded synthetic drill: 5,000 calls and 5,000 profile-cache rows.

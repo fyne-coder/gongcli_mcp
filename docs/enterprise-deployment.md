@@ -156,6 +156,14 @@ flowchart LR
   This first scoped business-pilot role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader
   until a sanitized builtin SQL surface exists.
+- For approved Postgres `analyst` and `analyst-expansion` sessions, run
+  `gongmcp` with the scoped analyst reader and
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. That mode applies MCP-layer
+  small-cell suppression to business-analysis dimension summaries: buckets
+  below 3 calls are omitted and the response includes
+  `small_cell_suppression_applied` / `small_cell_suppression_min_3` metadata.
+  This is a conservative pilot guard, not a substitute for database-enforced
+  RLS, materialized governed snapshots, or customer-specific privacy review.
 - Operators can check or repair Postgres builtin fact readiness with
   `gongctl sync read-model` and `gongctl sync read-model --rebuild` using a
   writable database URL. MCP remains read-only and will not rebuild stale facts.

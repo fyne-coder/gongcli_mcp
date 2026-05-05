@@ -102,9 +102,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid tool selection: %v\n", err)
 		return 2
 	}
+	selectedPreset := selectedToolPresetName(toolSelection)
 	if postgresMode || *printPostgresReaderGrants {
 		postgresHTTPMode := !*forceStdio && firstNonEmpty(*httpAddr, os.Getenv("GONGMCP_HTTP_ADDR")) != ""
-		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode, selectedToolPresetName(toolSelection))
+		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode, selectedPreset)
 		if err != nil {
 			fmt.Fprintf(stderr, "invalid postgres tool selection: %v\n", err)
 			return 2
@@ -157,6 +158,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
+	enforceScopedDBGrants := *enforceToolScopedDBGrants || truthy(os.Getenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"))
 
 	ctx := context.Background()
 	var store mcp.Store
@@ -165,7 +167,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var closeStore func() error
 	if postgresMode {
 		readOnlyOptions := postgres.ReadOnlyOptions{}
-		if *enforceToolScopedDBGrants || truthy(os.Getenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")) {
+		if enforceScopedDBGrants {
 			readOnlyOptions = postgresReadOnlyOptionsForAllowlist(allowlist)
 			if governanceConfigPath != "" {
 				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
@@ -206,6 +208,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer closeStore()
 
 	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
+	if min := postgresAnalystSmallCellMin(postgresMode, selectedPreset, enforceScopedDBGrants); min > 1 {
+		serverOptions = append(serverOptions, mcp.WithBusinessAnalysisSmallCellMin(min))
+	}
 	if governanceConfigPath != "" {
 		configPath := governanceConfigPath
 		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
@@ -660,6 +665,18 @@ func selectedToolPresetName(selection toolSelection) string {
 		return preset
 	}
 	return ""
+}
+
+func postgresAnalystSmallCellMin(postgresMode bool, presetName string, enforceScopedDBGrants bool) int {
+	if !postgresMode || !enforceScopedDBGrants {
+		return 0
+	}
+	switch strings.ToLower(strings.TrimSpace(presetName)) {
+	case "analyst", "analyst-expansion":
+		return 3
+	default:
+		return 0
+	}
 }
 
 type getenvFunc func(string) string
