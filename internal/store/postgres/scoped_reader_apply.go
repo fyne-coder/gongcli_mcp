@@ -118,8 +118,8 @@ SELECT member.rolname
 
 func validateScopedReaderEffectiveBoundary(ctx context.Context, db *sql.DB, params ScopedReaderGrantSQLParams) error {
 	options := ReadOnlyOptionsForToolAllowlist(params.Allowlist)
-	if !options.EnforceAllowedColumnBoundary || !BusinessPilotScopedColumns(params.Allowlist) {
-		return errors.New("scoped reader effective validation currently supports only the reviewed business-pilot scoped reader surface")
+	if !options.EnforceAllowedColumnBoundary || !isReviewedScopedReaderSurface(params.Allowlist) {
+		return errors.New("scoped reader effective validation currently supports only reviewed business-pilot and analyst scoped reader surfaces")
 	}
 	roleName := strings.TrimSpace(params.RoleName)
 	missingColumnGrants, err := missingColumnSelectGrantsForRole(ctx, db, roleName, cleanColumnSelectGrants(options.RequiredColumnSelectGrants))

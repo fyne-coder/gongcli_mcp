@@ -192,7 +192,7 @@ func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
 		`-- It reconciles current public objects only; gongmcp startup rejects default privileges that would grant future public objects to this service role.`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
-		`profile-backed`,
+		`reviewed business-pilot and analyst scoped readers`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
 		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,
@@ -353,7 +353,7 @@ func TestPrintPostgresReaderGrantsRejectsUnsupportedPreset(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout not empty: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "business-pilot scoped reader surface") {
+	if !strings.Contains(stderr.String(), "reviewed business-pilot and analyst scoped reader surfaces") {
 		t.Fatalf("stderr=%q missing unsupported preset message", stderr.String())
 	}
 }
@@ -576,6 +576,18 @@ func TestPostgresToolAllowlistAcceptsAnalystPreset(t *testing.T) {
 		if !reflect.DeepEqual(allowlist, expanded) {
 			t.Fatalf("postgresToolAllowlist(%q)=%v want expanded preset %v", preset, allowlist, expanded)
 		}
+	}
+}
+
+func TestPostgresToolAllowlistRejectsUnreviewedAnalystExpansion(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	expanded = append(expanded, "search_crm_field_values")
+	_, err = postgresToolAllowlist(expanded, true, "analyst")
+	if err == nil || !strings.Contains(err.Error(), "not been reviewed for the postgres analyst preset") {
+		t.Fatalf("postgresToolAllowlist accepted unreviewed analyst expansion: %v", err)
 	}
 }
 

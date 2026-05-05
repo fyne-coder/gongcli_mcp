@@ -602,17 +602,19 @@ The default Postgres reader contract preserves the broad `gongmcp_reader`
 service role for compatibility. Operators who create a narrower function-scoped
 role for a specific preset or allowlist can start `gongmcp` with
 `--enforce-tool-scoped-db-grants` or `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`;
-startup then requires exactly the reviewed `gongmcp_*` function grants for the
-selected tool surface and fails closed on extra function grants such as
-admin-only `missing_transcripts` helpers outside `business-pilot`. For the
-`business-pilot` preset, startup also validates a first table/column grant
-boundary that avoids direct `calls.call_id`, `calls.title`,
-`call_facts.call_id`, and `call_facts.title` reads. The scoped reader URL is
+startup then requires exactly the reviewed `gongmcp_*` function grants and
+reviewed table/column grants for the selected scoped surface and fails closed on
+extra function grants such as admin-only `missing_transcripts` helpers outside
+the selected preset. The reviewed scoped surfaces are currently
+`business-pilot` and `analyst`. They deny direct base-table identifiers such as
+`calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`;
+the analyst surface also grants sanitized business-analysis wrapper functions
+instead of the raw identifier-bearing SQL helpers. The scoped reader URL is
 still a service secret because selected functions and sanitized views can expose
-minimized call metadata, timings, counts, and tenant terminology.
-To generate the reviewed business-pilot grant block without copying smoke
-script internals, use the `gongctl` operator command. The `gongmcp` flag is a
-compatibility path for MCP-only images:
+minimized call metadata, snippets, timings, counts, and tenant terminology.
+To generate a reviewed grant block without copying smoke script internals, use
+the `gongctl` operator command. The `gongmcp` flag is a compatibility path for
+MCP-only images:
 
 ```bash
 gongctl mcp postgres-reader-sql --preset business-pilot \
@@ -631,6 +633,10 @@ gongmcp --print-postgres-reader-grants \
   --postgres-database gongctl
 ```
 
+Use `--preset analyst` and a separate role such as
+`gongmcp_analyst_reader` for approved analyst sessions that need the broader
+reviewed catalog.
+
 The generated SQL and apply JSON do not create credentials or print database
 URLs. Create a standalone `LOGIN NOINHERIT` role and password through your
 normal secret management process; do not grant that role to/from other roles.
@@ -648,15 +654,15 @@ function grant drift checks and MCP startup privilege enforcement enabled. Run
 `gongmcp` with the scoped reader URL and
 `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a `gongmcp`
 service credential, not an analyst SQL login. The scoped active-profile and
-profile-cache helpers redact source metadata and call IDs/titles, but selected
-functions still expose minimized operational metadata, timings, counts, and
-tenant terminology. Direct SQL callers can invoke capped sanitized profile-cache
-rows plus sanitized profile summary, lifecycle summary, and transcript backlog
-helpers; MCP result limits are still enforced above those SQL helpers.
-This first scoped `business-pilot` role is profile-backed: warm/import an active
-profile and use the default/profile lifecycle path. Explicit
-`lifecycle_source=builtin` still requires the broader compatibility reader role
-until a sanitized builtin SQL surface exists.
+profile-cache helpers redact source metadata and call IDs/titles, and scoped
+analyst business-analysis helpers return redacted call references/titles through
+sanitized SQL wrappers, but selected functions still expose minimized
+operational metadata, snippets, timings, counts, and tenant terminology. MCP
+result limits are still enforced above those SQL helpers. The scoped
+`business-pilot` role is profile-backed: warm/import an active profile and use
+the default/profile lifecycle path. Explicit `lifecycle_source=builtin` still
+requires the broader compatibility reader role until a sanitized builtin SQL
+surface exists.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),
@@ -667,7 +673,8 @@ That workflow is filter -> cohort -> inspect -> analyze -> quotes ->
 limitations, and it is intended for ChatGPT, Claude, or another reviewed MCP
 host after the operator confirms that `tools/list` exposes the requested
 cohort, theme, quote, pipeline, persona/industry, synthesis, and limitation
-tools under `analyst` or `all-readonly`.
+tools under `analyst` / `analyst-expansion` for approved Postgres sessions, or
+`analyst` / `all-readonly` for trusted SQLite sessions.
 
 ## Private HTTP MCP Pilot
 

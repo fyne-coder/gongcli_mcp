@@ -122,17 +122,17 @@ Required filter contract:
   fails closed for these aggregate cohort tools because their counts and slices
   are not recomputed over a filtered call set.
 
-| Tools | Intended preset | Default exposure | Required protections | Residual risk |
+| Tools | Intended preset / backend boundary | Default exposure | Required protections | Residual risk |
 | --- | --- | --- | --- | --- |
-| `build_call_cohort`, `inspect_call_cohort`, `list_call_cohorts`, `compare_call_cohorts` | `analyst`, `all-readonly` | Aggregate + limited cohort metadata | Filter allowlist, deterministic cohort id, echoed normalized filter, counts, coverage summary, warning flags | Small cohorts or narrow filters can still make records recognizable to the operator |
-| `search_calls_by_filters`, `summarize_calls_by_filters` | `analyst`, `all-readonly` | Aggregate or bounded record summaries | Bounded `limit`, no raw SQL, default identifier redaction unless a reviewed policy says otherwise | Call metadata can reveal business process or tenant terminology |
-| `search_transcripts_by_filters` | `analyst`, `all-readonly` | Snippet | Requires a search term, bounded excerpts, transcript-status filtering, no full transcript text, redacted provenance by default | Snippets are still customer data and can be identifying |
-| `discover_themes_in_cohort`, `summarize_themes_by_dimension`, `compare_themes_over_time`, `compare_themes_by_segment` | `analyst`, `all-readonly` | Aggregate + deterministic theme signals | Label outputs as cache-derived heuristic signals, include support counts and coverage, avoid LLM-style unsupported conclusions | Low-coverage themes can be overinterpreted by the host model |
-| `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | `analyst`, `all-readonly` | Snippet + optional evidence packaging | Requires a theme/search term, bounded quote count and length, safe attribution defaults, explicit opt-ins for names/titles/ids where policy supports them | Quote packs can carry sensitive customer language into the host model |
-| `compare_theme_outcomes`, `summarize_pipeline_progression_by_theme`, `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns` | `analyst`, `all-readonly` | Aggregate + CRM outcome coverage | Graceful degradation when stage, close status, loss reason, or opportunity linkage is absent; no causal claims from correlation alone | Pipeline labels and outcome rates can expose sensitive revenue context |
-| `summarize_themes_by_persona`, `summarize_themes_by_industry`, `rank_personas_by_insight_quality`, `diagnose_attribution_coverage` | `analyst`, `all-readonly` | Aggregate + attribution coverage | Report missing-title and missing-industry rates; never infer titles or industries from call names or snippets | Persona and industry slices may reveal go-to-market strategy |
-| `generate_sales_hooks_from_themes`, `generate_outreach_sequence_inputs`, `recommend_target_personas_and_industries`, `build_theme_brief` | `analyst`, `all-readonly` | Structured synthesis inputs | Return evidence-backed inputs for the host model; label hypotheses; include evidence counts and limitations | Host-generated copy can overstate cache-derived evidence if limitations are dropped |
-| `score_cohort_evidence_quality`, `explain_analysis_limitations`, `suggest_filter_refinements` | `analyst`, `all-readonly` | Aggregate + limitations | Always safe to call at the end of an analyst flow; recommend narrower filters and operator refreshes rather than filling missing data | Limitation summaries can still reveal where the tenant has weak process/data coverage |
+| `build_call_cohort`, `inspect_call_cohort`, `list_call_cohorts`, `compare_call_cohorts` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + limited cohort metadata | Filter allowlist, deterministic cohort id, echoed normalized filter, counts, coverage summary, warning flags | Small cohorts or narrow filters can still make records recognizable to the operator |
+| `search_calls_by_filters`, `summarize_calls_by_filters` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate or bounded record summaries | Bounded `limit`, no raw SQL, default identifier redaction unless a reviewed policy says otherwise | Call metadata can reveal business process or tenant terminology |
+| `search_transcripts_by_filters` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Snippet | Requires a search term, bounded excerpts, transcript-status filtering, no full transcript text, redacted provenance by default | Snippets are still customer data and can be identifying |
+| `discover_themes_in_cohort`, `summarize_themes_by_dimension`, `compare_themes_over_time`, `compare_themes_by_segment` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + deterministic theme signals | Label outputs as cache-derived heuristic signals, include support counts and coverage, avoid LLM-style unsupported conclusions | Low-coverage themes can be overinterpreted by the host model |
+| `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Snippet + optional evidence packaging | Requires a theme/search term, bounded quote count and length, safe attribution defaults, explicit opt-ins for names/titles/ids where policy supports them | Quote packs can carry sensitive customer language into the host model |
+| `compare_theme_outcomes`, `summarize_pipeline_progression_by_theme`, `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + CRM outcome coverage | Graceful degradation when stage, close status, loss reason, or opportunity linkage is absent; no causal claims from correlation alone | Pipeline labels and outcome rates can expose sensitive revenue context |
+| `summarize_themes_by_persona`, `summarize_themes_by_industry`, `rank_personas_by_insight_quality`, `diagnose_attribution_coverage` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + attribution coverage | Report missing-title and missing-industry rates; never infer titles or industries from call names or snippets | Persona and industry slices may reveal go-to-market strategy |
+| `generate_sales_hooks_from_themes`, `generate_outreach_sequence_inputs`, `recommend_target_personas_and_industries`, `build_theme_brief` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Structured synthesis inputs | Return evidence-backed inputs for the host model; label hypotheses; include evidence counts and limitations | Host-generated copy can overstate cache-derived evidence if limitations are dropped |
+| `score_cohort_evidence_quality`, `explain_analysis_limitations`, `suggest_filter_refinements` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + limitations | Always safe to call at the end of an analyst flow; recommend narrower filters and operator refreshes rather than filling missing data | Limitation summaries can still reveal where the tenant has weak process/data coverage |
 
 ## Highest-Risk MCP Tools
 
@@ -190,28 +190,31 @@ What the conservative defaults give you:
   `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. Tool-scoped mode rejects roles
   that can currently execute extra `gongmcp_*` functions outside the selected
   preset/allowlist, which reduces direct-SQL bypass risk for admin-only helper
-  functions. For `business-pilot`, startup also validates a first table/column
-  boundary that denies direct reads of `calls.call_id`, `calls.title`,
-  `call_facts.call_id`, and `call_facts.title`. The reviewed business-pilot
-  grant block is printable with the canonical `gongctl mcp
-  postgres-reader-sql --preset business-pilot` operator command. Operators can
-  also run `gongctl mcp postgres-reader-apply --preset business-pilot` as a
-  dry-run to emit the same reviewed SQL, then add `--apply` with a writable
-  `GONG_DATABASE_URL` or `DATABASE_URL` to clear stale public table/function
-  privileges and regrant the reviewed surface for an existing standalone
-  `NOINHERIT` role with no memberships. Neither path prints credentials or
-  connection URLs, and role/password creation stays in the deployment secret
-  manager. `gongmcp --print-postgres-reader-grants
-  --tool-preset business-pilot` remains a compatibility path for MCP-only
-  images. This first scoped role is profile-backed; explicit
-  `lifecycle_source=builtin` still requires the broader compatibility reader
-  until a sanitized builtin SQL surface exists. The scoped reader URL remains
-  a service secret because selected functions and sanitized views can still
-  expose minimized call metadata, timings, counts, tenant terminology. The
-  scoped active-profile and profile-cache helpers redact source metadata and
+  functions. For reviewed scoped surfaces (`business-pilot` and `analyst`),
+  startup also validates a table/column boundary that denies direct reads of
+  `calls.call_id`, `calls.title`, `call_facts.call_id`, and
+  `call_facts.title`; the analyst surface grants sanitized business-analysis
+  wrappers instead of raw identifier-bearing SQL helpers. Reviewed grant blocks
+  are printable with the canonical `gongctl mcp postgres-reader-sql --preset
+  business-pilot|analyst` operator command. Operators can also run `gongctl mcp
+  postgres-reader-apply --preset business-pilot|analyst` as a dry-run to emit
+  the same reviewed SQL, then add `--apply` with a writable `GONG_DATABASE_URL`
+  or `DATABASE_URL` to clear stale public table/function privileges and regrant
+  the reviewed surface for an existing standalone `NOINHERIT` role with no
+  memberships. Neither path prints credentials or connection URLs, and
+  role/password creation stays in the deployment secret manager. `gongmcp
+  --print-postgres-reader-grants --tool-preset business-pilot|analyst` remains
+  a compatibility path for MCP-only images. The scoped reader URL remains a
+  service secret because selected functions and sanitized views can still expose
+  minimized call metadata, snippets, timings, counts, and tenant terminology.
+  The scoped active-profile and profile-cache helpers redact source metadata and
   call IDs/titles; profile aggregate helpers summarize/rank in SQL before
-  output limits; and the direct profile-cache helper is capped at 1,000 rows per
-  direct helper call.
+  output limits; analyst business-analysis helpers redact direct SQL call
+  identifiers/titles through sanitized wrappers; and the direct profile-cache
+  helper is capped at 1,000 rows per direct helper call. The scoped
+  `business-pilot` role is profile-backed; explicit `lifecycle_source=builtin`
+  still requires the broader compatibility reader until a sanitized builtin SQL
+  surface exists.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes

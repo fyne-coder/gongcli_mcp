@@ -32,7 +32,7 @@ func TestMCPPostgresReaderSQLBusinessPilot(t *testing.T) {
 		`-- It reconciles current public objects only; gongmcp startup rejects default privileges that would grant future public objects to this service role.`,
 		`not an analyst SQL login`,
 		`minimized operational metadata`,
-		`profile-backed`,
+		`reviewed business-pilot and analyst scoped readers`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
 		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
@@ -96,7 +96,7 @@ func TestMCPPostgresReaderSQLRejectsUnsupportedPreset(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout not empty: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "business-pilot scoped reader surface") {
+	if !strings.Contains(stderr.String(), "reviewed business-pilot and analyst scoped reader surfaces") {
 		t.Fatalf("stderr=%q missing unsupported preset message", stderr.String())
 	}
 }
@@ -204,7 +204,7 @@ func TestMCPPostgresReaderApplyRejectsUnsupportedPreset(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout not empty: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "business-pilot scoped reader surface") {
+	if !strings.Contains(stderr.String(), "reviewed business-pilot and analyst scoped reader surfaces") {
 		t.Fatalf("stderr=%q missing unsupported preset message", stderr.String())
 	}
 }

@@ -478,12 +478,107 @@ SELECT CASE lower(trim(dimension_arg))
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_quotes_with_attribution_sanitized(search_text text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, row_limit integer)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, lifecycle_bucket text, account_name text, account_industry text, account_website text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_close_date text, opportunity_probability text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT md5(raw.call_id) AS call_id,
+       ''::text AS title,
+       raw.started_at,
+       raw.call_date,
+       raw.lifecycle_bucket,
+       ''::text AS account_name,
+       raw.account_industry,
+       ''::text AS account_website,
+       ''::text AS opportunity_name,
+       raw.opportunity_stage,
+       raw.opportunity_type,
+       ''::text AS opportunity_close_date,
+       ''::text AS opportunity_probability,
+       raw.participant_status,
+       raw.person_title_status,
+       raw.person_title_source,
+       raw.segment_index,
+       raw.start_ms,
+       raw.end_ms,
+       raw.snippet,
+       raw.context_excerpt
+  FROM gongmcp_search_transcript_quotes_with_attribution(search_text, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, row_limit) raw
+$function$;
+
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, duration_seconds bigint, lifecycle_bucket text, scope text, system text, direction text, transcript_status text, account_industry text, opportunity_stage text, opportunity_type text, forecast_category text, opportunity_count bigint, account_count bigint, participant_status text, person_title_status text, person_title_source text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT md5(raw.call_id) AS call_id,
+       ''::text AS title,
+       raw.started_at,
+       raw.call_date,
+       raw.call_month,
+       raw.duration_seconds,
+       raw.lifecycle_bucket,
+       raw.scope,
+       raw.system,
+       raw.direction,
+       raw.transcript_status,
+       raw.account_industry,
+       raw.opportunity_stage,
+       raw.opportunity_type,
+       raw.forecast_category,
+       raw.opportunity_count,
+       raw.account_count,
+       raw.participant_status,
+       raw.person_title_status,
+       raw.person_title_source
+  FROM gongmcp_business_analysis_calls(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
+$function$;
+
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence_sanitized(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT md5(raw.call_id) AS call_id,
+       ''::text AS title,
+       raw.started_at,
+       raw.call_date,
+       raw.call_month,
+       raw.lifecycle_bucket,
+       raw.account_industry,
+       ''::text AS account_name,
+       ''::text AS opportunity_name,
+       raw.opportunity_stage,
+       raw.opportunity_type,
+       ''::text AS opportunity_probability,
+       ''::text AS opportunity_close_date,
+       raw.participant_status,
+       raw.person_title_status,
+       raw.person_title_source,
+       raw.segment_index,
+       raw.start_ms,
+       raw.end_ms,
+       raw.snippet,
+       raw.context_excerpt
+  FROM gongmcp_business_analysis_evidence(search_text, title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
+$function$;
+
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 `
 
 const postgresBusinessAnalysisReaderGrantStatementsSQL = `

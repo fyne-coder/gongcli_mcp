@@ -20,11 +20,11 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 		AllowedFunctionSignatures:      signatures,
 		EnforceAllowedFunctionBoundary: true,
 	}
-	if BusinessPilotScopedColumns(allowlist) {
-		signatures = businessPilotFunctionSignatures(signatures)
+	if isReviewedScopedReaderSurface(allowlist) {
+		signatures = scopedReaderFunctionSignatures(signatures)
 		options.RequiredFunctionSignatures = signatures
 		options.AllowedFunctionSignatures = signatures
-		columns := BusinessPilotColumnSelectGrants()
+		columns := ScopedReaderColumnSelectGrants()
 		options.RequiredColumnSelectGrants = columns
 		options.AllowedColumnSelectGrants = columns
 		options.EnforceAllowedColumnBoundary = true
@@ -34,8 +34,8 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 
 func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error) {
 	options := ReadOnlyOptionsForToolAllowlist(params.Allowlist)
-	if !options.EnforceAllowedColumnBoundary || !BusinessPilotScopedColumns(params.Allowlist) {
-		return "", fmt.Errorf("scoped reader grant SQL currently supports only the reviewed business-pilot scoped reader surface")
+	if !options.EnforceAllowedColumnBoundary || !isReviewedScopedReaderSurface(params.Allowlist) {
+		return "", fmt.Errorf("scoped reader grant SQL currently supports only reviewed business-pilot and analyst scoped reader surfaces")
 	}
 	roleIdent, err := quotePostgresIdentifier(params.RoleName)
 	if err != nil {
@@ -59,8 +59,8 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("-- It reconciles current public objects only; gongmcp startup rejects default privileges that would grant future public objects to this service role.\n")
 	b.WriteString("-- Use a standalone LOGIN NOINHERIT role with no role memberships; the apply command rejects roles that inherit from or are granted to other roles.\n")
 	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.\n")
-	b.WriteString("-- Direct SQL callers can invoke capped sanitized profile-cache rows plus sanitized profile summary, lifecycle summary, and transcript backlog helpers; MCP limits are still enforced above SQL helpers.\n")
-	b.WriteString("-- This grant block supports the business-pilot scoped reader for profile-backed lifecycle analysis; use the compatibility reader role for builtin lifecycle-source analysis until a sanitized builtin SQL surface is available.\n")
+	b.WriteString("-- Direct SQL callers can invoke capped sanitized profile-cache rows, sanitized profile summaries, and sanitized analyst business-analysis wrappers; MCP limits are still enforced above SQL helpers.\n")
+	b.WriteString("-- This grant block supports reviewed business-pilot and analyst scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.\n")
 	b.WriteString("-- Role expected before running this block: ")
 	b.WriteString(roleIdent)
 	b.WriteString("\n")
@@ -112,21 +112,13 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("  END LOOP;\n")
 	b.WriteString("END\n")
 	b.WriteString("$gongctl_scoped_reader_reconcile$;\n")
-	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_active_business_profile() FROM ")
-	b.WriteString(roleIdent)
-	b.WriteString(";\n")
-	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM ")
-	b.WriteString(roleIdent)
-	b.WriteString(";\n")
-	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta(bigint, text) FROM ")
-	b.WriteString(roleIdent)
-	b.WriteString(";\n")
-	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM ")
-	b.WriteString(roleIdent)
-	b.WriteString(";\n")
-	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) FROM ")
-	b.WriteString(roleIdent)
-	b.WriteString(";\n")
+	for _, signature := range rawScopedReaderFunctionRevokes() {
+		b.WriteString("REVOKE EXECUTE ON FUNCTION ")
+		b.WriteString(signature)
+		b.WriteString(" FROM ")
+		b.WriteString(roleIdent)
+		b.WriteString(";\n")
+	}
 
 	for _, grant := range groupedColumnGrants(options.RequiredColumnSelectGrants) {
 		b.WriteString("GRANT SELECT (")
@@ -294,7 +286,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 	return signatures
 }
 
-func businessPilotFunctionSignatures(signatures []string) []string {
+func scopedReaderFunctionSignatures(signatures []string) []string {
 	out := make([]string, 0, len(signatures))
 	for _, signature := range signatures {
 		if signature == "public.gongmcp_profile_call_fact_cache(bigint, text)" {
@@ -314,9 +306,22 @@ func businessPilotFunctionSignatures(signatures []string) []string {
 		if signature == "public.gongmcp_active_business_profile()" {
 			signature = "public.gongmcp_active_business_profile_sanitized()"
 		}
+		if signature == "public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)" {
+			signature = "public.gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer)"
+		}
+		if signature == "public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" {
+			signature = "public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
+		}
+		if signature == "public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" {
+			signature = "public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
+		}
 		out = append(out, signature)
 	}
 	return out
+}
+
+func isReviewedScopedReaderSurface(allowlist []string) bool {
+	return BusinessPilotScopedColumns(allowlist) || AnalystScopedColumns(allowlist)
 }
 
 func BusinessPilotScopedColumns(allowlist []string) bool {
@@ -337,7 +342,71 @@ func BusinessPilotScopedColumns(allowlist []string) bool {
 	return true
 }
 
-func BusinessPilotColumnSelectGrants() []ColumnSelectGrant {
+func AnalystScopedColumns(allowlist []string) bool {
+	want := map[string]struct{}{
+		"analyze_late_stage_crm_signals":            {},
+		"build_call_cohort":                         {},
+		"build_quote_pack":                          {},
+		"build_theme_brief":                         {},
+		"compare_call_cohorts":                      {},
+		"compare_lifecycle_crm_fields":              {},
+		"compare_theme_outcomes":                    {},
+		"compare_themes_by_segment":                 {},
+		"compare_themes_over_time":                  {},
+		"compare_won_lost_theme_patterns":           {},
+		"crm_field_population_matrix":               {},
+		"diagnose_attribution_coverage":             {},
+		"discover_themes_in_cohort":                 {},
+		"explain_analysis_limitations":              {},
+		"extract_theme_quotes":                      {},
+		"generate_outreach_sequence_inputs":         {},
+		"generate_sales_hooks_from_themes":          {},
+		"get_business_profile":                      {},
+		"get_sync_status":                           {},
+		"inspect_call_cohort":                       {},
+		"list_business_concepts":                    {},
+		"list_call_cohorts":                         {},
+		"list_crm_fields":                           {},
+		"list_crm_object_types":                     {},
+		"list_lifecycle_buckets":                    {},
+		"list_unmapped_crm_fields":                  {},
+		"opportunities_missing_transcripts":         {},
+		"opportunity_call_summary":                  {},
+		"prioritize_transcripts_by_lifecycle":       {},
+		"rank_personas_by_insight_quality":          {},
+		"rank_quotes_for_sales_use":                 {},
+		"rank_transcript_backlog":                   {},
+		"recommend_target_personas_and_industries":  {},
+		"score_cohort_evidence_quality":             {},
+		"search_calls_by_filters":                   {},
+		"search_quotes_in_cohort":                   {},
+		"search_transcript_quotes_with_attribution": {},
+		"search_transcript_segments":                {},
+		"search_transcripts_by_call_facts":          {},
+		"search_transcripts_by_crm_context":         {},
+		"search_transcripts_by_filters":             {},
+		"suggest_filter_refinements":                {},
+		"summarize_call_facts":                      {},
+		"summarize_calls_by_filters":                {},
+		"summarize_calls_by_lifecycle":              {},
+		"summarize_loss_reasons_by_theme":           {},
+		"summarize_pipeline_progression_by_theme":   {},
+		"summarize_themes_by_dimension":             {},
+		"summarize_themes_by_industry":              {},
+		"summarize_themes_by_persona":               {},
+	}
+	if len(allowlist) != len(want) {
+		return false
+	}
+	for _, name := range allowlist {
+		if _, ok := want[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 	grants := []ColumnSelectGrant{
 		{Table: "gongctl_schema_migrations", Column: "version"},
 		{Table: "calls", Column: "started_at"},
@@ -375,6 +444,23 @@ func BusinessPilotColumnSelectGrants() []ColumnSelectGrant {
 		grants = append(grants, ColumnSelectGrant{Table: "gongmcp_sync_state", Column: column})
 	}
 	return grants
+}
+
+func BusinessPilotColumnSelectGrants() []ColumnSelectGrant {
+	return ScopedReaderColumnSelectGrants()
+}
+
+func rawScopedReaderFunctionRevokes() []string {
+	return []string{
+		"public.gongmcp_active_business_profile()",
+		"public.gongmcp_profile_call_fact_cache(bigint, text)",
+		"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
+		"public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)",
+		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+	}
 }
 
 func copyPostgresFunctionSignatures(signatures []string) []string {

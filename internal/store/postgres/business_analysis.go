@@ -97,7 +97,7 @@ func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, param
 	}
 	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, lifecycle_bucket, account_name, account_industry, account_website, opportunity_name, opportunity_stage, opportunity_type, opportunity_close_date, opportunity_probability, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
-  FROM gongmcp_search_transcript_quotes_with_attribution($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+  FROM `+s.postgresTranscriptQuoteAttributionFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		queryText,
 		fromDate,
 		toDate,
@@ -158,7 +158,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 		return nil, errors.New("query is required for business-analysis evidence searches")
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
-  FROM gongmcp_business_analysis_evidence($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+  FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		queryText,
 		filter.TitleQuery,
 		filter.Query,
@@ -245,7 +245,7 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 
 func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sqlite.BusinessAnalysisFilter, limit int) ([]sqlite.BusinessAnalysisCallRow, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, duration_seconds, lifecycle_bucket, scope, system, direction, transcript_status, account_industry, opportunity_stage, opportunity_type, forecast_category, opportunity_count, account_count, participant_status, person_title_status, person_title_source
-  FROM gongmcp_business_analysis_calls($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+  FROM `+s.postgresBusinessAnalysisCallsFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		filter.TitleQuery,
 		filter.Query,
 		filter.FromDate,
@@ -276,6 +276,27 @@ func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sql
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) postgresBusinessAnalysisCallsFunction() string {
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		return "gongmcp_business_analysis_calls_sanitized"
+	}
+	return "gongmcp_business_analysis_calls"
+}
+
+func (s *Store) postgresBusinessAnalysisEvidenceFunction() string {
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		return "gongmcp_business_analysis_evidence_sanitized"
+	}
+	return "gongmcp_business_analysis_evidence"
+}
+
+func (s *Store) postgresTranscriptQuoteAttributionFunction() string {
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		return "gongmcp_search_transcript_quotes_with_attribution_sanitized"
+	}
+	return "gongmcp_search_transcript_quotes_with_attribution"
 }
 
 func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqlite.BusinessAnalysisFilter) (sqlite.BusinessAnalysisCohortSummary, error) {
