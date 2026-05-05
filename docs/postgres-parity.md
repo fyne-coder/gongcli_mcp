@@ -51,8 +51,8 @@ Postgres parity should be added deliberately, with each surface classified as
 | Support bundle | SQLite sanitized support bundle | complete for metadata-only Postgres diagnostics | Sanitized Postgres diagnostics without secrets/customer payloads or database URLs | postgres-native equivalent | Phase 6a | support bundle fixture inspection; `scripts/postgres-smoke.sh` |
 | Cache inventory | SQLite file/table inventory | complete for Postgres table/version/readiness diagnostics | Postgres table counts, schema version, read-model/profile readiness, and reader-role diagnostics without database URL export | postgres-native equivalent | Phase 6a | `TestPostgresCacheInventoryAndDiagnostics`; `scripts/postgres-smoke.sh` |
 | Purge/retention | SQLite purge commands | complete for bounded call-scoped Postgres row cleanup | Reader-role dry-run plan plus writable confirmed purge for calls and dependent transcript, CRM-context, read-model, profile-cache, scorecard-activity, and governance-suppression rows; physical WAL/backups/replicas remain operator-owned | postgres-native equivalent | Phase 6b | purge dry-run/confirm tests and smoke |
-| Backup/restore | SQLite file copy guidance | queued | Postgres dump/restore, migration rollback, and role-grant guidance | postgres-native equivalent | Phase 7 | documented operator smoke |
-| Release hardening | SQLite CI coverage plus release gates | queued for Postgres service tests | CI-backed Postgres service tests and versioned docs/images | must match release quality | Phase 7 | CI service test + release checklist |
+| Backup/restore | SQLite file copy guidance | complete for synthetic Postgres restore smoke and operator guidance | Postgres dump/restore, read-model rebuild, read-only MCP verification, reader denial checks, and role-grant guidance; PITR/replica/customer backup policy remains operator-owned | postgres-native equivalent | Phase 7 | `scripts/postgres-backup-restore-smoke.sh` |
+| Release hardening | SQLite CI coverage plus release gates | complete for Postgres service tests plus backup/restore smoke in CI and image-publish gates | CI-backed Postgres service tests and versioned docs/images | must match release quality | Phase 7 | `.github/workflows/ci.yml`; `.github/workflows/publish-images.yml`; release checklist |
 
 ## Phase Boundaries
 
@@ -73,6 +73,26 @@ Postgres parity should be added deliberately, with each surface classified as
    diagnostics.
 8. **Phase 7 release hardening**: CI service tests, backup/restore, migration
    rollback, docs, and versioned release artifacts.
+
+## Phase 7 Risk Status
+
+- Closed for synthetic release hardening: `scripts/postgres-backup-restore-smoke.sh`
+  starts an isolated Postgres service, syncs the synthetic fixture, rebuilds the
+  read model, creates a custom-format `pg_dump`, restores into a second
+  database, rebuilds readiness, verifies row-count equivalence, runs read-only
+  `gongmcp` operator-smoke tools, and proves the restored reader role cannot
+  write or directly read raw call JSON.
+- Closed for CI/release gates: normal CI and the image publish workflow run
+  Postgres-backed Go tests through `GONGCTL_TEST_POSTGRES_URL` and run the
+  synthetic backup/restore smoke before release images publish.
+- Closed for rollback guidance: release and operator docs now require a
+  restorable pre-upgrade backup, writable migration/read-model validation, and
+  read-only MCP smoke before promotion; rollback uses the prior image digest and
+  prior verified backup.
+- Accepted residual risk: production PITR, replica rewind, object-storage
+  lifecycle, backup encryption, restore RTO/RPO, and cross-version customer-data
+  restore drills are deployment-owned controls and must be validated in the
+  customer's Postgres platform before GA.
 
 ## Phase 4 Risk Status
 
@@ -179,6 +199,6 @@ Postgres parity should be added deliberately, with each surface classified as
   should still run destructive cleanup in a maintenance window with scheduled
   sync jobs stopped.
 - Still queued: database-enforced governance filtering/RLS, analyst and
-  all-readonly query parity, larger
-  customer-scale load benchmarking for read-model counter write contention, and
-  release rollback/backup hardening.
+  all-readonly query parity, larger customer-scale load benchmarking for
+  read-model counter write contention, customer-platform PITR/replica restore
+  drills, and cross-version customer-data restore validation before GA.

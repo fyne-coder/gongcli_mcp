@@ -8,8 +8,9 @@ This document defines the current enterprise pilot deployment shape for
 - `gongctl` is the writable operator tool that authenticates to Gong and
   refreshes local cache state.
 - `gongmcp` is a read-only MCP server over the configured cache store. SQLite
-  is complete/default; Postgres supports the first shared-deployment
-  `business-pilot` slice. It supports local stdio and a minimal HTTP `/mcp`
+  is complete/default; Postgres supports the explicitly listed
+  shared-deployment slices. Full Postgres `analyst` and `all-readonly` parity
+  remain follow-ups. It supports local stdio and a minimal HTTP `/mcp`
   private-pilot mode.
 - Business users should consume only the approved MCP tool set through host or
   wrapper policy. They do not run live syncs, handle Gong credentials, or write
@@ -131,6 +132,10 @@ flowchart LR
 - Operators can check or repair Postgres builtin fact readiness with
   `gongctl sync read-model` and `gongctl sync read-model --rebuild` using a
   writable database URL. MCP remains read-only and will not rebuild stale facts.
+- Operators should verify Postgres backups by restoring into an isolated
+  database, rebuilding readiness with the writable role, and running a
+  read-only MCP smoke against the restored database. The repo provides a
+  synthetic version of that drill through `scripts/postgres-backup-restore-smoke.sh`.
 - The Postgres slice supports the explicit `business-pilot` preset through MCP
   (`get_sync_status`, `summarize_call_facts`,
   `summarize_calls_by_lifecycle`, and `rank_transcript_backlog`) plus narrow
@@ -429,6 +434,9 @@ Backup policy should be owned by the company operating the pilot:
 - back up the SQLite cache before upgrades, major sync-scope changes, and
   profile changes
 - include transcript and profile storage in the same backup plan
+- for Postgres shared deployments, back up the database with the customer's
+  approved Postgres backup mechanism and keep DB dumps, WAL/PITR archives,
+  snapshots, and replicas under the same protected data class as the live cache
 - review `cache inventory` output alongside backup logs so unusual DB growth or
   missing sync metadata is caught early
 - for Postgres deployments, generate metadata-only support diagnostics with the
@@ -436,6 +444,25 @@ Backup policy should be owned by the company operating the pilot:
   `GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl support bundle --out /srv/gongctl/support-bundle`
 - verify that restores can be mounted back into a read-only MCP runtime before
   treating the backup as valid
+
+Postgres restore validation should prove:
+
+1. the restored database schema version is current
+2. `gongctl sync read-model --rebuild` succeeds with the writable role
+3. source and restored table counts match for the approved validation scope
+4. `gongmcp` starts with the read-only role and can run `get_sync_status`,
+   `search_calls`, and `search_transcript_segments`
+5. the read-only role cannot write and cannot directly read raw payload columns
+
+The local synthetic release drill is:
+
+```bash
+scripts/postgres-backup-restore-smoke.sh
+```
+
+Customer production restore drills should use customer-owned backup tooling and
+synthetic or approved non-production data. Do not copy production transcript
+text, raw payloads, or database URLs into shared evidence files.
 
 Retention policy should define:
 

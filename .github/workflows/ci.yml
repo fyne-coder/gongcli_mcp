@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
         env:
           POSTGRES_USER: gongctl
           POSTGRES_PASSWORD: gongctl_ci_password
@@ -30,6 +30,8 @@ jobs:
           go-version: "1.26.x"
       - run: make secret-scan
       - run: go test -count=1 ./...
+      - name: Postgres backup/restore smoke
+        run: ./scripts/postgres-backup-restore-smoke.sh
       - run: go vet ./...
       - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
       - run: |

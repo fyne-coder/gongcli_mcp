@@ -26,6 +26,7 @@ make sbom
 make checksums
 docker build -t gongctl:local .
 docker build --target mcp -t gongctl:mcp-local .
+scripts/postgres-backup-restore-smoke.sh
 ```
 
 CI also runs static analysis, Go vulnerability checks, normal image builds, and
@@ -42,19 +43,21 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
 5. Run `make secret-scan`.
 6. Run `make sbom`.
 7. Run `make checksums`.
-8. Run `make docker-build`.
-9. Run `make docker-build-mcp`.
-10. Run `make docker-build-ghcr`.
-11. Run `make docker-build-ghcr-mcp`.
-12. Tag the release as `v$(cat VERSION)`.
-13. Push the tag; `.github/workflows/publish-images.yml` reruns tests, vet,
-    secret scan, Docker smoke builds, and image vulnerability scans before it
+8. Run `make postgres-backup-restore-smoke`.
+9. Run `make docker-build`.
+10. Run `make docker-build-mcp`.
+11. Run `make docker-build-ghcr`.
+12. Run `make docker-build-ghcr-mcp`.
+13. Tag the release as `v$(cat VERSION)`.
+14. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
+    Go tests, the synthetic Postgres backup/restore smoke, vet, secret scan,
+    Docker smoke builds, and image vulnerability scans before it
     publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
-14. After the first publish, confirm the GHCR packages are public if the GitHub
+15. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-15. Run GoReleaser from the tag.
+16. Run GoReleaser from the tag.
 
 The GHCR workflow can also be run manually from GitHub Actions from the default
 branch. Manual runs publish SHA-tagged images only; release version tags come
@@ -115,15 +118,30 @@ For customer-hosted deployments:
 
 1. Pin the current working image digest and record the current cache backup.
 2. Pull the candidate `gongctl` and `gongmcp` images by immutable tag or digest.
-3. Back up SQLite, transcript files, profile YAML, AI governance YAML, and MCP
-   host config before changing binaries.
-4. Run `gongctl sync status --db PATH` with the candidate operator image.
-5. Run `gongmcp` `tools/list` against the candidate MCP image using a read-only
-   cache mount.
-6. Promote the MCP image only after the target host, allowlist, auth mode, and
+3. Back up SQLite or Postgres, transcript files, profile YAML, AI governance
+   YAML, and MCP host config before changing binaries.
+4. For SQLite, run `gongctl sync status --db PATH` with the candidate operator
+   image against a protected copy before touching production.
+5. For Postgres, restore the backup into an isolated database, run
+   `gongctl sync read-model --rebuild` with the candidate operator image, then
+   run a read-only MCP smoke against the restored database.
+6. Run `gongmcp` `tools/list` against the candidate MCP image using a read-only
+   cache mount or read-only Postgres role.
+7. Promote the MCP image only after the target host, allowlist, auth mode, and
    support-bundle smoke pass.
-7. Roll back by restoring the prior image digest and prior cache/config backup.
+8. Roll back by restoring the prior image digest and prior cache/config backup.
 
 Do not use read-only `gongmcp` as a migration path. If the cache needs a schema
 repair or migration, run the writable `gongctl` operator path first, validate
 `sync status`, then restart MCP.
+
+The repo-level Postgres release drill is synthetic only:
+
+```bash
+scripts/postgres-backup-restore-smoke.sh
+```
+
+It proves dump/restore mechanics, migration/read-model repair, restored MCP
+startup, and read-only-role denials without using customer data. Customer
+production backup policy, PITR, replica rewind, encryption, and retention of
+backup media remain deployment-owned controls.

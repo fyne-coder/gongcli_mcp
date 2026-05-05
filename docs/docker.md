@@ -43,8 +43,8 @@ Release images are published to GHCR as two separate packages:
 Use immutable version tags or digest-pinned references in company deployments:
 
 ```bash
-docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2
-docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z
 ```
 
 A version tag is available only after the matching Git tag triggers
@@ -180,12 +180,12 @@ The first Postgres vertical slice supports:
   prepared; Postgres narrows this preset to supported search tools
 
 It does not yet provide full SQLite query parity for database-enforced
-governance snapshots/RLS, full analyst/all-readonly presets, backup/restore, or
-remaining CRM/lifecycle-heavy MCP tools. Postgres support bundles, cache
-inventory, and retention purge planning are available as metadata-only
-diagnostics that do not export the database URL. Confirmed Postgres purge is
-call-scoped row cleanup with a writable URL, not physical erasure of WAL,
-replicas, snapshots, or backups. See the
+governance snapshots/RLS, full analyst/all-readonly presets, production PITR
+policy, or remaining CRM/lifecycle-heavy MCP tools. Postgres support bundles,
+cache inventory, retention purge planning, and synthetic backup/restore smoke
+are available as operator diagnostics that do not export the database URL.
+Confirmed Postgres purge is call-scoped row cleanup with a writable URL, not
+physical erasure of WAL, replicas, snapshots, or backups. See the
 [Postgres parity matrix](postgres-parity.md) for the phased parity contract.
 
 Read-only `gongmcp` never rebuilds the Postgres read model. If startup reports a
@@ -211,6 +211,21 @@ Run an approved Postgres retention cleanup with the writable operator role:
 export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
 gongctl cache purge --older-than 2026-04-01 --confirm
 ```
+
+Run a local synthetic Postgres backup/restore drill before release promotion or
+after changing migrations, grants, or read-model startup behavior:
+
+```bash
+scripts/postgres-backup-restore-smoke.sh
+```
+
+The drill creates an isolated Compose Postgres instance, writes synthetic data,
+dumps and restores it into a second database, rebuilds Postgres read-model
+readiness, runs read-only MCP `operator-smoke` calls against the restored
+database, and records synthetic-only evidence under `/tmp/gongctl-postgres-restore-*`.
+The MCP evidence can include synthetic transcript snippets; production restore
+evidence must use synthetic or approved non-production data and must be
+sanitized before sharing.
 
 Run the local synthetic smoke:
 
@@ -247,7 +262,7 @@ Point an MCP host at `docker run` with stdin kept open:
         "none",
         "-v",
         "/Users/YOU/gongctl-data:/data:ro",
-        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2",
+        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z",
         "--db",
         "/data/gong.db",
         "--tool-preset",
@@ -276,7 +291,7 @@ docker run --rm \
   -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
   -v /srv/gongctl/gong.db:/data/gong.db:ro \
   -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \
-  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z \
   --http 0.0.0.0:8080 \
   --auth-mode bearer \
   --allow-open-network \
@@ -367,7 +382,9 @@ the MCP host config. The expected operational contract is:
 - shared hosts should avoid long-lived plain environment variables where possible; Docker socket access can expose container environment through inspection
 - production rollouts should pin immutable digests and can add image signing outside this repo's local-development defaults
 - stdio MCP host configs must use the MCP-only target once published, with no
-  Gong credentials, `--network none`, and a read-only SQLite mount
+  Gong credentials, `--network none` for SQLite, and either a read-only SQLite
+  mount or a Postgres reader URL with `--db` omitted
 - HTTP MCP host configs must use the MCP-only target with no Gong credentials,
-  an explicit tool preset or allowlist, a read-only SQLite mount, and a TLS/private-network
-  boundary managed outside the container
+  an explicit tool preset or allowlist, either a read-only SQLite mount or a
+  Postgres reader URL with `--db` omitted, and a TLS/private-network boundary
+  managed outside the container

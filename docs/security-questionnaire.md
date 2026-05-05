@@ -7,7 +7,7 @@ with customer-specific deployment facts before submitting to a security team.
 
 | Question | Example answer |
 | --- | --- |
-| What is the product? | `gongctl` is an unofficial local-first Gong API CLI plus `gongmcp`, a read-only MCP adapter over a customer-controlled SQLite cache. |
+| What is the product? | `gongctl` is an unofficial local-first Gong API CLI plus `gongmcp`, a read-only MCP adapter over a configured customer-controlled cache store: SQLite by default, or customer-owned Postgres for shared deployments. |
 | Who hosts it? | The customer hosts the runtime, cache, secrets, logs, and network endpoint. The package does not require a vendor-hosted SaaS control plane. |
 | Is this multi-tenant SaaS? | No. The current package is customer-hosted. Any multi-tenant routing or browser application would be a separate customer-owned or future application layer. |
 | What environments are supported? | Local workstation, customer-managed VM/container, stdio MCP, and private HTTP MCP behind customer TLS/auth infrastructure. |
@@ -17,17 +17,17 @@ with customer-specific deployment facts before submitting to a security team.
 | Question | Example answer |
 | --- | --- |
 | What data is processed? | Depending on sync scope, cached Gong call metadata, transcript text, users, selected CRM context, settings/scorecard metadata, sync state, and profile mappings. |
-| Where is customer data stored? | In a customer-owned data root outside the source checkout, typically SQLite plus optional transcript/profile files. |
+| Where is customer data stored? | In a customer-owned data root outside the source checkout, typically SQLite plus optional transcript/profile files, or in customer-owned Postgres for shared multi-container deployments. |
 | Does the vendor receive transcript data by default? | No. There is no default outbound vendor telemetry or support upload path. |
 | Are support bundles safe to send? | Support bundles are designed to exclude raw transcripts, raw payloads, customer-content identifiers, secrets, and local paths. They still contain customer operational metadata and should not be posted publicly. |
-| Can restricted customer data be excluded from MCP use? | Yes. Operators can maintain a private AI governance YAML and export a physically filtered MCP database before starting `gongmcp`. |
+| Can restricted customer data be excluded from MCP use? | Yes. For SQLite, operators can maintain a private AI governance YAML and export a physically filtered MCP database before starting `gongmcp`. For Postgres, operators can prepare a policy-backed `governance-search` slice; database-enforced governed views/RLS/snapshots remain a follow-up. |
 
 ## Credentials And Secrets
 
 | Question | Example answer |
 | --- | --- |
 | Where are Gong credentials stored? | In customer-managed secret storage, environment variables, or ignored local `.env` files for the writable `gongctl` process only. |
-| Does `gongmcp` need Gong credentials? | No. `gongmcp` reads an existing SQLite cache and should not receive Gong API credentials. |
+| Does `gongmcp` need Gong credentials? | No. `gongmcp` reads an existing SQLite cache or a read-only Postgres role and should not receive Gong API credentials. |
 | How are MCP bearer tokens stored? | Customer-managed secret manager, mounted secret file, systemd environment file, Docker secret, Kubernetes Secret, or equivalent platform secret. Tokens must not be committed or baked into images. |
 | Is OAuth supported? | Native OAuth is not implemented in `gongmcp` yet. Production remote MCP should use a customer-managed OAuth broker/gateway in front of `gongmcp`, or a future native OAuth implementation. The lab-auth harness proves the gateway pattern with OAuth protected-resource metadata, Keycloak token validation, Cloudflare Tunnel HTTPS, dynamic-client-registration checks, and ChatGPT-style MCP tool-call compatibility. |
 
@@ -53,7 +53,7 @@ with customer-specific deployment facts before submitting to a security team.
 
 | Question | Example answer |
 | --- | --- |
-| Is the MCP cache read-only? | `gongmcp` opens SQLite read-only and should run with a read-only mount. |
+| Is the MCP cache read-only? | `gongmcp` opens SQLite read-only and should run with a read-only mount. For Postgres deployments, `gongmcp` uses a reader role; release smoke proves that role cannot write or directly read raw payload columns. |
 | Is network access required for MCP? | Stdio Docker MCP can run with `--network none`. HTTP MCP needs only the MCP listener behind customer-managed TLS/auth. |
 | Does HTTP MCP validate browser origins? | Yes. Non-local HTTP requires `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`; unexpected `Origin` headers are rejected before auth or tool dispatch. |
 | Are result sizes bounded? | Yes. MCP tools enforce bounded result counts and the server enforces an MCP frame-size limit. |
@@ -72,8 +72,8 @@ with customer-specific deployment facts before submitting to a security team.
 
 | Question | Example answer |
 | --- | --- |
-| How are upgrades handled? | Pin image tags or digests, back up the cache first, run `sync status`, run MCP `tools/list`, then promote. |
-| How is rollback handled? | Revert to the prior pinned image and prior cache backup if the new binary/cache combination fails validation. |
+| How are upgrades handled? | Pin image tags or digests, back up the cache first, run `sync status`, run MCP `tools/list`, then promote. For Postgres, restore the backup into an isolated database, rebuild readiness with the writable role, and run read-only MCP smoke before promotion. |
+| How is rollback handled? | Revert to the prior pinned image and prior verified cache backup if the new binary/cache combination fails validation. Postgres production PITR, replica rewind, backup encryption, and retention are customer-platform controls. |
 | How are retention deletes handled? | Use `gongctl cache purge` dry-run first, then confirm only after backup, legal-hold, and owner approval checks. SQLite performs active-file cleanup with `secure_delete`/`VACUUM`; Postgres deletes approved call-scoped rows but WAL, replicas, snapshots, and backups remain under company retention controls. |
 | How is decommissioning handled? | Stop sync jobs, remove MCP host configs, revoke/rotate credentials, archive or destroy cache/transcript/profile data per policy, and remove unused images/volumes. |
 

@@ -6,7 +6,9 @@ This runbook is for the IT / RevOps operator who refreshes protected Gong cache
 data for an enterprise pilot. It assumes the current product boundary:
 
 - `gongctl` performs writable sync and profile operations
-- `gongmcp` reads the resulting SQLite cache only
+- `gongmcp` reads the configured cache store read-only: SQLite for
+  local/single-host deployments, or a Postgres reader role for shared
+  deployments
 - business users consume approved MCP tools and do not run sync jobs
 
 Do not paste secrets, transcript text, raw payloads, or tenant-specific IDs
@@ -85,6 +87,9 @@ Minimum backup set:
 - active SQLite file
 - profile YAML files used by this tenant
 - transcript directory if transcript sync is enabled for the pilot
+- for Postgres shared deployments, the database backup or snapshot plus any
+  WAL/PITR material, role/grant definitions, and external transcript/profile
+  storage used by the same deployment
 
 The exact copy command depends on the host. The requirement is operational, not
 tool-specific: produce a dated backup in protected storage and verify the copy
@@ -306,6 +311,29 @@ Restore test:
 3. verify `tools/list` or `get_sync_status`
 4. only then treat the backup as usable
 
+Postgres restore test:
+
+1. restore the Postgres backup into an isolated database or instance
+2. run `gongctl sync read-model --rebuild` with the writable database URL
+3. compare source and restored table counts for the approved validation scope
+4. start `gongmcp` with the restored read-only database URL and run
+   `get_sync_status`, `search_calls`, and `search_transcript_segments`
+5. prove the restored reader role cannot write and cannot directly read raw
+   payload columns
+
+For local release validation with synthetic fixtures only, run:
+
+```bash
+scripts/postgres-backup-restore-smoke.sh
+```
+
+That script writes synthetic-only evidence under
+`/tmp/gongctl-postgres-restore-*` and checks those public evidence files for
+database URLs, dev passwords, the local host marker, and raw payload markers.
+The MCP smoke artifact can include synthetic transcript snippets; production
+restore evidence must use synthetic or approved non-production data and must be
+sanitized before sharing.
+
 ## Decommissioning
 
 When the pilot ends or a tenant is removed:
@@ -389,4 +417,6 @@ Before closing the change window, confirm:
 - required sync commands completed
 - `sync status` reflects the expected cache state
 - read-only `gongmcp` smoke passed with no network and no credentials
+- for Postgres changes, backup/restore or restore-drill evidence exists and the
+  restored read-only MCP smoke passed
 - any scheduled job change has a named owner and documented cadence
