@@ -768,7 +768,7 @@ if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-p
   exit 1
 fi
 grep -q 'default privileges for future public objects' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
-grep -q 'public:current_user:tables:SELECT' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
+grep -q 'public:gongmcp_business_pilot_reader:tables:SELECT' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM gongmcp_business_pilot_reader" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC" >/dev/null
 if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-business-pilot-reader-public-default-privilege-drift.txt 2>&1; then
