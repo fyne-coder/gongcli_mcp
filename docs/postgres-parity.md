@@ -29,7 +29,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Call facts | `call_facts` view | foundation table added | Maintained indexed facts table for grouping/filtering | must match at output layer | Phase 1 | SQLite-vs-Postgres call-fact aggregate tests |
 | Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2c for builtin facts: migration/write refresh plus trigger-maintained readiness counters | Backfill on upgrade, refresh on writes, cheap version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `TestPostgresReadModelReadinessRejectsRebuildInProgressState`; `gongctl sync read-model` |
 | Operator read-model check/rebuild | SQLite profile cache readiness/rebuild is profile-aware | complete for Postgres builtin facts via `gongctl sync read-model [--rebuild]` | Writable CLI can check/rebuild; read-only MCP never rebuilds | postgres-native equivalent | Phase 2 | `GONG_DATABASE_URL=... gongctl sync read-model --rebuild` |
-| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke, 1,200-call contention smoke, and bounded over-cap profile-cache helper EXPLAIN evidence | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, post-contention row/profile-cache correctness, and profile-backed helper evidence at synthetic over-cap profile-cache size | postgres-native equivalent | Phase 2/8b/9s | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh` |
+| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke, 1,200-call contention smoke, and bounded over-cap profile-cache helper-call EXPLAIN evidence | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, post-contention row/profile-cache correctness, and profile-backed helper-call plus equivalent index-probe evidence at synthetic over-cap profile-cache size | postgres-native equivalent | Phase 2/8b/9s | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh` |
 | Transcript FTS | SQLite FTS5 | Postgres `tsvector`/GIN with execute-only snippet function | Equivalent bounded search semantics, documented ranking differences | postgres-native equivalent | Phase 2 | synthetic search comparison tests |
 | Call search | SQLite filters over calls/context | complete for normalized CRM object and builtin call-fact filters | Match safe filters or document intentional exclusions | must match | Phase 2 | `TestPostgresSearchCallsRawSafeFiltersMatchSQLite`; `scripts/postgres-smoke.sh` |
 | MCP `get_call` | SQLite minimized call detail | complete for Postgres normalized context rows | Same minimized JSON contract over Postgres MCP | must match | Phase 2 | `TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext`; `scripts/postgres-smoke.sh` |
@@ -40,7 +40,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Business-pilot scoped grant SQL handoff | Manual role/grant notes | complete for first Postgres business-pilot scoped role | `gongctl mcp postgres-reader-sql --preset business-pilot` is the canonical print-only operator command; `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is the MCP-only compatibility path. Both emit deterministic, secret-free grant SQL from the same reviewed function and column maps used by startup validation; profile-backed only until a sanitized builtin SQL surface exists | postgres-native operator handoff | Phase 9l | `TestPrintPostgresReaderGrantsForBusinessPilot`; `TestMCPPostgresReaderSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
 | Business-pilot scoped grant reconciliation | Manual SQL apply/stale grant repair | complete for existing Postgres business-pilot scoped roles | `gongctl mcp postgres-reader-apply --preset business-pilot` dry-runs the reviewed SQL by default and applies it only with `--apply` plus a writable `GONG_DATABASE_URL` / `DATABASE_URL`; role credentials remain external, output never includes database URLs or passwords, and smoke proves stale grants are repaired while scoped startup and direct-denial checks still pass | postgres-native operator lifecycle | Phase 9p | `TestMCPPostgresReaderApplySuccessJSONOmitsURL`; `scripts/postgres-smoke.sh` |
 | Business-pilot sanitized profile-cache grants | SQLite filesystem read-only boundary | complete for first Postgres business-pilot scoped role | Exact `business-pilot` scoped roles grant `gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)` instead of the identifier-bearing or unbounded sanitized profile-cache helpers; direct SQL through the scoped role is denied on both unbounded helpers and receives blank call IDs/titles from the capped helper | postgres-native hardening | Phase 9m/9o | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `TestBuildScopedReaderGrantSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
-| Business-pilot scoped profile aggregate helpers | SQLite profile-cache aggregation | complete for exact Postgres business-pilot scoped role | Exact `business-pilot` scoped role grants sanitized lifecycle-summary and transcript-backlog helpers so profile aggregate MCP tools aggregate/filter in SQL before applying output limits instead of aggregating over the 1,000-row direct cache helper cap; bounded load smoke captures helper-level EXPLAIN plus an equivalent profile-cache index probe and proves high-priority backlog rows outside the direct cap are still returned redacted | postgres-native hardening | Phase 9q/9s | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh`; `scripts/postgres-load-smoke.sh` |
+| Business-pilot scoped profile aggregate helpers | SQLite profile-cache aggregation | complete for exact Postgres business-pilot scoped role | Exact `business-pilot` scoped role grants sanitized lifecycle-summary and transcript-backlog helpers so profile aggregate MCP tools aggregate/filter in SQL before applying output limits instead of aggregating over the 1,000-row direct cache helper cap; bounded load smoke captures EXPLAIN for sanitized helper calls plus an equivalent profile-cache index probe and proves high-priority backlog rows outside the direct cap are still returned redacted | postgres-native hardening | Phase 9q/9s | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh`; `scripts/postgres-load-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
@@ -143,9 +143,9 @@ Postgres parity should be added deliberately, with each surface classified as
     aggregate helpers so they do not depend on the capped direct row helper.
 27. **Phase 9s profile backlog EXPLAIN/load evidence**: extend the bounded
     Postgres load smoke with synthetic over-cap active profile-cache data,
-    sanitized profile helper EXPLAIN artifacts, and assertions that ranked
-    date-bounded backlog rows remain redacted and are not limited by the
-    newest-1,000 direct helper cap.
+    sanitized helper-call EXPLAIN artifacts, a writer-only equivalent index
+    probe, and assertions that ranked date-bounded backlog rows remain redacted
+    and are not limited by the newest-1,000 direct helper cap.
 
 ## Phase 9l Risk Status
 
@@ -192,9 +192,11 @@ Postgres parity should be added deliberately, with each surface classified as
 - Phase 9s added bounded load evidence for this path: the Postgres load smoke
   seeds an over-cap synthetic profile cache, proves the direct capped helper
   returns only 1,000 rows while sanitized summary/backlog helpers use the full
-  profile cache, captures helper-level `EXPLAIN (ANALYZE, BUFFERS, FORMAT
-  JSON)` artifacts, and captures a writer-only equivalent backlog predicate
-  EXPLAIN that shows profile-cache index use at the synthetic size.
+  profile cache, captures `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` artifacts
+  for sanitized helper calls, and captures a writer-only companion
+  profile-cache predicate EXPLAIN that shows available index use for the
+  date-bounded filter at the synthetic size. PostgreSQL does not expose helper
+  internals through the function-call EXPLAIN.
 - Remaining risk after 9q: `rank_transcript_backlog` still returns
   identifier-minimized per-call operational metadata such as started time,
   lifecycle, confidence, duration, scope, system, direction, and rationale.
@@ -204,12 +206,12 @@ Postgres parity should be added deliberately, with each surface classified as
 
 ## Phase 9s Risk Status
 
-- Closed for bounded synthetic profile-cache evidence: `scripts/postgres-load-smoke.sh`
+- Covered for bounded synthetic profile-cache evidence: `scripts/postgres-load-smoke.sh`
   now creates an active synthetic profile cache above the 1,000-row direct
   helper cap, captures `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` artifacts for
-  `gongmcp_profile_lifecycle_summary_sanitized(...)`,
-  `gongmcp_profile_transcript_backlog_sanitized(...)`, and the date-bounded
-  backlog call, and records a direct profile-cache index probe artifact.
+  sanitized helper calls including the date-bounded backlog call, and records a
+  writer-only equivalent profile-cache index probe artifact because the
+  `SECURITY DEFINER` helpers can appear as function scans at the call boundary.
 - The smoke proves the direct capped helper returns 1,000 rows and no
   `closed_won` rows from the oldest high-priority synthetic cohort, while the
   date-bounded sanitized backlog helper returns 25 ranked `closed_won` rows

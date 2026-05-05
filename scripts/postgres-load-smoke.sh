@@ -24,14 +24,25 @@ case "$PROFILE_CACHE_COUNT" in
     exit 1
     ;;
 esac
-if [ "$PROFILE_CACHE_COUNT" -lt 1001 ]; then
-  PROFILE_CACHE_COUNT=1500
+if [ "$PROFILE_CACHE_COUNT" -lt 1200 ]; then
+  PROFILE_CACHE_COUNT=1200
+fi
+if [ "$PROFILE_CACHE_COUNT" -gt 5000 ]; then
+  echo "GONGCTL_POSTGRES_LOAD_PROFILE_CACHE_ROWS must be at most 5000 for this bounded smoke" >&2
+  exit 1
 fi
 export GONGCTL_POSTGRES_PORT="$PORT"
 export GONGCTL_POSTGRES_PASSWORD="${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}"
 export GONGMCP_READER_PASSWORD="${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}"
-WRITER_URL="postgres://gongctl:${GONGCTL_POSTGRES_PASSWORD}@127.0.0.1:${PORT}/gongctl?sslmode=disable"
-READER_URL="postgres://gongmcp_reader:${GONGMCP_READER_PASSWORD}@127.0.0.1:${PORT}/gongctl?sslmode=disable"
+export GONGMCP_BUSINESS_PILOT_READER_PASSWORD="${GONGMCP_BUSINESS_PILOT_READER_PASSWORD:-gongmcp_business_pilot_reader_dev_password}"
+
+urlencode() {
+  python3 -c 'from urllib.parse import quote; import sys; print(quote(sys.argv[1], safe=""))' "$1"
+}
+
+WRITER_URL="postgres://gongctl:$(urlencode "$GONGCTL_POSTGRES_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
+READER_URL="postgres://gongmcp_reader:$(urlencode "$GONGMCP_READER_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
+BUSINESS_PILOT_READER_URL="postgres://gongmcp_business_pilot_reader:$(urlencode "$GONGMCP_BUSINESS_PILOT_READER_PASSWORD")@127.0.0.1:${PORT}/gongctl?sslmode=disable"
 
 ARTIFACT_DIR="${GONGCTL_POSTGRES_LOAD_ARTIFACT_DIR:-$(mktemp -d /tmp/gongctl-postgres-load.XXXXXX)}"
 mkdir -p "$ARTIFACT_DIR"
@@ -46,6 +57,7 @@ EXPLAIN_TRANSCRIPT_OUT="$ARTIFACT_DIR/explain-transcript-search.json"
 EXPLAIN_BUSINESS_OUT="$ARTIFACT_DIR/explain-business-pilot.json"
 PROFILE_COUNTS_OUT="$ARTIFACT_DIR/profile-cache-counts.txt"
 PROFILE_BACKLOG_ROWS_OUT="$ARTIFACT_DIR/profile-backlog-sanitized-rows.txt"
+PROFILE_MCP_OUT="$ARTIFACT_DIR/business-pilot-profile-load.jsonl"
 EXPLAIN_PROFILE_SUMMARY_OUT="$ARTIFACT_DIR/explain-profile-lifecycle-summary.json"
 EXPLAIN_PROFILE_BACKLOG_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog.json"
 EXPLAIN_PROFILE_BACKLOG_DATED_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog-dated.json"
@@ -102,6 +114,65 @@ with open(path, "r", encoding="utf-8") as handle:
 missing = required - seen
 if missing:
     raise SystemExit(f"missing MCP result ids: {sorted(missing)}")
+PY
+}
+
+assert_profile_mcp_load_success() {
+  local file="$1"
+  local expected_profile_rows="$2"
+  python3 - "$file" "$expected_profile_rows" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+expected_profile_rows = int(sys.argv[2])
+payloads = {}
+with open(path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        message = json.loads(line)
+        request_id = message.get("id")
+        if request_id not in {3, 4}:
+            continue
+        if "error" in message:
+            raise SystemExit(f"MCP id {request_id} returned JSON-RPC error: {message['error']}")
+        result = message.get("result")
+        if isinstance(result, dict) and result.get("isError") is True:
+            raise SystemExit(f"MCP id {request_id} returned tool isError=true: {result}")
+        content = result.get("content") if isinstance(result, dict) else None
+        if not content or not isinstance(content, list):
+            raise SystemExit(f"MCP id {request_id} missing content")
+        payloads[request_id] = json.loads(content[0]["text"])
+
+missing = {3, 4} - set(payloads)
+if missing:
+    raise SystemExit(f"missing profile MCP payload ids: {sorted(missing)}")
+
+summary = payloads[3]
+if summary.get("lifecycle_source") != "profile":
+    raise SystemExit("summary did not use profile lifecycle source")
+summary_results = summary.get("results") or []
+if sum(int(row.get("call_count", 0)) for row in summary_results) != expected_profile_rows:
+    raise SystemExit("summary call_count did not cover the full profile cache")
+closed_won = [row for row in summary_results if row.get("bucket") == "closed_won"]
+if not closed_won or int(closed_won[0].get("call_count", 0)) != 50:
+    raise SystemExit("summary did not include the over-cap closed_won cohort")
+
+backlog = payloads[4]
+if backlog.get("lifecycle_source") != "profile":
+    raise SystemExit("backlog did not use profile lifecycle source")
+backlog_results = backlog.get("results") or []
+if len(backlog_results) != 25:
+    raise SystemExit(f"expected 25 backlog rows, got {len(backlog_results)}")
+for row in backlog_results:
+    if row.get("call_id") or row.get("title"):
+        raise SystemExit("backlog returned a call identifier or title")
+    if row.get("bucket") != "closed_won":
+        raise SystemExit("backlog did not rank the over-cap closed_won cohort first")
+    if int(row.get("priority_score", 0)) <= 0:
+        raise SystemExit("backlog returned a non-positive priority score")
 PY
 }
 
@@ -358,7 +429,8 @@ SELECT 9001,
   FROM synthetic;
 
 INSERT INTO profile_call_fact_cache_meta(profile_id, canonical_sha256, data_fingerprint, built_at, call_count)
-VALUES(9001, 'synthetic-load-profile-sha', 'synthetic-load-profile-fingerprint', '2026-03-01T00:00:00Z', :profile_cache_count);
+SELECT 9001, 'synthetic-load-profile-sha', fingerprint, '2026-03-01T00:00:00Z', :profile_cache_count
+  FROM gongmcp_profile_data_fingerprint();
 SQL
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "
@@ -516,6 +588,45 @@ if grep -Eq 'profile-load-call-|Synthetic profile load call' "$PROFILE_COUNTS_OU
   exit 1
 fi
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T -e GONGMCP_BUSINESS_PILOT_READER_PASSWORD="$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" postgres sh -s >/dev/null <<'SH'
+set -eu
+psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v reader_password="$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" <<'SQL'
+DROP ROLE IF EXISTS gongmcp_business_pilot_reader;
+CREATE ROLE gongmcp_business_pilot_reader LOGIN NOINHERIT PASSWORD :'reader_password';
+SQL
+SH
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-apply --preset business-pilot --role gongmcp_business_pilot_reader --database gongctl --apply >"$ARTIFACT_DIR/business-pilot-reader-apply.json"
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+UPDATE profile_call_fact_cache_meta
+   SET data_fingerprint = (SELECT fingerprint FROM gongmcp_profile_data_fingerprint()),
+       built_at = '2026-03-01T00:00:01Z',
+       call_count = (SELECT COUNT(*) FROM profile_call_fact_cache WHERE profile_id = 9001)
+ WHERE profile_id = 9001;
+SQL
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{"lifecycle_source":"profile"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"lifecycle_source":"profile","from_date":"2026-03-01","to_date":"2026-12-31","limit":25}}}'
+} | GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp >"$PROFILE_MCP_OUT"
+assert_mcp_success "$PROFILE_MCP_OUT" 3 4
+assert_profile_mcp_load_success "$PROFILE_MCP_OUT" "$PROFILE_CACHE_COUNT"
+if grep -Eq 'profile-load-call-|Synthetic profile load call|postgres://|gongctl_dev_password|gongmcp_reader_dev_password|gongmcp_business_pilot_reader_dev_password' "$PROFILE_MCP_OUT" "$ARTIFACT_DIR/business-pilot-reader-apply.json"; then
+  echo "business-pilot profile MCP load evidence exposed identifiers, titles, or connection secrets" >&2
+  exit 1
+fi
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DELETE FROM profile_call_fact_cache WHERE profile_id = 9001; DELETE FROM profile_call_fact_cache_meta WHERE profile_id = 9001; DELETE FROM profile_lifecycle_rule WHERE profile_id = 9001; DELETE FROM profile_meta WHERE id = 9001" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SELECT pg_terminate_backend(pid)
+  FROM pg_stat_activity
+ WHERE usename = 'gongmcp_business_pilot_reader'
+   AND pid <> pg_backend_pid();
+DROP OWNED BY gongmcp_business_pilot_reader;
+DROP ROLE gongmcp_business_pilot_reader;
+SQL
+
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >"$READER_NO_ROLE_VIEW_OUT" <<'SQL'
 DROP VIEW IF EXISTS gongmcp_transcript_segments;
 DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments(text, integer);
@@ -525,8 +636,12 @@ DROP VIEW IF EXISTS gongmcp_sync_runs;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
-    DROP OWNED BY gongmcp_reader;
-    DROP ROLE gongmcp_reader;
+    PERFORM pg_terminate_backend(pid)
+      FROM pg_stat_activity
+     WHERE usename = 'gongmcp_reader'
+       AND pid <> pg_backend_pid();
+    EXECUTE 'DROP OWNED BY gongmcp_reader';
+    EXECUTE 'DROP ROLE gongmcp_reader';
   END IF;
 END;
 $$;
@@ -543,12 +658,9 @@ SELECT COUNT(*)::int
  WHERE found;
 SQL
 grep -q '^4$' "$READER_NO_ROLE_VIEW_OUT"
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres sh -s >>"$READER_NO_ROLE_VIEW_OUT" <<'SH'
-set -eu
-psql -U gongctl -d gongctl -v reader_password="$GONGMCP_READER_PASSWORD" <<'SQL'
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v reader_password="$GONGMCP_READER_PASSWORD" >>"$READER_NO_ROLE_VIEW_OUT" <<'SQL'
 CREATE ROLE gongmcp_reader LOGIN PASSWORD :'reader_password';
 SQL
-SH
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader" >"$READER_REGRANT_OUT"
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >>"$READER_REGRANT_OUT"
@@ -628,6 +740,10 @@ if grep -q 'raw_json\|crmObjects' "$OPERATOR_SMOKE_OUT"; then
   echo "operator-smoke load MCP smoke exposed raw call payload fields" >&2
   exit 1
 fi
+if grep -Eq 'Synthetic load profile|Synthetic profile load call|profile-load-call-' "$OPERATOR_SMOKE_OUT"; then
+  echo "operator-smoke load MCP smoke was polluted by synthetic profile cache identifiers or titles" >&2
+  exit 1
+fi
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -642,6 +758,10 @@ grep -q '"summarize_call_facts"' "$BUSINESS_PILOT_OUT"
 grep -q '"summarize_calls_by_lifecycle"' "$BUSINESS_PILOT_OUT"
 grep -q '"rank_transcript_backlog"' "$BUSINESS_PILOT_OUT"
 assert_mcp_success "$BUSINESS_PILOT_OUT" 3 4 5 6
+if grep -Eq 'Synthetic load profile|Synthetic profile load call|profile-load-call-' "$BUSINESS_PILOT_OUT"; then
+  echo "business-pilot builtin load MCP smoke was polluted by synthetic profile cache" >&2
+  exit 1
+fi
 
 if reader_psql -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('load-should-fail', '{}'::jsonb, 'x', now()::text, now()::text)" >"$READER_WRITE_OUT" 2>&1; then
   echo "reader role unexpectedly wrote to Postgres during load smoke" >&2
@@ -664,7 +784,7 @@ cat >"$SUMMARY_OUT" <<JSON
   "synthetic_transcript_segments": $((CALL_COUNT * 2)),
   "bulk_insert_command_seconds": $load_insert_seconds,
   "read_model_rebuild_command_seconds": $rebuild_command_seconds,
-  "decision": "Bounded serial rebuild, read-path smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts prove analyzed execution and expected selective profile-cache index use where stable at this scale; this is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
+  "decision": "Bounded serial rebuild, read-path smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts prove analyzed sanitized helper-call execution at the function boundary; a separate equivalent profile-cache predicate probe shows expected selective index use where stable at this scale. This is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
 }
 JSON
 
@@ -682,6 +802,7 @@ echo "transcript search explain output: $EXPLAIN_TRANSCRIPT_OUT"
 echo "business-pilot explain output: $EXPLAIN_BUSINESS_OUT"
 echo "profile cache counts output: $PROFILE_COUNTS_OUT"
 echo "profile backlog rows output: $PROFILE_BACKLOG_ROWS_OUT"
+echo "business-pilot profile load MCP output: $PROFILE_MCP_OUT"
 echo "profile lifecycle summary explain output: $EXPLAIN_PROFILE_SUMMARY_OUT"
 echo "profile transcript backlog explain output: $EXPLAIN_PROFILE_BACKLOG_OUT"
 echo "profile transcript backlog dated explain output: $EXPLAIN_PROFILE_BACKLOG_DATED_OUT"
