@@ -48,6 +48,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | MCP `list_unmapped_crm_fields` | SQLite profile-aware unmapped CRM field inventory | complete for explicit Postgres allowlists | Security-definer aggregate over normalized CRM context returns field metadata/counts/length stats only; mapped fields are filtered through the active profile and raw values remain denied | must match at MCP contract | Phase 9b | store parity test; MCP smoke; reader table/function denial smoke |
 | MCP `search_crm_field_values` | SQLite explicit CRM value lookup | complete for explicit Postgres allowlists | Security-definer lookup over normalized CRM context with default redaction for call IDs, titles, object IDs/names, and values; explicit opt-ins return call IDs and bounded snippets/titles; the reader function never returns object IDs/names and direct table reads remain denied | must match at MCP contract | Phase 9a | store parity test; redacted/opt-in MCP smoke; reader function/table denial smoke |
 | MCP `analyze_late_stage_crm_signals` | SQLite late-stage aggregate signal analysis | complete for explicit Postgres allowlists with `Opportunity.StageName` only | Security-definer aggregate over normalized CRM context returns stage counts, field names, population rates, and lift only; custom stage fields are rejected/empty to avoid raw value-distribution leakage, and raw arbitrary CRM values, CRM object IDs/names, call IDs, call titles, transcript text, and profile payloads remain denied | must match default MCP contract with safer Postgres field boundary | Phase 9c | store parity test; MCP smoke; reader table/function denial smoke |
+| MCP `opportunities_missing_transcripts` | SQLite Opportunity transcript coverage aggregate | complete for explicit Postgres allowlists with SQL-boundary identifier redaction | Security-definer aggregate groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; the function/MCP output does not return Opportunity IDs/names, latest call IDs, object names, owner IDs, amount/close date, raw values, transcript text, or raw storage fields | must match redacted MCP contract | Phase 9d | store parity test; MCP smoke; reader function/table denial smoke |
 | Scorecard activity | SQLite `scorecard_activity` | complete for aggregate Postgres slice | Same aggregate/read-only scorecard activity surfaces except raw reviewed-user grouping is rejected for Postgres read-only deployments; raw activity payloads and raw hashes are denied to the reader role | must match for aggregate surfaces | Phase 5d | scorecard activity parity tests; `scripts/postgres-smoke.sh` |
 | Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | Postgres policy-backed MCP suppression implemented for narrowed search slice; physical filtered export remains SQLite-only | Governed views, row-level security, or materialized governed snapshots before broad analyst/all-readonly GA | postgres-native equivalent | Phase 4 | restricted synthetic account absent from governed MCP search outputs |
 | Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
@@ -88,6 +89,25 @@ Postgres parity should be added deliberately, with each surface classified as
 12. **Phase 9c targeted late-stage CRM signals**: explicit Postgres
     `analyze_late_stage_crm_signals` allowlist parity before broader
     full-preset enablement.
+13. **Phase 9d targeted Opportunity transcript coverage**: explicit Postgres
+    `opportunities_missing_transcripts` allowlist parity with SQL-boundary
+    identifier redaction before broader full-preset enablement.
+
+## Phase 9d Risk Status
+
+- Closed for the explicit allowlist slice: Postgres serves
+  `opportunities_missing_transcripts` through an execute-only reader function
+  that groups by Opportunity internally while returning only redacted coverage
+  metadata: stage, counts, and latest-call timing.
+- Closed for reader-role hardening: direct reader SELECT on
+  `call_context_objects.object_id` is denied, and Postgres read-only call
+  detail now redacts CRM object IDs.
+- Still queued: broad `analyst` / `all-readonly` enablement, neighboring
+  Opportunity CRM tools, governance-safe aggregate variants, and customer-scale
+  aggregate performance testing. The current aggregate still performs a
+  full Opportunity-context scan before applying the final row limit, so
+  customer-scale deployments should treat this as an explicit allowlist until
+  a bounded/materialized aggregate is added.
 
 ## Phase 9c Risk Status
 

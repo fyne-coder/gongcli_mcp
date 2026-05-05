@@ -18,6 +18,8 @@ BEGIN
   END IF;
 END
 \$\$;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM gongmcp_reader;
 GRANT CONNECT ON DATABASE "$POSTGRES_DB" TO gongmcp_reader;
 GRANT USAGE ON SCHEMA public TO gongmcp_reader;
 SQL

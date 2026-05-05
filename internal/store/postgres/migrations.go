@@ -381,7 +381,7 @@ BEGIN
 		EXECUTE 'GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader';
-		EXECUTE 'GRANT SELECT (id, call_id, object_key, object_type, object_id) ON call_context_objects TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (id, call_id, object_key, object_type) ON call_context_objects TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader';
@@ -890,10 +890,13 @@ $$;
 	`
 DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
+DROP FUNCTION IF EXISTS gongmcp_crm_object_type_summary();
+` + postgresCRMObjectTypeSummaryFunctionSQL + `
 ` + postgresCRMFieldValueSearchFunctionSQL + `
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO gongmcp_reader';
 	END IF;
 END;
@@ -921,6 +924,17 @@ BEGIN
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
+	`
+DROP FUNCTION IF EXISTS gongmcp_opportunities_missing_transcripts(text, integer);
+` + postgresOpportunitiesMissingTranscriptsFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader';
 	END IF;
 END;
 $$;

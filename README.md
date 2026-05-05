@@ -22,9 +22,10 @@ settings inventory and aggregate answered scorecard activity are available
 through the Postgres analyst-core surface. Postgres also supports explicit
 `list_unmapped_crm_fields`, `search_crm_field_values`, and
 `analyze_late_stage_crm_signals` allowlists with the same
-metadata-only/default-redaction contracts as SQLite, while full `analyst` and
-`all-readonly` remain gated until the remaining full-catalog query parity is
-complete.
+metadata-only/default-redaction contracts as SQLite. It also supports explicit
+`opportunities_missing_transcripts` for redacted Opportunity transcript
+coverage gaps, while full `analyst` and `all-readonly` remain gated until the
+remaining full-catalog query parity is complete.
 
 ## Positioning
 
@@ -48,7 +49,7 @@ question, better tracker/theme inputs, and known coverage limits.
 
 ## Status
 
-Early public release. `v0.3.2` is enterprise-pilot ready for operator-managed
+Early public release. `v0.3.3` is enterprise-pilot ready for operator-managed
 local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
 requires signed/provenance-backed release artifacts, stable deprecation policy,
 and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
@@ -86,7 +87,8 @@ transcript-evidence/business analysis workflows. For directed Postgres CRM
 field discovery, use an explicit `list_unmapped_crm_fields` allowlist; for
 directed CRM value lookup, use an explicit `search_crm_field_values` allowlist.
 For aggregate late-stage pipeline signal review, use an explicit
-`analyze_late_stage_crm_signals` allowlist.
+`analyze_late_stage_crm_signals` allowlist. For redacted Opportunity transcript
+coverage gaps, use an explicit `opportunities_missing_transcripts` allowlist.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
@@ -167,18 +169,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#postgres-shared-contai
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.3 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.3 sync status --db /data/gong.db
 ```
 
-The `v0.3.2` image references require the `v0.3.2` tag workflow to have
+The `v0.3.3` image references require the `v0.3.3` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.3 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
@@ -661,6 +663,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `summarize_scorecard_activity` returns aggregate answered-scorecard counts and scores only. By default it does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw scorecard activity payloads.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
 `analyze_late_stage_crm_signals` returns aggregate stage counts, field names, population rates, and lift only. In the current Postgres slice it is limited to `Opportunity.StageName` so custom field selection cannot be used as a raw value-distribution path. It does not return raw arbitrary CRM values, CRM object IDs/names, call IDs, call titles, transcript text, or profile payloads.
+`opportunities_missing_transcripts` returns redacted per-Opportunity transcript coverage metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; Opportunity IDs/names, latest call IDs, raw CRM values, and raw storage fields are not returned.
 The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values and object names remain denied.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.

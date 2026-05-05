@@ -12,9 +12,6 @@ var errUnsupported = errors.New("postgres store does not support this tool in th
 
 func unsupported() error { return errUnsupported }
 
-func (s *Store) ListOpportunitiesMissingTranscripts(ctx context.Context, params sqlite.OpportunityMissingTranscriptParams) ([]sqlite.OpportunityMissingTranscriptSummary, error) {
-	return nil, unsupported()
-}
 func (s *Store) SearchTranscriptSegmentsByCRMContext(ctx context.Context, params sqlite.TranscriptCRMSearchParams) ([]sqlite.TranscriptCRMSearchResult, error) {
 	return nil, unsupported()
 }

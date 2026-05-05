@@ -145,8 +145,10 @@ flowchart LR
   inventory queries, cached CRM schema/settings inventory, scorecard inventory,
   and aggregate scorecard activity. `analyst-business-core` adds bounded
   transcript-evidence and business-analysis workflows. Directed CRM
-  `list_unmapped_crm_fields`, `search_crm_field_values`, and
-  `analyze_late_stage_crm_signals` are available through explicit allowlists.
+  `list_unmapped_crm_fields`, `search_crm_field_values`,
+  `analyze_late_stage_crm_signals`, and
+  `opportunities_missing_transcripts` are available through explicit
+  allowlists.
   Full `analyst` and `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).
 - AI governance filtered DB export remains SQLite-only. Postgres supports a

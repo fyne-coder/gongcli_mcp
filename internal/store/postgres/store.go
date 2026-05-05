@@ -20,19 +20,23 @@ import (
 )
 
 const (
-	defaultTranscriptSearchLimit = 20
-	maxTranscriptSearchLimit     = 1000
-	defaultCallSearchLimit       = 20
-	maxCallSearchLimit           = 1000
-	defaultCRMFieldLimit         = 50
-	maxCRMFieldLimit             = 1000
-	defaultCRMFieldValueLimit    = 20
-	maxCRMFieldValueLimit        = 1000
-	defaultLateStageSignalLimit  = 25
-	maxLateStageSignalLimit      = 500
-	maxLateStageValueCount       = 25
-	maxLateStageValueLength      = 200
-	postgresWriterLockKey        = "gongctl_postgres_writer_v1"
+	defaultTranscriptSearchLimit   = 20
+	maxTranscriptSearchLimit       = 1000
+	defaultCallSearchLimit         = 20
+	maxCallSearchLimit             = 1000
+	defaultCRMFieldLimit           = 50
+	maxCRMFieldLimit               = 1000
+	defaultCRMFieldValueLimit      = 20
+	maxCRMFieldValueLimit          = 1000
+	defaultLateStageSignalLimit    = 25
+	maxLateStageSignalLimit        = 500
+	defaultOpportunitySummaryLimit = 25
+	maxOpportunitySummaryLimit     = 1000
+	maxOpportunityStageValueCount  = 50
+	maxOpportunityStageValueLength = 200
+	maxLateStageValueCount         = 25
+	maxLateStageValueLength        = 200
+	postgresWriterLockKey          = "gongctl_postgres_writer_v1"
 )
 
 const postgresReadModelBackfillMigrationVersion = 2
@@ -390,15 +394,19 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
 	DROP VIEW IF EXISTS gongmcp_transcript_segments;
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_crm_object_type_summary();
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean);
 	DROP FUNCTION IF EXISTS gongmcp_unmapped_crm_field_inventory(integer);
 	DROP FUNCTION IF EXISTS gongmcp_late_stage_call_counts(text, text, text);
 	DROP FUNCTION IF EXISTS gongmcp_late_stage_stage_counts(text, text, text);
 	DROP FUNCTION IF EXISTS gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean);
+	DROP FUNCTION IF EXISTS gongmcp_opportunities_missing_transcripts(text, integer);
+	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
 	`+postgresLateStageSignalFunctionsSQL+`
+	`+postgresOpportunitiesMissingTranscriptsFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -652,6 +660,8 @@ BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
 		REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader;
 		ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM gongmcp_reader;
+		REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+		REVOKE CREATE ON SCHEMA public FROM gongmcp_reader;
 		EXECUTE 'GRANT CONNECT ON DATABASE ' || quote_ident(current_database()) || ' TO gongmcp_reader';
 		GRANT USAGE ON SCHEMA public TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongctl_schema_migrations TO gongmcp_reader;
@@ -661,7 +671,7 @@ BEGIN
 		GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader;
 		GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
-		GRANT SELECT (id, call_id, object_key, object_type, object_id) ON call_context_objects TO gongmcp_reader;
+		GRANT SELECT (id, call_id, object_key, object_type) ON call_context_objects TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader;
 		GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader;
 		GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader;
@@ -683,6 +693,8 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -758,6 +770,13 @@ func (s *Store) validateMigrationVersion(ctx context.Context) error {
 }
 
 func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
+	var canCreatePublic bool
+	if err := s.db.QueryRowContext(ctx, `SELECT has_schema_privilege(current_user, 'public', 'CREATE')`).Scan(&canCreatePublic); err != nil {
+		return err
+	}
+	if canCreatePublic {
+		return errors.New("postgres read-only URL has CREATE privilege on public schema")
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT table_name
   FROM information_schema.tables
@@ -834,6 +853,7 @@ WITH forbidden(table_name, column_name) AS (
 		('transcript_segments', 'text'),
 		('transcript_segments', 'raw_json'),
 		('transcript_segments', 'search_vector'),
+		('call_context_objects', 'object_id'),
 		('call_context_objects', 'object_name'),
 		('call_context_objects', 'raw_json'),
 		('call_context_fields', 'field_value_text'),
@@ -947,6 +967,8 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_late_stage_call_counts(text, text, text)'),
 		('public.gongmcp_late_stage_stage_counts(text, text, text)'),
 		('public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)'),
+		('public.gongmcp_crm_object_type_summary()'),
+		('public.gongmcp_opportunities_missing_transcripts(text, integer)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature
@@ -970,6 +992,34 @@ SELECT signature
 	}
 	if len(missingFunctionGrants) > 0 {
 		return fmt.Errorf("postgres read-only URL is missing required function EXECUTE grants: %s", strings.Join(missingFunctionGrants, ", "))
+	}
+	rows, err = s.db.QueryContext(ctx, `
+SELECT p.oid::regprocedure::text AS signature
+  FROM pg_proc p
+  JOIN pg_namespace n
+    ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public'
+   AND p.prosecdef
+   AND p.proname LIKE 'gongmcp_%'
+   AND has_function_privilege('public', p.oid, 'EXECUTE')
+ ORDER BY signature`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var publicFunctionGrants []string
+	for rows.Next() {
+		var signature string
+		if err := rows.Scan(&signature); err != nil {
+			return err
+		}
+		publicFunctionGrants = append(publicFunctionGrants, signature)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(publicFunctionGrants) > 0 {
+		return fmt.Errorf("postgres read-only URL has over-broad function EXECUTE grants: %s", strings.Join(publicFunctionGrants, ", "))
 	}
 	return nil
 }
@@ -1318,6 +1368,9 @@ func (s *Store) SearchCallsRaw(ctx context.Context, params sqlite.CallSearchPara
 
 	objectType := strings.TrimSpace(params.CRMObjectType)
 	objectID := strings.TrimSpace(params.CRMObjectID)
+	if s.readOnly && objectID != "" {
+		return nil, errors.New("postgres read-only call search does not support crm_object_id filters; use explicit MCP tools that preserve identifier boundaries")
+	}
 	if objectType != "" || objectID != "" {
 		subquery := []string{`o.call_id = c.call_id`}
 		if objectType != "" {
@@ -1422,9 +1475,17 @@ func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallD
 		return nil, err
 	}
 
+	objectIDSelect := `o.object_id`
+	objectIDGroupOrder := `o.object_id`
+	objectGroupBy := `o.object_key, o.object_type, o.object_id`
+	if s.readOnly {
+		objectIDSelect = `''::text`
+		objectIDGroupOrder = `o.object_key`
+		objectGroupBy = `o.object_key, o.object_type`
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT o.object_type,
-       o.object_id,
+       `+objectIDSelect+`,
        '' AS object_name,
 	       COUNT(f.id) AS field_count,
 	       COUNT(CASE WHEN f.field_populated THEN 1 END) AS populated_field_count,
@@ -1434,8 +1495,8 @@ SELECT o.object_type,
 	    ON f.call_id = o.call_id
 	   AND f.object_key = o.object_key
  WHERE o.call_id = $1
-	 GROUP BY o.object_key, o.object_type, o.object_id
- ORDER BY o.object_type, o.object_id, o.object_key`, callID)
+	 GROUP BY `+objectGroupBy+`
+ ORDER BY o.object_type, `+objectIDGroupOrder+`, o.object_key`, callID)
 	if err != nil {
 		return nil, err
 	}

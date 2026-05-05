@@ -949,7 +949,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -2074,6 +2074,139 @@ func TestPostgresAnalyzeLateStageSignalsMatchesSQLite(t *testing.T) {
 	}
 }
 
+func TestPostgresListOpportunitiesMissingTranscriptsMatchesSQLiteRedacted(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	calls := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-opp-missing-001","title":"Latest covered gap call","started":"2026-04-20T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-1","name":"Coverage Gap One","fields":{"StageName":"Contract Signing","Amount":"50000"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-missing-002","title":"Earlier covered transcript call","started":"2026-04-19T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-1","name":"Coverage Gap One","fields":{"StageName":"Contract Signing","Amount":"50000"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-missing-003","title":"Latest two gap call","started":"2026-04-21T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-2","name":"Coverage Gap Two","fields":{"StageName":"Contract Signing","Amount":"75000"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-missing-004","title":"Earlier two gap call","started":"2026-04-18T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-2","name":"Coverage Gap Two","fields":{"StageName":"Contract Signing","Amount":"75000"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-missing-005","title":"Proposal stage gap call","started":"2026-04-22T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-proposal","name":"Proposal Gap","fields":{"StageName":"Proposal","Amount":"10000"}}]}}`),
+	}
+	transcripts := []json.RawMessage{
+		json.RawMessage(`{"callId":"pg-opp-missing-002","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":1000,"text":"Synthetic transcript for covered opportunity call."}]}]}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+		UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+	}{pgStore, sqliteStore} {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("UpsertCall returned error: %v", err)
+			}
+		}
+		for _, raw := range transcripts {
+			if _, err := store.UpsertTranscript(ctx, raw); err != nil {
+				t.Fatalf("UpsertTranscript returned error: %v", err)
+			}
+		}
+	}
+
+	params := sqlite.OpportunityMissingTranscriptParams{StageValues: []string{"Contract Signing"}, Limit: 10}
+	got, err := pgStore.ListOpportunitiesMissingTranscripts(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres ListOpportunitiesMissingTranscripts returned error: %v", err)
+	}
+	want, err := sqliteStore.ListOpportunitiesMissingTranscripts(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite ListOpportunitiesMissingTranscripts returned error: %v", err)
+	}
+	redactOpportunityMissingTranscriptSummaries(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres opportunity gaps=%+v want sqlite %+v", got, want)
+	}
+	if len(got) != 2 || got[0].MissingTranscriptCount != 2 || got[1].MissingTranscriptCount != 1 {
+		t.Fatalf("unexpected ordering/counts: %+v", got)
+	}
+	if got[0].OpportunityID != "" || got[0].OpportunityName != "" || got[0].LatestCallID != "" {
+		t.Fatalf("postgres exposed opportunity identifiers: %+v", got[0])
+	}
+
+	limited, err := pgStore.ListOpportunitiesMissingTranscripts(ctx, sqlite.OpportunityMissingTranscriptParams{StageValues: []string{"Contract Signing"}, Limit: 1})
+	if err != nil {
+		t.Fatalf("postgres limited ListOpportunitiesMissingTranscripts returned error: %v", err)
+	}
+	if len(limited) != 1 || limited[0].MissingTranscriptCount != 2 {
+		t.Fatalf("unexpected limited result: %+v", limited)
+	}
+
+	proposalOnly, err := pgStore.ListOpportunitiesMissingTranscripts(ctx, sqlite.OpportunityMissingTranscriptParams{StageValues: []string{"Proposal"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres Proposal ListOpportunitiesMissingTranscripts returned error: %v", err)
+	}
+	if len(proposalOnly) != 1 || proposalOnly[0].Stage != "Proposal" || proposalOnly[0].MissingTranscriptCount != 1 {
+		t.Fatalf("unexpected proposal-only result: %+v", proposalOnly)
+	}
+
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT object_id FROM gongmcp_opportunities_missing_transcripts('["Contract Signing"]', 10)`); err == nil {
+		t.Fatal("opportunities missing transcripts function exposed object_id column")
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT object_name FROM gongmcp_opportunities_missing_transcripts('["Contract Signing"]', 10)`); err == nil {
+		t.Fatal("opportunities missing transcripts function exposed object_name column")
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT latest_call_id FROM gongmcp_opportunities_missing_transcripts('["Contract Signing"]', 10)`); err == nil {
+		t.Fatal("opportunities missing transcripts function exposed latest_call_id column")
+	}
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT stage, call_count, missing_transcript_count, transcript_count, latest_call_at FROM gongmcp_opportunities_missing_transcripts('["Contract Signing"]', 10)`)
+	if err != nil {
+		t.Fatalf("direct safe function returned error: %v", err)
+	}
+	defer directRows.Close()
+	var directText strings.Builder
+	for directRows.Next() {
+		var stage, latestCallAt string
+		var callCount, missingCount, transcriptCount int64
+		if err := directRows.Scan(&stage, &callCount, &missingCount, &transcriptCount, &latestCallAt); err != nil {
+			t.Fatalf("scan direct opportunity function row: %v", err)
+		}
+		directText.WriteString(fmt.Sprintf("%s|%d|%d|%d|%s\n", stage, callCount, missingCount, transcriptCount, latestCallAt))
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("direct safe function rows error: %v", err)
+	}
+	if strings.Contains(directText.String(), "opp-missing") || strings.Contains(directText.String(), "Coverage Gap") || strings.Contains(directText.String(), "pg-opp-missing") || strings.Contains(directText.String(), "50000") || strings.Contains(directText.String(), "75000") {
+		t.Fatalf("direct safe function leaked identifiers or raw values: %s", directText.String())
+	}
+
+	wideStageValues := []string{"Contract Signing"}
+	for len(wideStageValues) < maxOpportunityStageValueCount {
+		wideStageValues = append(wideStageValues, strings.Repeat("&", maxOpportunityStageValueLength))
+	}
+	wide, err := pgStore.ListOpportunitiesMissingTranscripts(ctx, sqlite.OpportunityMissingTranscriptParams{StageValues: wideStageValues, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres wide stage_values ListOpportunitiesMissingTranscripts returned error: %v", err)
+	}
+	if !reflect.DeepEqual(wide, got) {
+		t.Fatalf("wide accepted stage_values returned %+v want %+v", wide, got)
+	}
+
+	tooManyStages := make([]string, maxOpportunityStageValueCount+1)
+	for i := range tooManyStages {
+		tooManyStages[i] = fmt.Sprintf("Stage %d", i)
+	}
+	if _, err := pgStore.ListOpportunitiesMissingTranscripts(ctx, sqlite.OpportunityMissingTranscriptParams{StageValues: tooManyStages}); err == nil {
+		t.Fatal("expected too many stage_values to fail")
+	}
+}
+
 func TestPostgresReadModelExtractionCapsRecordDiagnostics(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -2890,6 +3023,14 @@ func crmFieldSummaryByName(rows []sqlite.CRMFieldSummary) map[string]sqlite.CRMF
 		out[row.FieldName] = row
 	}
 	return out
+}
+
+func redactOpportunityMissingTranscriptSummaries(rows []sqlite.OpportunityMissingTranscriptSummary) {
+	for idx := range rows {
+		rows[idx].OpportunityID = ""
+		rows[idx].OpportunityName = ""
+		rows[idx].LatestCallID = ""
+	}
 }
 
 func equalLifecycleSummaries(got map[string]sqlite.LifecycleBucketSummary, want map[string]sqlite.LifecycleBucketSummary) bool {

@@ -58,8 +58,18 @@ func TestPostgresToolAllowlistAcceptsCoreQueryParityTools(t *testing.T) {
 }
 
 func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
-	if _, err := postgresToolAllowlist([]string{"opportunities_missing_transcripts"}, false, ""); err == nil {
+	if _, err := postgresToolAllowlist([]string{"search_transcripts_by_crm_context"}, false, ""); err == nil {
 		t.Fatal("postgresToolAllowlist accepted unsupported tool")
+	}
+}
+
+func TestPostgresToolAllowlistAcceptsOpportunitiesMissingTranscripts(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"opportunities_missing_transcripts"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"opportunities_missing_transcripts"}) {
+		t.Fatalf("allowlist=%v want opportunities_missing_transcripts", allowlist)
 	}
 }
 

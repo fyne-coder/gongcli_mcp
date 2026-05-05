@@ -426,10 +426,12 @@ Tools required: `analyze_late_stage_crm_signals`,
 `search_transcript_quotes_with_attribution` (with Opportunity attribution
 opt-ins), `rank_transcript_backlog`, `get_sync_status`. The operator must have
 enabled the wider analyst posture for these tools to be available. In Postgres
-shared deployments, only `analyze_late_stage_crm_signals` from this workflow is
-currently available, and only through an explicit allowlist; the remaining
-CRM-heavy tools still require SQLite/full-catalog mode until Postgres full
-parity is complete.
+shared deployments, `analyze_late_stage_crm_signals` and
+`opportunities_missing_transcripts` are available through explicit allowlists,
+while `search_transcript_quotes_with_attribution`, `rank_transcript_backlog`,
+and `get_sync_status` are available through the appropriate reviewed
+Postgres presets or allowlists. `opportunity_call_summary` still requires
+SQLite/full-catalog mode until Postgres full parity is complete.
 
 Output discipline: do not turn missing transcript coverage into a forecast
 recommendation by itself; treat it as a refresh request to the operator and a

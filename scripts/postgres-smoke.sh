@@ -428,6 +428,10 @@ if reader_psql -c "SELECT field_value_text FROM call_context_fields LIMIT 1" >>/
   echo "reader role unexpectedly read normalized CRM field values" >&2
   exit 1
 fi
+if reader_psql -c "SELECT object_id FROM call_context_objects LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read normalized CRM object IDs" >&2
+  exit 1
+fi
 if reader_psql -c "SELECT object_name FROM call_context_objects LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
   echo "reader role unexpectedly read normalized CRM object names" >&2
   exit 1
@@ -671,6 +675,69 @@ if grep -q 'New Business\|synthetic-profile-call-001\|Profile lifecycle proposal
   exit 1
 fi
 
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"opportunities_missing_transcripts","arguments":{"stage_values":["Proposal"],"limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp > /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl
+grep -q '"opportunities_missing_transcripts"' /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl
+grep -q 'missing_transcript_count.*1' /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl
+grep -q 'stage.*Proposal' /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl
+assert_mcp_success /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl 3
+if grep -q 'synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|field_value_text\|raw_json\|raw_sha256\|canonical_sha256\|Synthetic Postgres profile\|New Business' /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl; then
+  echo "Postgres opportunities missing transcripts output exposed identifiers, raw values, profile details, or raw storage fields" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT stage || '|' || call_count || '|' || missing_transcript_count || '|' || transcript_count || '|' || latest_call_at FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-transcripts.txt
+grep -q 'Proposal|1|1|0|' /tmp/gongctl-postgres-reader-opportunities-missing-transcripts.txt
+if grep -q 'synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|New Business' /tmp/gongctl-postgres-reader-opportunities-missing-transcripts.txt; then
+  echo "Postgres opportunities missing transcripts function exposed identifiers or raw values" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_id FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-object-id.txt 2>&1; then
+  echo "Postgres opportunities missing transcripts function exposed object_id column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_name FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-object-name.txt 2>&1; then
+  echo "Postgres opportunities missing transcripts function exposed object_name column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT latest_call_id FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-latest-call-id.txt 2>&1; then
+  echo "Postgres opportunities missing transcripts function exposed latest_call_id column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT owner_id FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-owner-id.txt 2>&1; then
+  echo "Postgres opportunities missing transcripts function exposed owner_id column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT amount FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-amount.txt 2>&1; then
+  echo "Postgres opportunities missing transcripts function exposed amount column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT close_date FROM gongmcp_opportunities_missing_transcripts('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunities-missing-close-date.txt 2>&1; then
+  echo "Postgres opportunities missing transcripts function exposed close_date column" >&2
+  exit 1
+fi
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started without opportunities_missing_transcripts function grant" >&2
+  exit 1
+fi
+grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift.txt
+grep -q 'gongmcp_opportunities_missing_transcripts' /tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift-repaired.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-public-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started with public function EXECUTE drift" >&2
+  exit 1
+fi
+grep -q 'over-broad function EXECUTE grants' /tmp/gongctl-postgres-reader-function-public-drift.txt
+grep -q 'gongmcp_opportunities_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
+grep -q 'gongmcp_crm_object_type_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-function-public-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-function-public-drift-repaired.json
+
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-analyst-rejected.txt 2>&1; then
   echo "postgres unexpectedly accepted full analyst preset" >&2
   exit 1
@@ -847,7 +914,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -924,6 +991,9 @@ echo "reader regrant output: /tmp/gongctl-postgres-reader-regrant.txt"
 echo "reader column-drift denial output: /tmp/gongctl-postgres-reader-column-drift.txt"
 echo "reader sensitive-column-drift denial output: /tmp/gongctl-postgres-reader-sensitive-column-drift.txt"
 echo "reader function-grant drift denial output: /tmp/gongctl-postgres-reader-function-grant-drift.txt"
+echo "reader function-grant drift repair output: /tmp/gongctl-postgres-reader-function-grant-drift-repaired.json"
+echo "reader public function-grant drift denial output: /tmp/gongctl-postgres-reader-function-public-drift.txt"
+echo "reader public function-grant drift repair output: /tmp/gongctl-postgres-reader-function-public-drift-repaired.json"
 echo "reader CRM grant-drift denial output: /tmp/gongctl-postgres-reader-crm-grant-drift.txt"
 echo "retired function output: /tmp/gongctl-postgres-retired-function.txt"
 echo "normalized counts output: /tmp/gongctl-postgres-normalized-counts.txt"
@@ -953,6 +1023,16 @@ echo "CRM integrations count output: /tmp/gongctl-postgres-crm-integrations-coun
 echo "CRM schema objects count output: /tmp/gongctl-postgres-crm-schema-objects-count.txt"
 echo "CRM schema fields count output: /tmp/gongctl-postgres-crm-schema-fields-count.txt"
 echo "CRM schema analysis output: /tmp/gongctl-postgres-crm-schema.json"
+echo "opportunities missing transcripts MCP output: /tmp/gongctl-postgres-opportunities-missing-transcripts.jsonl"
+echo "opportunities missing transcripts reader output: /tmp/gongctl-postgres-reader-opportunities-missing-transcripts.txt"
+echo "opportunities missing transcripts object-id denial output: /tmp/gongctl-postgres-reader-opportunities-missing-object-id.txt"
+echo "opportunities missing transcripts object-name denial output: /tmp/gongctl-postgres-reader-opportunities-missing-object-name.txt"
+echo "opportunities missing transcripts latest-call-id denial output: /tmp/gongctl-postgres-reader-opportunities-missing-latest-call-id.txt"
+echo "opportunities missing transcripts owner-id denial output: /tmp/gongctl-postgres-reader-opportunities-missing-owner-id.txt"
+echo "opportunities missing transcripts amount denial output: /tmp/gongctl-postgres-reader-opportunities-missing-amount.txt"
+echo "opportunities missing transcripts close-date denial output: /tmp/gongctl-postgres-reader-opportunities-missing-close-date.txt"
+echo "opportunities missing transcripts function-grant drift denial output: /tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift.txt"
+echo "opportunities missing transcripts function-grant drift repair output: /tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift-repaired.json"
 echo "cache inventory output: /tmp/gongctl-postgres-cache-inventory.json"
 echo "cache inventory writer URL output: /tmp/gongctl-postgres-cache-inventory-writer-url.json"
 echo "support bundle response output: /tmp/gongctl-postgres-support-bundle.json"
