@@ -745,7 +745,7 @@ func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
 	defer store.Close()
 	resetPostgresTestStore(t, ctx, store)
 
-	governanceMigrationVersion := len(migrations) - 2
+	governanceMigrationVersion := len(migrations) - 3
 	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version >= $1`, governanceMigrationVersion); err != nil {
 		t.Fatalf("delete governance-and-later migration versions: %v", err)
 	}
@@ -759,6 +759,116 @@ func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
 	}()
 	if _, err := OpenStatus(ctx, databaseURL); err == nil || !strings.Contains(err.Error(), "schema version") {
 		t.Fatalf("OpenStatus stale migration error=%v, want schema version guidance", err)
+	}
+}
+
+func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqlitePath := filepath.Join(t.TempDir(), "gongctl.sqlite")
+	sqliteStore, err := sqlite.Open(ctx, sqlitePath)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	seedPhase5BBusinessAnalysisFixtures(t, ctx, pgStore, sqliteStore)
+
+	callFactsParams := sqlite.TranscriptCallFactsSearchParams{
+		Query:    "implementation",
+		FromDate: "2026-01-01",
+		ToDate:   "2026-03-31",
+		Scope:    "External",
+		Limit:    10,
+	}
+	pgCallFacts, err := pgStore.SearchTranscriptSegmentsByCallFacts(ctx, callFactsParams)
+	if err != nil {
+		t.Fatalf("postgres SearchTranscriptSegmentsByCallFacts: %v", err)
+	}
+	sqliteCallFacts, err := sqliteStore.SearchTranscriptSegmentsByCallFacts(ctx, callFactsParams)
+	if err != nil {
+		t.Fatalf("sqlite SearchTranscriptSegmentsByCallFacts: %v", err)
+	}
+	if got, want := transcriptCallFactIDs(pgCallFacts), transcriptCallFactIDs(sqliteCallFacts); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres call-fact transcript ids=%v want sqlite %v", got, want)
+	}
+	if len(pgCallFacts) != 1 || !strings.Contains(strings.ToLower(pgCallFacts[0].ContextExcerpt), "implementation timeline") {
+		t.Fatalf("unexpected postgres call-fact transcript result: %+v", pgCallFacts)
+	}
+
+	attributionParams := sqlite.TranscriptAttributionSearchParams{
+		Query:            "implementation",
+		FromDate:         "2026-01-01",
+		ToDate:           "2026-03-31",
+		Industry:         "manufacturing",
+		OpportunityStage: "Discovery",
+		Limit:            10,
+	}
+	pgAttributed, err := pgStore.SearchTranscriptQuotesWithAttribution(ctx, attributionParams)
+	if err != nil {
+		t.Fatalf("postgres SearchTranscriptQuotesWithAttribution: %v", err)
+	}
+	sqliteAttributed, err := sqliteStore.SearchTranscriptQuotesWithAttribution(ctx, attributionParams)
+	if err != nil {
+		t.Fatalf("sqlite SearchTranscriptQuotesWithAttribution: %v", err)
+	}
+	if got, want := transcriptAttributionIDs(pgAttributed), transcriptAttributionIDs(sqliteAttributed); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres attributed ids=%v want sqlite %v", got, want)
+	}
+	if len(pgAttributed) != 1 || pgAttributed[0].AccountName != "" || pgAttributed[0].OpportunityName != "" || pgAttributed[0].AccountIndustry != "Manufacturing" || pgAttributed[0].OpportunityStage != "Discovery" || pgAttributed[0].OpportunityType != "New Business" {
+		t.Fatalf("unexpected postgres attribution result: %+v", pgAttributed)
+	}
+	if _, err := pgStore.SearchTranscriptQuotesWithAttribution(ctx, sqlite.TranscriptAttributionSearchParams{Query: "implementation", AccountQuery: "Example"}); err == nil || !strings.Contains(err.Error(), "account_query is not supported") {
+		t.Fatalf("postgres attribution account_query error=%v, want unsupported account_query error", err)
+	}
+
+	filter := sqlite.BusinessAnalysisFilter{Quarter: "2026-Q1", Industry: "manufacturing", Limit: 10}
+	pgCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: filter, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SearchBusinessAnalysisCalls: %v", err)
+	}
+	sqliteCalls, err := sqliteStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: filter, Limit: 10})
+	if err != nil {
+		t.Fatalf("sqlite SearchBusinessAnalysisCalls: %v", err)
+	}
+	if pgCalls.Summary.CallCount != sqliteCalls.Summary.CallCount || pgCalls.Summary.TranscriptCount != sqliteCalls.Summary.TranscriptCount {
+		t.Fatalf("postgres summary=%+v want sqlite %+v", pgCalls.Summary, sqliteCalls.Summary)
+	}
+	if got, want := businessAnalysisCallIDs(pgCalls.Rows), businessAnalysisCallIDs(sqliteCalls.Rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres business call ids=%v want sqlite %v", got, want)
+	}
+	if _, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: sqlite.BusinessAnalysisFilter{AccountQuery: "Example"}, Limit: 10}); err == nil || !strings.Contains(err.Error(), "account_query is not supported") {
+		t.Fatalf("postgres business account_query error=%v, want unsupported account_query error", err)
+	}
+
+	pgEvidence, err := pgStore.SearchBusinessAnalysisEvidence(ctx, sqlite.BusinessAnalysisEvidenceSearchParams{Filter: filter, Query: "implementation", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SearchBusinessAnalysisEvidence: %v", err)
+	}
+	if len(pgEvidence) != 1 || pgEvidence[0].CallID != "pg-ba-001" || !strings.Contains(strings.ToLower(pgEvidence[0].ContextExcerpt), "implementation timeline") {
+		t.Fatalf("unexpected postgres evidence: %+v", pgEvidence)
+	}
+	if pgEvidence[0].AccountName != "" || pgEvidence[0].OpportunityName != "" || pgEvidence[0].OpportunityProbability != "" || pgEvidence[0].OpportunityCloseDate != "" {
+		t.Fatalf("postgres evidence exposed raw CRM values: %+v", pgEvidence[0])
+	}
+
+	pgDimension, err := pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "industry", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SummarizeBusinessAnalysisDimension: %v", err)
+	}
+	if len(pgDimension) != 1 || pgDimension[0].Value != "Manufacturing" || pgDimension[0].CallCount != 1 {
+		t.Fatalf("unexpected postgres dimension summary: %+v", pgDimension)
 	}
 }
 
@@ -1466,6 +1576,141 @@ func assertPostgresCount(t *testing.T, ctx context.Context, store *Store, query 
 	if got != want {
 		t.Fatalf("count query got %d want %d: %s", got, want, query)
 	}
+}
+
+type phase5BStore interface {
+	UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+	UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+}
+
+func seedPhase5BBusinessAnalysisFixtures(t *testing.T, ctx context.Context, stores ...phase5BStore) {
+	t.Helper()
+	calls := []json.RawMessage{
+		postgresTestRaw(t, map[string]any{
+			"id":       "pg-ba-001",
+			"title":    "Implementation evidence call",
+			"started":  "2026-02-12T15:00:00Z",
+			"duration": 1800,
+			"metaData": map[string]any{
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+			"context": []any{
+				map[string]any{
+					"objectType": "Account",
+					"id":         "acct-ba",
+					"fields": []any{
+						map[string]any{"name": "Name", "value": "Example Manufacturing"},
+						map[string]any{"name": "Industry", "value": "Manufacturing"},
+						map[string]any{"name": "Website", "value": "https://example.invalid"},
+					},
+				},
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp-ba",
+					"fields": []any{
+						map[string]any{"name": "Name", "value": "Example Deal"},
+						map[string]any{"name": "StageName", "value": "Discovery"},
+						map[string]any{"name": "Type", "value": "New Business"},
+						map[string]any{"name": "CloseDate", "value": "2026-03-31"},
+						map[string]any{"name": "Probability", "value": "25"},
+					},
+				},
+			},
+		}),
+		postgresTestRaw(t, map[string]any{
+			"id":       "pg-ba-002",
+			"title":    "Out of filter implementation call",
+			"started":  "2026-04-15T15:00:00Z",
+			"duration": 900,
+			"metaData": map[string]any{
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+		}),
+	}
+	transcripts := []json.RawMessage{
+		postgresTestRaw(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": "pg-ba-001",
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "buyer",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is our biggest question."},
+							},
+						},
+					},
+				},
+			},
+		}),
+		postgresTestRaw(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": "pg-ba-002",
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "buyer",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is outside the quarter."},
+							},
+						},
+					},
+				},
+			},
+		}),
+	}
+	for _, store := range stores {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("upsert phase 5b call: %v", err)
+			}
+		}
+		for _, raw := range transcripts {
+			if _, err := store.UpsertTranscript(ctx, raw); err != nil {
+				t.Fatalf("upsert phase 5b transcript: %v", err)
+			}
+		}
+	}
+}
+
+func postgresTestRaw(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := normalizeJSONValue(value)
+	if err != nil {
+		t.Fatalf("normalize JSON value: %v", err)
+	}
+	return raw
+}
+
+func transcriptCallFactIDs(rows []sqlite.TranscriptCallFactsSearchResult) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.CallID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func transcriptAttributionIDs(rows []sqlite.TranscriptAttributionSearchResult) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.CallID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func businessAnalysisCallIDs(rows []sqlite.BusinessAnalysisCallRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.CallID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func postgresNormalizedRows(t *testing.T, ctx context.Context, store *Store) []string {

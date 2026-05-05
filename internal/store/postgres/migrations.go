@@ -817,4 +817,6 @@ $$;
 DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 
 `,
+	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

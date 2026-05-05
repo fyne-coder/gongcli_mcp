@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst-core, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -322,20 +322,35 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
 	}
 	supported := map[string]struct{}{
-		"get_sync_status":                     {},
-		"get_business_profile":                {},
-		"get_call":                            {},
-		"list_business_concepts":              {},
-		"list_crm_fields":                     {},
-		"list_crm_object_types":               {},
-		"list_lifecycle_buckets":              {},
-		"prioritize_transcripts_by_lifecycle": {},
-		"rank_transcript_backlog":             {},
-		"search_calls":                        {},
-		"search_calls_by_lifecycle":           {},
-		"search_transcript_segments":          {},
-		"summarize_call_facts":                {},
-		"summarize_calls_by_lifecycle":        {},
+		"get_sync_status":                           {},
+		"get_business_profile":                      {},
+		"get_call":                                  {},
+		"list_business_concepts":                    {},
+		"list_crm_fields":                           {},
+		"list_crm_object_types":                     {},
+		"list_lifecycle_buckets":                    {},
+		"prioritize_transcripts_by_lifecycle":       {},
+		"rank_transcript_backlog":                   {},
+		"search_calls":                              {},
+		"search_calls_by_lifecycle":                 {},
+		"search_transcript_segments":                {},
+		"search_transcript_quotes_with_attribution": {},
+		"search_transcripts_by_call_facts":          {},
+		"build_call_cohort":                         {},
+		"inspect_call_cohort":                       {},
+		"search_calls_by_filters":                   {},
+		"summarize_calls_by_filters":                {},
+		"search_transcripts_by_filters":             {},
+		"discover_themes_in_cohort":                 {},
+		"summarize_themes_by_dimension":             {},
+		"extract_theme_quotes":                      {},
+		"search_quotes_in_cohort":                   {},
+		"diagnose_attribution_coverage":             {},
+		"score_cohort_evidence_quality":             {},
+		"explain_analysis_limitations":              {},
+		"suggest_filter_refinements":                {},
+		"summarize_call_facts":                      {},
+		"summarize_calls_by_lifecycle":              {},
 	}
 	if len(allowlist) == 0 {
 		if httpMode {

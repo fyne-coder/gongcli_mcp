@@ -291,6 +291,35 @@ fi
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_transcripts_by_call_facts","arguments":{"query":"shared Postgres","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_transcript_quotes_with_attribution","arguments":{"query":"shared Postgres","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcripts_by_filters","arguments":{"filter":{"query":"shared Postgres"},"limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-business-core go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst-business-core.jsonl
+
+grep -q '"search_transcripts_by_call_facts"' /tmp/gongctl-postgres-analyst-business-core.jsonl
+grep -q '"search_transcript_quotes_with_attribution"' /tmp/gongctl-postgres-analyst-business-core.jsonl
+grep -q '"search_transcripts_by_filters"' /tmp/gongctl-postgres-analyst-business-core.jsonl
+grep -q 'shared.*Postgres' /tmp/gongctl-postgres-analyst-business-core.jsonl
+assert_mcp_success /tmp/gongctl-postgres-analyst-business-core.jsonl 3 4 5
+if grep -q 'raw_json\|field_value_text' /tmp/gongctl-postgres-analyst-business-core.jsonl; then
+  echo "analyst-business-core output exposed raw storage fields" >&2
+  exit 1
+fi
+
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-analyst-rejected.txt 2>&1; then
+  echo "postgres unexpectedly accepted full analyst preset" >&2
+  exit 1
+fi
+grep -q 'analyst is not supported by the postgres vertical slice' /tmp/gongctl-postgres-analyst-rejected.txt
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=all-readonly go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-all-readonly-rejected.txt 2>&1; then
+  echo "postgres unexpectedly accepted all-readonly preset" >&2
+  exit 1
+fi
+grep -q 'all-readonly is not supported by the postgres vertical slice' /tmp/gongctl-postgres-all-readonly-rejected.txt
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"transcript_status","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{}}}'
@@ -487,6 +516,9 @@ echo "postgres smoke passed"
 echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
 echo "analyst-core output: /tmp/gongctl-postgres-analyst-core.jsonl"
+echo "analyst-business-core output: /tmp/gongctl-postgres-analyst-business-core.jsonl"
+echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"
+echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"

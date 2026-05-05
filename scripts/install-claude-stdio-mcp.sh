@@ -13,7 +13,7 @@ Options:
   --data-dir PATH        Host directory to mount read-only. Defaults to DB directory.
   --server-name NAME     Claude MCP server name. Default: gong.
   --image IMAGE          MCP image. Default: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2.
-  --tool-preset NAME     Named tool preset. Default: business-pilot. Options: business-pilot, operator-smoke, analyst-core, analyst, governance-search, all-readonly.
+  --tool-preset NAME     Named tool preset. Default: business-pilot. Options: business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, all-readonly.
   --tool-allowlist LIST  Optional comma-separated MCP tool allowlist.
   --config PATH          Claude config path. Defaults to macOS Claude Desktop config.
   --install              Merge into Claude config with a timestamped backup.
@@ -43,6 +43,9 @@ preset_allowlist() {
       ;;
     analyst-core|postgres-analyst-core)
       printf '%s\n' 'get_sync_status,search_calls,get_call,list_crm_object_types,list_crm_fields,get_business_profile,list_business_concepts,list_lifecycle_buckets,summarize_calls_by_lifecycle,search_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,summarize_call_facts,rank_transcript_backlog,search_transcript_segments'
+      ;;
+    analyst-business-core|postgres-analyst-business-core)
+      printf '%s\n' 'get_sync_status,search_calls,get_call,list_crm_object_types,list_crm_fields,get_business_profile,list_business_concepts,list_lifecycle_buckets,summarize_calls_by_lifecycle,search_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution,build_call_cohort,inspect_call_cohort,search_calls_by_filters,summarize_calls_by_filters,search_transcripts_by_filters,discover_themes_in_cohort,summarize_themes_by_dimension,extract_theme_quotes,search_quotes_in_cohort,diagnose_attribution_coverage,score_cohort_evidence_quality,explain_analysis_limitations,suggest_filter_refinements'
       ;;
     analyst|analyst-expansion)
       printf '%s\n' 'get_sync_status,list_crm_object_types,list_crm_fields,get_business_profile,list_business_concepts,list_unmapped_crm_fields,analyze_late_stage_crm_signals,opportunities_missing_transcripts,search_transcripts_by_crm_context,opportunity_call_summary,crm_field_population_matrix,list_lifecycle_buckets,summarize_calls_by_lifecycle,prioritize_transcripts_by_lifecycle,compare_lifecycle_crm_fields,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,search_transcripts_by_call_facts,search_transcript_quotes_with_attribution'

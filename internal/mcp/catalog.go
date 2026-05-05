@@ -83,6 +83,38 @@ func ExpandToolPreset(name string) ([]string, error) {
 			"rank_transcript_backlog",
 			"search_transcript_segments",
 		}), nil
+	case "analyst-business-core", "postgres-analyst-business-core":
+		return copyStrings([]string{
+			"get_sync_status",
+			"search_calls",
+			"get_call",
+			"list_crm_object_types",
+			"list_crm_fields",
+			"get_business_profile",
+			"list_business_concepts",
+			"list_lifecycle_buckets",
+			"summarize_calls_by_lifecycle",
+			"search_calls_by_lifecycle",
+			"prioritize_transcripts_by_lifecycle",
+			"summarize_call_facts",
+			"rank_transcript_backlog",
+			"search_transcript_segments",
+			"search_transcripts_by_call_facts",
+			"search_transcript_quotes_with_attribution",
+			"build_call_cohort",
+			"inspect_call_cohort",
+			"search_calls_by_filters",
+			"summarize_calls_by_filters",
+			"search_transcripts_by_filters",
+			"discover_themes_in_cohort",
+			"summarize_themes_by_dimension",
+			"extract_theme_quotes",
+			"search_quotes_in_cohort",
+			"diagnose_attribution_coverage",
+			"score_cohort_evidence_quality",
+			"explain_analysis_limitations",
+			"suggest_filter_refinements",
+		}), nil
 	case "analyst", "analyst-expansion":
 		tools := []string{
 			"get_sync_status",
@@ -113,7 +145,7 @@ func ExpandToolPreset(name string) ([]string, error) {
 	case "all-readonly", "all-tools", "all":
 		return ToolCatalogNames(), nil
 	default:
-		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
 	}
 }
 
@@ -140,6 +172,12 @@ func ToolPresetCatalog() []ToolPresetInfo {
 			aliases:     []string{"postgres-analyst-core"},
 			purpose:     "Postgres-supported analyst starter surface over core call, CRM context, profile, lifecycle, and transcript search tools.",
 			recommended: "approved analysts validating shared Postgres deployments before full analyst parity",
+		},
+		{
+			name:        "analyst-business-core",
+			aliases:     []string{"postgres-analyst-business-core"},
+			purpose:     "Postgres-supported analyst business-analysis starter surface over bounded cohort, transcript evidence, and dimension tools.",
+			recommended: "approved analysts validating shared Postgres business-analysis workflows before full analyst parity",
 		},
 		{
 			name:        "analyst",

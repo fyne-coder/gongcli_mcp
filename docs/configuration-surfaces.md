@@ -66,7 +66,8 @@ Recommended contract:
 - Flags and env vars can override YAML for local debugging and container
   platform integration.
 - Built-in presets are the fast path for common deployments:
-  `business-pilot`, `operator-smoke`, `analyst`, `governance-search`, and
+  `business-pilot`, `operator-smoke`, `analyst-core`,
+  `analyst-business-core`, `analyst`, `governance-search`, and
   `all-readonly`.
 - HTTP must still have an explicit tool policy, but that policy can be a named
   preset such as `business-pilot` or `all-readonly`, or a custom allowlist.

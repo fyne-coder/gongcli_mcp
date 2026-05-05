@@ -329,6 +329,15 @@ case "$GONGMCP_TOOL_PRESET" in
       exit 1
     fi
     ;;
+  analyst-business-core|postgres-analyst-business-core)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcripts_by_call_facts")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_quotes_with_attribution")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcripts_by_filters")' >/dev/null
+    if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_scorecards" or . == "search_crm_field_values")' >/dev/null; then
+      echo "unexpected all-readonly tool exposed by analyst-business-core" >&2
+      exit 1
+    fi
+    ;;
   analyst|analyst-expansion|all-readonly|all|all-tools)
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls_by_filters")' >/dev/null

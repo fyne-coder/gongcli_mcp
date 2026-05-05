@@ -18,8 +18,12 @@ Current fixed boundaries:
 	  record-reference tool and should be enabled only through an explicit
 	  allowlist for reviewed operator use, not through `business-pilot`.
 	  Postgres `analyst-core` adds reviewed core/profile/lifecycle/CRM-context
-	  inventory tools without raw CRM field values. Broader `analyst` and
-	  `all-readonly` Postgres parity remains a follow-up.
+	  inventory tools without raw CRM field values. Postgres
+		  `analyst-business-core` adds bounded transcript-evidence and
+		  business-analysis tools through reviewed read-only functions; direct
+		  reader SQL calls do not receive raw account/opportunity names,
+		  websites, close dates, or probabilities from those functions. Broader
+		  `analyst` and `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool

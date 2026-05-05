@@ -57,21 +57,6 @@ func (s *Store) CRMFieldPopulationMatrix(ctx context.Context, params sqlite.CRMF
 func (s *Store) CompareLifecycleCRMFields(ctx context.Context, params sqlite.LifecycleCRMFieldComparisonParams) (*sqlite.LifecycleCRMFieldComparison, error) {
 	return nil, unsupported()
 }
-func (s *Store) SearchTranscriptSegmentsByCallFacts(ctx context.Context, params sqlite.TranscriptCallFactsSearchParams) ([]sqlite.TranscriptCallFactsSearchResult, error) {
-	return nil, unsupported()
-}
-func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, params sqlite.TranscriptAttributionSearchParams) ([]sqlite.TranscriptAttributionSearchResult, error) {
-	return nil, unsupported()
-}
-func (s *Store) SearchBusinessAnalysisCalls(ctx context.Context, params sqlite.BusinessAnalysisCallSearchParams) (*sqlite.BusinessAnalysisCallSearchResult, error) {
-	return nil, unsupported()
-}
-func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlite.BusinessAnalysisEvidenceSearchParams) ([]sqlite.BusinessAnalysisEvidenceRow, error) {
-	return nil, unsupported()
-}
-func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params sqlite.BusinessAnalysisDimensionSummaryParams) ([]sqlite.BusinessAnalysisDimensionRow, error) {
-	return nil, unsupported()
-}
 func (s *Store) FindCallsMissingTranscriptsByFilters(ctx context.Context, params sqlite.MissingTranscriptSearchParams) ([]sqlite.MissingTranscriptCall, error) {
 	if strings.TrimSpace(params.CRMObjectType) != "" || strings.TrimSpace(params.CRMObjectID) != "" || strings.TrimSpace(params.LifecycleBucket) != "" || strings.TrimSpace(params.Scope) != "" || strings.TrimSpace(params.System) != "" || strings.TrimSpace(params.Direction) != "" {
 		return nil, unsupported()

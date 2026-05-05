@@ -261,6 +261,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS
 CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
 DROP VIEW IF EXISTS gongmcp_transcript_segments;
 DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
+`+postgresBusinessAnalysisFunctionsSQL+`
 DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
@@ -533,6 +534,7 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_governance_data_fingerprint() TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_governance_policy_state(text) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
+`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
 		END IF;
 	END;
 	$$;`)

@@ -78,6 +78,22 @@ func TestPostgresToolAllowlistAcceptsAnalystCorePreset(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsAnalystBusinessCorePreset(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("analyst-business-core")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "analyst-business-core")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	for _, name := range []string{"search_transcripts_by_call_facts", "search_transcript_quotes_with_attribution", "search_transcripts_by_filters", "summarize_themes_by_dimension"} {
+		if !containsString(allowlist, name) {
+			t.Fatalf("analyst-business-core missing %s: %v", name, allowlist)
+		}
+	}
+}
+
 func TestPostgresToolAllowlistAcceptsBusinessPilotPreset(t *testing.T) {
 	expanded, err := mcp.ExpandToolPreset("business-pilot")
 	if err != nil {
@@ -261,7 +277,7 @@ func TestRunListToolPresetsDoesNotRequireDB(t *testing.T) {
 			t.Fatalf("incomplete preset entry: %+v", preset)
 		}
 	}
-	for _, name := range []string{"business-pilot", "operator-smoke", "analyst-core", "analyst", "governance-search", "all-readonly"} {
+	for _, name := range []string{"business-pilot", "operator-smoke", "analyst-core", "analyst-business-core", "analyst", "governance-search", "all-readonly"} {
 		if _, ok := seen[name]; !ok {
 			t.Fatalf("missing preset %q in %s", name, stdout.String())
 		}

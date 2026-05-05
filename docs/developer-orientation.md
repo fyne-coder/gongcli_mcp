@@ -73,7 +73,8 @@ These are easy to miss if you only read the high-level docs.
   or allowlist is explicit.
 - Built-in MCP presets live in `internal/mcp/catalog.go`; `cmd/gongmcp/main.go`
   only resolves flag/env precedence and transport policy. Current presets are
-  `business-pilot`, `operator-smoke`, `analyst`, `governance-search`, and
+  `business-pilot`, `operator-smoke`, `analyst-core`,
+  `analyst-business-core`, `analyst`, `governance-search`, and
   `all-readonly`; run `gongmcp --list-tool-presets` for the expanded lists.
 - HTTP MCP defaults to bearer auth. `auth-mode=none` is only allowed with
   `--dev-allow-no-auth-localhost` on a local bind.

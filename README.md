@@ -2,7 +2,7 @@
 
 `gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports bounded shared-deployment `business-pilot` and `analyst-core` slices. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports bounded shared-deployment `business-pilot`, `analyst-core`, and `analyst-business-core` slices. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 SQLite remains the default local/single-host cache. For shared multi-container
 deployments, the first Postgres vertical slice supports a shared database for
 sync status, cached calls, users, transcripts, transcript segments, and the
@@ -16,8 +16,9 @@ lifecycle facts when an active profile has a fresh profile fact cache. Postgres
 governance mode supports a prepared private policy for the narrowed
 `governance-search` MCP slice. `analyst-core` adds Postgres-supported call,
 CRM context inventory, profile, lifecycle, and transcript-search tools while
-full `analyst` and `all-readonly` remain gated until inventory, scorecard, and
-business-analysis parity is complete.
+`analyst-business-core` adds bounded Postgres transcript-evidence and
+business-analysis tools. Full `analyst` and `all-readonly` remain gated until
+inventory and scorecard parity is complete.
 
 ## Positioning
 
@@ -72,9 +73,10 @@ gongctl profile schema
 ```
 
 Use `business-pilot` for first business-user access, `analyst-core` for the
-reviewed Postgres analyst starter surface, and `all-readonly` only for trusted
-SQLite admin/analyst sessions against a reviewed SQLite or filtered cache. For
-Postgres, use `analyst-core` until full parity is complete.
+reviewed Postgres analyst starter surface, `analyst-business-core` for bounded
+Postgres transcript-evidence/business-analysis workflows, and `all-readonly`
+only for trusted SQLite admin/analyst sessions against a reviewed SQLite or
+filtered cache.
 
 - Deployment worksheet: [Customer implementation checklist](docs/implementation-checklist.md)
 - Local/container start: [Quickstart](docs/quickstart.md)
