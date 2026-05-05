@@ -788,7 +788,8 @@ internal/checkpoint/      resumable batch checkpoints
 internal/redact/          safe logging helpers
 internal/profile/         tenant-editable business profile parser, validator, discovery, and rule evaluation
 internal/store/sqlite/    local SQLite cache for calls, users, transcripts, CRM schema, settings, profiles, and sync state
-internal/syncsvc/         SQLite-backed call/user/inventory sync orchestration
+internal/store/postgres/  shared Postgres cache backend, migrations, read models, and scoped reader helpers
+internal/syncsvc/         call/user/inventory sync orchestration over the store/cache layer
 internal/transcripts/     transcript sync/search helpers on top of store + Gong client
 internal/mcp/             read-only MCP adapter over the store interface
 testdata/fixtures/        sanitized sample payloads only

@@ -79,7 +79,9 @@ Operational implications:
 
 Implementation controls on the MCP side:
 
-- `cmd/gongmcp/main.go` requires an explicit `--db PATH`.
+- `cmd/gongmcp/main.go` requires either `--db PATH` for SQLite or
+  `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres. Postgres deployments
+  should use a reader or scoped-reader service URL.
 - `gongmcp` opens SQLite through `sqlite.OpenReadOnly(...)`.
 - `internal/mcp/server.go` enforces bounded result counts and a maximum MCP frame size of about 1 MiB. Operators can raise selected row caps by `GONGMCP_MAX_*` env vars or `gongmcp --max-*` flags, but each family has a hard ceiling and `tools/list` reflects the active maximum.
 - Profile-aware reads refuse stale-cache rebuilds instead of mutating SQLite from MCP.

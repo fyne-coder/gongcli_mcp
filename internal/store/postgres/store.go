@@ -1352,6 +1352,51 @@ SELECT c.relname
 		return fmt.Errorf("postgres read-only URL has sequence privileges: %s", strings.Join(readableSequences, ", "))
 	}
 	rows, err = s.db.QueryContext(ctx, `
+WITH current_reader_role AS (
+	SELECT oid
+	  FROM pg_roles
+	 WHERE rolname = current_user
+),
+default_acl AS (
+	SELECT COALESCE(n.nspname, '<all schemas>') AS schema_name,
+	       CASE d.defaclobjtype
+	         WHEN 'r' THEN 'tables'
+	         WHEN 'S' THEN 'sequences'
+	         WHEN 'f' THEN 'functions'
+	         ELSE d.defaclobjtype::text
+	       END AS object_type,
+	       a.privilege_type
+	  FROM pg_default_acl d
+	  LEFT JOIN pg_namespace n
+	    ON n.oid = d.defaclnamespace
+	  CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+	  JOIN current_reader_role r
+	    ON r.oid = a.grantee
+	 WHERE d.defaclobjtype IN ('r', 'S', 'f')
+	   AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+)
+SELECT schema_name || ':' || object_type || ':' || privilege_type
+  FROM default_acl
+ ORDER BY schema_name, object_type, privilege_type`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var defaultPrivilegeGrants []string
+	for rows.Next() {
+		var grant string
+		if err := rows.Scan(&grant); err != nil {
+			return err
+		}
+		defaultPrivilegeGrants = append(defaultPrivilegeGrants, grant)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(defaultPrivilegeGrants) > 0 {
+		return fmt.Errorf("postgres read-only URL has default privileges for future public objects: %s", strings.Join(defaultPrivilegeGrants, ", "))
+	}
+	rows, err = s.db.QueryContext(ctx, `
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'

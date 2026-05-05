@@ -581,7 +581,8 @@ grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_transcript_backlog_san
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer)' /tmp/gongctl-postgres-business-pilot-reader-apply-dry-run.sql
 for generated_sql in /tmp/gongctl-postgres-business-pilot-reader-grants.sql /tmp/gongctl-postgres-business-pilot-reader-grants-gongctl.sql /tmp/gongctl-postgres-business-pilot-reader-apply-dry-run.sql; do
   grep -q 'Role and credentials must already exist' "$generated_sql"
-  grep -q 'clearing existing public table/function privileges' "$generated_sql"
+  grep -q 'clearing existing public table/function/sequence privileges' "$generated_sql"
+  grep -q 'startup rejects default privileges' "$generated_sql"
   grep -q 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public"' "$generated_sql"
   grep -q 'REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "public"' "$generated_sql"
   grep -q 'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public"' "$generated_sql"
@@ -753,6 +754,14 @@ if business_pilot_reader_psql -c "SELECT last_value FROM profile_meta_id_seq" >/
   exit 1
 fi
 grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO gongmcp_business_pilot_reader" >/dev/null
+if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt 2>&1; then
+  echo "business-pilot scoped reader unexpectedly started with default privilege drift" >&2
+  exit 1
+fi
+grep -q 'default privileges for future public objects' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
+grep -q 'public:tables:SELECT' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM gongmcp_business_pilot_reader" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE SELECT (title) ON calls FROM gongmcp_business_pilot_reader" >/dev/null
 business_pilot_profile_identity="$(docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT id, canonical_sha256 FROM profile_meta WHERE is_active = true LIMIT 1")"
 IFS='|' read -r business_pilot_profile_id business_pilot_profile_sha <<EOF
@@ -1683,6 +1692,7 @@ echo "synthetic business-pilot scoped reader apply wrong-database denial output:
 echo "synthetic business-pilot scoped reader apply column repair JSON: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair.json"
 echo "synthetic business-pilot scoped reader apply column repair calls.title denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-calls-title-denied.txt"
 echo "synthetic business-pilot scoped reader apply column repair sequence denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt"
+echo "synthetic business-pilot scoped reader default privilege drift denial output: /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt"
 echo "synthetic business-pilot scoped reader apply repair identifier-helper denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-identifier-helper-denied.txt"
 echo "synthetic business-pilot scoped reader apply repair active-profile denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-active-profile-denied.txt"
 echo "synthetic business-pilot scoped reader apply repair missing-transcripts denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-missing-transcripts-denied.txt"
