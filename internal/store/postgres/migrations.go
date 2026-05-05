@@ -338,7 +338,8 @@ FOR EACH STATEMENT EXECUTE FUNCTION gongctl_read_model_recalculate_counters_fn()
 	`
 CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text AS cursor, from_value, to_value, ''::text AS request_context, status, started_at, finished_at, records_seen, records_written, ''::text AS error_text FROM sync_runs;
 CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
-CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
+CREATE OR REPLACE VIEW gongmcp_call_context_objects AS SELECT id, call_id, 'object:' || id::text AS object_key, object_type FROM call_context_objects;
+CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT f.id, f.call_id, 'object:' || o.id::text AS object_key, f.field_name, f.field_label, f.field_type, (TRIM(f.field_value_text) <> '') AS field_populated FROM call_context_fields f JOIN call_context_objects o ON o.call_id = f.call_id AND o.object_key = f.object_key;
 DROP VIEW IF EXISTS gongmcp_transcript_segments;
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments(search_text text, row_limit integer)
 RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
@@ -381,7 +382,8 @@ BEGIN
 		EXECUTE 'GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader';
-		EXECUTE 'GRANT SELECT (id, call_id, object_key, object_type) ON call_context_objects TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE gongmcp_call_context_objects TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader';
@@ -968,6 +970,17 @@ DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
+	`
+DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
+` + postgresMissingTranscriptsFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
 	END IF;
 END;
 $$;

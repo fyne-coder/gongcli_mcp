@@ -2158,6 +2158,11 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.MissingTranscriptLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().MissingTranscripts)
+	if strings.TrimSpace(args.CRMObjectID) != "" && strings.TrimSpace(args.CRMObjectType) == "" {
+		return toolCallResult{}, errors.New("crm_object_type is required when crm_object_id is set")
+	}
 	rows, err := s.store.FindCallsMissingTranscriptsByFilters(ctx, sqlite.MissingTranscriptSearchParams{
 		FromDate:        args.FromDate,
 		ToDate:          args.ToDate,
@@ -2167,7 +2172,7 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 		Direction:       args.Direction,
 		CRMObjectType:   args.CRMObjectType,
 		CRMObjectID:     args.CRMObjectID,
-		Limit:           s.limitPolicy.MissingTranscriptLimit(args.Limit),
+		Limit:           queryLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -2180,8 +2185,11 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 			continue
 		}
 		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
-	return s.newCappedToolResult("missing_transcripts", out, len(out), s.limitPolicy.MissingTranscriptLimit(args.Limit), filtered, missingTranscriptRefinements(args))
+	return s.newCappedToolResult("missing_transcripts", out, len(out), limit, filtered, missingTranscriptRefinements(args))
 }
 
 func (s *Server) ok(id any, result any) *response {

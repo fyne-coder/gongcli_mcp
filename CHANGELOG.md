@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added development-branch Postgres explicit allowlist support for filtered
+  `missing_transcripts`, matching SQLite date, lifecycle, scope, system,
+  direction, and CRM object filters for admin transcript-backfill workflows.
 - Added development-branch Postgres explicit allowlist support for
   `compare_lifecycle_crm_fields`, returning aggregate lifecycle-vs-CRM field
   population comparisons for the reviewed `Opportunity` object type without

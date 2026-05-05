@@ -1078,7 +1078,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -2738,6 +2738,141 @@ func TestPostgresCompareLifecycleCRMFieldsMatchesSQLite(t *testing.T) {
 		if row.FieldName == "Renewal_Process__c" && row.BucketAPopulated != 0 {
 			t.Fatalf("governed lifecycle CRM comparison included suppressed call: %+v", row)
 		}
+	}
+}
+
+func TestPostgresFindCallsMissingTranscriptsByFiltersMatchesSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	calls := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-missing-filter-001","title":"Missing renewal external","started":"2026-04-20T12:00:00Z","duration":1200,"metaData":{"scope":"External","system":"Zoom","direction":"Conference"},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-filter-1","fields":{"StageName":"Renewal Discussion","Type":"Renewal"}}]}}`),
+		json.RawMessage(`{"id":"pg-missing-filter-002","title":"Missing active internal","started":"2026-04-21T12:00:00Z","duration":900,"metaData":{"scope":"Internal","system":"Upload API","direction":"Inbound"},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-filter-2","fields":{"StageName":"Discovery","Type":"New Business"}}]}}`),
+		json.RawMessage(`{"id":"pg-missing-filter-003","title":"Present renewal external","started":"2026-04-22T12:00:00Z","duration":1500,"metaData":{"scope":"External","system":"Zoom","direction":"Conference"},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-missing-filter-3","fields":{"StageName":"Renewal Discussion","Type":"Renewal"}}]}}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+		UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+	}{pgStore, sqliteStore} {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("UpsertCall returned error: %v", err)
+			}
+		}
+		if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-missing-filter-003","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":1000,"text":"present transcript"}]}]}`)); err != nil {
+			t.Fatalf("UpsertTranscript returned error: %v", err)
+		}
+	}
+
+	for name, params := range map[string]sqlite.MissingTranscriptSearchParams{
+		"unfiltered": {Limit: 10},
+		"date":       {FromDate: "2026-04-20", ToDate: "2026-04-20", Limit: 10},
+		"lifecycle":  {LifecycleBucket: "renewal", Limit: 10},
+		"scope":      {Scope: "external", Limit: 10},
+		"system":     {System: "Zoom", Limit: 10},
+		"direction":  {Direction: "Conference", Limit: 10},
+		"crm type":   {CRMObjectType: "Opportunity", Limit: 10},
+		"crm object": {CRMObjectType: "Opportunity", CRMObjectID: "opp-missing-filter-1", Limit: 10},
+		"combined":   {LifecycleBucket: "renewal", Scope: "External", System: "Zoom", Direction: "Conference", CRMObjectType: "Opportunity", Limit: 10},
+		"limit":      {Limit: 1},
+	} {
+		got, err := pgStore.FindCallsMissingTranscriptsByFilters(ctx, params)
+		if err != nil {
+			t.Fatalf("%s: postgres FindCallsMissingTranscriptsByFilters returned error: %v", name, err)
+		}
+		want, err := sqliteStore.FindCallsMissingTranscriptsByFilters(ctx, params)
+		if err != nil {
+			t.Fatalf("%s: sqlite FindCallsMissingTranscriptsByFilters returned error: %v", name, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: postgres missing=%+v want sqlite %+v", name, got, want)
+		}
+	}
+
+	for name, params := range map[string]sqlite.MissingTranscriptSearchParams{
+		"bad date":   {FromDate: "2026-02-99"},
+		"bad range":  {FromDate: "2026-04-22", ToDate: "2026-04-20"},
+		"bad bucket": {LifecycleBucket: "not-real"},
+		"bad scope":  {Scope: "field"},
+		"id only":    {CRMObjectID: "opp-missing-filter-1"},
+	} {
+		if _, err := pgStore.FindCallsMissingTranscriptsByFilters(ctx, params); err == nil {
+			t.Fatalf("%s: expected postgres filter error", name)
+		}
+	}
+
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT call_id, title, started_at FROM gongmcp_missing_transcripts('2026-04-20', '2026-04-20', 'renewal', 'External', 'Zoom', 'Conference', 'Opportunity', 'opp-missing-filter-1', 10)`)
+	if err != nil {
+		t.Fatalf("missing_transcripts function returned error: %v", err)
+	}
+	defer directRows.Close()
+	var direct []sqlite.MissingTranscriptCall
+	for directRows.Next() {
+		var row sqlite.MissingTranscriptCall
+		if err := directRows.Scan(&row.CallID, &row.Title, &row.StartedAt); err != nil {
+			t.Fatalf("scan missing_transcripts function row: %v", err)
+		}
+		direct = append(direct, row)
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("missing_transcripts function rows: %v", err)
+	}
+	if !reflect.DeepEqual(direct, []sqlite.MissingTranscriptCall{{CallID: "pg-missing-filter-001", Title: "Missing renewal external", StartedAt: "2026-04-20T12:00:00Z"}}) {
+		t.Fatalf("missing_transcripts function direct=%+v", direct)
+	}
+	var idOnlyCount int
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM gongmcp_missing_transcripts('', '', '', '', '', '', '', 'opp-missing-filter-1', 10)`).Scan(&idOnlyCount); err != nil {
+		t.Fatalf("missing_transcripts function id-only query returned error: %v", err)
+	}
+	if idOnlyCount != 0 {
+		t.Fatalf("missing_transcripts function accepted crm_object_id without crm_object_type: %d", idOnlyCount)
+	}
+	for _, column := range []string{"object_id", "object_name", "object_key", "field_value_text", "raw_json", "raw_sha256", "text"} {
+		if _, err := pgStore.DB().ExecContext(ctx, `SELECT `+column+` FROM gongmcp_missing_transcripts('2026-04-20', '2026-04-20', 'renewal', 'External', 'Zoom', 'Conference', 'Opportunity', 'opp-missing-filter-1', 10)`); err == nil {
+			t.Fatalf("missing_transcripts function exposed %s column", column)
+		}
+	}
+
+	if _, err := pgStore.DB().ExecContext(ctx, `INSERT INTO governance_policy_state(config_sha256, data_fingerprint, suppressed_call_count, updated_at) VALUES('stale-missing-transcripts-policy', 'stale-fingerprint', 1, $1)`, nowUTC()); err != nil {
+		t.Fatalf("insert stale governance policy: %v", err)
+	}
+	if _, err := pgStore.DB().ExecContext(ctx, `INSERT INTO governance_suppressed_calls(config_sha256, call_id) VALUES('stale-missing-transcripts-policy', 'pg-missing-filter-001')`); err != nil {
+		t.Fatalf("insert stale suppressed call: %v", err)
+	}
+	staleRows, err := pgStore.DB().QueryContext(ctx, `SELECT call_id, title, started_at FROM gongmcp_missing_transcripts('2026-04-20', '2026-04-20', 'renewal', 'External', 'Zoom', 'Conference', 'Opportunity', 'opp-missing-filter-1', 10)`)
+	if err != nil {
+		t.Fatalf("missing_transcripts function with stale governance policy returned error: %v", err)
+	}
+	defer staleRows.Close()
+	direct = direct[:0]
+	for staleRows.Next() {
+		var row sqlite.MissingTranscriptCall
+		if err := staleRows.Scan(&row.CallID, &row.Title, &row.StartedAt); err != nil {
+			t.Fatalf("scan missing_transcripts stale policy row: %v", err)
+		}
+		direct = append(direct, row)
+	}
+	if err := staleRows.Err(); err != nil {
+		t.Fatalf("missing_transcripts stale policy rows: %v", err)
+	}
+	if !reflect.DeepEqual(direct, []sqlite.MissingTranscriptCall{{CallID: "pg-missing-filter-001", Title: "Missing renewal external", StartedAt: "2026-04-20T12:00:00Z"}}) {
+		t.Fatalf("missing_transcripts function applied stale governance policy: %+v", direct)
 	}
 }
 

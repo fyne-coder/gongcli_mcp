@@ -93,6 +93,16 @@ func TestPostgresToolAllowlistAcceptsOpportunitiesMissingTranscripts(t *testing.
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsMissingTranscripts(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"missing_transcripts"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"missing_transcripts"}) {
+		t.Fatalf("allowlist=%v want missing_transcripts", allowlist)
+	}
+}
+
 func TestPostgresToolAllowlistAcceptsOpportunityCallSummary(t *testing.T) {
 	allowlist, err := postgresToolAllowlist([]string{"opportunity_call_summary"}, false, "")
 	if err != nil {

@@ -94,7 +94,7 @@ Current fixed boundaries:
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
 | `search_transcripts_by_crm_context` | Restricted | Snippet | Server blanks call ID, title, object ID, object name, and speaker ID; the Postgres reader function filters governance-suppressed calls in SQL and does not return call IDs, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, or full transcript text | Still returns transcript-derived snippets tied to an object type and call time |
 | `compare_lifecycle_crm_fields` | Restricted | Aggregate | Postgres reader function is limited to reviewed `Opportunity` comparisons, excludes governance-suppressed calls in SQL, and returns object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta only | Field names and lifecycle bucket rates can reveal tenant-specific CRM structure |
-| `search_calls`, `search_calls_by_lifecycle`, `missing_transcripts` | Admin-only | Record reference | Return minimized call metadata rather than raw JSON | Exposes call IDs, titles, timestamps, and durations |
+| `search_calls`, `search_calls_by_lifecycle`, `missing_transcripts` | Admin-only | Record reference | Return minimized call metadata rather than raw JSON. Postgres `missing_transcripts` supports explicit date, lifecycle, scope, system, direction, and CRM object filters for admin backfill workflows only; CRM object ID requires object type | Exposes call IDs, titles, timestamps, and durations |
 | `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; Postgres read-only also redacts CRM object IDs | Still exposes call ID/title plus CRM object/field shape for one call; SQLite/full-catalog mode can include CRM object IDs |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
 
@@ -216,7 +216,8 @@ How to open up the surface intentionally:
   `governance-search`, or explicit allowlists such as
   `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`,
   `opportunity_call_summary`, `crm_field_population_matrix`,
-  `compare_lifecycle_crm_fields`, or `search_transcripts_by_crm_context`; full
+  `compare_lifecycle_crm_fields`, `missing_transcripts`, or
+  `search_transcripts_by_crm_context`; full
   Postgres `analyst` and `all-readonly` are not yet supported.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
@@ -305,9 +306,15 @@ High-volume tools should be filter-first, not cap-first. `search_calls`,
 `prioritize_transcripts_by_lifecycle`, and `rank_transcript_backlog` accept
 date, lifecycle, scope, system, and direction filters where the cache has
 normalized call facts. `search_calls` and `missing_transcripts` also accept
-CRM object filters. `search_transcript_quotes_with_attribution` accepts those
-call-fact filters plus its attribution filters such as industry, account, and
-Opportunity stage.
+CRM object filters; Postgres `missing_transcripts` requires `crm_object_type`
+when `crm_object_id` is set. `search_transcript_quotes_with_attribution`
+accepts those call-fact filters plus its attribution filters such as industry,
+account, and Opportunity stage.
+
+For Postgres, `missing_transcripts` uses a reader-executable function when CRM
+object ID filtering is needed. The function returns only call IDs, titles, and
+started timestamps; it does not return CRM object IDs/names, raw CRM values,
+raw JSON, raw hashes, or transcript text.
 
 The highest-volume row tools that commonly drive follow-up calls
 (`search_calls`, `search_crm_field_values`, transcript search tools,

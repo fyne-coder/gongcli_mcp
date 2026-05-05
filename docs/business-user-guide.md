@@ -574,11 +574,12 @@ Do not expose these tools to business users during the pilot:
 These tools are operator-only or expansion-candidate tools because they can
 reveal tenant structure, allow directed value lookup, or move too close to
 exact-call review for an initial business pilot.
-For Postgres deployments, `crm_field_population_matrix` and
-`compare_lifecycle_crm_fields` are available only as reviewed explicit
-operator allowlists and should stay out of business-user presets until
-aggregate privacy and customer-scale performance are hardened. The current
-Postgres lifecycle comparison slice is limited to Opportunity fields.
+For Postgres deployments, `crm_field_population_matrix`,
+`compare_lifecycle_crm_fields`, and `missing_transcripts` are available only as
+reviewed explicit operator allowlists and should stay out of business-user
+presets until aggregate privacy, record-reference safety, and customer-scale
+performance are hardened. The current Postgres lifecycle comparison slice is
+limited to Opportunity fields.
 
 `search_transcript_quotes_with_attribution` is the right tool for marketing
 asks like “top quotes by Q1 theme, industry, and opportunity stage.” It returns

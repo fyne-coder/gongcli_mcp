@@ -196,6 +196,70 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM PUBLIC;
 `
 
+const postgresMissingTranscriptsFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_missing_transcripts(from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, crm_object_type_arg text, crm_object_id_arg text, row_limit integer)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH input AS (
+	SELECT TRIM(COALESCE(from_date_arg, '')) AS from_date_value,
+	       TRIM(COALESCE(to_date_arg, '')) AS to_date_value,
+	       TRIM(COALESCE(lifecycle_bucket_arg, '')) AS lifecycle_bucket_value,
+	       TRIM(COALESCE(scope_arg, '')) AS scope_value,
+	       TRIM(COALESCE(system_arg, '')) AS system_value,
+	       TRIM(COALESCE(direction_arg, '')) AS direction_value,
+	       TRIM(COALESCE(crm_object_type_arg, '')) AS crm_object_type_value,
+	       TRIM(COALESCE(crm_object_id_arg, '')) AS crm_object_id_value
+),
+bounded AS (
+	SELECT LEAST(GREATEST(COALESCE(row_limit, 100), 1), 10000) AS limit_value
+)
+SELECT c.call_id,
+       c.title,
+       c.started_at
+  FROM calls c
+  CROSS JOIN input
+  LEFT JOIN transcripts t
+    ON t.call_id = c.call_id
+ WHERE t.call_id IS NULL
+   AND (
+		(input.crm_object_type_value = '' AND input.crm_object_id_value = '')
+		OR (input.crm_object_type_value <> '' AND EXISTS (
+			SELECT 1
+			  FROM call_context_objects o
+			 WHERE o.call_id = c.call_id
+			   AND o.object_type = input.crm_object_type_value
+			   AND (input.crm_object_id_value = '' OR o.object_id = input.crm_object_id_value)
+		))
+   )
+   AND (
+		(input.from_date_value = '' AND input.to_date_value = '' AND input.lifecycle_bucket_value = '' AND input.scope_value = '' AND input.system_value = '' AND input.direction_value = '')
+		OR EXISTS (
+			SELECT 1
+			  FROM call_facts cf
+			 WHERE cf.call_id = c.call_id
+			   AND (input.from_date_value = '' OR cf.call_date >= input.from_date_value)
+			   AND (input.to_date_value = '' OR cf.call_date <= input.to_date_value)
+			   AND (input.lifecycle_bucket_value = '' OR cf.lifecycle_bucket = input.lifecycle_bucket_value)
+			   AND (input.scope_value = '' OR cf.scope = input.scope_value)
+			   AND (input.system_value = '' OR cf.system = input.system_value)
+			   AND (input.direction_value = '' OR cf.direction = input.direction_value)
+		)
+   )
+ ORDER BY c.started_at DESC, c.call_id
+ LIMIT (SELECT limit_value FROM bounded)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+`
+
 const postgresCRMFieldValueSearchFunctionSQL = `
 CREATE OR REPLACE FUNCTION gongmcp_crm_field_value_search(object_type_arg text, field_name_arg text, value_query_arg text, row_limit integer, include_call_ids_arg boolean, include_value_snippets_arg boolean)
 RETURNS TABLE(
@@ -932,10 +996,10 @@ SELECT o.object_type,
        COUNT(DISTINCT o.id) AS object_count,
        COUNT(DISTINCT o.call_id) AS call_count,
        COUNT(f.id) AS field_count,
-       COUNT(CASE WHEN f.field_populated THEN 1 END) AS populated_field_count,
+       COUNT(CASE WHEN TRIM(f.field_value_text) <> '' THEN 1 END) AS populated_field_count,
        COUNT(DISTINCT NULLIF(TRIM(o.object_id), '')) AS distinct_object_id_count
   FROM call_context_objects o
-  LEFT JOIN gongmcp_call_context_fields f
+  LEFT JOIN call_context_fields f
     ON f.call_id = o.call_id
    AND f.object_key = o.object_key
  GROUP BY o.object_type
@@ -1024,7 +1088,7 @@ SELECT object_type,
 	       COUNT(CASE WHEN f.field_populated THEN 1 END) AS populated_count,
 	       0::bigint AS distinct_value_count
 	  FROM gongmcp_call_context_fields f
-	  JOIN call_context_objects o
+	  JOIN gongmcp_call_context_objects o
 	    ON o.call_id = f.call_id
 	   AND o.object_key = f.object_key
 	 WHERE o.object_type = $1

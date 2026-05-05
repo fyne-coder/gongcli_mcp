@@ -35,9 +35,11 @@ pairs: `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`,
 field comparison for the reviewed `Opportunity` object type. Explicit
 `search_transcripts_by_crm_context`
 support is available for CRM-constrained transcript snippet search with default
-MCP redaction of call, title, object, and speaker identifiers. Full `analyst`
-and `all-readonly` remain gated until the remaining full-catalog query parity
-is complete.
+MCP redaction of call, title, object, and speaker identifiers. Explicit
+`missing_transcripts` support is available for admin transcript-backfill
+workflows with date, lifecycle, scope, system, direction, and CRM object
+filters. Full `analyst` and `all-readonly` remain gated until the remaining
+full-catalog query parity is complete.
 
 ## Positioning
 
@@ -690,7 +692,8 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `crm_field_population_matrix` returns aggregate field-population cells grouped by approved categorical fields. Approved group values are intentionally exposed as aggregate labels. The Postgres reader function returns only group value, field name/label, object count, call count, and populated count; MCP/store output derives `population_rate` from those counts. Object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, raw hashes, titles, and transcript text are not returned.
 `compare_lifecycle_crm_fields` returns aggregate CRM field-population differences between two lifecycle buckets for the reviewed `Opportunity` object type. The Postgres reader function returns only object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta; it omits call IDs, call titles, CRM object IDs/names/keys, raw CRM values, raw JSON, raw hashes, and transcript text, rejects unreviewed object types, and excludes governance-suppressed calls inside SQL. This Postgres slice is development-branch work after `v0.3.3` until a tagged release includes it.
 `search_transcripts_by_crm_context` returns CRM-constrained transcript snippets. MCP output redacts call IDs, call titles, speaker IDs, CRM object IDs/names, and object keys. The Postgres reader function filters governance-suppressed calls inside SQL and returns only started time, object type, matching-object count, segment timing, and snippet; it omits call IDs, call titles, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, and full transcript text.
-The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values, object names, and transcript text remain denied.
+`missing_transcripts` returns direct missing-transcript call references for admin transcript-backfill workflows. Postgres supports the reviewed filter set: date range, lifecycle bucket, scope, system, direction, CRM object type, and CRM object ID; `crm_object_id` requires `crm_object_type` to avoid cross-object probing. It returns call IDs, titles, and start times, but not raw cached JSON, transcript text, CRM field values, raw JSON, or raw hashes. Use explicit allowlists; do not put it in business-user presets.
+The Postgres reader role can execute the reviewed bounded reader functions, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values, object names, and transcript text remain denied.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 

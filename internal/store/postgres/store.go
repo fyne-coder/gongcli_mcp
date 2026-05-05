@@ -395,7 +395,8 @@ func (s *Store) reconcileReaderGrants(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text AS cursor, from_value, to_value, ''::text AS request_context, status, started_at, finished_at, records_seen, records_written, ''::text AS error_text FROM sync_runs;
 	CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
-	CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
+	CREATE OR REPLACE VIEW gongmcp_call_context_objects AS SELECT id, call_id, 'object:' || id::text AS object_key, object_type FROM call_context_objects;
+	CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT f.id, f.call_id, 'object:' || o.id::text AS object_key, f.field_name, f.field_label, f.field_type, (TRIM(f.field_value_text) <> '') AS field_populated FROM call_context_fields f JOIN call_context_objects o ON o.call_id = f.call_id AND o.object_key = f.object_key;
 	DROP VIEW IF EXISTS gongmcp_transcript_segments;
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_crm_object_type_summary();
@@ -410,6 +411,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_population_matrix(text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_compare_lifecycle_crm_fields(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
@@ -419,6 +421,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresCRMFieldPopulationMatrixFunctionSQL+`
 	`+postgresLifecycleCRMFieldComparisonFunctionSQL+`
 	`+postgresTranscriptCRMContextSearchFunctionSQL+`
+	`+postgresMissingTranscriptsFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -684,7 +687,8 @@ BEGIN
 		GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader;
-		GRANT SELECT (id, call_id, object_key, object_type) ON call_context_objects TO gongmcp_reader;
+		GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader;
+		GRANT SELECT ON TABLE gongmcp_call_context_objects TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader;
 		GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader;
 		GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader;
@@ -711,6 +715,7 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -871,6 +876,7 @@ WITH forbidden(table_name, column_name) AS (
 		('transcript_segments', 'search_vector'),
 		('call_context_objects', 'object_id'),
 		('call_context_objects', 'object_name'),
+		('call_context_objects', 'object_key'),
 		('call_context_objects', 'raw_json'),
 		('call_context_fields', 'field_value_text'),
 		('call_context_fields', 'raw_json'),
@@ -989,6 +995,7 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_opportunity_call_summary(text, integer)'),
 		('public.gongmcp_crm_field_population_matrix(text, text, integer)'),
 		('public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)'),
+		('public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature
@@ -1322,13 +1329,152 @@ VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`,
 }
 
 func (s *Store) FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error) {
-	limit = boundedLimit(limit, 100, 10000)
-	rows, err := s.db.QueryContext(ctx, `SELECT c.call_id, c.title, c.started_at
+	return s.FindCallsMissingTranscriptsByFilters(ctx, sqlite.MissingTranscriptSearchParams{Limit: limit})
+}
+
+func (s *Store) FindCallsMissingTranscriptsByFilters(ctx context.Context, params sqlite.MissingTranscriptSearchParams) ([]sqlite.MissingTranscriptCall, error) {
+	limit := boundedLimit(params.Limit, 100, 10000)
+	if s.readOnly {
+		return s.findCallsMissingTranscriptsByFiltersReadOnly(ctx, params, limit)
+	}
+	query := `SELECT c.call_id, c.title, c.started_at
 FROM calls c
 LEFT JOIN transcripts t ON t.call_id = c.call_id
-WHERE t.call_id IS NULL
-ORDER BY c.started_at DESC, c.call_id
-LIMIT $1`, limit)
+WHERE t.call_id IS NULL`
+	args := []any{}
+	addArg := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	where := []string{}
+
+	objectType := strings.TrimSpace(params.CRMObjectType)
+	objectID := strings.TrimSpace(params.CRMObjectID)
+	if objectID != "" && objectType == "" {
+		return nil, errors.New("crm_object_type is required when crm_object_id is set")
+	}
+	if objectType != "" || objectID != "" {
+		subquery := []string{`o.call_id = c.call_id`}
+		if objectType != "" {
+			subquery = append(subquery, `o.object_type = `+addArg(objectType))
+		}
+		if objectID != "" {
+			subquery = append(subquery, `o.object_id = `+addArg(objectID))
+		}
+		where = append(where, `EXISTS (SELECT 1 FROM call_context_objects o WHERE `+strings.Join(subquery, ` AND `)+`)`)
+	}
+
+	factWhere := []string{`cf.call_id = c.call_id`}
+	var fromDate, toDate string
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "from_date")
+		if err != nil {
+			return nil, err
+		}
+		fromDate = date
+		factWhere = append(factWhere, `cf.call_date >= `+addArg(date))
+	}
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "to_date")
+		if err != nil {
+			return nil, err
+		}
+		toDate = date
+		factWhere = append(factWhere, `cf.call_date <= `+addArg(date))
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, errors.New("from_date must be on or before to_date")
+	}
+	if value := strings.TrimSpace(params.LifecycleBucket); value != "" {
+		if !postgresKnownLifecycleBucket(value) {
+			return nil, fmt.Errorf("unknown lifecycle bucket %q", value)
+		}
+		factWhere = append(factWhere, `cf.lifecycle_bucket = `+addArg(value))
+	}
+	if value := strings.TrimSpace(params.Scope); value != "" {
+		scope, ok := normalizePostgresScope(value)
+		if !ok {
+			return nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		factWhere = append(factWhere, `cf.scope = `+addArg(scope))
+	}
+	if value := strings.TrimSpace(params.System); value != "" {
+		factWhere = append(factWhere, `cf.system = `+addArg(value))
+	}
+	if value := strings.TrimSpace(params.Direction); value != "" {
+		factWhere = append(factWhere, `cf.direction = `+addArg(value))
+	}
+	if len(factWhere) > 1 {
+		where = append(where, `EXISTS (SELECT 1 FROM call_facts cf WHERE `+strings.Join(factWhere, ` AND `)+`)`)
+	}
+	if len(where) > 0 {
+		query += ` AND ` + strings.Join(where, ` AND `)
+	}
+	query += ` ORDER BY c.started_at DESC, c.call_id LIMIT ` + addArg(limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []sqlite.MissingTranscriptCall
+	for rows.Next() {
+		var row sqlite.MissingTranscriptCall
+		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) findCallsMissingTranscriptsByFiltersReadOnly(ctx context.Context, params sqlite.MissingTranscriptSearchParams, limit int) ([]sqlite.MissingTranscriptCall, error) {
+	fromDate := ""
+	if value := strings.TrimSpace(params.FromDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "from_date")
+		if err != nil {
+			return nil, err
+		}
+		fromDate = date
+	}
+	toDate := ""
+	if value := strings.TrimSpace(params.ToDate); value != "" {
+		date, err := normalizePostgresDateFilter(value, "to_date")
+		if err != nil {
+			return nil, err
+		}
+		toDate = date
+	}
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		return nil, errors.New("from_date must be on or before to_date")
+	}
+	lifecycleBucket := strings.TrimSpace(params.LifecycleBucket)
+	if lifecycleBucket != "" && !postgresKnownLifecycleBucket(lifecycleBucket) {
+		return nil, fmt.Errorf("unknown lifecycle bucket %q", lifecycleBucket)
+	}
+	scope := strings.TrimSpace(params.Scope)
+	if scope != "" {
+		normalized, ok := normalizePostgresScope(scope)
+		if !ok {
+			return nil, errors.New("scope must be one of: External, Internal, Unknown")
+		}
+		scope = normalized
+	}
+	objectType := strings.TrimSpace(params.CRMObjectType)
+	objectID := strings.TrimSpace(params.CRMObjectID)
+	if objectID != "" && objectType == "" {
+		return nil, errors.New("crm_object_type is required when crm_object_id is set")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at
+  FROM gongmcp_missing_transcripts($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		fromDate,
+		toDate,
+		lifecycleBucket,
+		scope,
+		strings.TrimSpace(params.System),
+		strings.TrimSpace(params.Direction),
+		objectType,
+		objectID,
+		limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1498,20 +1644,26 @@ func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallD
 	objectIDSelect := `o.object_id`
 	objectIDGroupOrder := `o.object_id`
 	objectGroupBy := `o.object_key, o.object_type, o.object_id`
+	objectSource := `call_context_objects`
+	fieldSource := `call_context_fields`
+	fieldPopulatedExpr := `TRIM(f.field_value_text) <> ''`
 	if s.readOnly {
 		objectIDSelect = `''::text`
 		objectIDGroupOrder = `o.object_key`
 		objectGroupBy = `o.object_key, o.object_type`
+		objectSource = `gongmcp_call_context_objects`
+		fieldSource = `gongmcp_call_context_fields`
+		fieldPopulatedExpr = `f.field_populated`
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT o.object_type,
        `+objectIDSelect+`,
        '' AS object_name,
 	       COUNT(f.id) AS field_count,
-	       COUNT(CASE WHEN f.field_populated THEN 1 END) AS populated_field_count,
+	       COUNT(CASE WHEN `+fieldPopulatedExpr+` THEN 1 END) AS populated_field_count,
 	       COALESCE(string_agg(DISTINCT f.field_name, ',' ORDER BY f.field_name), '') AS field_names
-	  FROM call_context_objects o
-	  LEFT JOIN gongmcp_call_context_fields f
+	  FROM `+objectSource+` o
+	  LEFT JOIN `+fieldSource+` f
 	    ON f.call_id = o.call_id
 	   AND f.object_key = o.object_key
  WHERE o.call_id = $1

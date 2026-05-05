@@ -1847,6 +1847,75 @@ func TestMissingTranscriptsOmittedLimitHonorsConfiguredCap(t *testing.T) {
 	}
 }
 
+func TestMissingTranscriptsGovernanceOverfetchTrimsToRequestedLimit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	for _, call := range []struct {
+		id      string
+		title   string
+		started string
+	}{
+		{id: "call_missing_governance_blocked", title: "Blocked missing transcript", started: "2026-02-13T15:00:00Z"},
+		{id: "call_missing_governance_allowed_1", title: "Allowed missing transcript one", started: "2026-02-12T15:00:00Z"},
+		{id: "call_missing_governance_allowed_2", title: "Allowed missing transcript two", started: "2026-02-11T15:00:00Z"},
+	} {
+		if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+			"metaData": map[string]any{
+				"id":      call.id,
+				"title":   call.title,
+				"started": call.started,
+			},
+		})); err != nil {
+			t.Fatalf("upsert missing transcript call: %v", err)
+		}
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call_missing_governance_blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "missing-governance-limit",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "missing_transcripts",
+			"arguments": map[string]any{
+				"from_date": "2026-02-11",
+				"to_date":   "2026-02-13",
+				"limit":     1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_missing_governance_blocked") {
+		t.Fatalf("missing transcripts leaked suppressed call: %s", text)
+	}
+	if strings.Contains(text, "call_missing_governance_allowed_2") {
+		t.Fatalf("missing transcripts returned more than requested limit: %s", text)
+	}
+	if !strings.Contains(text, "call_missing_governance_allowed_1") {
+		t.Fatalf("missing transcripts missed first allowed call after governance overfetch: %s", text)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatalf("unmarshal capped payload: %v", err)
+	}
+	if intField(payload, "limit") != 1 || intField(payload, "returned") != 1 {
+		t.Fatalf("governed missing transcript limit mismatch: %+v", payload)
+	}
+}
+
 func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 	t.Parallel()
 

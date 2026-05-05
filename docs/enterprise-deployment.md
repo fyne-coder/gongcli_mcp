@@ -149,10 +149,11 @@ flowchart LR
   `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`, and
   `opportunity_call_summary`, plus aggregate CRM field-population diagnostics
   through `crm_field_population_matrix`, reviewed Opportunity lifecycle CRM
-  field comparison through `compare_lifecycle_crm_fields`, and
+  field comparison through `compare_lifecycle_crm_fields`, admin
+  transcript-backfill call references through `missing_transcripts`, and
   CRM-constrained transcript snippets
   through `search_transcripts_by_crm_context`, are available through explicit
-  allowlists. The `compare_lifecycle_crm_fields` and
+  allowlists. The `compare_lifecycle_crm_fields`, `missing_transcripts`, and
   `search_transcripts_by_crm_context` Postgres slices are development-branch
   work after `v0.3.3` until a tagged release includes them.
   Full `analyst` and `all-readonly` parity remains a follow-up tracked in the

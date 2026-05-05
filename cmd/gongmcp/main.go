@@ -337,6 +337,7 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		"list_lifecycle_buckets":                    {},
 		"list_scorecards":                           {},
 		"list_unmapped_crm_fields":                  {},
+		"missing_transcripts":                       {},
 		"crm_field_population_matrix":               {},
 		"compare_lifecycle_crm_fields":              {},
 		"opportunity_call_summary":                  {},
