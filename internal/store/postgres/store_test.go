@@ -949,7 +949,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -2336,6 +2336,128 @@ func TestPostgresSummarizeOpportunityCallsMatchesSQLiteRedacted(t *testing.T) {
 	}
 	if _, err := pgStore.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{StageValues: []string{strings.Repeat("x", maxOpportunityStageValueLength+1)}}); err == nil {
 		t.Fatal("expected too-long stage_values entry to fail")
+	}
+}
+
+func TestPostgresCRMFieldPopulationMatrixMatchesSQLite(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	calls := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-crm-matrix-001","title":"Matrix latest contract call","started":"2026-04-20T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-matrix-1","name":"Matrix One","fields":{"StageName":"Contract Signing","Amount":"50000","CloseDate":"2026-06-01","OwnerId":"owner-001","Forecast_Category_VP__c":"Commit"}}]}}`),
+		json.RawMessage(`{"id":"pg-crm-matrix-002","title":"Matrix earlier contract call","started":"2026-04-19T12:00:00Z","duration":600,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-matrix-2","name":"Matrix Two","fields":{"StageName":"Contract Signing","Amount":"","CloseDate":"2026-06-15","OwnerId":"owner-002","Forecast_Category_VP__c":"Best Case"}}]}}`),
+		json.RawMessage(`{"id":"pg-crm-matrix-003","title":"Matrix proposal call","started":"2026-04-22T12:00:00Z","duration":1500,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-matrix-proposal","name":"Matrix Proposal","fields":{"StageName":"Proposal","Amount":"10000","CloseDate":"2026-05-20","OwnerId":"owner-003","Forecast_Category_VP__c":"Pipeline"}}]}}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+	}{pgStore, sqliteStore} {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("UpsertCall returned error: %v", err)
+			}
+		}
+	}
+
+	params := sqlite.CRMFieldPopulationMatrixParams{ObjectType: "Opportunity", GroupByField: "stagename", Limit: 20}
+	got, err := pgStore.CRMFieldPopulationMatrix(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres CRMFieldPopulationMatrix returned error: %v", err)
+	}
+	want, err := sqliteStore.CRMFieldPopulationMatrix(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite CRMFieldPopulationMatrix returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres CRM matrix=%+v want sqlite %+v", got, want)
+	}
+	if got.ObjectType != "Opportunity" || got.GroupByField != "StageName" {
+		t.Fatalf("unexpected matrix header: %+v", got)
+	}
+	if len(got.Cells) == 0 {
+		t.Fatalf("expected matrix cells")
+	}
+	var foundAmount bool
+	for _, cell := range got.Cells {
+		if cell.FieldName == "StageName" {
+			t.Fatalf("group-by field leaked into matrix cells: %+v", cell)
+		}
+		if cell.GroupValue == "Contract Signing" && cell.FieldName == "Amount" {
+			foundAmount = true
+			if cell.ObjectCount != 2 || cell.CallCount != 2 || cell.PopulatedCount != 1 || cell.PopulationRate != 0.5 {
+				t.Fatalf("unexpected amount population cell: %+v", cell)
+			}
+		}
+	}
+	if !foundAmount {
+		t.Fatalf("amount cell missing from matrix: %+v", got.Cells)
+	}
+
+	limited, err := pgStore.CRMFieldPopulationMatrix(ctx, sqlite.CRMFieldPopulationMatrixParams{ObjectType: "Opportunity", GroupByField: "StageName", Limit: 1})
+	if err != nil {
+		t.Fatalf("postgres limited CRMFieldPopulationMatrix returned error: %v", err)
+	}
+	if len(limited.Cells) != 1 || limited.Cells[0].FieldName != got.Cells[0].FieldName {
+		t.Fatalf("unexpected limited matrix: %+v", limited)
+	}
+
+	if _, err := pgStore.CRMFieldPopulationMatrix(ctx, sqlite.CRMFieldPopulationMatrixParams{ObjectType: "Opportunity", GroupByField: "OwnerId", Limit: 20}); err == nil {
+		t.Fatal("expected unsafe group_by_field OwnerId to fail")
+	}
+	forecast, err := pgStore.CRMFieldPopulationMatrix(ctx, sqlite.CRMFieldPopulationMatrixParams{ObjectType: "Opportunity", GroupByField: "forecast_category_vp__c", Limit: 20})
+	if err != nil {
+		t.Fatalf("expected allowed Opportunity forecast group field to pass: %v", err)
+	}
+	if forecast.GroupByField != "Forecast_Category_VP__c" || len(forecast.Cells) == 0 {
+		t.Fatalf("unexpected forecast matrix: %+v", forecast)
+	}
+	if _, err := pgStore.CRMFieldPopulationMatrix(ctx, sqlite.CRMFieldPopulationMatrixParams{ObjectType: "Account", GroupByField: "StageName", Limit: 20}); err == nil {
+		t.Fatal("expected unsafe Account StageName pair to fail")
+	}
+
+	for _, column := range []string{"object_id", "object_name", "object_key", "call_id", "field_value_text", "raw_json", "raw_sha256", "canonical_sha256"} {
+		if _, err := pgStore.DB().ExecContext(ctx, `SELECT `+column+` FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 10)`); err == nil {
+			t.Fatalf("CRM field population matrix function exposed %s column", column)
+		}
+	}
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT group_value, field_name, field_label, object_count, call_count, populated_count FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 10)`)
+	if err != nil {
+		t.Fatalf("direct safe CRM matrix function returned error: %v", err)
+	}
+	defer directRows.Close()
+	var directText strings.Builder
+	for directRows.Next() {
+		var groupValue, fieldName, fieldLabel string
+		var objectCount, callCount, populatedCount int64
+		if err := directRows.Scan(&groupValue, &fieldName, &fieldLabel, &objectCount, &callCount, &populatedCount); err != nil {
+			t.Fatalf("scan direct CRM matrix row: %v", err)
+		}
+		directText.WriteString(fmt.Sprintf("%s|%s|%s|%d|%d|%d\n", groupValue, fieldName, fieldLabel, objectCount, callCount, populatedCount))
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("direct CRM matrix rows error: %v", err)
+	}
+	if strings.Contains(directText.String(), "opp-matrix") || strings.Contains(directText.String(), "Matrix One") || strings.Contains(directText.String(), "pg-crm-matrix") || strings.Contains(directText.String(), "owner-") || strings.Contains(directText.String(), "50000") || strings.Contains(directText.String(), "2026-06") || strings.Contains(directText.String(), "Commit") {
+		t.Fatalf("direct safe CRM matrix function leaked identifiers or values: %s", directText.String())
+	}
+
+	if _, err := pgStore.DB().ExecContext(ctx, `SELECT COUNT(*) FROM gongmcp_crm_field_population_matrix('Opportunity', 'OwnerId', 10)`); err == nil {
+		t.Fatal("direct unsafe group_by_field did not fail")
 	}
 }
 

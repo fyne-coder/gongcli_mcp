@@ -29,10 +29,14 @@ Current fixed boundaries:
 		  text, or raw activity payloads. Explicit Postgres allowlists are also
 		  available for `list_unmapped_crm_fields`, `search_crm_field_values`,
 		  `analyze_late_stage_crm_signals`,
-		  `opportunities_missing_transcripts`, and
-		  `opportunity_call_summary`; the late-stage Postgres slice is limited
-		  to `Opportunity.StageName`, and the Opportunity aggregate slices
-		  return only redacted coverage and call-summary metadata. These stay outside the full
+		  `opportunities_missing_transcripts`, `opportunity_call_summary`, and
+		  `crm_field_population_matrix`; the late-stage Postgres slice is
+		  limited to `Opportunity.StageName`, the Opportunity aggregate slices
+		  return only redacted coverage and call-summary metadata, and the CRM
+		  matrix slice groups only by approved object/field pairs:
+		  `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`,
+		  `Opportunity.Forecast_Category_AE__c`, `Account.Industry`,
+		  `Account.Account_Type__c`, and `Account.Revenue_Range_f__c`. These stay outside the full
 		  `analyst` preset until the remaining catalog is ready. Broader
 		  `analyst` and `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
@@ -73,11 +77,12 @@ Current fixed boundaries:
 | `list_scorecards`, `get_scorecard` | Safe-default with review | Config | No raw settings payloads | Exposes scorecard names, question text, and scoring metadata, which may reflect internal QA/coaching policy |
 | `summarize_scorecard_activity` | Safe-default with review | Aggregate | No answered-scorecard IDs, call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, or raw activity payloads | Aggregate scorecard/program shape can still reveal coaching emphasis and review-process coverage |
 | `list_crm_object_types`, `list_crm_fields`, `list_unmapped_crm_fields` | Restricted | Aggregate + Config | Counts and field metadata only; no field values by default | Field names and labels can still reveal tenant business model |
-| `analyze_late_stage_crm_signals`, `crm_field_population_matrix`, `list_lifecycle_buckets`, `compare_lifecycle_crm_fields` | Restricted | Aggregate | Return rates, counts, classification logic, or allowlisted business dimensions only | Business groupings can reveal tenant-specific CRM structure |
+| `analyze_late_stage_crm_signals`, `list_lifecycle_buckets`, `compare_lifecycle_crm_fields` | Restricted | Aggregate | Return rates, counts, classification logic, or allowlisted business dimensions only | Business groupings can reveal tenant-specific CRM structure |
 | `list_crm_integrations`, `list_cached_crm_schema_objects`, `list_cached_crm_schema_fields`, `list_gong_settings` | Restricted | Config | No raw CRM schema/settings payloads; Postgres reader grants exclude raw JSON and raw hashes | Still exposes integration IDs, object IDs, workspace IDs, tracker names, field names/labels/types, and related inventory metadata |
 | `get_business_profile`, `list_business_concepts` | Restricted | Config | Redacts source path, source hash, canonical hash, and imported-by identity | Still exposes tenant lifecycle/methodology concepts and mapping logic |
 | `opportunities_missing_transcripts` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, and latest call IDs; Postgres reader function never returns owner IDs, amount, close date, or raw values | Still reveals stage, transcript coverage counts, and latest-call timing at an opportunity-summary level |
 | `opportunity_call_summary` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, owner IDs, amount, close date, and latest call IDs; Postgres reader function never returns those fields or raw values | Still reveals stage, coverage, duration totals, and latest-call timing at an opportunity-summary level |
+| `crm_field_population_matrix` | Restricted | Aggregate + Config | Only approved categorical object/field pairs are accepted; approved group values are intentionally exposed as aggregate labels; function output excludes object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, and raw hashes | Group labels can still reveal tenant-specific CRM structure and small-cell population patterns |
 | `search_transcripts_by_call_facts` | Restricted | Snippet | No call IDs, titles, or speaker IDs in the result shape | Still returns bounded transcript/context excerpts plus lifecycle/scope/system/direction metadata |
 | `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
@@ -203,8 +208,9 @@ How to open up the surface intentionally:
   `business-pilot`, `operator-smoke`, `analyst-core`, `analyst-business-core`,
   `governance-search`, or explicit allowlists such as
   `analyze_late_stage_crm_signals` and
-  `opportunities_missing_transcripts` or `opportunity_call_summary`; full
-  Postgres `all-readonly` is not yet supported.
+  `opportunities_missing_transcripts`, `opportunity_call_summary`, or
+  `crm_field_population_matrix`; full Postgres `all-readonly` is not yet
+  supported.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.
@@ -317,10 +323,12 @@ Practical recommendations:
   `rank_transcript_backlog`, `summarize_call_facts`,
   `analyze_late_stage_crm_signals`) before reaching for identifier-bearing or
   snippet-bearing tools.
-- Use `--tool-preset business-pilot`, `--tool-preset analyst`, or a custom
-  `--tool-allowlist` to remove tools the host should not be reaching for
-  reflexively in a given deployment lane. A narrow preset or allowlist is
-  usually a better limit than relying on the agent to ration its own tool calls.
+- Use `--tool-preset business-pilot`, a reviewed SQLite/full-catalog preset
+  such as `analyst`, a reviewed Postgres preset such as `analyst-core` or
+  `analyst-business-core`, or a custom `--tool-allowlist` to remove tools the
+  host should not be reaching for reflexively in a given deployment lane. A
+  narrow preset or allowlist is usually a better limit than relying on the
+  agent to ration its own tool calls.
 - Use `--tool-preset governance-search` for raw SQLite governance or
   prepared-policy Postgres governance. For a physically filtered SQLite DB,
   choose the normal deployment preset instead. In Postgres, this preset is

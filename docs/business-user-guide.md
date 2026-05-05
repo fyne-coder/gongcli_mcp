@@ -31,8 +31,10 @@ local database files. Those workflows stay with the pilot operator.
   transcript files, raw cached JSON, or direct filesystem/database access.
 - The default business-user tool preset is `business-pilot` from
   [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
-  Wider presets such as `analyst`, `governance-search`, and `all-readonly`
+  Wider SQLite/full-catalog presets such as `analyst` and `all-readonly`
   require operator/sponsor approval and are not the business-user default.
+  Postgres expansion uses reviewed Postgres presets such as `analyst-core`,
+  `analyst-business-core`, `governance-search`, or explicit tool allowlists.
 
 For the first-session handoff, use
 [Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).
@@ -440,6 +442,11 @@ available through explicit allowlists, while
 `get_sync_status` are available through the appropriate reviewed Postgres
 presets or allowlists.
 
+Optional operator diagnostic: `crm_field_population_matrix` is available in
+Postgres only through an explicit allowlist for reviewed field-population
+diagnostics. Keep it out of routine business-user presets until small-cell
+privacy and customer-scale performance hardening are complete.
+
 Output discipline: do not turn missing transcript coverage into a forecast
 recommendation by itself; treat it as a refresh request to the operator and a
 deal-desk review trigger.
@@ -562,6 +569,9 @@ Do not expose these tools to business users during the pilot:
 These tools are operator-only or expansion-candidate tools because they can
 reveal tenant structure, allow directed value lookup, or move too close to
 exact-call review for an initial business pilot.
+For Postgres deployments, `crm_field_population_matrix` is available only as a
+reviewed explicit operator allowlist and should stay out of business-user
+presets until aggregate privacy and customer-scale performance are hardened.
 
 `search_transcript_quotes_with_attribution` is the right tool for marketing
 asks like “top quotes by Q1 theme, industry, and opportunity stage.” It returns

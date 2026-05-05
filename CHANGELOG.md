@@ -6,6 +6,10 @@
   `opportunity_call_summary`, returning redacted Opportunity call coverage
   aggregates through a reader-executable function without exposing Opportunity
   IDs/names, owner IDs, amount, close date, latest call IDs, or raw CRM values.
+- Added development-branch Postgres explicit allowlist support for
+  `crm_field_population_matrix`, returning aggregate field-population cells by
+  approved categorical group fields without exposing object IDs/names, call IDs,
+  raw CRM values, raw JSON, or raw hashes.
 
 ## 0.3.3 - 2026-05-04
 

@@ -32,6 +32,8 @@ const (
 	maxLateStageSignalLimit        = 500
 	defaultOpportunitySummaryLimit = 25
 	maxOpportunitySummaryLimit     = 1000
+	defaultCRMMatrixLimit          = 50
+	maxCRMMatrixLimit              = 1000
 	maxOpportunityStageValueCount  = 50
 	maxOpportunityStageValueLength = 200
 	maxLateStageValueCount         = 25
@@ -403,12 +405,14 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean);
 	DROP FUNCTION IF EXISTS gongmcp_opportunities_missing_transcripts(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_opportunity_call_summary(text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_crm_field_population_matrix(text, text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
 	`+postgresLateStageSignalFunctionsSQL+`
 	`+postgresOpportunitiesMissingTranscriptsFunctionSQL+`
 	`+postgresOpportunityCallSummaryFunctionSQL+`
+	`+postgresCRMFieldPopulationMatrixFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -698,6 +702,7 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -973,6 +978,7 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_crm_object_type_summary()'),
 		('public.gongmcp_opportunities_missing_transcripts(text, integer)'),
 		('public.gongmcp_opportunity_call_summary(text, integer)'),
+		('public.gongmcp_crm_field_population_matrix(text, text, integer)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature

@@ -147,8 +147,9 @@ flowchart LR
   transcript-evidence and business-analysis workflows. Directed CRM
   `list_unmapped_crm_fields`, `search_crm_field_values`,
   `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`, and
-  `opportunity_call_summary` are
-  available through explicit allowlists.
+  `opportunity_call_summary`, plus aggregate CRM field-population diagnostics
+  through `crm_field_population_matrix`, are available through explicit
+  allowlists.
   Full `analyst` and `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).
 - AI governance filtered DB export remains SQLite-only. Postgres supports a
@@ -565,10 +566,13 @@ centralized transcript review workflows, those belong in a separate application
 layer around or in front of `gongmcp`, not in the read-only cache adapter itself.
 
 The conservative defaults documented here are not the only supported posture.
-A trusted single-user analyst workstation using stdio can skip the tool
+A trusted single-user SQLite analyst workstation using stdio can skip the tool
 allowlist and enable per-tool opt-ins to surface exact identifiers, bounded
 snippets, and attribution joined to Account/Opportunity context for deeper
-questions. See
+questions. Postgres deployments should expand through reviewed presets such as
+`analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool
+allowlists such as `crm_field_population_matrix`; full Postgres `analyst` and
+`all-readonly` remain gated until the parity matrix says otherwise. See
 [mcp-data-exposure.md](mcp-data-exposure.md) for the trade-off framing and
 [mcp-data-exposure.md#mcp-call-volume-and-limits](mcp-data-exposure.md#mcp-call-volume-and-limits)
 for the per-call cost model and recommended limits.

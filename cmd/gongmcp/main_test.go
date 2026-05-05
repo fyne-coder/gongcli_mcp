@@ -83,6 +83,16 @@ func TestPostgresToolAllowlistAcceptsOpportunityCallSummary(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsCRMFieldPopulationMatrix(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"crm_field_population_matrix"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"crm_field_population_matrix"}) {
+		t.Fatalf("allowlist=%v want crm_field_population_matrix", allowlist)
+	}
+}
+
 func TestPostgresToolAllowlistAcceptsLateStageCRMSignals(t *testing.T) {
 	allowlist, err := postgresToolAllowlist([]string{"analyze_late_stage_crm_signals"}, false, "")
 	if err != nil {

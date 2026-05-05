@@ -784,6 +784,66 @@ if reader_psql -c "SELECT close_date FROM gongmcp_opportunity_call_summary('[\"P
   echo "Postgres opportunity call summary function exposed close_date column" >&2
   exit 1
 fi
+if reader_psql -c "SELECT field_value_text FROM gongmcp_opportunity_call_summary('[\"Proposal\"]', 5)" >/tmp/gongctl-postgres-reader-opportunity-summary-field-value-text.txt 2>&1; then
+  echo "Postgres opportunity call summary function exposed field_value_text column" >&2
+  exit 1
+fi
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"crm_field_population_matrix","arguments":{"object_type":"Opportunity","group_by_field":"StageName","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"crm_field_population_matrix","arguments":{"object_type":"Opportunity","group_by_field":"OwnerId","limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=crm_field_population_matrix go run ./cmd/gongmcp > /tmp/gongctl-postgres-crm-field-population-matrix.jsonl
+grep -q '"crm_field_population_matrix"' /tmp/gongctl-postgres-crm-field-population-matrix.jsonl
+grep -q 'group_by_field.*StageName' /tmp/gongctl-postgres-crm-field-population-matrix.jsonl
+grep -q 'group_value.*Proposal' /tmp/gongctl-postgres-crm-field-population-matrix.jsonl
+grep -q 'field_name.*Type' /tmp/gongctl-postgres-crm-field-population-matrix.jsonl
+grep -q 'group_by_field.*OwnerId.*not allowed' /tmp/gongctl-postgres-crm-field-population-matrix.jsonl
+assert_mcp_success /tmp/gongctl-postgres-crm-field-population-matrix.jsonl 3
+if grep -q 'synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|owner-\|field_value_text\|raw_json\|raw_sha256\|canonical_sha256\|Synthetic Postgres profile\|New Business\|10000' /tmp/gongctl-postgres-crm-field-population-matrix.jsonl; then
+  echo "Postgres CRM field population matrix output exposed identifiers, raw values, profile details, or raw storage fields" >&2
+  exit 1
+fi
+reader_psql -tAc "SELECT group_value || '|' || field_name || '|' || object_count || '|' || call_count || '|' || populated_count FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix.txt
+grep -q 'Proposal|Type|1|1|1' /tmp/gongctl-postgres-reader-crm-field-population-matrix.txt
+if grep -q 'synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|owner-\|New Business\|10000' /tmp/gongctl-postgres-reader-crm-field-population-matrix.txt; then
+  echo "Postgres CRM field population matrix function exposed identifiers or raw values" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT COUNT(*) FROM gongmcp_crm_field_population_matrix('Opportunity', 'OwnerId', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-unsafe-group.txt 2>&1; then
+  echo "Postgres CRM field population matrix function accepted unsafe group_by_field" >&2
+  exit 1
+fi
+grep -q 'not allowed for MCP-safe aggregate grouping' /tmp/gongctl-postgres-reader-crm-field-population-matrix-unsafe-group.txt
+if reader_psql -c "SELECT object_id FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-object-id.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed object_id column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_name FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-object-name.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed object_name column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_key FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-object-key.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed object_key column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT call_id FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-call-id.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed call_id column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_value_text FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-field-value-text.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed field_value_text column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT raw_json FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-raw-json.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed raw_json column" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT raw_sha256 FROM gongmcp_crm_field_population_matrix('Opportunity', 'StageName', 5)" >/tmp/gongctl-postgres-reader-crm-field-population-matrix-raw-sha256.txt 2>&1; then
+  echo "Postgres CRM field population matrix function exposed raw_sha256 column" >&2
+  exit 1
+fi
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-opportunities-missing-function-grant-drift.txt 2>&1; then
@@ -803,7 +863,16 @@ grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-
 grep -q 'gongmcp_opportunity_call_summary' /tmp/gongctl-postgres-reader-opportunity-summary-function-grant-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-opportunity-summary-function-grant-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-opportunity-summary-function-grant-drift-repaired.json
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=crm_field_population_matrix go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started without crm_field_population_matrix function grant" >&2
+  exit 1
+fi
+grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt
+grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO PUBLIC" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST=opportunities_missing_transcripts go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-public-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started with public function EXECUTE drift" >&2
   exit 1
@@ -811,6 +880,7 @@ fi
 grep -q 'over-broad function EXECUTE grants' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_opportunities_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_opportunity_call_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
+grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_object_type_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-function-public-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-function-public-drift-repaired.json
@@ -991,7 +1061,7 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM gongmcp_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_unmapped_crm_field_inventory(integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_call_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_stage_counts(text, text, text) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM gongmcp_reader; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM gongmcp_reader" >/dev/null
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
   echo "read-only MCP unexpectedly started without required function grants" >&2
   exit 1
@@ -1129,6 +1199,18 @@ echo "opportunity call summary raw-value column denial output: /tmp/gongctl-post
 echo "opportunity call summary direct sensitive-table denial output: /tmp/gongctl-postgres-reader-crm-inventory-raw-read.txt"
 echo "opportunity call summary function-grant drift denial output: /tmp/gongctl-postgres-reader-opportunity-summary-function-grant-drift.txt"
 echo "opportunity call summary function-grant drift repair output: /tmp/gongctl-postgres-reader-opportunity-summary-function-grant-drift-repaired.json"
+echo "CRM field population matrix MCP output: /tmp/gongctl-postgres-crm-field-population-matrix.jsonl"
+echo "CRM field population matrix reader output: /tmp/gongctl-postgres-reader-crm-field-population-matrix.txt"
+echo "CRM field population matrix unsafe group output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-unsafe-group.txt"
+echo "CRM field population matrix object-id denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-object-id.txt"
+echo "CRM field population matrix object-name denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-object-name.txt"
+echo "CRM field population matrix object-key denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-object-key.txt"
+echo "CRM field population matrix call-id denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-call-id.txt"
+echo "CRM field population matrix field-value denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-field-value-text.txt"
+echo "CRM field population matrix raw-json denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-raw-json.txt"
+echo "CRM field population matrix raw-sha denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-raw-sha256.txt"
+echo "CRM field population matrix function-grant drift denial output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift.txt"
+echo "CRM field population matrix function-grant drift repair output: /tmp/gongctl-postgres-reader-crm-field-population-matrix-function-grant-drift-repaired.json"
 echo "cache inventory output: /tmp/gongctl-postgres-cache-inventory.json"
 echo "cache inventory writer URL output: /tmp/gongctl-postgres-cache-inventory-writer-url.json"
 echo "support bundle response output: /tmp/gongctl-postgres-support-bundle.json"

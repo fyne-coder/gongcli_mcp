@@ -26,8 +26,13 @@ through the Postgres analyst-core surface. In the development branch after
 metadata-only/default-redaction contracts as SQLite. It also supports explicit
 `opportunities_missing_transcripts` for redacted Opportunity transcript
 coverage gaps and explicit `opportunity_call_summary` for redacted Opportunity
-call aggregates, while full `analyst` and `all-readonly` remain gated until
-the remaining full-catalog query parity is complete.
+call aggregates. Explicit `crm_field_population_matrix` support is also
+available for aggregate field-population diagnostics by approved object/field
+pairs: `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`,
+`Opportunity.Forecast_Category_AE__c`, `Account.Industry`,
+`Account.Account_Type__c`, and `Account.Revenue_Range_f__c`, while full
+`analyst` and `all-readonly` remain gated until the remaining full-catalog
+query parity is complete.
 
 ## Positioning
 
@@ -95,7 +100,9 @@ For aggregate late-stage pipeline signal review, use an explicit
 `analyze_late_stage_crm_signals` allowlist. For redacted Opportunity transcript
 coverage gaps, use an explicit `opportunities_missing_transcripts` allowlist.
 For redacted Opportunity call aggregates, use an explicit
-`opportunity_call_summary` allowlist.
+`opportunity_call_summary` allowlist. For Postgres CRM field-population
+diagnostics, use an explicit `crm_field_population_matrix` allowlist and keep
+grouping to the approved object/field pairs listed below.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
@@ -664,7 +671,7 @@ the full `analyst` / `all-readonly` presets fail closed.
 - `missing_transcripts`
 
 The SQLite MCP path requires `--db`; the Postgres path omits `--db` and uses `GONG_DATABASE_URL` or `DATABASE_URL`. In both modes, the MCP server intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
-`get_call` returns minimized call detail instead of raw cached call JSON. `crm_field_population_matrix` only allows safe categorical group fields such as `StageName`.
+`get_call` returns minimized call detail instead of raw cached call JSON. `crm_field_population_matrix` only allows safe categorical object/field pairs: `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`, `Opportunity.Forecast_Category_AE__c`, `Account.Industry`, `Account.Account_Type__c`, and `Account.Revenue_Range_f__c`.
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
 `summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `list_unmapped_crm_fields` for profile field-discovery gaps and `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `summarize_scorecard_activity` returns aggregate answered-scorecard counts and scores only. By default it does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw scorecard activity payloads.
@@ -672,6 +679,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `analyze_late_stage_crm_signals` returns aggregate stage counts, field names, population rates, and lift only. In the current Postgres slice it is limited to `Opportunity.StageName` so custom field selection cannot be used as a raw value-distribution path. It does not return raw arbitrary CRM values, CRM object IDs/names, call IDs, call titles, transcript text, or profile payloads.
 `opportunities_missing_transcripts` returns redacted per-Opportunity transcript coverage metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; Opportunity IDs/names, latest call IDs, raw CRM values, and raw storage fields are not returned.
 `opportunity_call_summary` returns redacted per-Opportunity call aggregate metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call count, transcript/missing-transcript counts, total duration, and latest-call timing; Opportunity IDs/names, latest call IDs, owner IDs, amount/close date, raw CRM values, and raw storage fields are not returned.
+`crm_field_population_matrix` returns aggregate field-population cells grouped by approved categorical fields. Approved group values are intentionally exposed as aggregate labels. The Postgres reader function returns only group value, field name/label, object count, call count, and populated count; MCP/store output derives `population_rate` from those counts. Object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, raw hashes, titles, and transcript text are not returned.
 The Postgres reader role can execute the same bounded function, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values and object names remain denied.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.

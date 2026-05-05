@@ -553,6 +553,113 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM PUBLIC;
 `
 
+const postgresCRMFieldPopulationMatrixFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_crm_field_population_matrix(object_type_arg text, group_by_field_arg text, row_limit integer)
+RETURNS TABLE(
+	group_value text,
+	field_name text,
+	field_label text,
+	object_count bigint,
+	call_count bigint,
+	populated_count bigint
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+	canonical_object_type text := TRIM(object_type_arg);
+	canonical_group_by_field text := '';
+BEGIN
+	IF canonical_object_type = '' THEN
+		RAISE EXCEPTION 'object_type is required' USING ERRCODE = '22023';
+	END IF;
+	CASE LOWER(TRIM(COALESCE(NULLIF(group_by_field_arg, ''), 'StageName')))
+		WHEN 'stagename' THEN
+			IF canonical_object_type = 'Opportunity' THEN
+				canonical_group_by_field := 'StageName';
+			END IF;
+		WHEN 'forecast_category_vp__c' THEN
+			IF canonical_object_type = 'Opportunity' THEN
+				canonical_group_by_field := 'Forecast_Category_VP__c';
+			END IF;
+		WHEN 'forecast_category_ae__c' THEN
+			IF canonical_object_type = 'Opportunity' THEN
+				canonical_group_by_field := 'Forecast_Category_AE__c';
+			END IF;
+		WHEN 'industry' THEN
+			IF canonical_object_type = 'Account' THEN
+				canonical_group_by_field := 'Industry';
+			END IF;
+		WHEN 'account_type__c' THEN
+			IF canonical_object_type = 'Account' THEN
+				canonical_group_by_field := 'Account_Type__c';
+			END IF;
+		WHEN 'revenue_range_f__c' THEN
+			IF canonical_object_type = 'Account' THEN
+				canonical_group_by_field := 'Revenue_Range_f__c';
+			END IF;
+		ELSE
+			canonical_group_by_field := '';
+	END CASE;
+	IF canonical_group_by_field = '' THEN
+		RAISE EXCEPTION 'object_type % with group_by_field % is not allowed for MCP-safe aggregate grouping', canonical_object_type, COALESCE(NULLIF(TRIM(group_by_field_arg), ''), 'StageName') USING ERRCODE = '22023';
+	END IF;
+
+	RETURN QUERY
+	WITH
+groups AS (
+	SELECT o.call_id,
+	       o.object_key,
+	       MAX(TRIM(g.field_value_text)) AS group_value
+	  FROM call_context_objects o
+	  JOIN call_context_fields g
+	    ON g.call_id = o.call_id
+	   AND g.object_key = o.object_key
+	   AND g.field_name = canonical_group_by_field
+	 WHERE o.object_type = canonical_object_type
+	   AND TRIM(g.field_value_text) <> ''
+	 GROUP BY o.call_id, o.object_key
+),
+group_sizes AS (
+	SELECT groups.group_value,
+	       COUNT(DISTINCT (call_id, object_key))::bigint AS object_count,
+	       COUNT(DISTINCT call_id)::bigint AS call_count
+	  FROM groups
+	 GROUP BY groups.group_value
+),
+field_counts AS (
+	SELECT g.group_value,
+	       f.field_name,
+	       MAX(f.field_label) AS field_label,
+	       COUNT(DISTINCT (g.call_id, g.object_key))::bigint AS object_count,
+	       COUNT(DISTINCT g.call_id)::bigint AS call_count,
+	       COUNT(DISTINCT (g.call_id, g.object_key)) FILTER (WHERE TRIM(f.field_value_text) <> '') AS populated_count
+	  FROM groups g
+	  JOIN call_context_fields f
+	    ON f.call_id = g.call_id
+	   AND f.object_key = g.object_key
+	 WHERE f.field_name <> canonical_group_by_field
+	 GROUP BY g.group_value, f.field_name
+)
+SELECT fc.group_value,
+       fc.field_name,
+       fc.field_label,
+       gs.object_count,
+       gs.call_count,
+       fc.populated_count
+  FROM field_counts fc
+  JOIN group_sizes gs
+    ON gs.group_value = fc.group_value
+ ORDER BY fc.populated_count DESC, fc.group_value, fc.field_name
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 50), 1), 1000);
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM PUBLIC;
+`
+
 type postgresCRMIntegrationPayload struct {
 	IntegrationID string
 	Name          string
@@ -1030,6 +1137,84 @@ SELECT stage,
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) CRMFieldPopulationMatrix(ctx context.Context, params sqlite.CRMFieldPopulationMatrixParams) (*sqlite.CRMFieldPopulationMatrix, error) {
+	objectType := strings.TrimSpace(params.ObjectType)
+	if objectType == "" {
+		return nil, errors.New("object type is required")
+	}
+	groupByField := strings.TrimSpace(params.GroupByField)
+	if groupByField == "" {
+		groupByField = "StageName"
+	}
+	canonicalGroupByField, ok := safePostgresCRMMatrixGroupField(objectType, groupByField)
+	if !ok {
+		return nil, fmt.Errorf("object_type %q with group_by_field %q is not allowed for MCP-safe aggregate grouping", objectType, groupByField)
+	}
+	groupByField = canonicalGroupByField
+	limit := boundedLimit(params.Limit, defaultCRMMatrixLimit, maxCRMMatrixLimit)
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT group_value,
+       field_name,
+       field_label,
+       object_count,
+       call_count,
+       populated_count
+  FROM gongmcp_crm_field_population_matrix($1, $2, $3)`, objectType, groupByField, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	report := &sqlite.CRMFieldPopulationMatrix{
+		ObjectType:   objectType,
+		GroupByField: groupByField,
+	}
+	for rows.Next() {
+		var cell sqlite.CRMFieldPopulationCell
+		if err := rows.Scan(
+			&cell.GroupValue,
+			&cell.FieldName,
+			&cell.FieldLabel,
+			&cell.ObjectCount,
+			&cell.CallCount,
+			&cell.PopulatedCount,
+		); err != nil {
+			return nil, err
+		}
+		cell.PopulationRate = rate(cell.PopulatedCount, cell.ObjectCount)
+		report.Cells = append(report.Cells, cell)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return report, nil
+}
+
+func safePostgresCRMMatrixGroupField(objectType string, fieldName string) (string, bool) {
+	switch strings.TrimSpace(objectType) {
+	case "Opportunity":
+		switch strings.ToLower(strings.TrimSpace(fieldName)) {
+		case "stagename":
+			return "StageName", true
+		case "forecast_category_vp__c":
+			return "Forecast_Category_VP__c", true
+		case "forecast_category_ae__c":
+			return "Forecast_Category_AE__c", true
+		}
+	case "Account":
+		switch strings.ToLower(strings.TrimSpace(fieldName)) {
+		case "account_type__c":
+			return "Account_Type__c", true
+		case "industry":
+			return "Industry", true
+		case "revenue_range_f__c":
+			return "Revenue_Range_f__c", true
+		}
+	}
+	return "", false
 }
 
 func (s *Store) UpsertCRMIntegration(ctx context.Context, raw json.RawMessage) (*sqlite.CRMIntegrationRecord, error) {

@@ -950,4 +950,15 @@ BEGIN
 END;
 $$;
 `,
+	`
+DROP FUNCTION IF EXISTS gongmcp_crm_field_population_matrix(text, text, integer);
+` + postgresCRMFieldPopulationMatrixFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }
