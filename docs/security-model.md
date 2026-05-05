@@ -114,6 +114,14 @@ Implementation controls on the CLI side:
   show/diff workflows, but the `gongmcp_reader` role is granted only execute
   access to the profile MCP helper function rather than direct table reads for
   profile documents or mapping projection tables.
+- Postgres AI governance support prepares policy state through the writable
+  operator role. The `gongmcp_reader` role validates that policy through
+  execute-only helper functions and is not granted direct reads on governance
+  policy tables or raw candidate values.
+- Treat the Postgres reader URL as a service secret for `gongmcp`, not as an
+  analyst SQL credential. This phase suppresses restricted records in the MCP
+  layer; direct SQL use of the reader URL can still query minimized readable
+  tables until governed views/RLS/materialized snapshots replace direct grants.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose

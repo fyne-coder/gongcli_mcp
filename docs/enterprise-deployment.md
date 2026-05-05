@@ -137,8 +137,9 @@ flowchart LR
   operator smoke/search allowlists for `search_calls`, `get_call`, and
   `search_transcript_segments`. Full analyst/all-readonly query parity is a
   follow-up tracked in the [Postgres parity matrix](postgres-parity.md).
-- AI governance filtered DB export remains SQLite-only until a Postgres
-  governed-view or governed-snapshot replacement is implemented.
+- AI governance filtered DB export remains SQLite-only. Postgres supports a
+  prepared governance policy for the narrowed `governance-search` MCP slice;
+  database-enforced governed views/RLS/snapshots remain a follow-up.
 
 ### 3. MCP-only consumer host
 
@@ -239,9 +240,11 @@ Storage-specific guidance:
   termination at a trusted proxy/gateway for shared access.
 - For customer-specific AI-use restrictions, mount a private AI governance
   config, run `gongctl governance audit`, and start `gongmcp` with
-  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
-  Restart is mandatory after cache/config changes because `gongmcp`
-  fingerprints both and fails closed if either changes while running.
+  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`. For Postgres,
+  run `gongctl governance audit --apply-postgres-policy` with the writable URL
+  before starting the read-only MCP container. Restart is mandatory after
+  cache/config/policy changes because `gongmcp` fingerprints governance state
+  and fails closed if it changes while running.
 - For shared environments, separate the writable sync runtime from the
   business-user MCP runtime even if both read the same protected data root.
 

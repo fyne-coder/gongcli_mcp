@@ -910,6 +910,63 @@ func TestGovernanceSuppressionHidesSearchCallsAndNames(t *testing.T) {
 	}
 }
 
+func TestGovernanceSuppressionSearchCallsOverfetchesBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-limit-blocked",
+		"title":    "Blocked governance limit call",
+		"started":  "2026-05-02T13:00:00Z",
+		"duration": 1200,
+	})); err != nil {
+		t.Fatalf("upsert blocked call: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-limit-allowed",
+		"title":    "Allowed governance limit call",
+		"started":  "2026-05-02T12:00:00Z",
+		"duration": 1200,
+	})); err != nil {
+		t.Fatalf("upsert allowed call: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-governance-limit-blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "search",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_calls",
+			"arguments": map[string]any{
+				"from_date": "2026-05-02",
+				"to_date":   "2026-05-02",
+				"limit":     1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("search_calls returned error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call-governance-limit-blocked") {
+		t.Fatalf("governance response leaked blocked limit row: %s", text)
+	}
+	if !strings.Contains(text, "call-governance-limit-allowed") {
+		t.Fatalf("governance response missed allowed row after filtered limit: %s", text)
+	}
+}
+
 func TestGovernanceSuppressionFailsClosedForAggregateTool(t *testing.T) {
 	t.Parallel()
 
@@ -938,6 +995,39 @@ func TestGovernanceSuppressionFailsClosedForAggregateTool(t *testing.T) {
 	}
 	if strings.Contains(envelope.Result.Content[0].Text, "NoAI Synthetic Corp") {
 		t.Fatalf("aggregate error leaked restricted name: %s", envelope.Result.Content[0].Text)
+	}
+}
+
+func TestGovernanceSuppressionGetCallDoesNotEchoSuppressedID(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-id"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "get-call",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_call",
+			"arguments": map[string]any{
+				"call_id": "call-id",
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal get_call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected get_call to hide suppressed call")
+	}
+	if strings.Contains(envelope.Result.Content[0].Text, "call-id") {
+		t.Fatalf("get_call error leaked suppressed call id: %s", envelope.Result.Content[0].Text)
 	}
 }
 

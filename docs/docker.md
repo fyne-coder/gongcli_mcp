@@ -152,6 +152,9 @@ The first Postgres vertical slice supports:
 - `gongctl profile discover`, `profile validate`, `profile import`,
   `profile history`, `profile activate`, and `profile show` when `--db` is
   omitted and the operator sets a writer `GONG_DATABASE_URL`
+- `gongctl governance audit --config PATH --apply-postgres-policy` when the
+  operator sets a writer `GONG_DATABASE_URL`; read-only Postgres `gongmcp` can
+  then load the same private config for the narrowed `governance-search` slice
 - `gongctl search calls` and `gongctl calls show --json` for minimized
   read-model call metadata/detail; use explicit raw-export commands with
   `--allow-sensitive-export` for raw payload access
@@ -161,12 +164,14 @@ The first Postgres vertical slice supports:
   `rank_transcript_backlog`
 - `gongmcp --tool-preset operator-smoke`: `get_sync_status`, `search_calls`,
   `search_transcript_segments`, `get_call`, and `rank_transcript_backlog`
+- `gongmcp --tool-preset governance-search` with
+  `GONGMCP_AI_GOVERNANCE_CONFIG` after a Postgres governance policy has been
+  prepared; Postgres narrows this preset to supported search tools
 
-It does not yet provide full SQLite query parity for governance filtered DB
-export, profile-derived lifecycle facts (`lifecycle_source=profile` fails
-closed for Postgres until the profile fact cache slice), analyst/all-readonly
-presets, business-analysis views, support bundles, cache inventory, or broader
-CRM/lifecycle-heavy MCP tools. See the
+It does not yet provide full SQLite query parity for database-enforced
+governance snapshots/RLS, analyst/all-readonly presets, business-analysis views,
+support bundles, cache inventory, or broader CRM/lifecycle-heavy MCP tools. See
+the
 [Postgres parity matrix](postgres-parity.md) for the phased parity contract.
 
 Read-only `gongmcp` never rebuilds the Postgres read model. If startup reports a

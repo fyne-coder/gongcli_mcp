@@ -82,11 +82,11 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	store := &Store{db: db, readOnly: true}
-	if err := store.validateSchema(ctx); err != nil {
+	if err := store.validateMigrationVersion(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := store.validateMigrationVersion(ctx); err != nil {
+	if err := store.validateSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -126,11 +126,11 @@ func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	store := &Store{db: db, readOnly: true}
-	if err := store.validateSchema(ctx); err != nil {
+	if err := store.validateMigrationVersion(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := store.validateMigrationVersion(ctx); err != nil {
+	if err := store.validateSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -149,11 +149,11 @@ func OpenProfileInventory(ctx context.Context, databaseURL string) (*Store, erro
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	store := &Store{db: db, readOnly: true}
-	if err := store.validateSchema(ctx); err != nil {
+	if err := store.validateMigrationVersion(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := store.validateMigrationVersion(ctx); err != nil {
+	if err := store.validateSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -501,12 +501,15 @@ BEGIN
 		GRANT SELECT ON TABLE call_read_model_diagnostics TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_active_business_profile() TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_cache_meta(bigint, text) TO gongmcp_reader;
-		GRANT EXECUTE ON FUNCTION gongmcp_profile_data_fingerprint() TO gongmcp_reader;
-		GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) TO gongmcp_reader;
-		GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO gongmcp_reader;
-	END IF;
-END;
-$$;`)
+			GRANT EXECUTE ON FUNCTION gongmcp_profile_data_fingerprint() TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_governance_data_fingerprint() TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_governance_policy_state(text) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
+		END IF;
+	END;
+	$$;`)
 	if err != nil {
 		return fmt.Errorf("reconcile postgres reader grants: %w", err)
 	}
@@ -536,15 +539,17 @@ func (s *Store) validateSchema(ctx context.Context) error {
 		'profile_field_concept',
 		'profile_lifecycle_rule',
 		'profile_methodology_concept',
-		'profile_validation_warning',
-		'profile_call_fact_cache_meta',
-		'profile_call_fact_cache'
-	  ]) AS core_table(table_name)
-	 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
+			'profile_validation_warning',
+			'profile_call_fact_cache_meta',
+			'profile_call_fact_cache',
+			'governance_policy_state',
+			'governance_suppressed_calls'
+		  ]) AS core_table(table_name)
+		 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 19 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/19 core tables", count)
+	if count != 21 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/21 core tables", count)
 	}
 	return nil
 }
@@ -552,6 +557,13 @@ func (s *Store) validateSchema(ctx context.Context) error {
 func (s *Store) validateMigrationVersion(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("postgres store is not open")
+	}
+	var migrationTable any
+	if err := s.db.QueryRowContext(ctx, `SELECT to_regclass('gongctl_schema_migrations')`).Scan(&migrationTable); err != nil {
+		return fmt.Errorf("read postgres migration table: %w", err)
+	}
+	if migrationTable == nil {
+		return fmt.Errorf("postgres schema is not initialized; run gongctl sync with a writable Postgres URL to migrate to version %d", len(migrations))
 	}
 	var current int
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM gongctl_schema_migrations`).Scan(&current); err != nil {
@@ -568,7 +580,7 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = current_schema()
-   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache')
+	   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -598,7 +610,7 @@ SELECT table_name
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = current_schema()
-   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache')
+	   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
    AND has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
  ORDER BY table_name`)
 	if err != nil {

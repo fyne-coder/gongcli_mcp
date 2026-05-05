@@ -1249,6 +1249,8 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.SearchLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().SearchResults)
 	rows, err := s.store.SearchCallsRaw(ctx, sqlite.CallSearchParams{
 		CRMObjectType:    args.CRMObjectType,
 		CRMObjectID:      args.CRMObjectID,
@@ -1259,7 +1261,7 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 		System:           args.System,
 		Direction:        args.Direction,
 		TranscriptStatus: args.TranscriptStatus,
-		Limit:            s.limitPolicy.SearchLimit(args.Limit),
+		Limit:            queryLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1277,8 +1279,11 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 			continue
 		}
 		summaries = append(summaries, summary)
+		if len(summaries) >= limit {
+			break
+		}
 	}
-	return s.newCappedToolResult("search_calls", summaries, len(summaries), s.limitPolicy.SearchLimit(args.Limit), filtered, searchCallRefinements(args))
+	return s.newCappedToolResult("search_calls", summaries, len(summaries), limit, filtered, searchCallRefinements(args))
 }
 
 func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1287,7 +1292,7 @@ func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResu
 		return toolCallResult{}, err
 	}
 	if s.isSuppressedCall(args.CallID) {
-		return toolCallResult{}, fmt.Errorf("call %q not found", args.CallID)
+		return toolCallResult{}, fmt.Errorf("call not found")
 	}
 
 	detail, err := s.store.GetCallDetail(ctx, args.CallID)
@@ -1726,6 +1731,8 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.LifecycleLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().LifecycleResults)
 	rows, info, err := s.store.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{
 		Bucket:          args.Bucket,
 		FromDate:        args.FromDate,
@@ -1733,7 +1740,7 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 		Scope:           args.Scope,
 		System:          args.System,
 		Direction:       args.Direction,
-		Limit:           s.limitPolicy.LifecycleLimit(args.Limit),
+		Limit:           queryLimit,
 		LifecycleSource: args.LifecycleSource,
 	})
 	if err != nil {
@@ -1747,10 +1754,13 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 			continue
 		}
 		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
 	results := mcpTranscriptPriorities(out)
-	if shouldReturnCapEnvelope(len(results), s.limitPolicy.LifecycleLimit(args.Limit)) {
-		envelope := cappedToolPayload("prioritize_transcripts_by_lifecycle", results, len(results), s.limitPolicy.LifecycleLimit(args.Limit), transcriptBacklogRefinements(args))
+	if shouldReturnCapEnvelope(len(results), limit) {
+		envelope := cappedToolPayload("prioritize_transcripts_by_lifecycle", results, len(results), limit, transcriptBacklogRefinements(args))
 		if info != nil && (info.Profile != nil || strings.TrimSpace(args.LifecycleSource) != "") {
 			envelope["lifecycle_source"] = info.LifecycleSource
 			envelope["profile"] = mcpBusinessProfile(info.Profile)
@@ -1876,6 +1886,8 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.LifecycleLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().LifecycleResults)
 	rows, info, err := s.store.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{
 		Bucket:          args.Bucket,
 		FromDate:        args.FromDate,
@@ -1883,7 +1895,7 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 		Scope:           args.Scope,
 		System:          args.System,
 		Direction:       args.Direction,
-		Limit:           s.limitPolicy.LifecycleLimit(args.Limit),
+		Limit:           queryLimit,
 		LifecycleSource: args.LifecycleSource,
 	})
 	if err != nil {
@@ -1897,10 +1909,13 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 			continue
 		}
 		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
 	results := mcpTranscriptPriorities(out)
-	if shouldReturnCapEnvelope(len(results), s.limitPolicy.LifecycleLimit(args.Limit)) {
-		envelope := cappedToolPayload("rank_transcript_backlog", results, len(results), s.limitPolicy.LifecycleLimit(args.Limit), transcriptBacklogRefinements(args))
+	if shouldReturnCapEnvelope(len(results), limit) {
+		envelope := cappedToolPayload("rank_transcript_backlog", results, len(results), limit, transcriptBacklogRefinements(args))
 		if info != nil && (info.Profile != nil || strings.TrimSpace(args.LifecycleSource) != "") {
 			envelope["lifecycle_source"] = info.LifecycleSource
 			envelope["profile"] = mcpBusinessProfile(info.Profile)
@@ -1918,6 +1933,7 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 	}
 
 	limit := s.limitPolicy.SearchLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().SearchResults)
 	var snippets []transcriptSnippet
 	filtered := 0
 	if searchTranscriptSegmentsUsesCallFactFilters(args) {
@@ -1929,7 +1945,7 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 			Scope:           args.Scope,
 			System:          args.System,
 			Direction:       args.Direction,
-			Limit:           limit,
+			Limit:           queryLimit,
 		})
 		if err != nil {
 			return toolCallResult{}, err
@@ -1957,9 +1973,12 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 				EndMS:        row.EndMS,
 				Snippet:      row.Snippet,
 			})
+			if len(snippets) >= limit {
+				break
+			}
 		}
 	} else {
-		results, err := s.store.SearchTranscriptSegments(ctx, args.Query, limit)
+		results, err := s.store.SearchTranscriptSegments(ctx, args.Query, queryLimit)
 		if err != nil {
 			return toolCallResult{}, err
 		}
@@ -1986,6 +2005,9 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 				EndMS:        row.EndMS,
 				Snippet:      row.Snippet,
 			})
+			if len(snippets) >= limit {
+				break
+			}
 		}
 	}
 	return s.newCappedToolResult("search_transcript_segments", snippets, len(snippets), limit, filtered, transcriptSearchRefinements(args))
@@ -2472,6 +2494,16 @@ func (s *Server) newGovernedLifecycleToolResult(results any, info *sqlite.Profil
 		envelope["unavailable_concepts"] = info.UnavailableConcepts
 	}
 	return newToolResult(envelope)
+}
+
+func (s *Server) governedQueryLimit(requested int, max int) int {
+	if len(s.suppressedCallIDs) == 0 {
+		return requested
+	}
+	if max <= 0 {
+		return requested
+	}
+	return max
 }
 
 func (s *Server) isSuppressedCall(callID string) bool {

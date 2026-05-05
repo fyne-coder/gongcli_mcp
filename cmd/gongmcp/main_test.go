@@ -78,6 +78,21 @@ func TestPostgresToolAllowlistAcceptsBusinessPilotPreset(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistNarrowsGovernanceSearchPreset(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("governance-search")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true)
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	want := []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}
+	if !reflect.DeepEqual(allowlist, want) {
+		t.Fatalf("allowlist=%v want %v", allowlist, want)
+	}
+}
+
 func TestPostgresToolAllowlistRejectsUnsupportedPostgresPresets(t *testing.T) {
 	for _, preset := range []string{"analyst", "all-readonly"} {
 		expanded, err := mcp.ExpandToolPreset(preset)

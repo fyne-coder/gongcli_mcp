@@ -12,7 +12,9 @@ read-only MCP `business-pilot` preset: `get_sync_status`,
 allow `get_sync_status`, `search_calls`, `search_transcript_segments`,
 `get_call`, and `rank_transcript_backlog`. Postgres also supports profile
 metadata import/show/readiness, MCP profile reads, and profile-derived
-lifecycle facts when an active profile has a fresh profile fact cache.
+lifecycle facts when an active profile has a fresh profile fact cache. Postgres
+governance mode supports a prepared private policy for the narrowed
+`governance-search` MCP slice.
 
 ## Positioning
 
@@ -198,7 +200,9 @@ The smoke uses synthetic data only. It initializes Postgres, writes the
 synthetic cache through `gongctl sync synthetic`, checks Postgres read-model
 state with `gongctl sync read-model`, starts `gongmcp` with a read-only
 Postgres role, calls the supported MCP tools, and proves the reader role cannot
-write.
+write or directly read raw/sensitive tables. It also prepares a synthetic
+Postgres AI governance policy and proves restricted synthetic records are absent
+from governed MCP search outputs.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 
@@ -416,7 +420,10 @@ Rules:
   `valid` field. `profile import` is the command that refuses `valid:false`
   profiles before writing.
 - `profile import` stores the active profile in SQLite or Postgres in one transaction. Re-importing identical profile content is a no-op; changed source metadata for the same canonical profile updates metadata without changing profile meaning.
-- Profile-aware analysis uses a materialized SQLite read model keyed by active profile and canonical hash. Writable SQLite CLI sync/profile commands rebuild or warm it; read-only SQLite MCP requires that cache to be current and reports a stale-cache error instead of writing to SQLite. Postgres currently exposes profile metadata/readiness but rejects `lifecycle_source=profile` until the Postgres profile fact cache is implemented.
+- Profile-aware analysis uses a materialized read model keyed by active profile
+  and canonical hash. Writable SQLite/Postgres CLI sync/profile commands rebuild
+  or warm it; read-only MCP requires that cache to be current and reports a
+  stale-cache error instead of writing to the cache.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.
 - `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads.
 - `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
@@ -439,8 +446,10 @@ For companies with customer-specific AI-use restrictions, keep the real
 restricted-customer list in a private YAML file outside Git and load it with
 `gongmcp --ai-governance-config PATH` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
 `gongctl governance audit --db PATH --config PATH` verifies deterministic
-name/alias matches before MCP use. This is a local exclusion filter, not legal
-consent management or contractual enforcement. See
+SQLite name/alias matches before MCP use. For Postgres, omit `--db`, set a
+writable `GONG_DATABASE_URL`, and run `gongctl governance audit --config PATH
+--apply-postgres-policy` before starting read-only `gongmcp`. This is a local
+exclusion filter, not legal consent management or contractual enforcement. See
 [docs/ai-governance.md](docs/ai-governance.md); the tracked example config uses
 synthetic names only. For MCP/LLM use, default to a physically filtered MCP DB:
 
@@ -449,10 +458,13 @@ gongctl governance export-filtered-db --db ~/gongctl-data/gong.db --config ~/gon
 gongmcp --db ~/gongctl-data/gong-mcp-governed.db --tool-preset business-pilot
 ```
 
-Raw-DB governance remains available as a fallback; when it is enabled,
-`gongmcp` requires an explicit governance-compatible `--tool-preset`,
-`--tool-allowlist`, `GONGMCP_TOOL_PRESET`, or `GONGMCP_TOOL_ALLOWLIST`, and
-unsupported aggregate/config tools are refused.
+Raw-DB governance remains available as a fallback. SQLite computes suppression at
+`gongmcp` startup. Postgres requires a previously prepared policy because the
+MCP container should use the read-only role and should not receive raw candidate
+value access. In both modes, `gongmcp` requires an explicit
+governance-compatible `--tool-preset`, `--tool-allowlist`,
+`GONGMCP_TOOL_PRESET`, or `GONGMCP_TOOL_ALLOWLIST`, and unsupported
+aggregate/config tools are refused.
 
 ## Local MCP (stdio)
 

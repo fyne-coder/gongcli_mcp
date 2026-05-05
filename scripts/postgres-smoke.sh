@@ -228,6 +228,14 @@ if reader_psql -c "SELECT * FROM profile_call_fact_cache LIMIT 1" >>/tmp/gongctl
   echo "reader role unexpectedly read profile fact-cache table" >&2
   exit 1
 fi
+if reader_psql -c "SELECT * FROM governance_policy_state LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read governance policy table directly" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT * FROM governance_suppressed_calls LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read governance suppressed-call table directly" >&2
+  exit 1
+fi
 if reader_psql -c "SELECT field_values_json FROM gongmcp_profile_call_fact_cache(1, 'not-a-real-sha') LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
   echo "reader role unexpectedly read profile field values through cache helper" >&2
   exit 1
@@ -295,6 +303,96 @@ grep -q 'profile read model is missing or stale' /tmp/gongctl-postgres-profile-s
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-profile-cache-rewarm.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-profile-cache-rewarm.json
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/tmp/gongctl-postgres-governance-fixture.txt
+DELETE FROM transcript_segments WHERE call_id IN ('synthetic-governance-blocked', 'synthetic-governance-allowed');
+DELETE FROM transcripts WHERE call_id IN ('synthetic-governance-blocked', 'synthetic-governance-allowed');
+DELETE FROM calls WHERE call_id IN ('synthetic-governance-blocked', 'synthetic-governance-allowed');
+INSERT INTO calls(call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at)
+VALUES
+  ('synthetic-governance-blocked', 'Restricted governance customer review', '2026-03-01T15:00:00Z', 1500, 2, true, '{"id":"synthetic-governance-blocked","title":"Restricted governance customer review","started":"2026-03-01T15:00:00Z","duration":1500,"context":{"crmObjects":[{"type":"Account","id":"acct-governance-blocked","name":"Governance NoAI Corp","fields":{"Name":"Governance NoAI Corp"}}]}}'::jsonb, 'governance-blocked-sha', now()::text, now()::text),
+  ('synthetic-governance-allowed', 'Allowed governance customer review', '2026-03-01T16:00:00Z', 1200, 2, true, '{"id":"synthetic-governance-allowed","title":"Allowed governance customer review","started":"2026-03-01T16:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Account","id":"acct-governance-allowed","name":"Governance Allowed Corp","fields":{"Name":"Governance Allowed Corp"}}]}}'::jsonb, 'governance-allowed-sha', now()::text, now()::text);
+INSERT INTO transcripts(call_id, raw_json, raw_sha256, segment_count, first_seen_at, updated_at)
+VALUES
+  ('synthetic-governance-blocked', '{"callId":"synthetic-governance-blocked"}'::jsonb, 'governance-blocked-transcript-sha', 1, now()::text, now()::text),
+  ('synthetic-governance-allowed', '{"callId":"synthetic-governance-allowed"}'::jsonb, 'governance-allowed-transcript-sha', 1, now()::text, now()::text);
+INSERT INTO transcript_segments(call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json)
+VALUES
+  ('synthetic-governance-blocked', 0, 'speaker-governance-blocked', 0, 3000, 'Governance NoAI Corp should never appear in governed MCP transcript snippets.', '{"speakerId":"speaker-governance-blocked"}'::jsonb),
+  ('synthetic-governance-allowed', 0, 'speaker-governance-allowed', 0, 3000, 'Governance allowed search evidence should remain visible.', '{"speakerId":"speaker-governance-allowed"}'::jsonb);
+SQL
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-governance-read-model.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-governance-read-model.json
+cat >/tmp/gongctl-postgres-governance.yaml <<'YAML'
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Governance NoAI Corp"
+YAML
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl governance audit --config /tmp/gongctl-postgres-governance.yaml --apply-postgres-policy --json >/tmp/gongctl-postgres-governance-audit.json
+grep -q '"backend": "postgres"' /tmp/gongctl-postgres-governance-audit.json
+grep -q '"postgres_policy_applied": true' /tmp/gongctl-postgres-governance-audit.json
+grep -q '"suppressed_call_count": 1' /tmp/gongctl-postgres-governance-audit.json
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_calls","arguments":{"limit":10}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_transcript_segments","arguments":{"query":"Governance","limit":10}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_call","arguments":{"call_id":"synthetic-governance-blocked"}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=governance-search GONGMCP_AI_GOVERNANCE_CONFIG=/tmp/gongctl-postgres-governance.yaml go run ./cmd/gongmcp > /tmp/gongctl-postgres-governance-mcp.jsonl 2>/tmp/gongctl-postgres-governance-mcp.stderr
+
+grep -q '"search_calls"' /tmp/gongctl-postgres-governance-mcp.jsonl
+grep -q '"search_transcript_segments"' /tmp/gongctl-postgres-governance-mcp.jsonl
+grep -q 'synthetic-governance-allowed' /tmp/gongctl-postgres-governance-mcp.jsonl
+grep -q 'allowed search evidence' /tmp/gongctl-postgres-governance-mcp.jsonl
+grep -q 'AI governance active: backend=postgres' /tmp/gongctl-postgres-governance-mcp.stderr
+assert_mcp_success /tmp/gongctl-postgres-governance-mcp.jsonl 3 4
+python3 - /tmp/gongctl-postgres-governance-mcp.jsonl <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+for line in open(path, "r", encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        message = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if message.get("id") != 5:
+        continue
+    result = message.get("result")
+    if not isinstance(result, dict) or result.get("isError") is not True:
+        raise SystemExit(f"blocked get_call did not fail closed: {message}")
+    text = json.dumps(result)
+    if "synthetic-governance-blocked" in text or "Governance NoAI Corp" in text:
+        raise SystemExit(f"blocked get_call leaked restricted data: {text}")
+    break
+else:
+    raise SystemExit("missing blocked get_call MCP result id 5")
+PY
+if grep -q 'Governance NoAI Corp\|synthetic-governance-blocked' /tmp/gongctl-postgres-governance-mcp.jsonl /tmp/gongctl-postgres-governance-mcp.stderr; then
+  echo "Postgres governed MCP output leaked restricted governance data" >&2
+  exit 1
+fi
+if grep -q 'search_transcripts_by_call_facts\|missing_transcripts\|search_transcript_quotes_with_attribution' /tmp/gongctl-postgres-governance-mcp.jsonl; then
+  echo "Postgres governance-search exposed unsupported Postgres tools" >&2
+  exit 1
+fi
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "UPDATE calls SET title = 'Allowed governance customer changed', updated_at = '2099-02-01T00:00:00Z' WHERE call_id = 'synthetic-governance-allowed'" >/dev/null
+if {
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_calls","arguments":{"limit":5}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=governance-search GONGMCP_AI_GOVERNANCE_CONFIG=/tmp/gongctl-postgres-governance.yaml go run ./cmd/gongmcp > /tmp/gongctl-postgres-governance-stale-mcp.jsonl 2>/tmp/gongctl-postgres-governance-stale-mcp.stderr; then
+  echo "Postgres governed MCP unexpectedly started with a stale governance policy" >&2
+  exit 1
+fi
+grep -q 'Postgres AI governance policy is stale' /tmp/gongctl-postgres-governance-stale-mcp.stderr
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl governance audit --config /tmp/gongctl-postgres-governance.yaml --apply-postgres-policy --json >/tmp/gongctl-postgres-governance-audit-reapplied.json
+grep -q '"postgres_policy_applied": true' /tmp/gongctl-postgres-governance-audit-reapplied.json
+
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -347,5 +445,13 @@ echo "profile mcp output: /tmp/gongctl-postgres-profile-mcp.jsonl"
 echo "profile fixture read model output: /tmp/gongctl-postgres-profile-fixture-read-model.json"
 echo "profile stale reader output: /tmp/gongctl-postgres-profile-stale-reader.jsonl"
 echo "profile cache rewarm output: /tmp/gongctl-postgres-profile-cache-rewarm.json"
+echo "governance fixture output: /tmp/gongctl-postgres-governance-fixture.txt"
+echo "governance read model output: /tmp/gongctl-postgres-governance-read-model.json"
+echo "governance audit output: /tmp/gongctl-postgres-governance-audit.json"
+echo "governance audit reapplied output: /tmp/gongctl-postgres-governance-audit-reapplied.json"
+echo "governance mcp output: /tmp/gongctl-postgres-governance-mcp.jsonl"
+echo "governance mcp stderr output: /tmp/gongctl-postgres-governance-mcp.stderr"
+echo "governance stale mcp output: /tmp/gongctl-postgres-governance-stale-mcp.jsonl"
+echo "governance stale mcp stderr output: /tmp/gongctl-postgres-governance-stale-mcp.stderr"
 echo "reader select-drift denial output: /tmp/gongctl-postgres-reader-select-drift.txt"
 echo "reader select-drift repair output: /tmp/gongctl-postgres-reader-select-drift-repaired.json"

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
@@ -605,7 +606,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -623,7 +624,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -689,6 +690,9 @@ func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
 
 	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version = $1`, len(migrations)); err != nil {
 		t.Fatalf("delete latest migration version: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DROP TABLE IF EXISTS governance_suppressed_calls, governance_policy_state`); err != nil {
+		t.Fatalf("drop latest governance tables: %v", err)
 	}
 	defer func() {
 		if err := store.Migrate(ctx); err != nil {
@@ -1313,9 +1317,72 @@ func TestPostgresPrioritizeTranscriptsByLifecycle(t *testing.T) {
 	}
 }
 
+func TestPostgresGovernanceAuditAndPolicy(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-governance-blocked","title":"Blocked governance account","started":"2026-04-24T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Account","id":"acct-governance-blocked","name":"Postgres NoAI Corp","fields":{"Name":"Postgres NoAI Corp"}}]}}`)); err != nil {
+		t.Fatalf("UpsertCall blocked returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-governance-allowed","title":"Allowed governance account","started":"2026-04-24T13:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Account","id":"acct-governance-allowed","name":"Postgres Allowed Corp","fields":{"Name":"Postgres Allowed Corp"}}]}}`)); err != nil {
+		t.Fatalf("UpsertCall allowed returned error: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-governance-blocked","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":3000,"text":"The team named Postgres NoAI Corp in transcript evidence."}]}]}`)); err != nil {
+		t.Fatalf("UpsertTranscript blocked returned error: %v", err)
+	}
+
+	cfg, err := governance.ParseYAML([]byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Postgres NoAI Corp"
+`))
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+	audit, policy, err := store.BuildAndSaveGovernancePolicy(ctx, cfg.Fingerprint(), cfg)
+	if err != nil {
+		t.Fatalf("BuildAndSaveGovernancePolicy returned error: %v", err)
+	}
+	if audit.SuppressedCallCount != 1 || len(audit.SuppressedCallIDs) != 1 || audit.SuppressedCallIDs[0] != "pg-governance-blocked" {
+		t.Fatalf("unexpected governance audit: %+v", audit)
+	}
+	if policy.ConfigSHA256 != cfg.Fingerprint() || policy.SuppressedCallCount != 1 || len(policy.SuppressedCallIDs) != 1 {
+		t.Fatalf("unexpected saved policy: %+v", policy)
+	}
+	loaded, err := store.LoadGovernancePolicy(ctx, cfg.Fingerprint())
+	if err != nil {
+		t.Fatalf("LoadGovernancePolicy returned error: %v", err)
+	}
+	if !reflect.DeepEqual(loaded.SuppressedCallIDs, []string{"pg-governance-blocked"}) || loaded.DataFingerprint == "" {
+		t.Fatalf("unexpected loaded policy: %+v", loaded)
+	}
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-governance-blocked-late","title":"Late Postgres NoAI Corp","started":"2026-04-24T14:00:00Z","duration":1200}`)); err != nil {
+		t.Fatalf("UpsertCall late blocked returned error: %v", err)
+	}
+	currentFingerprint, err := store.GovernanceDataFingerprint(ctx)
+	if err != nil {
+		t.Fatalf("GovernanceDataFingerprint returned error: %v", err)
+	}
+	if currentFingerprint == loaded.DataFingerprint {
+		t.Fatalf("governance policy fingerprint did not detect candidate mutation")
+	}
+}
+
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

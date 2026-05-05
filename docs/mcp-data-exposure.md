@@ -11,24 +11,27 @@ Current fixed boundaries:
 
 - MCP reads a local cache/store only. SQLite is the complete default backend;
   the Postgres shared-deployment slice supports the explicit
-  `business-pilot` preset over a read-only database role, plus narrow
-  operator smoke/search allowlists for `search_calls`, `get_call`, and
-  `search_transcript_segments`. Postgres `get_call` is a record-reference tool
-  and should be enabled only through an explicit allowlist for reviewed
-  operator use, not through `business-pilot`. Broader `analyst` and `all-readonly`
-  Postgres parity remains a follow-up.
+	  `business-pilot` preset over a read-only database role, plus narrow
+	  operator smoke/search allowlists for `search_calls`, `get_call`, and
+	  `search_transcript_segments`. Postgres governance mode supports a prepared
+	  policy for the narrowed `governance-search` preset. Postgres `get_call` is a
+	  record-reference tool and should be enabled only through an explicit
+	  allowlist for reviewed operator use, not through `business-pilot`. Broader
+	  `analyst` and `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool
   surface; HTTP mode requires an explicit preset or allowlist. When neither is
   set, the full read-only catalog remains available only for stdio.
 - `gongmcp --ai-governance-config` and `GONGMCP_AI_GOVERNANCE_CONFIG` can
-  suppress calls linked to private restricted-customer name/alias matches before
-  MCP output reaches an LLM. The preferred blocklist path is
-  `gongctl governance export-filtered-db`, which scans call titles, raw call
-  metadata including participant emails, embedded CRM values, and transcript
-  segment text, then points MCP at the physically filtered copy. The real list
-  must stay outside the public repo.
+	  suppress calls linked to private restricted-customer name/alias matches before
+	  MCP output reaches an LLM. The preferred SQLite blocklist path is
+	  `gongctl governance export-filtered-db`, which scans call titles, raw call
+	  metadata including participant emails, embedded CRM values, and transcript
+	  segment text, then points MCP at the physically filtered copy. Postgres uses
+	  `gongctl governance audit --apply-postgres-policy` with a writable operator
+	  URL, then read-only `gongmcp` validates the prepared policy. The real list
+	  must stay outside the public repo.
 - MCP does not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or full transcript dumps.
 - HTTP mode can require bearer tokens, but bearer auth is an access gate, not
   tenant separation or data anonymization.
@@ -125,10 +128,12 @@ The following tools deserve the most review before enabling them in a model-faci
   of relying on host prompts alone.
 - For customer-specific AI restrictions, run `gongctl governance audit` with the
   private config before MCP use, then start `gongmcp` with the same config.
-  Prefer `gongctl governance export-filtered-db` and point MCP at the filtered
-  copy whenever a blocklist exists. Raw-DB governance mode requires an explicit
-  tool preset or allowlist and refuses unsupported aggregate/config tools instead of
-  returning unfiltered counts or metadata. `search_crm_field_values` is
+  Prefer `gongctl governance export-filtered-db` and point SQLite MCP at the
+  filtered copy whenever a blocklist exists. For Postgres, prepare the policy
+  with `gongctl governance audit --apply-postgres-policy` using the writable URL,
+  then run `gongmcp` with the read-only URL. Raw-DB governance mode requires an
+  explicit tool preset or allowlist and refuses unsupported aggregate/config
+  tools instead of returning unfiltered counts or metadata. `search_crm_field_values` is
   intentionally unavailable in raw-DB governance mode because direct CRM value
   lookup can reveal whether configured customer-name variants are present in
   the cache.
@@ -291,8 +296,10 @@ Practical recommendations:
   `--tool-allowlist` to remove tools the host should not be reaching for
   reflexively in a given deployment lane. A narrow preset or allowlist is
   usually a better limit than relying on the agent to ration its own tool calls.
-- Use `--tool-preset governance-search` only with raw-DB AI governance mode;
-  for a physically filtered DB, choose the normal deployment preset instead.
+- Use `--tool-preset governance-search` for raw SQLite governance or
+  prepared-policy Postgres governance. For a physically filtered SQLite DB,
+  choose the normal deployment preset instead. In Postgres, this preset is
+  narrowed to the supported governed search tools after policy preparation.
 - Avoid agent loops that call `search_transcript_segments` followed by
   `get_call` for every hit; the combined output is large in both context tokens
   and wall-clock time.

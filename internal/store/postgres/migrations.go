@@ -658,4 +658,115 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 
 `,
+	`
+CREATE TABLE IF NOT EXISTS governance_policy_state (
+	config_sha256 TEXT PRIMARY KEY,
+	data_fingerprint TEXT NOT NULL,
+	config_entries INTEGER NOT NULL DEFAULT 0,
+	config_aliases INTEGER NOT NULL DEFAULT 0,
+	matched_entries INTEGER NOT NULL DEFAULT 0,
+	unmatched_entries INTEGER NOT NULL DEFAULT 0,
+	suppressed_call_count INTEGER NOT NULL DEFAULT 0,
+	updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS governance_suppressed_calls (
+	config_sha256 TEXT NOT NULL REFERENCES governance_policy_state(config_sha256) ON DELETE CASCADE,
+	call_id TEXT NOT NULL,
+	PRIMARY KEY(config_sha256, call_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pg_governance_suppressed_calls_call_id
+	ON governance_suppressed_calls(call_id);
+
+CREATE OR REPLACE FUNCTION gongmcp_governance_data_fingerprint()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH candidates AS (
+	SELECT call_id, 'call_title' AS source, title AS value
+	  FROM calls
+	 WHERE TRIM(title) <> ''
+	UNION ALL
+	SELECT call_id, 'call_raw_json' AS source, raw_json::text AS value
+	  FROM calls
+	 WHERE TRIM(raw_json::text) <> ''
+	UNION ALL
+	SELECT call_id, 'crm_object_name' AS source, object_name AS value
+	  FROM call_context_objects
+	 WHERE TRIM(object_name) <> ''
+	UNION ALL
+	SELECT call_id, 'crm_field:' || field_name AS source, field_value_text AS value
+	  FROM call_context_fields
+	 WHERE TRIM(field_value_text) <> ''
+	UNION ALL
+	SELECT call_id, 'transcript_segment' AS source, text AS value
+	  FROM transcript_segments
+	 WHERE TRIM(text) <> ''
+)
+SELECT 'candidates:' || COUNT(*)::text || ':' ||
+       COALESCE(md5(string_agg(call_id || chr(31) || source || chr(31) || TRIM(value), chr(30) ORDER BY call_id, source, value)), md5(''))
+  FROM candidates
+$function$;
+
+CREATE OR REPLACE FUNCTION gongmcp_governance_policy_state(config_sha_arg text)
+RETURNS TABLE(
+	config_sha256 text,
+	data_fingerprint text,
+	config_entries integer,
+	config_aliases integer,
+	matched_entries integer,
+	unmatched_entries integer,
+	suppressed_call_count integer,
+	updated_at text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT p.config_sha256,
+       p.data_fingerprint,
+       p.config_entries,
+       p.config_aliases,
+       p.matched_entries,
+       p.unmatched_entries,
+       p.suppressed_call_count,
+       p.updated_at
+  FROM governance_policy_state p
+ WHERE p.config_sha256 = config_sha_arg
+$function$;
+
+CREATE OR REPLACE FUNCTION gongmcp_governance_suppressed_call_ids(config_sha_arg text)
+RETURNS TABLE(call_id text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT s.call_id
+  FROM governance_suppressed_calls s
+ WHERE s.config_sha256 = config_sha_arg
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_governance_data_fingerprint() FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_governance_policy_state(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_governance_suppressed_call_ids(text) FROM PUBLIC;
+
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE governance_policy_state FROM gongmcp_reader';
+		EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE governance_suppressed_calls FROM gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_governance_data_fingerprint() TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_governance_policy_state(text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+
+`,
 }

@@ -36,7 +36,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | CLI `calls show` | SQLite raw cached JSON behind sensitive-export controls | complete for Postgres minimized call detail | Postgres uses `GetCallDetail` and does not return raw cached JSON, CRM field values, transcript text, or participant payloads | intentionally minimized for shared Postgres | Phase 2 | CLI call-detail smoke/tests |
 | `business-pilot` MCP preset | SQLite full preset | complete/foundation over Postgres facts | Keep supported tools stable and read-only | must match | Phase 1 | `scripts/postgres-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
-| `governance-search` MCP preset | SQLite governed search | queued | Governed Postgres search or explicit unsupported state | postgres-native equivalent | Phase 4 | governed synthetic smoke |
+| `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst` MCP preset | SQLite analyst/cohort tools | rejected in Postgres | Enable only after backing queries and governance are ready | must match before enablement | Phase 5 | preset parity tests |
 | `all-readonly` MCP preset | SQLite full read-only catalog | rejected in Postgres | Enable only after full read-only query parity | must match before enablement | Phase 5 | catalog parity tests |
 | Profile import/show | SQLite profile tables/cache | complete for metadata/import/show/readiness and profile fact-cache freshness | Postgres profile metadata, active-state storage, business-profile MCP reads, and sync-status readiness | must match for metadata; cache freshness complete for first profile slice | Phase 3/3b | `TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata` |
@@ -44,8 +44,8 @@ Postgres parity should be added deliberately, with each surface classified as
 | Business-analysis calls/evidence | SQLite `business_analysis.go` helpers | queued | Equivalent read APIs over normalized context/facts/transcripts | must match | Phase 5 | business-analysis parity fixtures |
 | CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | queued for Postgres | Same cached metadata read surfaces | must match | Phase 5 | inventory/query tests |
 | Scorecard activity | SQLite `scorecard_activity` | queued for Postgres | Same aggregate/read-only scorecard activity surfaces | must match | Phase 5 | scorecard activity parity tests |
-| Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | queued | Governed views, row-level security, or materialized governed snapshots | postgres-native equivalent | Phase 4 | restricted synthetic account absent from all MCP outputs |
-| Governance audit | SQLite local audit against private YAML | queued | Audit Postgres governed/read model coverage without exposing restricted names | postgres-native equivalent | Phase 4 | `gongctl governance audit` Postgres tests |
+| Governance filtered DB export | SQLite physical filtered copy plus `VACUUM INTO` | Postgres policy-backed MCP suppression implemented for narrowed search slice; physical filtered export remains SQLite-only | Governed views, row-level security, or materialized governed snapshots before broad analyst/all-readonly GA | postgres-native equivalent | Phase 4 | restricted synthetic account absent from governed MCP search outputs |
+| Governance audit | SQLite local audit against private YAML | complete for Postgres candidate scan plus persisted policy preparation | Audit Postgres coverage with writable operator role; read-only MCP validates policy/config/data fingerprints without exposing restricted names over MCP | postgres-native equivalent | Phase 4 | `gongctl governance audit --apply-postgres-policy`; governed smoke |
 | Support bundle | SQLite sanitized support bundle | queued | Sanitized Postgres diagnostics without secrets/customer payloads | postgres-native equivalent | Phase 6 | support bundle fixture inspection |
 | Cache inventory | SQLite file/table inventory | queued | Postgres DB/table/index/version/readiness inventory | postgres-native equivalent | Phase 6 | `cache inventory` Postgres tests |
 | Purge/retention | SQLite purge commands | queued | Postgres retention diagnostics and dry-run/confirm semantics | postgres-native equivalent | Phase 6 | purge dry-run tests |
@@ -71,6 +71,32 @@ Postgres parity should be added deliberately, with each surface classified as
    diagnostics.
 8. **Phase 7 release hardening**: CI service tests, backup/restore, migration
    rollback, docs, and versioned release artifacts.
+
+## Phase 4 Risk Status
+
+- Closed for first governed Postgres slice: writable `gongctl governance audit
+  --apply-postgres-policy` scans Postgres candidates and persists the policy
+  fingerprint, data fingerprint, and suppressed call IDs.
+- Closed for read-only MCP startup: `gongmcp` with a Postgres reader role loads
+  only the prepared policy, validates the same private config and current data
+  fingerprint, and fails closed when policy/config/data are missing or stale.
+- Closed for narrowed `governance-search`: Postgres maps the preset to supported
+  search tools and suppresses configured calls from `search_calls`, `get_call`,
+  `search_transcript_segments`, and `rank_transcript_backlog` outputs without
+  exposing filtered counts over MCP.
+- Closed after review: policy preparation now builds candidates, computes the
+  data fingerprint, and persists suppressed call IDs inside one serializable
+  transaction. Governed MCP search overfetches before post-query suppression so
+  suppressed rows do not starve allowed rows at small limits.
+- Accepted residual risk: `gongmcp_reader` remains a service secret. Direct SQL
+  use of that URL can bypass MCP-layer suppression on minimized readable tables
+  until database-enforced governed views/RLS/materialized snapshots replace
+  direct table grants.
+- Accepted residual performance risk: governed MCP still recomputes the raw-data
+  governance fingerprint on each tool call. Replace this with a
+  writer-maintained generation/fingerprint row before large-tenant GA.
+- Still queued: database-enforced governed views/RLS/materialized snapshots and
+  governance-safe analyst/all-readonly aggregates.
 
 ## Phase 3b Risk Status
 
@@ -135,7 +161,7 @@ Postgres parity should be added deliberately, with each surface classified as
   presets after rebuild, proves the reader role cannot write or directly read
   raw JSON payload columns, and proves stale startup denial. Keep a larger
   customer-scale benchmark queued before GA.
-- Still queued: profile lifecycle cache parity, governance filtering/RLS, analyst and
+- Still queued: database-enforced governance filtering/RLS, analyst and
   all-readonly query parity, support/cache inventory, purge/retention, larger
   customer-scale load benchmarking for read-model counter write contention, and
   release rollback/backup hardening.

@@ -143,6 +143,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	var store mcp.Store
 	var governanceStore governance.CandidateStore
+	var postgresStore *postgres.Store
 	var closeStore func() error
 	if postgresMode {
 		pgStore, err := postgres.OpenReadOnly(ctx, postgresURL)
@@ -151,6 +152,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 1
 		}
 		store = pgStore
+		postgresStore = pgStore
 		closeStore = pgStore.Close
 		fmt.Fprintf(stderr, "postgres backend active: read-only MCP exposes %s\n", strings.Join(allowlist, ","))
 	} else {
@@ -179,10 +181,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
 	if configPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG")); configPath != "" {
-		if governanceStore == nil {
-			fmt.Fprintln(stderr, "AI governance config is not supported by the Postgres vertical slice; use SQLite filtered DB export or a governed SQLite cache")
-			return 2
-		}
 		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
 			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
 			return 2
@@ -192,38 +190,89 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "load AI governance config: failed")
 			return 2
 		}
-		snapshot, err := governance.Snapshot(ctx, configPath, governanceStore)
-		if err != nil {
-			fmt.Fprintln(stderr, "snapshot AI governance state: failed")
-			return 1
-		}
-		audit, err := governance.BuildAudit(ctx, governanceStore, cfg)
-		if err != nil {
-			fmt.Fprintln(stderr, "audit AI governance config: failed")
-			return 1
-		}
-		if len(audit.UnmatchedEntries) > 0 && !(*allowUnmatchedAIGovernance || truthy(os.Getenv("GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE"))) {
-			fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", len(audit.UnmatchedEntries))
-			return 2
-		}
-		serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(audit.SuppressedCallIDs))
-		serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
-			current, err := governance.Snapshot(checkCtx, configPath, governanceStore)
+		if postgresMode {
+			if postgresStore == nil {
+				fmt.Fprintln(stderr, "open postgres governance state: failed")
+				return 1
+			}
+			state, err := postgresStore.LoadGovernancePolicy(ctx, cfg.Fingerprint())
 			if err != nil {
-				return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				fmt.Fprintln(stderr, "load Postgres AI governance policy: failed; run GONG_DATABASE_URL=<writer-url> gongctl governance audit --config <same-ai-governance.yaml> --apply-postgres-policy, then restart gongmcp")
+				return 2
 			}
-			if current != snapshot {
-				return fmt.Errorf("AI governance state changed; restart gongmcp")
+			currentFingerprint, err := postgresStore.GovernanceDataFingerprint(ctx)
+			if err != nil {
+				fmt.Fprintln(stderr, "snapshot Postgres AI governance state: failed")
+				return 1
 			}
-			return nil
-		}))
-		fmt.Fprintf(stderr, "AI governance active: entries=%d aliases=%d matched=%d unmatched=%d suppressed_calls=%d; restart gongmcp after cache or config changes\n",
-			audit.ConfigEntries,
-			audit.ConfigAliases,
-			len(audit.MatchedEntries),
-			len(audit.UnmatchedEntries),
-			audit.SuppressedCallCount,
-		)
+			if currentFingerprint != state.DataFingerprint {
+				fmt.Fprintln(stderr, "Postgres AI governance policy is stale; run GONG_DATABASE_URL=<writer-url> gongctl governance audit --config <same-ai-governance.yaml> --apply-postgres-policy, then restart gongmcp")
+				return 2
+			}
+			if state.UnmatchedEntries > 0 && !(*allowUnmatchedAIGovernance || truthy(os.Getenv("GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE"))) {
+				fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", state.UnmatchedEntries)
+				return 2
+			}
+			serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(state.SuppressedCallIDs))
+			serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
+				current, err := postgresStore.GovernanceDataFingerprint(checkCtx)
+				if err != nil {
+					return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				}
+				nextState, err := postgresStore.LoadGovernancePolicy(checkCtx, cfg.Fingerprint())
+				if err != nil {
+					return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				}
+				if current != state.DataFingerprint || nextState.DataFingerprint != state.DataFingerprint || nextState.UpdatedAt != state.UpdatedAt || nextState.SuppressedCallCount != state.SuppressedCallCount {
+					return fmt.Errorf("AI governance state changed; restart gongmcp")
+				}
+				return nil
+			}))
+			fmt.Fprintf(stderr, "AI governance active: backend=postgres entries=%d aliases=%d matched=%d unmatched=%d suppressed_calls=%d; restart gongmcp after cache, policy, or config changes\n",
+				state.ConfigEntries,
+				state.ConfigAliases,
+				state.MatchedEntries,
+				state.UnmatchedEntries,
+				state.SuppressedCallCount,
+			)
+		} else {
+			if governanceStore == nil {
+				fmt.Fprintln(stderr, "AI governance config is not supported without a governance-capable store")
+				return 2
+			}
+			snapshot, err := governance.Snapshot(ctx, configPath, governanceStore)
+			if err != nil {
+				fmt.Fprintln(stderr, "snapshot AI governance state: failed")
+				return 1
+			}
+			audit, err := governance.BuildAudit(ctx, governanceStore, cfg)
+			if err != nil {
+				fmt.Fprintln(stderr, "audit AI governance config: failed")
+				return 1
+			}
+			if len(audit.UnmatchedEntries) > 0 && !(*allowUnmatchedAIGovernance || truthy(os.Getenv("GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE"))) {
+				fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", len(audit.UnmatchedEntries))
+				return 2
+			}
+			serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(audit.SuppressedCallIDs))
+			serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
+				current, err := governance.Snapshot(checkCtx, configPath, governanceStore)
+				if err != nil {
+					return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				}
+				if current != snapshot {
+					return fmt.Errorf("AI governance state changed; restart gongmcp")
+				}
+				return nil
+			}))
+			fmt.Fprintf(stderr, "AI governance active: entries=%d aliases=%d matched=%d unmatched=%d suppressed_calls=%d; restart gongmcp after cache or config changes\n",
+				audit.ConfigEntries,
+				audit.ConfigAliases,
+				len(audit.MatchedEntries),
+				len(audit.UnmatchedEntries),
+				audit.SuppressedCallCount,
+			)
+		}
 	}
 
 	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), serverOptions...)
@@ -262,6 +311,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func postgresToolAllowlist(allowlist []string, httpMode bool) ([]string, error) {
+	if postgresGovernanceSearchPreset(allowlist) {
+		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
+	}
 	supported := map[string]struct{}{
 		"get_sync_status":              {},
 		"get_business_profile":         {},
@@ -285,6 +337,27 @@ func postgresToolAllowlist(allowlist []string, httpMode bool) ([]string, error) 
 		}
 	}
 	return allowlist, nil
+}
+
+func postgresGovernanceSearchPreset(allowlist []string) bool {
+	if len(allowlist) == 0 {
+		return false
+	}
+	governanceTools, err := mcp.ExpandToolPreset("governance-search")
+	if err != nil || len(governanceTools) != len(allowlist) {
+		return false
+	}
+	seen := make(map[string]int, len(governanceTools))
+	for _, name := range governanceTools {
+		seen[name]++
+	}
+	for _, name := range allowlist {
+		seen[name]--
+		if seen[name] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 type toolSelection struct {

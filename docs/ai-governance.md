@@ -72,6 +72,22 @@ gongctl governance audit \
   --json
 ```
 
+For Postgres shared deployments, run the audit with the writable operator URL
+and persist the policy for the read-only MCP container:
+
+```bash
+export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
+gongctl governance audit \
+  --config /srv/gongctl/private/ai-governance.yaml \
+  --apply-postgres-policy \
+  --json
+```
+
+The persisted Postgres policy stores aggregate audit counts, a config
+fingerprint, a data fingerprint, and suppressed call IDs. It does not grant the
+`gongmcp_reader` role direct access to raw candidate values or governance policy
+tables.
+
 ## Filtered MCP Database
 
 For MCP/LLM use, the preferred deployment is a physically filtered SQLite copy:
@@ -136,14 +152,35 @@ GONGMCP_TOOL_PRESET=governance-search \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 
+For Postgres, omit `--db` and use the read-only database URL after the policy has
+been prepared:
+
+```bash
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" \
+GONGMCP_AI_GOVERNANCE_CONFIG=/srv/gongctl/private/ai-governance.yaml \
+GONGMCP_TOOL_PRESET=governance-search \
+  gongmcp
+```
+
+The Postgres `governance-search` preset is narrowed to the supported search
+slice. Broader database-enforced RLS/materialized governed snapshots remain a
+follow-up before analyst/all-readonly Postgres governance.
+
+Treat the Postgres reader URL as a `gongmcp` service secret, not a general
+analyst SQL credential. The current Postgres slice enforces governance at the
+MCP layer over a prepared policy; direct SQL use of the reader role can still
+query minimized readable tables until governed views/RLS/materialized snapshots
+land.
+
 MCP responses do not include configured restricted customer names or filtered
 match counts. Aggregate tools that are not yet recomputed over the filtered call
 set fail closed instead of returning counts that include excluded customers.
 
 Restart `gongmcp` after cache refreshes or config changes. This is mandatory:
-`gongmcp` fingerprints the config and cache at startup, checks that fingerprint
-on each tool call, and fails closed if either changes while the process is
-running.
+SQLite `gongmcp` fingerprints the config and cache at startup. Postgres
+`gongmcp` validates the prepared policy, config fingerprint, and current data
+fingerprint at startup and on each tool call. Both modes fail closed if the
+governance state changes while the process is running.
 
 By default, `gongmcp` refuses governance configs with unmatched entries. Use
 `--allow-unmatched-ai-governance` only after the local audit confirms the
@@ -154,6 +191,7 @@ unmatched entries are expected for the current cache.
 Filtered export physically removes matched call-dependent rows from the MCP copy
 only; it does not delete data from the source operator SQLite cache. Raw-DB
 governance remains query/output-time suppression and does not prevent local
-operators from running raw CLI cache inspection commands. Environments that
-cannot store restricted customer data at all should add sync-time exclusion
-before ingesting those records.
+operators from running raw CLI cache inspection commands. Postgres governance in
+this slice is a prepared-policy MCP search boundary, not database-enforced RLS.
+Environments that cannot store restricted customer data at all should add
+sync-time exclusion before ingesting those records.
