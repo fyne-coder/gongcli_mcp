@@ -144,9 +144,10 @@ Implementation controls on the CLI side:
   reader until a sanitized builtin SQL surface exists.
   The scoped reader URL remains a service secret because selected functions and
   sanitized views can still expose minimized operational metadata, timings,
-  counts, and tenant terminology. The scoped profile-cache helper redacts call
-  IDs/titles, but direct SQL callers can invoke it over all matching cached
-  rows; MCP result limits are enforced above that SQL helper.
+  counts, and tenant terminology. The scoped active-profile and profile-cache
+  helpers redact source metadata and call IDs/titles, and direct SQL callers can
+  invoke only the capped sanitized profile-cache helper; MCP result limits are
+  still enforced above that SQL helper.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose

@@ -144,9 +144,10 @@ flowchart LR
   compatibility path for MCP-only images. Apply the SQL to a fresh `NOINHERIT`
   role, or revoke stale grants before role reuse. Treat the scoped URL as a
   `gongmcp` service credential, not an analyst SQL login. The scoped
-  profile-cache helper redacts call IDs/titles, but selected functions still
-  expose minimized operational metadata, timings, counts, and tenant
-  terminology.
+  active-profile and profile-cache helpers redact source metadata and call
+  IDs/titles, and the direct profile-cache helper is capped, but selected
+  functions still expose minimized operational metadata, timings, counts, and
+  tenant terminology.
   This first scoped business-pilot role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader
   until a sanitized builtin SQL surface exists.

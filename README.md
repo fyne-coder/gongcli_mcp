@@ -625,11 +625,12 @@ to a fresh `NOINHERIT` role, or explicitly revoke stale grants before reusing
 an existing role. Create the LOGIN role and password through your normal secret
 management process, review/apply the grant block, then run `gongmcp` with the
 scoped reader URL and `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a
-`gongmcp` service credential, not an analyst SQL login. The scoped profile-cache
-helper redacts call IDs/titles, but selected functions still expose
-minimized operational metadata, timings, counts, and tenant terminology. Direct
-SQL callers can invoke the sanitized profile-cache helper over all matching
-cached rows; MCP result limits are enforced above that SQL helper.
+`gongmcp` service credential, not an analyst SQL login. The scoped active-profile
+and profile-cache helpers redact source metadata and call IDs/titles, but
+selected functions still expose minimized operational metadata, timings, counts,
+and tenant terminology. Direct SQL callers can invoke only the capped sanitized
+profile-cache helper; MCP result limits are still enforced above that SQL
+helper.
 This first scoped `business-pilot` role is profile-backed: warm/import an active
 profile and use the default/profile lifecycle path. Explicit
 `lifecycle_source=builtin` still requires the broader compatibility reader role

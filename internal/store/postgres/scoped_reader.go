@@ -57,12 +57,13 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("-- Create credentials outside this grant block using your secret manager.\n")
 	b.WriteString("-- Apply to a fresh NOINHERIT role; revoke stale table/function grants before reusing an existing role.\n")
 	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.\n")
-	b.WriteString("-- Direct SQL callers can invoke the sanitized profile-cache helper over all matching cached rows; MCP limits are enforced above the SQL helper.\n")
+	b.WriteString("-- Direct SQL callers can invoke only the capped sanitized profile-cache helper; MCP limits are still enforced above the SQL helper.\n")
 	b.WriteString("-- This grant block supports the business-pilot scoped reader for profile-backed lifecycle analysis; use the compatibility reader role for builtin lifecycle-source analysis until a sanitized builtin SQL surface is available.\n")
 	b.WriteString("-- Role expected before running this block: ")
 	b.WriteString(roleIdent)
 	b.WriteString("\n")
 	b.WriteString("BEGIN;\n")
+	b.WriteString("REVOKE CREATE ON SCHEMA \"public\" FROM PUBLIC;\n")
 	b.WriteString("REVOKE CREATE ON SCHEMA \"public\" FROM ")
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
@@ -74,7 +75,16 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("GRANT USAGE ON SCHEMA \"public\" TO ")
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
+	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_active_business_profile() FROM ")
+	b.WriteString(roleIdent)
+	b.WriteString(";\n")
 	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM ")
+	b.WriteString(roleIdent)
+	b.WriteString(";\n")
+	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta(bigint, text) FROM ")
+	b.WriteString(roleIdent)
+	b.WriteString(";\n")
+	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM ")
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
 
@@ -231,7 +241,13 @@ func businessPilotFunctionSignatures(signatures []string) []string {
 	out := make([]string, 0, len(signatures))
 	for _, signature := range signatures {
 		if signature == "public.gongmcp_profile_call_fact_cache(bigint, text)" {
-			signature = "public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)"
+			signature = "public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)"
+		}
+		if signature == "public.gongmcp_profile_call_fact_cache_meta(bigint, text)" {
+			signature = "public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint)"
+		}
+		if signature == "public.gongmcp_active_business_profile()" {
+			signature = "public.gongmcp_active_business_profile_sanitized()"
 		}
 		out = append(out, signature)
 	}

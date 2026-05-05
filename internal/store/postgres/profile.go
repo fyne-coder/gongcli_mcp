@@ -564,7 +564,11 @@ SELECT id, name, version, source_path, source_sha256, canonical_sha256, imported
 
 func (s *Store) activeProfileViaMCPFunction(ctx context.Context) (*profileMetaRecord, *profilepkg.Profile, []profilepkg.Finding, error) {
 	var payload []byte
-	if err := s.db.QueryRowContext(ctx, `SELECT profile_json::text FROM gongmcp_active_business_profile()`).Scan(&payload); err != nil {
+	functionName := "gongmcp_active_business_profile"
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		functionName = "gongmcp_active_business_profile_sanitized"
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT profile_json::text FROM `+functionName+`()`).Scan(&payload); err != nil {
 		return nil, nil, nil, err
 	}
 	var decoded struct {
@@ -898,8 +902,17 @@ SELECT canonical_sha256, data_fingerprint
 	if s.readOnly {
 		metaQuery = `SELECT canonical_sha256, data_fingerprint FROM gongmcp_profile_call_fact_cache_meta($1, $2)`
 		metaArgs = []any{profile.ProfileID, profile.CanonicalSHA256}
+		if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+			metaQuery = `SELECT data_fingerprint FROM gongmcp_profile_call_fact_cache_meta_sanitized($1)`
+			metaArgs = []any{profile.ProfileID}
+		}
 	}
-	if err := s.db.QueryRowContext(ctx, metaQuery, metaArgs...).Scan(&canonicalSHA256, &dataFingerprint); err != nil {
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		err = s.db.QueryRowContext(ctx, metaQuery, metaArgs...).Scan(&dataFingerprint)
+	} else {
+		err = s.db.QueryRowContext(ctx, metaQuery, metaArgs...).Scan(&canonicalSHA256, &dataFingerprint)
+	}
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			readiness.Status = "needs_action"
 			readiness.Detail = "An active business profile is imported, but the Postgres profile read model cache has not been warmed."
@@ -910,7 +923,7 @@ SELECT canonical_sha256, data_fingerprint
 		}
 		return readiness, err
 	}
-	readiness.CacheFresh = canonicalSHA256 == profile.CanonicalSHA256 && dataFingerprint == fingerprint
+	readiness.CacheFresh = (profile.CanonicalSHA256 == "" || canonicalSHA256 == profile.CanonicalSHA256) && dataFingerprint == fingerprint
 	if readiness.CacheFresh {
 		readiness.CacheStatus = "fresh"
 		readiness.Blocking = nil

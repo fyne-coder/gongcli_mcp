@@ -145,9 +145,9 @@ func TestPostgresReadOnlyOptionsForBusinessPilotAllowlist(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"public.gongmcp_active_business_profile()",
-		"public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)",
-		"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
+		"public.gongmcp_active_business_profile_sanitized()",
+		"public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)",
+		"public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint)",
 		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_profile_data_fingerprint()",
 		"public.gongmcp_scorecard_activity_totals()",
@@ -158,6 +158,12 @@ func TestPostgresReadOnlyOptionsForBusinessPilotAllowlist(t *testing.T) {
 	}
 	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_profile_call_fact_cache(bigint, text)") {
 		t.Fatalf("business-pilot required functions included identifier-bearing profile cache helper: %v", options.RequiredFunctionSignatures)
+	}
+	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_profile_call_fact_cache_meta(bigint, text)") {
+		t.Fatalf("business-pilot required functions included canonical profile cache metadata helper: %v", options.RequiredFunctionSignatures)
+	}
+	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_active_business_profile()") {
+		t.Fatalf("business-pilot required functions included identifier-bearing active profile helper: %v", options.RequiredFunctionSignatures)
 	}
 }
 
@@ -179,11 +185,16 @@ func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
 		`-- Apply to a fresh NOINHERIT role; revoke stale table/function grants before reusing an existing role.`,
 		`profile-backed`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
+		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,
+		`REVOKE EXECUTE ON FUNCTION public.gongmcp_active_business_profile() FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM "gongmcp_business_pilot_reader";`,
+		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
 		`COMMIT;`,
 	} {
@@ -196,7 +207,10 @@ func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
 		`"call_id", "title"`,
 		`"call_id"`,
 		`"object_key"`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile()`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta(bigint, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)`,
 		`public.gongmcp_missing_transcripts`,
 		`field_values_json`,
 	} {
@@ -269,10 +283,15 @@ func TestPrintPostgresReaderGrantsForBusinessPilot(t *testing.T) {
 	sql := stdout.String()
 	for _, want := range []string{
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
+		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
+		`REVOKE EXECUTE ON FUNCTION public.gongmcp_active_business_profile() FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM "gongmcp_business_pilot_reader";`,
+		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
 		`COMMIT;`,
 	} {
@@ -287,7 +306,10 @@ func TestPrintPostgresReaderGrantsForBusinessPilot(t *testing.T) {
 		`"title") ON TABLE public."call_facts"`,
 		`"call_id"`,
 		`"object_key"`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile()`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta(bigint, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)`,
 		`PASSWORD`,
 		`postgres://`,
 		`GONG_DATABASE_URL`,

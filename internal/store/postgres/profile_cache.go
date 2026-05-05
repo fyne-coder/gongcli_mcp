@@ -13,6 +13,8 @@ import (
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
+const scopedProfileCallFactCacheRowLimit = 1000
+
 type profileCallFact struct {
 	CallID               string
 	Title                string
@@ -132,9 +134,14 @@ func (s *Store) ensureProfileCallFactCache(ctx context.Context, meta *profileMet
 	query := `SELECT canonical_sha256, data_fingerprint FROM profile_call_fact_cache_meta WHERE profile_id = $1`
 	if s.readOnly {
 		query = `SELECT canonical_sha256, data_fingerprint FROM gongmcp_profile_call_fact_cache_meta($1, $2)`
+		if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+			query = `SELECT data_fingerprint FROM gongmcp_profile_call_fact_cache_meta_sanitized($1)`
+		}
 	}
 	var err error
-	if s.readOnly {
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		err = s.db.QueryRowContext(ctx, query, meta.ID).Scan(&existingFingerprint)
+	} else if s.readOnly {
 		err = s.db.QueryRowContext(ctx, query, meta.ID, meta.CanonicalSHA256).Scan(&existingCanonical, &existingFingerprint)
 	} else {
 		err = s.db.QueryRowContext(ctx, query, meta.ID).Scan(&existingCanonical, &existingFingerprint)
@@ -143,7 +150,12 @@ func (s *Store) ensureProfileCallFactCache(ctx context.Context, meta *profileMet
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-	} else if existingCanonical == meta.CanonicalSHA256 && existingFingerprint == fingerprint {
+	} else if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary && existingFingerprint == fingerprint {
+		return nil
+	} else if (meta.CanonicalSHA256 == "" || existingCanonical == meta.CanonicalSHA256) && existingFingerprint == fingerprint {
+		if meta.CanonicalSHA256 == "" {
+			meta.CanonicalSHA256 = existingCanonical
+		}
 		return nil
 	}
 	if s.readOnly {
@@ -275,9 +287,21 @@ func (s *Store) loadProfileCallFactCache(ctx context.Context, profileID int64, c
 	metaQuery := `SELECT call_count FROM profile_call_fact_cache_meta WHERE profile_id = $1 AND canonical_sha256 = $2`
 	if s.readOnly {
 		metaQuery = `SELECT call_count FROM gongmcp_profile_call_fact_cache_meta($1, $2)`
+		if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+			metaQuery = `SELECT call_count FROM gongmcp_profile_call_fact_cache_meta_sanitized($1)`
+		}
 	}
-	if err := s.db.QueryRowContext(ctx, metaQuery, profileID, canonicalSHA256).Scan(&expectedCount); err != nil {
+	var err error
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		err = s.db.QueryRowContext(ctx, metaQuery, profileID).Scan(&expectedCount)
+	} else {
+		err = s.db.QueryRowContext(ctx, metaQuery, profileID, canonicalSHA256).Scan(&expectedCount)
+	}
+	if err != nil {
 		return nil, err
+	}
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary && expectedCount > scopedProfileCallFactCacheRowLimit {
+		expectedCount = scopedProfileCallFactCacheRowLimit
 	}
 	rowsQuery := `
 SELECT call_id,
@@ -303,8 +327,10 @@ SELECT call_id,
  ORDER BY started_at DESC, call_id`
 	if s.readOnly {
 		functionName := "gongmcp_profile_call_fact_cache"
+		queryArgs := []any{profileID, canonicalSHA256}
 		if s.readOnlyOptions.EnforceAllowedColumnBoundary {
-			functionName = "gongmcp_profile_call_fact_cache_sanitized"
+			functionName = "gongmcp_profile_call_fact_cache_sanitized_limited"
+			queryArgs = append(queryArgs, scopedProfileCallFactCacheRowLimit)
 		}
 		rowsQuery = `
 SELECT call_id,
@@ -323,20 +349,37 @@ SELECT call_id,
        evidence_fields_json::text,
        deal_count,
        account_count
-  FROM ` + functionName + `($1, $2)
+  FROM ` + functionName + `($1, $2` + profileCacheLimitPlaceholder(s.readOnlyOptions.EnforceAllowedColumnBoundary) + `)
  ORDER BY started_at DESC, call_id`
+		rows, err := s.db.QueryContext(ctx, rowsQuery, queryArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanProfileCallFactRows(rows, expectedCount, s.readOnly)
 	}
 	rows, err := s.db.QueryContext(ctx, rowsQuery, profileID, canonicalSHA256)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	return scanProfileCallFactRows(rows, expectedCount, s.readOnly)
+}
+
+func profileCacheLimitPlaceholder(limited bool) string {
+	if limited {
+		return ", $3"
+	}
+	return ""
+}
+
+func scanProfileCallFactRows(rows *sql.Rows, expectedCount int, readOnly bool) ([]profileCallFact, error) {
 	out := make([]profileCallFact, 0)
 	for rows.Next() {
 		var row profileCallFact
 		var evidenceJSON []byte
 		var fieldValuesJSON []byte
-		if s.readOnly {
+		if readOnly {
 			if err := rows.Scan(
 				&row.CallID,
 				&row.Title,

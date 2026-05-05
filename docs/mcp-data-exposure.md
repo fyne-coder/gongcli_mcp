@@ -209,7 +209,8 @@ What the conservative defaults give you:
   until a sanitized builtin SQL surface exists. The scoped reader URL remains
   a service secret because selected functions and sanitized views can still
   expose minimized call metadata, timings, counts, tenant terminology. The
-  scoped profile-cache helper redacts call IDs/titles.
+  scoped active-profile and profile-cache helpers redact source metadata and
+  call IDs/titles, and the direct profile-cache helper is capped.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes

@@ -509,7 +509,6 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
-	DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
 LANGUAGE sql
@@ -523,10 +522,26 @@ SELECT m.canonical_sha256, m.data_fingerprint, m.built_at, m.call_count
     ON p.id = m.profile_id
  WHERE p.is_active = true
    AND m.profile_id = profile_id_arg
-   AND m.canonical_sha256 = canonical_sha_arg
+   AND (canonical_sha_arg = '' OR m.canonical_sha256 = canonical_sha_arg)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_meta(bigint, text) FROM PUBLIC;
-DROP FUNCTION IF EXISTS gongmcp_profile_data_fingerprint();
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta_sanitized(profile_id_arg bigint)
+RETURNS TABLE(data_fingerprint text, built_at text, call_count bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT m.data_fingerprint, m.built_at, m.call_count
+  FROM profile_call_fact_cache_meta m
+  JOIN profile_meta p
+    ON p.id = m.profile_id
+ WHERE p.is_active = true
+   AND m.profile_id = profile_id_arg
+ ORDER BY m.built_at DESC, m.canonical_sha256 DESC
+ LIMIT 1
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_meta_sanitized(bigint) FROM PUBLIC;
 CREATE OR REPLACE FUNCTION gongmcp_profile_data_fingerprint()
 RETURNS TABLE(fingerprint text)
 LANGUAGE sql
@@ -540,7 +555,6 @@ SELECT 'calls:' || (SELECT COUNT(*) FROM calls)::text || ':' || COALESCE((SELECT
        '|transcripts:' || (SELECT COUNT(*) FROM transcripts)::text || ':' || COALESCE((SELECT MAX(updated_at) FROM transcripts), '') AS fingerprint
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_data_fingerprint() FROM PUBLIC;
-DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(
 	call_id text,
@@ -586,7 +600,7 @@ SELECT c.call_id,
     ON p.id = c.profile_id
  WHERE p.is_active = true
    AND c.profile_id = profile_id_arg
-   AND c.canonical_sha256 = canonical_sha_arg
+   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache(bigint, text) FROM PUBLIC;
 
@@ -635,11 +649,61 @@ SELECT ''::text AS call_id,
     ON p.id = c.profile_id
  WHERE p.is_active = true
    AND c.profile_id = profile_id_arg
-   AND c.canonical_sha256 = canonical_sha_arg
+   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM PUBLIC;
 
-DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer);
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_sanitized_limited(profile_id_arg bigint, canonical_sha_arg text, row_limit integer)
+RETURNS TABLE(
+	call_id text,
+	title text,
+	started_at text,
+	duration_seconds bigint,
+	system text,
+	direction text,
+	scope text,
+	purpose text,
+	calendar_event_present boolean,
+	transcript_present boolean,
+	lifecycle_bucket text,
+	lifecycle_confidence text,
+	lifecycle_reason text,
+	evidence_fields_json jsonb,
+	deal_count bigint,
+	account_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT ''::text AS call_id,
+       ''::text AS title,
+       c.started_at,
+       c.duration_seconds,
+       c.system,
+       c.direction,
+       c.scope,
+       c.purpose,
+       c.calendar_event_present,
+       c.transcript_present,
+       c.lifecycle_bucket,
+       c.lifecycle_confidence,
+       c.lifecycle_reason,
+       c.evidence_fields_json,
+       c.deal_count,
+       c.account_count
+  FROM profile_call_fact_cache c
+  JOIN profile_meta p
+    ON p.id = c.profile_id
+ WHERE p.is_active = true
+   AND c.profile_id = profile_id_arg
+   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
+ ORDER BY c.started_at DESC, c.call_id
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 1000), 1), 1000)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_summary(profile_id_arg bigint, canonical_sha_arg text, group_by_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, row_limit integer)
 RETURNS TABLE(
 	group_by text,
@@ -719,7 +783,7 @@ filtered AS (
 		 WHERE p.is_active = true
 		   AND a.group_by <> ''
 		   AND c.profile_id = profile_id_arg
-		   AND c.canonical_sha256 = canonical_sha_arg
+		   AND (canonical_sha_arg = '' OR c.canonical_sha256 = canonical_sha_arg)
 	   AND (lifecycle_bucket_arg = '' OR c.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (scope_arg = '' OR c.scope = scope_arg)
 	   AND (system_arg = '' OR c.system = system_arg)
@@ -843,6 +907,73 @@ SELECT jsonb_build_object(
  LIMIT 1
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_active_business_profile() FROM PUBLIC;
+CREATE OR REPLACE FUNCTION gongmcp_active_business_profile_sanitized()
+RETURNS TABLE(profile_json jsonb)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT jsonb_build_object(
+	'profile_id', p.id,
+	'name', p.name,
+	'version', p.version,
+	'imported_at', p.imported_at,
+	'is_active', p.is_active,
+	'profile', jsonb_build_object(
+		'version', p.version,
+		'name', p.name,
+		'objects', COALESCE((
+			SELECT jsonb_object_agg(o.concept, jsonb_build_object('object_types', o.object_types) ORDER BY o.concept)
+			  FROM (
+				SELECT concept, jsonb_agg(object_type ORDER BY object_type) AS object_types
+				  FROM profile_object_alias
+				 WHERE profile_id = p.id
+				 GROUP BY concept
+			  ) o
+		), '{}'::jsonb),
+		'fields', COALESCE((
+			SELECT jsonb_object_agg(f.concept, jsonb_build_object('object', f.object_concept, 'names', f.names, 'confidence', f.confidence) ORDER BY f.concept)
+			  FROM (
+				SELECT concept, object_concept, confidence, jsonb_agg(field_name ORDER BY field_name) AS names
+				  FROM profile_field_concept
+				 WHERE profile_id = p.id
+				 GROUP BY concept, object_concept, confidence
+			  ) f
+		), '{}'::jsonb),
+		'lifecycle', COALESCE((
+			SELECT jsonb_object_agg(l.bucket, jsonb_build_object('order', l.ordinal, 'label', l.label, 'description', l.description, 'rules', l.rules) ORDER BY l.ordinal, l.bucket)
+			  FROM (
+				SELECT bucket,
+				       MAX(ordinal) AS ordinal,
+				       MAX(label) AS label,
+				       MAX(description) AS description,
+				       COALESCE(jsonb_agg(rule_json ORDER BY rule_index) FILTER (WHERE rule_index >= 0), '[]'::jsonb) AS rules
+				  FROM profile_lifecycle_rule
+				 WHERE profile_id = p.id
+				 GROUP BY bucket
+			  ) l
+		), '{}'::jsonb),
+		'methodology', COALESCE((
+			SELECT jsonb_object_agg(m.concept, jsonb_build_object('description', m.description, 'aliases', m.aliases_json, 'fields', m.fields_json, 'tracker_ids', m.tracker_ids_json, 'scorecard_question_ids', m.scorecard_question_ids_json) ORDER BY m.concept)
+			  FROM profile_methodology_concept m
+			 WHERE m.profile_id = p.id
+		), '{}'::jsonb)
+	),
+	'warnings', COALESCE((
+		SELECT jsonb_agg(jsonb_build_object('severity', w.severity, 'code', w.code, 'message', w.message, 'path', w.path)
+			ORDER BY CASE w.severity WHEN 'error' THEN 1 WHEN 'warn' THEN 2 ELSE 3 END, w.path, w.code)
+		  FROM profile_validation_warning w
+		 WHERE w.profile_id = p.id
+	), '[]'::jsonb)
+) AS profile_json
+  FROM profile_meta p
+ WHERE p.is_active = true
+ ORDER BY p.id DESC
+ LIMIT 1
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_active_business_profile_sanitized() FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
