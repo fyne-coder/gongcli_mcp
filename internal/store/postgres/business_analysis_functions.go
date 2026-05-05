@@ -217,7 +217,10 @@ WITH filtered AS (
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
-	   AND (participant_title_query_arg = '' OR cf.participant_title_present)
+	   AND (participant_title_query_arg = '' OR
+		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
+		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
+		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
 )
 SELECT call_id,
        title,
@@ -280,7 +283,10 @@ WITH rows AS (
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
-	   AND (participant_title_query_arg = '' OR cf.participant_title_present)
+	   AND (participant_title_query_arg = '' OR
+		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
+		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
+		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
 )
 SELECT COUNT(*) AS call_count,
        COALESCE(SUM(CASE WHEN transcript_status = 'present' THEN 1 ELSE 0 END), 0) AS transcript_count,
@@ -427,8 +433,6 @@ WITH rows AS (
 		       ELSE ''
 	       END AS dimension_value
 	  FROM call_facts cf
-	  JOIN calls c
-	    ON c.call_id = cf.call_id
 	 WHERE (title_query_arg = '' OR LOWER(cf.title) LIKE '%' || LOWER(left(title_query_arg, 160)) || '%')
 	   AND (transcript_query_arg = '' OR EXISTS (SELECT 1 FROM transcript_segments qts WHERE qts.call_id = cf.call_id AND qts.search_vector @@ websearch_to_tsquery('simple', left(transcript_query_arg, 160))))
 	   AND (theme_query_arg = '' OR EXISTS (SELECT 1 FROM transcript_segments qts WHERE qts.call_id = cf.call_id AND qts.search_vector @@ websearch_to_tsquery('simple', left(theme_query_arg, 160))))
@@ -443,9 +447,16 @@ WITH rows AS (
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
 	   AND (participant_title_query_arg = '' OR
-		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
-		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
-		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
+		       EXISTS (
+			       SELECT 1
+			         FROM calls filter_c
+			        WHERE filter_c.call_id = cf.call_id
+			          AND (
+			              EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(filter_c.raw_json->'parties') = 'array' THEN filter_c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%')
+			           OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(filter_c.raw_json->'metaData'->'parties') = 'array' THEN filter_c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%')
+			          )
+		       )
+		       OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
 )
 SELECT CASE lower(trim(dimension_arg))
 	       WHEN '' THEN 'lifecycle'
@@ -576,7 +587,7 @@ SELECT md5(raw.call_id) AS call_id,
        raw.segment_index,
        raw.start_ms,
        raw.end_ms,
-       raw.text,
+       ''::text AS text,
        raw.snippet
   FROM gongmcp_search_transcript_segments(search_text, row_limit) raw
 $function$;

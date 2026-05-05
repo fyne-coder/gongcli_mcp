@@ -374,4 +374,4 @@ grep -q "\"synthetic_profile_cache_rows\": $PROFILE_ROWS" "$CAPACITY_SUMMARY_OUT
 echo "postgres capacity drill passed"
 echo "artifact directory: $ARTIFACT_DIR"
 echo "capacity summary: $CAPACITY_SUMMARY_OUT"
-echo "load smoke artifacts: $LOAD_ARTIFACT_DIR"
+echo "load smoke artifact directory (internal synthetic debug output, not archive-safe as a whole): $LOAD_ARTIFACT_DIR"

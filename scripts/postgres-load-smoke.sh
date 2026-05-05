@@ -933,7 +933,7 @@ cat >"$SUMMARY_OUT" <<JSON
   "analyst_persona_dimension_explain": "$EXPLAIN_ANALYST_PERSONA_DIMENSION_OUT",
   "analyst_loss_reason_dimension_explain": "$EXPLAIN_ANALYST_LOSS_REASON_DIMENSION_OUT",
   "analyst_dimension_mcp": "$ANALYST_DIMENSIONS_OUT",
-  "decision": "Bounded serial rebuild, read-path smoke, analyst dimension MCP smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts prove analyzed sanitized helper-call execution at the function boundary, including persona and loss-reason dimension calls backed by materialized presence flags; a separate equivalent profile-cache predicate probe shows expected selective index use where stable at this scale. This is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
+  "decision": "Bounded serial rebuild, read-path smoke, analyst dimension MCP smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts record analyzed sanitized helper-call execution at the function boundary, including persona and loss-reason dimension calls backed by materialized presence flags; a separate equivalent profile-cache predicate probe shows expected selective index use where stable at this scale. This is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
 }
 JSON
 
@@ -994,3 +994,4 @@ echo "reader sensitive-read denial output: $READER_SENSITIVE_READ_OUT"
 echo "reader regrant output: $READER_REGRANT_OUT"
 echo "reader no-role view output: $READER_NO_ROLE_VIEW_OUT"
 echo "stale MCP denial output: $STALE_MCP_OUT"
+echo "archive note: treat this artifact directory as internal synthetic debug output; archive only reviewed summary/evidence files named by the capacity drill or release checklist"

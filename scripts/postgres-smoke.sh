@@ -1510,8 +1510,8 @@ if grep -q 'synthetic-call-001\|CustomerA\|Shared Postgres pilot kickoff' /tmp/g
   exit 1
 fi
 analyst_reader_psql -tA -c "SELECT row_to_json(r)::text FROM gongmcp_search_transcript_segments_sanitized('shared Postgres', 1) r" >/tmp/gongctl-postgres-analyst-reader-transcript-search-sanitized.json
-if grep -q 'synthetic-call-001\|speaker-1' /tmp/gongctl-postgres-analyst-reader-transcript-search-sanitized.json; then
-  echo "analyst scoped reader sanitized transcript search helper exposed raw call or speaker identifier" >&2
+if grep -q 'synthetic-call-001\|speaker-1\|We need a shared Postgres deployment path' /tmp/gongctl-postgres-analyst-reader-transcript-search-sanitized.json; then
+  echo "analyst scoped reader sanitized transcript search helper exposed raw call/speaker identifier or full transcript text" >&2
   exit 1
 fi
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/tmp/gongctl-postgres-analyst-loss-reason-fixture.txt <<'SQL'

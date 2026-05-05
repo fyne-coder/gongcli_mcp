@@ -1447,6 +1447,26 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if got, want := businessAnalysisCallIDs(pgCalls.Rows), businessAnalysisCallIDs(sqliteCalls.Rows); !reflect.DeepEqual(got, want) {
 		t.Fatalf("postgres business call ids=%v want sqlite %v", got, want)
 	}
+	titleFilter := sqlite.BusinessAnalysisFilter{Quarter: "2026-Q1", ParticipantTitleQuery: "VP Operations", Limit: 10}
+	pgTitleCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: titleFilter, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SearchBusinessAnalysisCalls participant_title_query: %v", err)
+	}
+	sqliteTitleCalls, err := sqliteStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: titleFilter, Limit: 10})
+	if err != nil {
+		t.Fatalf("sqlite SearchBusinessAnalysisCalls participant_title_query: %v", err)
+	}
+	if got, want := businessAnalysisCallIDs(pgTitleCalls.Rows), businessAnalysisCallIDs(sqliteTitleCalls.Rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres participant_title_query business call ids=%v want sqlite %v", got, want)
+	}
+	missingTitleFilter := sqlite.BusinessAnalysisFilter{Quarter: "2026-Q1", ParticipantTitleQuery: "Finance", Limit: 10}
+	pgMissingTitleCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: missingTitleFilter, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SearchBusinessAnalysisCalls missing participant_title_query: %v", err)
+	}
+	if pgMissingTitleCalls.Summary.CallCount != 0 || len(pgMissingTitleCalls.Rows) != 0 {
+		t.Fatalf("postgres participant_title_query matched by presence instead of title text: summary=%+v rows=%+v", pgMissingTitleCalls.Summary, pgMissingTitleCalls.Rows)
+	}
 	if _, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: sqlite.BusinessAnalysisFilter{AccountQuery: "Example"}, Limit: 10}); err == nil || !strings.Contains(err.Error(), "account_query is not supported") {
 		t.Fatalf("postgres business account_query error=%v, want unsupported account_query error", err)
 	}

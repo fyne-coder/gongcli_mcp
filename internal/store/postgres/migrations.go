@@ -1667,36 +1667,6 @@ ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS participant_title_present BOOLEA
 ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS loss_reason_present BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_participant_title_present ON call_facts(participant_title_present, call_date, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_loss_reason_present ON call_facts(loss_reason_present, call_date, started_at DESC);
-
-UPDATE call_facts cf
-   SET participant_title_present = (
-	       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '')
-	    OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '')
-	    OR EXISTS (
-	        SELECT 1
-	          FROM call_context_objects po
-	          JOIN call_context_fields pf
-	            ON pf.call_id = po.call_id
-	           AND pf.object_key = po.object_key
-	         WHERE po.call_id = cf.call_id
-	           AND po.object_type IN ('Contact', 'Lead')
-	           AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')
-	           AND TRIM(pf.field_value_text) <> ''
-	    )
-       ),
-       loss_reason_present = EXISTS (
-	        SELECT 1
-	          FROM call_context_objects po
-	          JOIN call_context_fields pf
-	            ON pf.call_id = po.call_id
-	           AND pf.object_key = po.object_key
-	         WHERE po.call_id = cf.call_id
-	           AND po.object_type = 'Opportunity'
-	           AND pf.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c')
-	           AND TRIM(pf.field_value_text) <> ''
-       )
-  FROM calls c
- WHERE c.call_id = cf.call_id;
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
 }
