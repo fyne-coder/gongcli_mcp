@@ -551,7 +551,7 @@ func TestPostgresToolAllowlistNarrowsGovernanceSearchExpandedAllowlist(t *testin
 }
 
 func TestPostgresToolAllowlistRejectsUnsupportedPostgresPresets(t *testing.T) {
-	for _, preset := range []string{"analyst", "all-readonly"} {
+	for _, preset := range []string{"all-readonly", "all-tools", "all"} {
 		expanded, err := mcp.ExpandToolPreset(preset)
 		if err != nil {
 			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
@@ -563,10 +563,67 @@ func TestPostgresToolAllowlistRejectsUnsupportedPostgresPresets(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsAnalystPreset(t *testing.T) {
+	for _, preset := range []string{"analyst", "analyst-expansion"} {
+		expanded, err := mcp.ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		allowlist, err := postgresToolAllowlist(expanded, true, preset)
+		if err != nil {
+			t.Fatalf("postgresToolAllowlist(%q) returned error: %v", preset, err)
+		}
+		if !reflect.DeepEqual(allowlist, expanded) {
+			t.Fatalf("postgresToolAllowlist(%q)=%v want expanded preset %v", preset, allowlist, expanded)
+		}
+	}
+}
+
+func TestPostgresAnalystPresetBusinessAnalysisToolsHaveGrantMappings(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "analyst")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	functionless := map[string]struct{}{
+		"list_call_cohorts": {},
+	}
+	for _, name := range allowlist {
+		if !containsString(mcp.BusinessAnalysisToolNames(), name) {
+			continue
+		}
+		if _, ok := functionless[name]; ok {
+			continue
+		}
+		if got := postgres.FunctionSignaturesForTools([]string{name}); len(got) == 0 {
+			t.Fatalf("business-analysis tool %q has no Postgres required-function mapping", name)
+		}
+	}
+}
+
+func TestPostgresAnalystPresetBusinessAnalysisToolsRequireExplicitReview(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "analyst")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	for _, name := range mcp.BusinessAnalysisToolNames() {
+		if !containsString(allowlist, name) {
+			t.Fatalf("business-analysis tool %q is in analyst catalog but not reviewed for Postgres analyst", name)
+		}
+	}
+}
+
 func TestPostgresToolAllowlistRejectsBlockedPresetEvenIfToolsBecomeSupported(t *testing.T) {
 	supportedSubset := []string{"get_sync_status", "search_calls", "list_crm_object_types", "list_crm_fields"}
-	if _, err := postgresToolAllowlist(supportedSubset, true, "analyst"); err == nil {
-		t.Fatal("postgresToolAllowlist accepted blocked analyst preset by supported subset")
+	if _, err := postgresToolAllowlist(supportedSubset, true, "all-readonly"); err == nil {
+		t.Fatal("postgresToolAllowlist accepted blocked all-readonly preset by supported subset")
 	}
 	allowlist, err := postgresToolAllowlist(supportedSubset, true, "")
 	if err != nil {

@@ -21,9 +21,10 @@ For a faster source-first onboarding path, start with
 - `internal/store/postgres`: first shared-deployment vertical slice for sync
   status, calls, users, transcripts, transcript segments, metadata-only support
   diagnostics, cache inventory, retention purge planning/cleanup, and read-only
-  MCP `business-pilot` plus core operator search/detail tools. It is not full
-  query parity with SQLite yet: database-enforced governance snapshots/RLS,
-  backup/restore, and full analyst/all-readonly tools remain follow-ups.
+  MCP `business-pilot`, approved `analyst`, and core operator search/detail
+  tools. It is not full query parity with SQLite yet: database-enforced
+  governance snapshots/RLS, backup/restore, and `all-readonly` remain
+  follow-ups.
   [Postgres parity matrix](postgres-parity.md) tracks the full parity contract.
 - `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus the configured cache store.
 - `internal/transcripts`: transcript sync/search helpers on top of the store interface plus the Gong client.
@@ -154,12 +155,11 @@ Unmapped CRM field surfaces are redacted by default. They return field names, ty
 Local SQLite state remains the complete proving ground and source of truth for
 MCP query tools. The Postgres backend now covers bounded reviewed slices for the
 shared store path, `business-pilot`, `analyst-core`, `analyst-business-core`,
-governance-search, backup/restore and retention smoke, and explicit
+governance-search, `analyst`, backup/restore and retention smoke, and explicit
 operator/admin allowlists such as CRM field diagnostics, lifecycle CRM
 comparison, CRM-context transcript snippets, and transcript-backfill call
-references. Full `analyst`/`all-readonly`, broad catalog parity,
-database-enforced governance/RLS, and customer-scale hardening remain follow-up
-work.
+references. `all-readonly`, broad catalog parity, database-enforced
+governance/RLS, and customer-scale hardening remain follow-up work.
 
 Postgres materializes builtin call/context facts because it cannot lean on
 SQLite views at read time. The writable CLI owns read-model refresh and repair;

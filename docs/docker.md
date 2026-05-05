@@ -10,8 +10,10 @@
 
 HTTP mode is explicit via `gongmcp --http ...`; the default MCP path remains
 stdio. SQLite remains the complete/default cache, while the Postgres
-business-pilot slice lets separate sync and MCP containers share one database.
-Keep credentials and customer data outside the image.
+shared-deployment slice lets separate sync and MCP containers share one
+database for approved presets such as `business-pilot`, narrower analyst
+presets, and `analyst`; `all-readonly` remains excluded. Keep credentials and
+customer data outside the image.
 
 ## Build
 
@@ -197,6 +199,9 @@ The current Postgres development branch supports:
   inventory, and aggregate scorecard activity tools
 - `gongmcp --tool-preset analyst-business-core`: bounded transcript-evidence
   and business-analysis tools plus analyst-core
+- `gongmcp --tool-preset analyst`: approved analyst sessions over the reviewed
+  Postgres catalog; use narrower presets when the host only needs a starter
+  surface
 - explicit `gongmcp --tool-allowlist list_unmapped_crm_fields`,
   `search_crm_field_values`, `analyze_late_stage_crm_signals`,
   `opportunities_missing_transcripts`, `opportunity_call_summary`,
@@ -215,7 +220,7 @@ The current Postgres development branch supports:
   prepared; Postgres narrows this preset to supported search tools
 
 It does not yet provide full SQLite query parity for database-enforced
-governance snapshots/RLS, full analyst/all-readonly presets, production PITR
+governance snapshots/RLS, the all-readonly preset, production PITR
 policy, broad full-catalog query parity, or customer-scale privacy/performance
 hardening. Postgres support bundles, cache inventory, retention purge planning,
 and synthetic backup/restore smoke are available as operator diagnostics that

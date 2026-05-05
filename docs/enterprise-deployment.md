@@ -9,8 +9,9 @@ This document defines the current enterprise pilot deployment shape for
   refreshes local cache state.
 - `gongmcp` is a read-only MCP server over the configured cache store. SQLite
   is complete/default; Postgres supports the explicitly listed
-  shared-deployment slices. Full Postgres `analyst` and `all-readonly` parity
-  remain follow-ups. It supports local stdio and a minimal HTTP `/mcp`
+  shared-deployment slices, including reviewed `analyst` sessions.
+  Postgres `all-readonly` parity remains a follow-up. It supports local stdio
+  and a minimal HTTP `/mcp`
   private-pilot mode.
 - Business users should consume only the approved MCP tool set through host or
   wrapper policy. They do not run live syncs, handle Gong credentials, or write
@@ -181,8 +182,9 @@ flowchart LR
   through `search_transcripts_by_crm_context`, are available through explicit
   allowlists. The `compare_lifecycle_crm_fields`, `missing_transcripts`, and
   `search_transcripts_by_crm_context` Postgres slices are development-branch
-  work after `v0.3.3` until a tagged release includes them.
-  Full `analyst` and `all-readonly` parity remains a follow-up tracked in the
+  work after `v0.3.3` until a tagged release includes them. The reviewed
+  Postgres `analyst` preset combines the supported analyst tools for approved
+  analyst sessions; `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).
 - AI governance filtered DB export remains SQLite-only. Postgres supports a
   prepared governance policy for the narrowed `governance-search` MCP slice;
@@ -634,11 +636,10 @@ A trusted single-user SQLite analyst workstation using stdio can skip the tool
 allowlist and enable per-tool opt-ins to surface exact identifiers, bounded
 snippets, and attribution joined to Account/Opportunity context for deeper
 questions. Postgres deployments should expand through reviewed presets such as
-`analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool
+`analyst`, `analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool
 allowlists such as `crm_field_population_matrix`,
-`compare_lifecycle_crm_fields`, or `search_transcripts_by_crm_context`; full
-Postgres `analyst` and `all-readonly` remain gated until the parity matrix
-says otherwise. See
+`compare_lifecycle_crm_fields`, or `search_transcripts_by_crm_context`;
+Postgres `all-readonly` remains gated until the parity matrix says otherwise. See
 [mcp-data-exposure.md](mcp-data-exposure.md) for the trade-off framing and
 [mcp-data-exposure.md#mcp-call-volume-and-limits](mcp-data-exposure.md#mcp-call-volume-and-limits)
 for the per-call cost model and recommended limits.

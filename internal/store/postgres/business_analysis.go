@@ -528,6 +528,8 @@ func postgresBusinessAnalysisDimension(value string) (string, error) {
 		return "lifecycle", nil
 	case "industry", "account_industry":
 		return "industry", nil
+	case "persona", "participant_title", "title":
+		return "persona", nil
 	case "opportunity_stage", "stage":
 		return "opportunity_stage", nil
 	case "opportunity_type":
@@ -548,6 +550,8 @@ func postgresBusinessAnalysisDimension(value string) (string, error) {
 		return "quarter", nil
 	case "won_lost", "outcome":
 		return "won_lost", nil
+	case "loss_reason":
+		return "loss_reason", nil
 	default:
 		return "", fmt.Errorf("unsupported business-analysis dimension %q", value)
 	}

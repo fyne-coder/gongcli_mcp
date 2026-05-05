@@ -185,19 +185,19 @@ func ToolPresetCatalog() []ToolPresetInfo {
 			name:        "analyst-core",
 			aliases:     []string{"postgres-analyst-core"},
 			purpose:     "Postgres-supported analyst starter surface over core call, CRM context, profile, lifecycle, and transcript search tools.",
-			recommended: "approved analysts validating shared Postgres deployments before full analyst parity",
+			recommended: "approved analysts using a narrower shared Postgres starter surface",
 		},
 		{
 			name:        "analyst-business-core",
 			aliases:     []string{"postgres-analyst-business-core"},
 			purpose:     "Postgres-supported analyst business-analysis starter surface over bounded cohort, transcript evidence, and dimension tools.",
-			recommended: "approved analysts validating shared Postgres business-analysis workflows before full analyst parity",
+			recommended: "approved analysts using a narrower shared Postgres business-analysis surface",
 		},
 		{
 			name:        "analyst",
 			aliases:     []string{"analyst-expansion"},
 			purpose:     "Broader bounded evidence and profile-aware analysis without admin/config-heavy tools.",
-			recommended: "SQLite analyst sessions, or Postgres only after full analyst parity is complete",
+			recommended: "approved SQLite or Postgres analyst sessions over the reviewed catalog",
 		},
 		{
 			name:        "governance-search",

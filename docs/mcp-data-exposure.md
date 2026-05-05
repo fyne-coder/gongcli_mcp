@@ -9,41 +9,31 @@ the same read-only tool layer.
 
 Current fixed boundaries:
 
-- MCP reads a local cache/store only. SQLite is the complete default backend;
-  the Postgres shared-deployment slice supports the explicit
-	  `business-pilot` preset over a read-only database role, plus narrow
-	  operator smoke/search allowlists for `search_calls`, `get_call`, and
-	  `search_transcript_segments`. Postgres governance mode supports a prepared
-	  policy for the narrowed `governance-search` preset. Postgres `get_call` is a
-	  record-reference tool and should be enabled only through an explicit
-	  allowlist for reviewed operator use, not through `business-pilot`.
-	  Postgres `analyst-core` adds reviewed core/profile/lifecycle/CRM-context
-	  inventory tools and scorecard settings inventory without raw CRM field
-	  values or raw settings payloads. Postgres
-	  `analyst-business-core` adds bounded transcript-evidence and
-		  business-analysis tools through reviewed read-only functions; direct
-		  reader SQL calls do not receive raw account/opportunity names,
-		  websites, close dates, or probabilities from those functions.
-		  `analyst-core` also includes aggregate answered-scorecard activity
-		  summaries without answered-scorecard IDs, call IDs, user IDs, answer
-		  text, or raw activity payloads. Explicit Postgres allowlists are also
-		  available for `list_unmapped_crm_fields`, `search_crm_field_values`,
-		  `analyze_late_stage_crm_signals`,
-		  `opportunities_missing_transcripts`, `opportunity_call_summary`, and
-		  `crm_field_population_matrix`, and
-		  `compare_lifecycle_crm_fields`; `search_transcripts_by_crm_context` is
-		  available as an explicit CRM-constrained transcript snippet allowlist
-		  with default MCP identifier redaction. The late-stage Postgres slice is
-		  limited to `Opportunity.StageName`, the Opportunity aggregate slices
-		  return only redacted coverage and call-summary metadata, and the CRM
-		  matrix slice groups only by approved object/field pairs:
-		  `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`,
-		  `Opportunity.Forecast_Category_AE__c`, `Account.Industry`,
-		  `Account.Account_Type__c`, and `Account.Revenue_Range_f__c`. The
-		  lifecycle comparison slice is limited to the reviewed `Opportunity`
-		  object type and returns aggregate field counts/rates only. These stay outside the full
-		  `analyst` preset until the remaining catalog is ready. Broader
-		  `analyst` and `all-readonly` Postgres parity remains a follow-up.
+- MCP reads a local cache/store only. SQLite is the complete default backend.
+  Postgres shared-deployment slices support `business-pilot`, `analyst-core`,
+  `analyst-business-core`, approved `analyst` sessions, `governance-search`,
+  and narrow operator smoke/search allowlists over a read-only database role.
+- Postgres `get_call` remains a record-reference tool and should be enabled
+  only through an explicit allowlist for reviewed operator use, not through
+  `business-pilot`. Postgres governance mode supports a prepared policy for the
+  narrowed `governance-search` preset.
+- Postgres analyst surfaces include reviewed core/profile/lifecycle/CRM-context
+  inventory tools, scorecard settings inventory, aggregate answered-scorecard
+  activity, bounded transcript evidence, and business-analysis tools through
+  reviewed read-only functions. Direct reader SQL calls do not receive raw
+  account/opportunity names, websites, close dates, probabilities, answered
+  scorecard IDs, call IDs, user IDs, answer text, or raw activity payloads from
+  those functions.
+- Explicit Postgres allowlists are also available for
+  `list_unmapped_crm_fields`, `search_crm_field_values`,
+  `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`,
+  `opportunity_call_summary`, `crm_field_population_matrix`,
+  `compare_lifecycle_crm_fields`, and `search_transcripts_by_crm_context`. The
+  late-stage Postgres slice is limited to `Opportunity.StageName`; Opportunity
+  aggregates return only redacted coverage and call-summary metadata; the CRM
+  matrix groups only by approved object/field pairs; and lifecycle comparison
+  is limited to the reviewed `Opportunity` object type. Postgres
+  `all-readonly` parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool
@@ -51,14 +41,14 @@ Current fixed boundaries:
   set, the full read-only catalog remains available only for SQLite stdio;
   Postgres stdio defaults to the bounded vertical-slice surface.
 - `gongmcp --ai-governance-config` and `GONGMCP_AI_GOVERNANCE_CONFIG` can
-	  suppress calls linked to private restricted-customer name/alias matches before
-	  MCP output reaches an LLM. The preferred SQLite blocklist path is
-	  `gongctl governance export-filtered-db`, which scans call titles, raw call
-	  metadata including participant emails, embedded CRM values, and transcript
-	  segment text, then points MCP at the physically filtered copy. Postgres uses
-	  `gongctl governance audit --apply-postgres-policy` with a writable operator
-	  URL, then read-only `gongmcp` validates the prepared policy. The real list
-	  must stay outside the public repo.
+  suppress calls linked to private restricted-customer name/alias matches before
+  MCP output reaches an LLM. The preferred SQLite blocklist path is
+  `gongctl governance export-filtered-db`, which scans call titles, raw call
+  metadata including participant emails, embedded CRM values, and transcript
+  segment text, then points MCP at the physically filtered copy. Postgres uses
+  `gongctl governance audit --apply-postgres-policy` with a writable operator
+  URL, then read-only `gongmcp` validates the prepared policy. The real list
+  must stay outside the public repo.
 - MCP does not expose raw Gong API passthrough, arbitrary SQL, raw cached call JSON, profile import, or full transcript dumps.
 - HTTP mode can require bearer tokens, but bearer auth is an access gate, not
   tenant separation or data anonymization.
@@ -125,10 +115,12 @@ Required filter contract:
 - Return coverage, warning, and limitation metadata when attribution,
   transcript, persona, industry, opportunity, loss-reason, or won/lost fields
   are missing.
-- Use a physically governance-filtered DB for analyst sessions when customer
-  exclusions apply. Raw-DB AI governance mode intentionally fails closed for
-  these aggregate cohort tools because their counts and slices are not
-  recomputed over a filtered call set.
+- For SQLite analyst sessions with customer exclusions, use a physically
+  governance-filtered DB. Postgres analyst sessions with customer exclusions
+  remain gated until governed views/RLS/materialized snapshots or an equivalent
+  filtered Postgres surface exists. Raw-DB AI governance mode intentionally
+  fails closed for these aggregate cohort tools because their counts and slices
+  are not recomputed over a filtered call set.
 
 | Tools | Intended preset | Default exposure | Required protections | Residual risk |
 | --- | --- | --- | --- | --- |
@@ -188,7 +180,8 @@ What the conservative defaults give you:
   preset or allowlist is set, but most identifier-bearing fields are blanked,
   snippet tools redact call IDs and speaker IDs, and CRM-value lookups require
   explicit opt-in flags. Postgres stdio defaults to the narrower vertical-slice
-  allowlist, and full Postgres `analyst` / `all-readonly` remains rejected.
+  allowlist; the reviewed `analyst` preset is available for approved analyst
+  sessions, while `all-readonly` remains rejected.
 - Pilot deployments are expected to layer `--tool-preset business-pilot` or a
   custom allowlist on top so business users see only the approved subset rather
   than the full catalog.
@@ -245,8 +238,9 @@ How to open up the surface intentionally:
   `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`,
   `opportunity_call_summary`, `crm_field_population_matrix`,
   `compare_lifecycle_crm_fields`, `missing_transcripts`, or
-  `search_transcripts_by_crm_context`; full
-  Postgres `analyst` and `all-readonly` are not yet supported.
+  `search_transcripts_by_crm_context`; use Postgres `analyst` for approved
+  analyst sessions over the reviewed catalog. Postgres `all-readonly` is not
+  yet supported.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.
@@ -365,8 +359,8 @@ Practical recommendations:
   `rank_transcript_backlog`, `summarize_call_facts`,
   `analyze_late_stage_crm_signals`) before reaching for identifier-bearing or
   snippet-bearing tools.
-- Use `--tool-preset business-pilot`, a reviewed SQLite/full-catalog preset
-  such as `analyst`, a reviewed Postgres preset such as `analyst-core` or
+- Use `--tool-preset business-pilot`, a reviewed analyst preset such as
+  `analyst`, a narrower Postgres preset such as `analyst-core` or
   `analyst-business-core`, or a custom `--tool-allowlist` to remove tools the
   host should not be reaching for reflexively in a given deployment lane. A
   narrow preset or allowlist is usually a better limit than relying on the

@@ -339,7 +339,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string) ([]string, error) {
 	switch strings.ToLower(strings.TrimSpace(presetName)) {
-	case "analyst", "analyst-expansion", "all-readonly", "all-tools", "all":
+	case "all-readonly", "all-tools", "all":
 		return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", presetName)
 	case "governance-search":
 		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
@@ -377,22 +377,39 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		"search_transcript_quotes_with_attribution": {},
 		"search_transcripts_by_call_facts":          {},
 		"search_transcripts_by_crm_context":         {},
+		"summarize_scorecard_activity":              {},
+		"summarize_call_facts":                      {},
+		"summarize_calls_by_lifecycle":              {},
 		"build_call_cohort":                         {},
 		"inspect_call_cohort":                       {},
+		"list_call_cohorts":                         {},
+		"compare_call_cohorts":                      {},
 		"search_calls_by_filters":                   {},
 		"summarize_calls_by_filters":                {},
 		"search_transcripts_by_filters":             {},
 		"discover_themes_in_cohort":                 {},
 		"summarize_themes_by_dimension":             {},
+		"compare_themes_over_time":                  {},
+		"compare_themes_by_segment":                 {},
 		"extract_theme_quotes":                      {},
 		"search_quotes_in_cohort":                   {},
+		"rank_quotes_for_sales_use":                 {},
+		"build_quote_pack":                          {},
+		"compare_theme_outcomes":                    {},
+		"summarize_pipeline_progression_by_theme":   {},
+		"summarize_loss_reasons_by_theme":           {},
+		"compare_won_lost_theme_patterns":           {},
+		"summarize_themes_by_persona":               {},
+		"summarize_themes_by_industry":              {},
+		"rank_personas_by_insight_quality":          {},
 		"diagnose_attribution_coverage":             {},
+		"generate_sales_hooks_from_themes":          {},
+		"generate_outreach_sequence_inputs":         {},
+		"recommend_target_personas_and_industries":  {},
+		"build_theme_brief":                         {},
 		"score_cohort_evidence_quality":             {},
 		"explain_analysis_limitations":              {},
 		"suggest_filter_refinements":                {},
-		"summarize_scorecard_activity":              {},
-		"summarize_call_facts":                      {},
-		"summarize_calls_by_lifecycle":              {},
 	}
 	if len(allowlist) == 0 {
 		if httpMode {

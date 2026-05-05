@@ -31,10 +31,10 @@ local database files. Those workflows stay with the pilot operator.
   transcript files, raw cached JSON, or direct filesystem/database access.
 - The default business-user tool preset is `business-pilot` from
   [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
-  Wider SQLite/full-catalog presets such as `analyst` and `all-readonly`
+  Wider analyst/full-catalog presets such as `analyst` and `all-readonly`
   require operator/sponsor approval and are not the business-user default.
-  Postgres expansion uses reviewed Postgres presets such as `analyst-core`,
-  `analyst-business-core`, `governance-search`, or explicit tool allowlists
+  Postgres expansion uses reviewed Postgres presets such as `analyst`,
+  `analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool allowlists
   such as `compare_lifecycle_crm_fields` for reviewed Opportunity lifecycle
   CRM field comparison or `search_transcripts_by_crm_context` for reviewed CRM-constrained snippet
   investigations. The `compare_lifecycle_crm_fields` and
@@ -441,16 +441,17 @@ Tools required: `analyze_late_stage_crm_signals`,
 opt-ins), `rank_transcript_backlog`, `get_sync_status`. The operator must have
 enabled the wider analyst posture for these tools to be available. In Postgres
 shared deployments, `analyze_late_stage_crm_signals`,
-`opportunities_missing_transcripts`, and `opportunity_call_summary` are
-available through explicit allowlists, while
+`opportunities_missing_transcripts`, `opportunity_call_summary`,
 `search_transcript_quotes_with_attribution`, `rank_transcript_backlog`, and
-`get_sync_status` are available through the appropriate reviewed Postgres
-presets or allowlists.
+`get_sync_status` are available through the approved `analyst` preset for
+approved analyst sessions, or explicit allowlists for narrower operator
+sessions.
 
 Optional operator diagnostic: `crm_field_population_matrix` is available in
-Postgres only through an explicit allowlist for reviewed field-population
-diagnostics. Keep it out of routine business-user presets until small-cell
-privacy and customer-scale performance hardening are complete.
+Postgres through the approved `analyst` preset for approved analyst sessions,
+or through an explicit allowlist for reviewed field-population diagnostics.
+Keep `missing_transcripts` explicit/admin-only, and keep CRM matrix use scoped
+until small-cell privacy and customer-scale performance hardening are complete.
 
 Output discipline: do not turn missing transcript coverage into a forecast
 recommendation by itself; treat it as a refresh request to the operator and a

@@ -1006,6 +1006,13 @@ ON CONFLICT (call_id, object_key) DO UPDATE
        object_id = EXCLUDED.object_id,
        object_name = EXCLUDED.object_name,
        raw_json = EXCLUDED.raw_json;
+INSERT INTO call_context_fields(call_id, object_key, field_name, field_label, field_type, field_value_text, raw_json)
+VALUES ('synthetic-call-001', 'Opportunity:opp-crm-context-private', 'Loss_Reason__c', 'Loss Reason', 'string', 'Timeline uncertainty', '{"name":"Loss_Reason__c","value":"Timeline uncertainty"}'::jsonb)
+ON CONFLICT (call_id, object_key, field_name) DO UPDATE
+   SET field_label = EXCLUDED.field_label,
+       field_type = EXCLUDED.field_type,
+       field_value_text = EXCLUDED.field_value_text,
+       raw_json = EXCLUDED.raw_json;
 SQL
 reader_psql -tA -F '|' -c "SELECT started_at, object_type, matching_object_count, segment_index, start_ms, end_ms, snippet FROM gongmcp_search_transcript_segments_by_crm_context('shared Postgres', 'Opportunity', 'opp-crm-context-private', 5)" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context.txt
 {
@@ -1416,7 +1423,7 @@ if env GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_ALLOWLIST="opportunities_mis
   echo "read-only MCP unexpectedly started with public function EXECUTE drift" >&2
   exit 1
 fi
-grep -q 'over-broad function EXECUTE grants' /tmp/gongctl-postgres-reader-function-public-drift.txt
+grep -Eq 'over-broad function EXECUTE grants|extra function EXECUTE grants outside selected MCP tools' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_opportunities_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_opportunity_call_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_field_population_matrix' /tmp/gongctl-postgres-reader-function-public-drift.txt
@@ -1425,17 +1432,91 @@ grep -q 'gongmcp_search_transcript_segments_by_crm_context' /tmp/gongctl-postgre
 grep -q 'gongmcp_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_object_type_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader" >/tmp/gongctl-postgres-reader-function-public-drift-repaired.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/tmp/gongctl-postgres-analyst-loss-reason-fixture.txt <<'SQL'
+INSERT INTO call_context_objects(call_id, object_key, object_type, object_id, object_name, raw_json)
+VALUES ('synthetic-call-001', 'Opportunity:opp-crm-context-private', 'Opportunity', 'opp-crm-context-private', 'CRM Context Private Opportunity', '{"type":"Opportunity"}'::jsonb)
+ON CONFLICT (call_id, object_key) DO UPDATE
+   SET object_type = EXCLUDED.object_type,
+       object_id = EXCLUDED.object_id,
+       object_name = EXCLUDED.object_name,
+       raw_json = EXCLUDED.raw_json;
+INSERT INTO call_context_fields(call_id, object_key, field_name, field_label, field_type, field_value_text, raw_json)
+VALUES ('synthetic-call-001', 'Opportunity:opp-crm-context-private', 'Loss_Reason__c', 'Loss Reason', 'string', 'LossReason raw sentinel', '{"name":"Loss_Reason__c","value":"LossReason raw sentinel"}'::jsonb)
+ON CONFLICT (call_id, object_key, field_name) DO UPDATE
+   SET field_label = EXCLUDED.field_label,
+       field_type = EXCLUDED.field_type,
+       field_value_text = EXCLUDED.field_value_text,
+       raw_json = EXCLUDED.raw_json;
+INSERT INTO call_context_objects(call_id, object_key, object_type, object_id, object_name, raw_json)
+VALUES ('synthetic-call-001', 'Contact:contact-analyst-private', 'Contact', 'contact-analyst-private', 'Analyst Private Contact', '{"type":"Contact"}'::jsonb)
+ON CONFLICT (call_id, object_key) DO UPDATE
+   SET object_type = EXCLUDED.object_type,
+       object_id = EXCLUDED.object_id,
+       object_name = EXCLUDED.object_name,
+       raw_json = EXCLUDED.raw_json;
+INSERT INTO call_context_fields(call_id, object_key, field_name, field_label, field_type, field_value_text, raw_json)
+VALUES ('synthetic-call-001', 'Contact:contact-analyst-private', 'Title', 'Title', 'string', 'VP Operations', '{"name":"Title","value":"VP Operations"}'::jsonb)
+ON CONFLICT (call_id, object_key, field_name) DO UPDATE
+   SET field_label = EXCLUDED.field_label,
+       field_type = EXCLUDED.field_type,
+       field_value_text = EXCLUDED.field_value_text,
+       raw_json = EXCLUDED.raw_json;
+SQL
 
-if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-analyst-rejected.txt 2>&1; then
-  echo "postgres unexpectedly accepted full analyst preset" >&2
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{"lifecycle_source":"builtin"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcripts_by_crm_context","arguments":{"query":"shared Postgres","object_type":"Opportunity","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"build_call_cohort","arguments":{"filter":{"query":"shared Postgres"},"limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"compare_theme_outcomes","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"summarize_loss_reasons_by_theme","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"summarize_themes_by_persona","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"rank_personas_by_insight_quality","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"build_quote_pack","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"generate_sales_hooks_from_themes","arguments":{"filter":{"query":"shared Postgres","limit":5},"theme_query":"Postgres"}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"get_sync_status"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"search_transcripts_by_crm_context"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"build_call_cohort"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"list_call_cohorts"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"compare_theme_outcomes"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"summarize_loss_reasons_by_theme"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"summarize_themes_by_persona"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"rank_personas_by_insight_quality"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"build_theme_brief"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"build_quote_pack"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"generate_sales_hooks_from_themes"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q '"compare_lifecycle_crm_fields"' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'lifecycle_source' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'cohort_id' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'shared.*Postgres' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'participant_title_present' /tmp/gongctl-postgres-analyst.jsonl
+grep -q 'loss_reason_present' /tmp/gongctl-postgres-analyst.jsonl
+assert_mcp_success /tmp/gongctl-postgres-analyst.jsonl 3 4 5 6 7 8 9 10 11 12
+if grep -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|raw_json\|raw_sha256\|field_value_text\|VP Operations\|LossReason raw sentinel\|Loss_Reason__c\|synthetic-profile-call-001\|Profile lifecycle proposal review\|opp-profile-001\|Profile Opportunity\|opp-crm-context-private\|CRM Context Private Opportunity\|This synthetic segment validates' /tmp/gongctl-postgres-analyst.jsonl; then
+  echo "postgres analyst preset output exposed connection, raw storage, identifier, or synthetic transcript markers" >&2
   exit 1
 fi
-grep -q 'analyst is not supported by the postgres vertical slice' /tmp/gongctl-postgres-analyst-rejected.txt
+if ! {
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-expansion go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst-expansion.jsonl 2>/tmp/gongctl-postgres-analyst-expansion.stderr; then
+  cat /tmp/gongctl-postgres-analyst-expansion.stderr >&2
+  exit 1
+fi
+grep -q '"build_call_cohort"' /tmp/gongctl-postgres-analyst-expansion.jsonl
+grep -q '"summarize_loss_reasons_by_theme"' /tmp/gongctl-postgres-analyst-expansion.jsonl
+grep -q '"generate_sales_hooks_from_themes"' /tmp/gongctl-postgres-analyst-expansion.jsonl
 if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=all-readonly go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-all-readonly-rejected.txt 2>&1; then
   echo "postgres unexpectedly accepted all-readonly preset" >&2
   exit 1
 fi
 grep -q 'all-readonly is not supported by the postgres vertical slice' /tmp/gongctl-postgres-all-readonly-rejected.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-post-analyst-read-model-rebuild.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-post-analyst-read-model-rebuild.json
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -1699,7 +1780,7 @@ echo "reader late-stage function fields output: /tmp/gongctl-postgres-reader-lat
 echo "reader late-stage function value-column denial output: /tmp/gongctl-postgres-reader-late-stage-function-value-column.txt"
 echo "reader late-stage custom-stage denial output: /tmp/gongctl-postgres-reader-late-stage-custom-stage-denial.txt"
 echo "MCP late-stage custom-stage denial output: /tmp/gongctl-postgres-late-stage-custom-stage-denial.jsonl"
-echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"
+echo "analyst output: /tmp/gongctl-postgres-analyst.jsonl"
 echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "compatibility reader business-pilot MCP output: /tmp/gongctl-postgres-business-pilot.jsonl"

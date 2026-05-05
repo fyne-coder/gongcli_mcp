@@ -407,6 +407,9 @@ WITH rows AS (
 		       WHEN 'lifecycle_bucket' THEN cf.lifecycle_bucket
 		       WHEN 'industry' THEN cf.account_industry
 		       WHEN 'account_industry' THEN cf.account_industry
+		       WHEN 'persona' THEN CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(pf.field_value_text) <> '') THEN 'participant_title_present' ELSE '' END
+		       WHEN 'participant_title' THEN CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(pf.field_value_text) <> '') THEN 'participant_title_present' ELSE '' END
+		       WHEN 'title' THEN CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> '') OR EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(pf.field_value_text) <> '') THEN 'participant_title_present' ELSE '' END
 		       WHEN 'opportunity_stage' THEN cf.opportunity_stage
 		       WHEN 'stage' THEN cf.opportunity_stage
 		       WHEN 'opportunity_type' THEN cf.opportunity_type
@@ -426,6 +429,7 @@ WITH rows AS (
 		       END
 		       WHEN 'won_lost' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
 		       WHEN 'outcome' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
+		       WHEN 'loss_reason' THEN CASE WHEN EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type = 'Opportunity' AND pf.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c') AND TRIM(pf.field_value_text) <> '') THEN 'loss_reason_present' ELSE '' END
 		       ELSE ''
 	       END AS dimension_value
 	  FROM call_facts cf
@@ -454,6 +458,8 @@ SELECT CASE lower(trim(dimension_arg))
 	       WHEN 'lifecycle_bucket' THEN 'lifecycle'
 	       WHEN 'industry' THEN 'industry'
 	       WHEN 'account_industry' THEN 'industry'
+	       WHEN 'participant_title' THEN 'persona'
+	       WHEN 'title' THEN 'persona'
 	       WHEN 'stage' THEN 'opportunity_stage'
 	       WHEN 'outcome' THEN 'won_lost'
 	       ELSE lower(trim(dimension_arg))

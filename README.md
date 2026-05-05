@@ -2,7 +2,7 @@
 
 `gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports bounded shared-deployment `business-pilot`, `analyst-core`, and `analyst-business-core` slices. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports bounded shared-deployment `business-pilot`, `analyst-core`, `analyst-business-core`, and approved `analyst` surfaces. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 SQLite remains the default local/single-host cache. For shared multi-container
 deployments, the first Postgres vertical slice supports a shared database for
 sync status, cached calls, users, transcripts, transcript segments, and the
@@ -38,7 +38,8 @@ support is available for CRM-constrained transcript snippet search with default
 MCP redaction of call, title, object, and speaker identifiers. Explicit
 `missing_transcripts` support is available for admin transcript-backfill
 workflows with date, lifecycle, scope, system, direction, and CRM object
-filters. Full `analyst` and `all-readonly` remain gated until the remaining
+filters. The Postgres `analyst` preset is available for approved analyst
+sessions over the reviewed catalog; `all-readonly` remains gated until
 full-catalog query parity is complete.
 
 ## Positioning
@@ -68,8 +69,8 @@ local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
 requires signed/provenance-backed release artifacts, stable deprecation policy,
 and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
 
-Postgres explicit allowlist additions called out above are development-branch
-work until they appear in a tagged release.
+Postgres analyst preset support and explicit allowlist additions called out
+above are development-branch work until they appear in a tagged release.
 
 For company evaluation, start with the enterprise pilot packet:
 
@@ -112,7 +113,9 @@ diagnostics, use an explicit `crm_field_population_matrix` allowlist and keep
 grouping to the approved object/field pairs listed below. For targeted
 transcript snippets tied to a CRM object type or record, use an explicit
 `search_transcripts_by_crm_context` allowlist and keep snippet exposure
-reviewed.
+reviewed. For approved analyst workflows on Postgres, use `analyst`; use
+`analyst-core` or `analyst-business-core` when you need a narrower starter
+surface.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.
@@ -592,8 +595,9 @@ keeps MCP traffic from overwhelming the host context window.
 For Postgres stdio, the no-allowlist default is the bounded vertical-slice
 surface (`get_sync_status`, `search_calls`, and `search_transcript_segments`).
 Broader Postgres tools require a supported preset such as `business-pilot`,
-`analyst-core`, or `analyst-business-core`, or an explicit
-`GONGMCP_TOOL_ALLOWLIST`; full `analyst` and `all-readonly` remain rejected.
+`analyst-core`, `analyst-business-core`, or `analyst`, or an explicit
+`GONGMCP_TOOL_ALLOWLIST`; `all-readonly` remains rejected until full-catalog
+query parity is complete.
 The default Postgres reader contract preserves the broad `gongmcp_reader`
 service role for compatibility. Operators who create a narrower function-scoped
 role for a specific preset or allowlist can start `gongmcp` with
@@ -679,8 +683,9 @@ GONGMCP_MAX_SEARCH_RESULTS=100 \
 ```
 
 HTTP mode is a request/response JSON-RPC bridge over one operator-owned cache
-store: SQLite for local/single-host pilots, or the Postgres business-pilot slice
-for shared deployments. Put it behind TLS termination at a trusted company
+store: SQLite for local/single-host pilots, or the Postgres shared-deployment
+slice for approved presets such as `business-pilot`, narrower analyst presets,
+and `analyst`. Put it behind TLS termination at a trusted company
 proxy/gateway before non-local use. It is not a hosted SaaS layer, tenant
 router, browser app, or full streaming MCP service. Every HTTP mode requires an
 explicit tool preset or
@@ -709,7 +714,7 @@ JSON-RPC traffic.
 
 Full SQLite catalog tools. Postgres availability is limited to the supported
 presets and explicit allowlists described above; unsupported Postgres tools and
-the full Postgres `analyst` / `all-readonly` presets fail closed.
+the full Postgres `all-readonly` preset fail closed.
 
 - `get_sync_status`
 - `search_calls`

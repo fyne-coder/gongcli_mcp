@@ -66,7 +66,7 @@ with customer-specific deployment facts before submitting to a security team.
 | --- | --- |
 | Which AI provider receives MCP results? | Customer-specific: `[ChatGPT Enterprise / Claude / internal model gateway / other]`. |
 | Is provider approval required? | Yes. MCP results can contain Gong-derived metadata or snippets depending on the tools enabled, so downstream AI provider use requires customer approval. |
-| Can the model call all tools? | Only the tools exposed by the MCP host and `gongmcp` preset/allowlist. `all-readonly` is available for trusted admin/analyst or fully reviewed filtered-DB deployments; start business users with status and aggregate tools. |
+| Can the model call all tools? | Only the tools exposed by the MCP host and `gongmcp` preset/allowlist. `all-readonly` is available only for trusted SQLite admin/analyst or fully reviewed SQLite filtered-DB deployments; Postgres rejects it until full-catalog parity is complete. Start business users with status and aggregate tools. |
 
 ## Operations
 

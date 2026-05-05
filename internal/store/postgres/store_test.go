@@ -1459,6 +1459,20 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if len(pgDimension) != 1 || pgDimension[0].Value != "Manufacturing" || pgDimension[0].CallCount != 1 {
 		t.Fatalf("unexpected postgres dimension summary: %+v", pgDimension)
 	}
+	pgPersonaDimension, err := pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "persona", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres persona SummarizeBusinessAnalysisDimension: %v", err)
+	}
+	if len(pgPersonaDimension) != 1 || pgPersonaDimension[0].Value != "participant_title_present" || pgPersonaDimension[0].CallCount != 1 {
+		t.Fatalf("unexpected postgres persona dimension summary: %+v", pgPersonaDimension)
+	}
+	pgLossReasonDimension, err := pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "loss_reason", Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres loss_reason SummarizeBusinessAnalysisDimension: %v", err)
+	}
+	if len(pgLossReasonDimension) != 1 || pgLossReasonDimension[0].Value != "loss_reason_present" || pgLossReasonDimension[0].CallCount != 1 {
+		t.Fatalf("unexpected postgres loss_reason dimension summary: %+v", pgLossReasonDimension)
+	}
 }
 
 func TestPostgresScorecardSettingsInventoryMatchesSQLiteRepresentativeSlice(t *testing.T) {
@@ -3614,6 +3628,9 @@ func seedPhase5BBusinessAnalysisFixtures(t *testing.T, ctx context.Context, stor
 				"system":    "Zoom",
 				"direction": "Conference",
 				"scope":     "External",
+				"parties": []any{
+					map[string]any{"id": "buyer", "title": "VP Operations"},
+				},
 			},
 			"context": []any{
 				map[string]any{
@@ -3632,6 +3649,7 @@ func seedPhase5BBusinessAnalysisFixtures(t *testing.T, ctx context.Context, stor
 						map[string]any{"name": "Name", "value": "Example Deal"},
 						map[string]any{"name": "StageName", "value": "Discovery"},
 						map[string]any{"name": "Type", "value": "New Business"},
+						map[string]any{"name": "LossReason", "value": "Timeline uncertainty"},
 						map[string]any{"name": "CloseDate", "value": "2026-03-31"},
 						map[string]any{"name": "Probability", "value": "25"},
 					},

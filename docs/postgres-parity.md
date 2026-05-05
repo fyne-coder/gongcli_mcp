@@ -45,12 +45,12 @@ Postgres parity should be added deliberately, with each surface classified as
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
 | `analyst-business-core` MCP preset | Postgres-specific business-analysis starter surface | complete for bounded cohort/transcript-evidence/dimension tools | Exposes implemented Phase 5b tools through security-definer transcript/evidence functions while keeping direct raw transcript/context grants denied and redacting raw account/opportunity names, websites, close dates, and probabilities at the SQL boundary | intentionally narrower than SQLite `analyst` | Phase 5b | analyst-business-core MCP smoke |
-| `analyst` MCP preset | SQLite analyst/cohort tools | rejected in Postgres | Enable only after backing queries and governance are ready | must match before enablement | Phase 5 | preset parity tests |
+| `analyst` MCP preset | SQLite analyst/cohort tools | complete for approved Postgres analyst sessions | Exposes the reviewed Postgres analyst catalog, including directed CRM aggregates, transcript evidence, and business-analysis tools; governance-active deployments should continue using `governance-search` or narrower allowlists | must match for reviewed analyst tools | Phase 9u | analyst preset tests; `scripts/postgres-smoke.sh` |
 | `all-readonly` MCP preset | SQLite full read-only catalog | rejected in Postgres | Enable only after full read-only query parity | must match before enablement | Phase 5 | catalog parity tests |
 | Profile import/show | SQLite profile tables/cache | complete for metadata/import/show/readiness and profile fact-cache freshness | Postgres profile metadata, active-state storage, business-profile MCP reads, and sync-status readiness | must match for metadata; cache freshness complete for first profile slice | Phase 3/3b | `TestPostgresProfileImportShowAndReadinessMatchesSQLiteMetadata` |
 | Profile lifecycle source | `lifecycle_source=auto|profile|builtin` with `profile_call_fact_cache` | complete for first business-pilot slice when active profile cache is fresh | `profile` requires an active fresh profile cache; `auto` falls back to builtin only when no profile exists and otherwise fails closed on missing/stale read-only cache | must match | Phase 3b | profile lifecycle cache parity tests; `scripts/postgres-smoke.sh` |
 | Business-analysis calls/evidence | SQLite `business_analysis.go` helpers | complete for bounded Postgres starter slice | Equivalent read APIs over normalized context/facts/transcripts with Postgres-native FTS ranking/snippets | postgres-native equivalent | Phase 5b | business-analysis parity fixtures; analyst-business-core smoke |
-| CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | complete for bounded Postgres analyst-core slice: embedded CRM object/field aggregates, cached CRM integrations/schema fields, Gong settings, scorecards, and scorecard activity aggregates | Same cached metadata read surfaces without raw CRM values or raw settings payloads; broader settings/catalog query parity remains queued before full `analyst`/`all-readonly` | must match for implemented inventory surfaces | Phase 5a/5c/5d/5e | inventory/query tests; `scripts/postgres-smoke.sh` |
+| CRM schema/settings inventory | SQLite `crm_integrations`, schema, settings, scorecards | complete for bounded Postgres analyst-core slice: embedded CRM object/field aggregates, cached CRM integrations/schema fields, Gong settings, scorecards, and scorecard activity aggregates | Same cached metadata read surfaces without raw CRM values or raw settings payloads; broader settings/catalog query parity remains queued before `all-readonly` | must match for implemented inventory surfaces | Phase 5a/5c/5d/5e | inventory/query tests; `scripts/postgres-smoke.sh` |
 | MCP `list_unmapped_crm_fields` | SQLite profile-aware unmapped CRM field inventory | complete for explicit Postgres allowlists | Security-definer aggregate over normalized CRM context returns field metadata/counts/length stats only; mapped fields are filtered through the active profile and raw values remain denied | must match at MCP contract | Phase 9b | store parity test; MCP smoke; reader table/function denial smoke |
 | MCP `search_crm_field_values` | SQLite explicit CRM value lookup | complete for explicit Postgres allowlists | Security-definer lookup over normalized CRM context with default redaction for call IDs, titles, object IDs/names, and values; explicit opt-ins return call IDs and bounded snippets/titles; the reader function never returns object IDs/names and direct table reads remain denied | must match at MCP contract | Phase 9a | store parity test; redacted/opt-in MCP smoke; reader function/table denial smoke |
 | MCP `analyze_late_stage_crm_signals` | SQLite late-stage aggregate signal analysis | complete for explicit Postgres allowlists with `Opportunity.StageName` only | Security-definer aggregate over normalized CRM context returns stage counts, field names, population rates, and lift only; custom stage fields are rejected/empty to avoid raw value-distribution leakage, and raw arbitrary CRM values, CRM object IDs/names, call IDs, call titles, transcript text, and profile payloads remain denied | must match default MCP contract with safer Postgres field boundary | Phase 9c | store parity test; MCP smoke; reader table/function denial smoke |
@@ -269,8 +269,8 @@ Postgres parity should be added deliberately, with each surface classified as
   SQL helpers. Explicit `lifecycle_source=builtin` still needs the compatibility
   reader until a sanitized builtin SQL surface exists.
 - Still queued: per-surface table/column maps beyond `business-pilot`, optional
-  richer role-template automation, and governed views/RLS/materialized snapshots
-  for broader `analyst` / `all-readonly` readiness.
+  richer role-template automation, governed views/RLS/materialized snapshots for
+  governance-safe analyst variants, and full `all-readonly` readiness.
 
 ## Phase 9n Risk Status
 
@@ -309,9 +309,9 @@ Postgres parity should be added deliberately, with each surface classified as
   replace prefix-based detection before broader customer role-generation
   automation.
 - Still queued: installer/DDL helpers for customer-managed scoped roles,
-  per-surface role templates beyond the synthetic business-pilot smoke, and
-  database-enforced governance views/RLS/materialized snapshots for the broad
-  `analyst` / `all-readonly` path.
+  per-surface role templates beyond the synthetic business-pilot smoke,
+  database-enforced governance views/RLS/materialized snapshots for approved
+  analyst variants, and the full `all-readonly` path.
 
 ## Phase 9i Risk Status
 
@@ -321,8 +321,8 @@ Postgres parity should be added deliberately, with each surface classified as
   filtering so suppressed calls do not hide allowed rows behind the requested
   limit.
 - Still queued: business-user-safe aggregate alternatives, profile-derived
-  lifecycle source parity, per-surface reader roles, and broad `analyst` /
-  `all-readonly` enablement. This tool intentionally returns call IDs and
+  lifecycle source parity, per-surface reader roles, governance-safe analyst
+  variants, and `all-readonly` enablement. This tool intentionally returns call IDs and
   titles, so keep it admin/operator-only.
 
 ## Phase 9h Risk Status
@@ -335,8 +335,8 @@ Postgres parity should be added deliberately, with each surface classified as
   delta. Unreviewed object types are rejected and governance-suppressed calls
   are excluded inside SQL. This is development-branch work after `v0.3.3` until
   a tagged release includes it.
-- Still queued: broad `analyst` / `all-readonly` enablement, profile-derived
-  lifecycle comparison parity, governance-safe aggregate variants, small-cell
+- Still queued: `all-readonly` enablement, profile-derived lifecycle comparison
+  parity, governance-safe aggregate variants, small-cell
   suppression, customer-scale aggregate performance testing, and per-surface
   reader roles. Field names/labels and exact lifecycle population rates can
   reveal tenant-specific CRM structure, so customer deployments should keep it
@@ -352,8 +352,8 @@ Postgres parity should be added deliberately, with each surface classified as
   object keys, call IDs, speaker IDs, raw CRM values, raw JSON, raw hashes, or
   full transcript text in the SQL result shape. Governance-suppressed calls are
   excluded inside the reader function before MCP redaction.
-- Still queued: broad `analyst` / `all-readonly` enablement, governance-safe
-  aggregate/snippet variants, customer-scale ranking/performance testing,
+- Still queued: `all-readonly` enablement, governance-safe aggregate/snippet
+  variants, customer-scale ranking/performance testing,
   minimum-cell/coarser-time controls for CRM-context snippet searches, and
   per-surface reader roles. Snippets remain customer transcript content, and
   exact object-type/object-ID filtering can reveal the presence of a sensitive
@@ -368,8 +368,8 @@ Postgres parity should be added deliberately, with each surface classified as
   values, raw JSON, and raw hashes out of the SQL result shape. Go and SQL both
   enforce reviewed object-type/group-field pairs for the current explicit
   slice.
-- Still queued: broad `analyst` / `all-readonly` enablement, governance-safe
-  aggregate variants, small-cell suppression, customer-scale aggregate
+- Still queued: `all-readonly` enablement, governance-safe aggregate variants,
+  small-cell suppression, customer-scale aggregate
   performance testing, and per-surface reader roles. The current function can
   reveal approved group labels and exact population counts, and the final
   `LIMIT` caps output rather than scan work, so customer deployments should
@@ -385,8 +385,8 @@ Postgres parity should be added deliberately, with each surface classified as
 - Closed for reader-role hardening: direct reader SELECT on
   `call_context_objects.object_id` is denied, and Postgres read-only call
   detail now redacts CRM object IDs.
-- Still queued: broad `analyst` / `all-readonly` enablement, neighboring
-  Opportunity CRM tools, governance-safe aggregate variants, minimum-cell or
+- Still queued: `all-readonly` enablement, neighboring Opportunity CRM tools,
+  governance-safe aggregate variants, minimum-cell or
   coarser time/duration redaction options, and customer-scale aggregate
   performance testing. The current Opportunity aggregates still perform full
   Opportunity-context grouping before applying the final row limit, and exact
@@ -404,9 +404,8 @@ Postgres parity should be added deliberately, with each surface classified as
   slice is intentionally restricted to `Opportunity.StageName`; custom
   `stage_field` values are not enabled until a reviewed field-governance model
   exists.
-- Still queued: broad `analyst` / `all-readonly` enablement, the remaining
-  CRM-heavy tools, governance-safe aggregate variants, and customer-scale
-  aggregate performance testing.
+- Still queued: `all-readonly` enablement, governance-safe aggregate variants,
+  and customer-scale aggregate performance testing.
 
 ## Phase 7 Risk Status
 
@@ -564,6 +563,6 @@ Postgres parity should be added deliberately, with each surface classified as
   over normalized CRM context. Output is limited to field metadata, population
   counts, distinct counts, and value length statistics; mapped fields are
   filtered through the active business profile, and raw values stay denied.
-- Still queued: database-enforced governance filtering/RLS, full analyst and
-  all-readonly query parity, customer-platform PITR/replica restore drills, and
+- Still queued: database-enforced governance filtering/RLS, all-readonly query
+  parity, customer-platform PITR/replica restore drills, and
   cross-version customer-data restore validation before GA.

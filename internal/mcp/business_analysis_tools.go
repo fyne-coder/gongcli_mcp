@@ -790,7 +790,7 @@ func businessAnalysisWarnings(toolName string, filter callFilter) []string {
 
 func businessAnalysisLimitations(toolName string) []string {
 	limitations := []string{
-		"read_only_sqlite_cache_only",
+		"read_only_cache_only",
 		"no_raw_sql_or_arbitrary_table_access",
 		"bounded_results_and_redacted_identifiers_by_default",
 		"cache_derived_signals_not_llm_conclusions",
