@@ -1423,7 +1423,7 @@ func (s *Server) summarizeScorecardActivity(ctx context.Context, raw json.RawMes
 		return toolCallResult{}, err
 	}
 
-	report, err := s.store.ScorecardActivityOverview(ctx, args.Limit)
+	report, err := s.store.ScorecardActivityOverview(ctx, capLimit(args.Limit, defaultCallFactRequestLimit, s.limitPolicy.Normalize().CallFactGroups))
 	if err != nil {
 		return toolCallResult{}, err
 	}

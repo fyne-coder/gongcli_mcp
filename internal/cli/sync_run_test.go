@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +68,120 @@ func TestSyncRunDryRunUsesFixtureAndResolvesRelativePaths(t *testing.T) {
 		if step.RequiresSensitiveExport {
 			t.Fatalf("fixture step %q unexpectedly marked sensitive: %+v", step.Name, step)
 		}
+	}
+}
+
+func TestSyncRunExecutesScorecardActivityStep(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "cache", "gong.db")
+	configPath := filepath.Join(dir, "sync-run.yaml")
+	body := []byte(`version: 1
+db: ./cache/gong.db
+steps:
+  - name: scorecard_activity
+    action: scorecard-activity
+    call_from: 2026-01-01
+    call_to: 2026-04-01
+    review_from: 2026-02-01
+    review_to: 2026-03-01
+    review_method: manual
+    max_pages: 1
+`)
+	if err := os.WriteFile(configPath, body, 0o600); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/stats/activity/scorecards" {
+			t.Fatalf("path=%q want /v2/stats/activity/scorecards", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%q want POST", r.Method)
+		}
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		filter := request["filter"].(map[string]any)
+		if filter["callFromDate"] != "2026-01-01" || filter["callToDate"] != "2026-04-01" {
+			t.Fatalf("unexpected call date filter: %+v", filter)
+		}
+		if filter["reviewFromDate"] != "2026-02-01" || filter["reviewToDate"] != "2026-03-01" || filter["reviewMethod"] != "MANUAL" {
+			t.Fatalf("unexpected review filter: %+v", filter)
+		}
+		writeCLIJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"answeredScorecards": []map[string]any{
+				{
+					"answeredScorecardId": "answered-run-001",
+					"scorecardId":         "scorecard-run-001",
+					"scorecardName":       "Discovery QA",
+					"callId":              "call-run-001",
+					"reviewedUserId":      "user-run-001",
+					"reviewMethod":        "MANUAL",
+					"reviewTime":          "2026-02-15T15:00:00Z",
+					"answers": []map[string]any{
+						{"questionId": "question-run-001", "isOverall": true, "score": 4},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"sync", "run", "--config", configPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(sync run scorecard activity) code=%d stderr=%q", code, stderr.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "sync run step 1/1: scorecard_activity (scorecard-activity)") {
+		t.Fatalf("stderr=%q missing scorecard activity step", got)
+	}
+
+	var resp struct {
+		Steps []struct {
+			Action         string `json:"action"`
+			Status         string `json:"status"`
+			CallFrom       string `json:"call_from"`
+			CallTo         string `json:"call_to"`
+			ReviewFrom     string `json:"review_from"`
+			ReviewTo       string `json:"review_to"`
+			ReviewMethod   string `json:"review_method"`
+			Scope          string `json:"scope"`
+			RecordsSeen    int64  `json:"records_seen"`
+			RecordsWritten int64  `json:"records_written"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+	if len(resp.Steps) != 1 {
+		t.Fatalf("step count=%d want 1", len(resp.Steps))
+	}
+	step := resp.Steps[0]
+	if step.Action != "scorecard-activity" || step.Status != "success" || step.Scope != "scorecard_activity" {
+		t.Fatalf("unexpected step metadata: %+v", step)
+	}
+	if step.CallFrom != "2026-01-01" || step.CallTo != "2026-04-01" || step.ReviewFrom != "2026-02-01" || step.ReviewTo != "2026-03-01" || step.ReviewMethod != "MANUAL" {
+		t.Fatalf("unexpected scorecard activity params: %+v", step)
+	}
+	if step.RecordsSeen != 1 || step.RecordsWritten != 1 {
+		t.Fatalf("scorecard activity seen/written=%d/%d want 1/1", step.RecordsSeen, step.RecordsWritten)
+	}
+
+	store := openCLITestStore(t, dbPath)
+	defer store.Close()
+	summary, err := store.SyncStatusSummary(context.Background())
+	if err != nil {
+		t.Fatalf("SyncStatusSummary returned error: %v", err)
+	}
+	if summary.TotalScorecardActivity != 1 {
+		t.Fatalf("total_scorecard_activity=%d want 1", summary.TotalScorecardActivity)
 	}
 }
 

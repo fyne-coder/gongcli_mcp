@@ -83,6 +83,8 @@ grep -q '"status": "current"' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"call_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"fact_count": 2' /tmp/gongctl-postgres-read-model-state.json
 grep -q '"ready": true' /tmp/gongctl-postgres-read-model-state.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tAc "SELECT COUNT(*) FROM scorecard_activity" >/tmp/gongctl-postgres-scorecard-activity-count.txt
+grep -q '^2$' /tmp/gongctl-postgres-scorecard-activity-count.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DELETE FROM calls WHERE call_id = 'synthetic-profile-call-001'; INSERT INTO calls(call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('synthetic-profile-call-001', 'Profile lifecycle proposal review', '2026-02-14T15:00:00Z', 1800, 2, true, '{\"id\":\"synthetic-profile-call-001\",\"title\":\"Profile lifecycle proposal review\",\"started\":\"2026-02-14T15:00:00Z\",\"duration\":1800,\"metaData\":{\"scope\":\"External\",\"system\":\"Zoom\",\"direction\":\"Conference\"},\"context\":{\"crmObjects\":[{\"type\":\"Opportunity\",\"id\":\"opp-profile-001\",\"name\":\"Profile Opportunity\",\"fields\":{\"StageName\":\"Proposal\",\"Type\":\"New Business\"}},{\"type\":\"Account\",\"id\":\"acct-profile-001\",\"name\":\"Profile Account\",\"fields\":{\"Account_Type__c\":\"Prospect\",\"Industry\":\"Manufacturing\"}}]}}'::jsonb, 'synthetic-profile-sha', now()::text, now()::text)" >/dev/null
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-profile-fixture-read-model.json
 grep -q '"call_count": 3' /tmp/gongctl-postgres-profile-fixture-read-model.json
@@ -170,16 +172,26 @@ grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-regrant.txt
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze settings --kind scorecards >/tmp/gongctl-postgres-scorecard-settings.json
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecards >/tmp/gongctl-postgres-scorecards.json
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecard --scorecard-id synthetic-scorecard-001 >/tmp/gongctl-postgres-scorecard-detail.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecard-activity --group-by review_method >/tmp/gongctl-postgres-scorecard-activity-review-method.json
+GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecard-activity --group-by transcript_status >/tmp/gongctl-postgres-scorecard-activity-transcript-status.json
+if GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl analyze scorecard-activity --group-by reviewed_user >/tmp/gongctl-postgres-scorecard-activity-reviewed-user-denied.txt 2>&1; then
+  echo "postgres read-only scorecard activity unexpectedly exposed reviewed_user grouping" >&2
+  exit 1
+fi
 grep -q '"object_id": "synthetic-generic-setting-id-001"' /tmp/gongctl-postgres-scorecard-settings.json
 grep -q '"name": "Synthetic discovery quality"' /tmp/gongctl-postgres-scorecards.json
 grep -q '"question_text": "Did the seller confirm the implementation timeline?"' /tmp/gongctl-postgres-scorecard-detail.json
+grep -q '"group_value": "MANUAL"' /tmp/gongctl-postgres-scorecard-activity-review-method.json
+grep -q '"group_value": "AUTOMATIC"' /tmp/gongctl-postgres-scorecard-activity-review-method.json
+grep -q '"group_value": "present"' /tmp/gongctl-postgres-scorecard-activity-transcript-status.json
+grep -q 'reviewed_user is not supported' /tmp/gongctl-postgres-scorecard-activity-reviewed-user-denied.txt
 grep -q '"min_range": 1' /tmp/gongctl-postgres-scorecard-detail.json
 if grep -q '"max_range"' /tmp/gongctl-postgres-scorecard-detail.json; then
   echo "scorecard detail did not tolerate nonnumeric maxRange" >&2
   exit 1
 fi
-if grep -q 'raw_json\|raw_sha256\|raw_payload' /tmp/gongctl-postgres-scorecard-settings.json /tmp/gongctl-postgres-scorecards.json /tmp/gongctl-postgres-scorecard-detail.json; then
-  echo "scorecard inventory output exposed raw settings payload fields" >&2
+if grep -q 'raw_json\|raw_sha256\|raw_payload\|synthetic-answered-scorecard\|synthetic-user-' /tmp/gongctl-postgres-scorecard-settings.json /tmp/gongctl-postgres-scorecards.json /tmp/gongctl-postgres-scorecard-detail.json /tmp/gongctl-postgres-scorecard-activity-review-method.json /tmp/gongctl-postgres-scorecard-activity-transcript-status.json; then
+  echo "scorecard inventory/activity output exposed raw payload fields or identifiers" >&2
   exit 1
 fi
 
@@ -193,6 +205,14 @@ if reader_psql -c "SELECT raw_json FROM gong_settings LIMIT 1" >/tmp/gongctl-pos
 fi
 if reader_psql -c "SELECT raw_sha256 FROM gong_settings LIMIT 1" >>/tmp/gongctl-postgres-reader-settings-raw-read.txt 2>&1; then
   echo "reader role unexpectedly read raw Gong settings hashes" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT raw_json FROM scorecard_activity LIMIT 1" >/tmp/gongctl-postgres-reader-scorecard-activity-raw-read.txt 2>&1; then
+  echo "reader role unexpectedly read raw scorecard activity JSON" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT raw_sha256 FROM scorecard_activity LIMIT 1" >>/tmp/gongctl-postgres-reader-scorecard-activity-raw-read.txt 2>&1; then
+  echo "reader role unexpectedly read raw scorecard activity hashes" >&2
   exit 1
 fi
 if reader_psql -c "SELECT cursor FROM sync_runs LIMIT 1" >/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
@@ -301,19 +321,24 @@ fi
   printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_crm_fields","arguments":{"object_type":"Opportunity","limit":10}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_scorecards","arguments":{"limit":10}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_scorecard","arguments":{"scorecard_id":"synthetic-scorecard-001"}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_scorecard_activity","arguments":{"limit":10}}}'
 } | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst-core.jsonl
 
 grep -q '"list_crm_object_types"' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q '"list_crm_fields"' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q '"list_scorecards"' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q '"get_scorecard"' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q '"summarize_scorecard_activity"' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q 'Opportunity' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q 'StageName' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q 'Synthetic discovery quality' /tmp/gongctl-postgres-analyst-core.jsonl
 grep -q 'Did the seller confirm the implementation timeline?' /tmp/gongctl-postgres-analyst-core.jsonl
-assert_mcp_success /tmp/gongctl-postgres-analyst-core.jsonl 3 4 5 6
-if grep -q 'Proposal\|Manufacturing\|Profile Account\|raw_json\|field_value_text\|raw_sha256\|raw_payload' /tmp/gongctl-postgres-analyst-core.jsonl; then
-  echo "analyst-core inventory exposed raw CRM/settings values" >&2
+grep -q 'total_answered_scorecards.*2' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q 'manual_count.*1' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q 'automatic_count.*1' /tmp/gongctl-postgres-analyst-core.jsonl
+assert_mcp_success /tmp/gongctl-postgres-analyst-core.jsonl 3 4 5 6 7
+if grep -q 'Proposal\|Manufacturing\|Profile Account\|raw_json\|field_value_text\|raw_sha256\|raw_payload\|synthetic-answered-scorecard\|synthetic-user-' /tmp/gongctl-postgres-analyst-core.jsonl; then
+  echo "analyst-core inventory exposed raw CRM/settings/activity values" >&2
   exit 1
 fi
 
@@ -511,6 +536,15 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensiti
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_scorecard_activity_summary(text, integer) FROM gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-function-grant-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started without scorecard activity function grant" >&2
+  exit 1
+fi
+grep -q 'missing required function EXECUTE grants' /tmp/gongctl-postgres-reader-function-grant-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-function-grant-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-function-grant-drift-repaired.json
+
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE OR REPLACE FUNCTION gongmcp_crm_field_summary(object_type_arg text, row_limit integer)
 RETURNS TABLE(
@@ -553,10 +587,12 @@ echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"
 echo "reader raw-read denial output: /tmp/gongctl-postgres-reader-raw-read.txt"
 echo "reader settings raw-read denial output: /tmp/gongctl-postgres-reader-settings-raw-read.txt"
+echo "reader scorecard activity raw-read denial output: /tmp/gongctl-postgres-reader-scorecard-activity-raw-read.txt"
 echo "reader sensitive-read denial output: /tmp/gongctl-postgres-reader-sensitive-read.txt"
 echo "reader regrant output: /tmp/gongctl-postgres-reader-regrant.txt"
 echo "reader column-drift denial output: /tmp/gongctl-postgres-reader-column-drift.txt"
 echo "reader sensitive-column-drift denial output: /tmp/gongctl-postgres-reader-sensitive-column-drift.txt"
+echo "reader function-grant drift denial output: /tmp/gongctl-postgres-reader-function-grant-drift.txt"
 echo "retired function output: /tmp/gongctl-postgres-retired-function.txt"
 echo "normalized counts output: /tmp/gongctl-postgres-normalized-counts.txt"
 echo "call facts output: /tmp/gongctl-postgres-call-facts.txt"
@@ -577,6 +613,10 @@ echo "profile cache rewarm output: /tmp/gongctl-postgres-profile-cache-rewarm.js
 echo "scorecard settings output: /tmp/gongctl-postgres-scorecard-settings.json"
 echo "scorecards output: /tmp/gongctl-postgres-scorecards.json"
 echo "scorecard detail output: /tmp/gongctl-postgres-scorecard-detail.json"
+echo "scorecard activity count output: /tmp/gongctl-postgres-scorecard-activity-count.txt"
+echo "scorecard activity review-method output: /tmp/gongctl-postgres-scorecard-activity-review-method.json"
+echo "scorecard activity transcript-status output: /tmp/gongctl-postgres-scorecard-activity-transcript-status.json"
+echo "scorecard activity reviewed-user denial output: /tmp/gongctl-postgres-scorecard-activity-reviewed-user-denied.txt"
 echo "governance fixture output: /tmp/gongctl-postgres-governance-fixture.txt"
 echo "governance read model output: /tmp/gongctl-postgres-governance-read-model.json"
 echo "governance audit output: /tmp/gongctl-postgres-governance-audit.json"

@@ -17,10 +17,10 @@ governance mode supports a prepared private policy for the narrowed
 `governance-search` MCP slice. `analyst-core` adds Postgres-supported call,
 CRM context inventory, profile, lifecycle, and transcript-search tools while
 `analyst-business-core` adds bounded Postgres transcript-evidence and
-business-analysis tools. Scorecard settings inventory is available through the
-Postgres analyst-core surface, while full `analyst` and `all-readonly` remain
-gated until scorecard activity, support/cache, and remaining catalog parity are
-complete.
+business-analysis tools. Scorecard settings inventory and aggregate answered
+scorecard activity are available through the Postgres analyst-core surface,
+while full `analyst` and `all-readonly` remain gated until support/cache,
+broader settings/catalog, and remaining query parity are complete.
 
 ## Positioning
 
@@ -75,10 +75,11 @@ gongctl profile schema
 ```
 
 Use `business-pilot` for first business-user access, `analyst-core` for the
-reviewed Postgres analyst starter surface including scorecard inventory,
-`analyst-business-core` for bounded Postgres transcript-evidence/business
-analysis workflows, and `all-readonly` only for trusted SQLite admin/analyst
-sessions against a reviewed SQLite or filtered cache.
+reviewed Postgres analyst starter surface including scorecard inventory and
+scorecard activity aggregates, `analyst-business-core` for bounded Postgres
+transcript-evidence/business analysis workflows, and `all-readonly` only for
+trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
+cache.
 
 - Deployment worksheet: [Customer implementation checklist](docs/implementation-checklist.md)
 - Local/container start: [Quickstart](docs/quickstart.md)
@@ -401,14 +402,18 @@ Rules:
 - `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
 - `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
 - `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces. With `GONG_DATABASE_URL` set and `--db` omitted, this cache can be written to Postgres for shared deployments.
-- `sync scorecard-activity` caches answered scorecard activity from Gong's scorecard
-  activity stats endpoint. It stores local raw JSON for operator audit, but
-  public summaries should use aggregate analyze/MCP surfaces.
+- `sync scorecard-activity` caches answered scorecard activity from Gong's
+  scorecard activity stats endpoint. It stores local raw JSON for operator
+  audit, but public summaries should use aggregate analyze/MCP surfaces. With
+  `GONG_DATABASE_URL` set and `--db` omitted, supported writes use Postgres for
+  shared deployments.
 - `sync run --config PATH` executes a staged refresh plan from YAML. Relative
   `db` and `out_dir` paths resolve from the config file location, and
-  `--dry-run` validates the file without calling Gong. Sensitive transcript and
-  extended-context steps are flagged in dry-run output, but runtime approval is
-  still required through `--allow-sensitive-export` or
+  `--dry-run` validates the file without calling Gong. Supported stages include
+  calls, users, transcripts, CRM integrations/schema, settings, and
+  scorecard-activity. Sensitive transcript and extended-context steps are
+  flagged in dry-run output, but runtime approval is still required through
+  `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` when restricted mode is enabled.
 - `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 100, and the CLI caps it at 100.
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
@@ -438,7 +443,12 @@ Rules:
   stale-cache error instead of writing to the cache.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.
 - `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads. With `GONG_DATABASE_URL` set and `--db` omitted, these read from Postgres through the read-only role.
-- `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
+- `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is
+  answered-scorecard activity and supports grouping by scorecard, review
+  method, reviewed user, lifecycle, or transcript status. With
+  `GONG_DATABASE_URL` set and `--db` omitted, Postgres reads use the read-only
+  role and aggregate functions instead of raw table access; the Postgres
+  read-only path rejects `reviewed_user` grouping so it does not emit user IDs.
 - After upgrading to a build with new SQLite migrations, run a writable `gongctl sync ...` command before starting `gongmcp`; read-only MCP refuses older schema versions and tells the operator to run a sync command first.
 - `sync` commands write concise progress summaries to `stderr`.
 - `sync status`, `search ...`, and `calls show --json` write JSON to `stdout`. Postgres `calls show --json` returns minimized call detail rather than raw cached JSON.

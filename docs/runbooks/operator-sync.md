@@ -131,6 +131,11 @@ steps:
   - name: tracker_settings
     action: settings
     settings_kind: trackers
+  - name: scorecard_activity
+    action: scorecard-activity
+    call_from: 2026-01-01
+    call_to: 2026-04-01
+    review_method: BOTH
 YAML
 
 bin/gongctl sync run --config <data-root>/configs/company-sync.yaml --dry-run

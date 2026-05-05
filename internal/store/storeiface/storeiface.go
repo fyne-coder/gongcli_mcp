@@ -32,6 +32,10 @@ type GongSettingWriter interface {
 	UpsertGongSetting(ctx context.Context, kind string, raw json.RawMessage) (*sqlite.GongSettingRecord, error)
 }
 
+type ScorecardActivityWriter interface {
+	UpsertScorecardActivity(ctx context.Context, raw json.RawMessage) (*sqlite.ScorecardActivityRecord, error)
+}
+
 type SyncStore interface {
 	SyncRunStore
 	CallWriter
@@ -41,6 +45,11 @@ type SyncStore interface {
 type SettingsStore interface {
 	SyncRunStore
 	GongSettingWriter
+}
+
+type ScorecardActivityStore interface {
+	SyncRunStore
+	ScorecardActivityWriter
 }
 
 type SyncStatusReader interface {

@@ -351,6 +351,7 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		"score_cohort_evidence_quality":             {},
 		"explain_analysis_limitations":              {},
 		"suggest_filter_refinements":                {},
+		"summarize_scorecard_activity":              {},
 		"summarize_call_facts":                      {},
 		"summarize_calls_by_lifecycle":              {},
 	}

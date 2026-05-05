@@ -663,7 +663,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls", "gong_settings"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "governance_policy_state", "governance_suppressed_calls", "gong_settings", "scorecard_activity"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -681,7 +681,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -973,6 +973,81 @@ func TestPostgresScorecardSettingsInventoryMatchesSQLiteRepresentativeSlice(t *t
 	}
 	if len(mixedDetail.Questions) != 1 || mixedDetail.Questions[0].MinRange != 1 || mixedDetail.Questions[0].MaxRange != 0 {
 		t.Fatalf("mixed-id scorecard detail did not tolerate numeric variants: %+v", mixedDetail.Questions)
+	}
+}
+
+func TestPostgresScorecardActivityAggregatesMatchSQLiteRepresentativeSlice(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gongctl.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	callPresent := json.RawMessage(`{"id":"scorecard-call-present","title":"Scorecard present transcript","started":"2026-03-01T15:00:00Z","duration":900}`)
+	callMissing := json.RawMessage(`{"id":"scorecard-call-missing","title":"Scorecard missing transcript","started":"2026-03-02T15:00:00Z","duration":1200}`)
+	transcript := json.RawMessage(`{"callId":"scorecard-call-present","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":1000,"text":"Synthetic transcript for scorecard activity."}]}]}`)
+	activities := []json.RawMessage{
+		json.RawMessage(`{"answeredScorecardId":"answered-scorecard-present","scorecardId":"scorecard-activity-001","scorecardName":"Discovery QA","callId":"scorecard-call-present","callStartTime":"2026-03-01T15:00:00Z","reviewedUserId":"seller-001","reviewMethod":"MANUAL","reviewTime":"2026-03-03T15:00:00Z","answers":[{"isOverall":true,"score":4,"notApplicable":false},{"score":5,"notApplicable":false}]}`),
+		json.RawMessage(`{"answeredScorecardId":"answered-scorecard-missing","scorecardId":"scorecard-activity-001","scorecardName":"Discovery QA","callId":"scorecard-call-missing","callStartTime":"2026-03-02T15:00:00Z","reviewedUserId":"seller-002","reviewMethod":"AUTOMATIC","reviewTime":"2026-03-04T15:00:00Z","answers":[{"isOverall":true,"score":3,"notApplicable":false},{"score":3,"notApplicable":false}]}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+		UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+		UpsertScorecardActivity(context.Context, json.RawMessage) (*sqlite.ScorecardActivityRecord, error)
+	}{pgStore, sqliteStore} {
+		if _, err := store.UpsertCall(ctx, callPresent); err != nil {
+			t.Fatalf("UpsertCall present returned error: %v", err)
+		}
+		if _, err := store.UpsertCall(ctx, callMissing); err != nil {
+			t.Fatalf("UpsertCall missing returned error: %v", err)
+		}
+		if _, err := store.UpsertTranscript(ctx, transcript); err != nil {
+			t.Fatalf("UpsertTranscript returned error: %v", err)
+		}
+		for _, raw := range activities {
+			if _, err := store.UpsertScorecardActivity(ctx, raw); err != nil {
+				t.Fatalf("UpsertScorecardActivity returned error: %v", err)
+			}
+		}
+	}
+
+	for _, groupBy := range []string{"scorecard", "review_method", "lifecycle", "transcript_status"} {
+		pgRows, err := pgStore.SummarizeScorecardActivity(ctx, sqlite.ScorecardActivitySummaryParams{GroupBy: groupBy, Limit: 10})
+		if err != nil {
+			t.Fatalf("postgres SummarizeScorecardActivity(%s) returned error: %v", groupBy, err)
+		}
+		sqliteRows, err := sqliteStore.SummarizeScorecardActivity(ctx, sqlite.ScorecardActivitySummaryParams{GroupBy: groupBy, Limit: 10})
+		if err != nil {
+			t.Fatalf("sqlite SummarizeScorecardActivity(%s) returned error: %v", groupBy, err)
+		}
+		if !reflect.DeepEqual(pgRows, sqliteRows) {
+			t.Fatalf("postgres scorecard activity %s rows=%+v want sqlite %+v", groupBy, pgRows, sqliteRows)
+		}
+	}
+
+	pgOverview, err := pgStore.ScorecardActivityOverview(ctx, 10)
+	if err != nil {
+		t.Fatalf("postgres ScorecardActivityOverview returned error: %v", err)
+	}
+	sqliteOverview, err := sqliteStore.ScorecardActivityOverview(ctx, 10)
+	if err != nil {
+		t.Fatalf("sqlite ScorecardActivityOverview returned error: %v", err)
+	}
+	if !reflect.DeepEqual(pgOverview, sqliteOverview) {
+		t.Fatalf("postgres overview=%+v want sqlite %+v", pgOverview, sqliteOverview)
 	}
 }
 
@@ -1654,7 +1729,7 @@ lists:
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

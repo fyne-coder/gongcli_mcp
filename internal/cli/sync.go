@@ -166,7 +166,7 @@ func (a *app) syncRun(ctx context.Context, args []string) error {
 func (a *app) syncScorecardActivity(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync scorecard-activity", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	callFrom := fs.String("call-from", "", "inclusive call from date, YYYY-MM-DD in Gong company timezone")
 	callTo := fs.String("call-to", "", "exclusive call to date, YYYY-MM-DD in Gong company timezone")
 	reviewFrom := fs.String("review-from", "", "optional inclusive review from date, YYYY-MM-DD in Gong company timezone")
@@ -183,7 +183,7 @@ func (a *app) syncScorecardActivity(ctx context.Context, args []string) error {
 		return fmt.Errorf("--call-to is required")
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableScorecardActivityStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -619,6 +619,18 @@ func (a *app) syncSynthetic(ctx context.Context, args []string) error {
 			written++
 		}
 	}
+	if activityStore, ok := store.(interface {
+		UpsertScorecardActivity(context.Context, json.RawMessage) (*sqlite.ScorecardActivityRecord, error)
+	}); ok {
+		for _, raw := range syntheticScorecardActivityPayloads() {
+			if _, err := activityStore.UpsertScorecardActivity(ctx, raw); err != nil {
+				finishStatus = "error"
+				finishError = err.Error()
+				return err
+			}
+			written++
+		}
+	}
 
 	fmt.Fprintf(a.err, "synced synthetic fixture: records_written=%d db=%s\n", written, displayStoreTarget(*dbPath))
 	return writeJSONValue(a.out, map[string]any{
@@ -654,6 +666,11 @@ type writableTranscriptStore interface {
 
 type writableSettingsStore interface {
 	storeiface.SettingsStore
+	storeiface.Closer
+}
+
+type writableScorecardActivityStore interface {
+	storeiface.ScorecardActivityStore
 	storeiface.Closer
 }
 
@@ -700,6 +717,17 @@ func openWritableTranscriptStore(ctx context.Context, path string) (writableTran
 }
 
 func openWritableSettingsStore(ctx context.Context, path string) (writableSettingsStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
+func openWritableScorecardActivityStore(ctx context.Context, path string) (writableScorecardActivityStore, error) {
 	if strings.TrimSpace(path) != "" {
 		return sqlite.Open(ctx, path)
 	}
@@ -787,6 +815,13 @@ func syntheticTranscriptPayloads() []json.RawMessage {
 func syntheticScorecardSettingPayloads() []json.RawMessage {
 	return []json.RawMessage{
 		json.RawMessage(`{"id":"synthetic-generic-setting-id-001","scorecardId":"synthetic-scorecard-001","scorecardName":"Synthetic discovery quality","enabled":true,"reviewMethod":"MANUAL","workspaceId":"synthetic-workspace-001","created":"2026-01-01T00:00:00Z","updated":"2026-01-02T00:00:00Z","questions":[{"questionId":"synthetic-question-001","questionText":"Did the seller confirm the implementation timeline?","questionType":"SCALE","minRange":1.5,"maxRange":"N/A","answerGuide":"Synthetic scoring guidance only."}]}`),
+	}
+}
+
+func syntheticScorecardActivityPayloads() []json.RawMessage {
+	return []json.RawMessage{
+		json.RawMessage(`{"answeredScorecardId":"synthetic-answered-scorecard-001","scorecardId":"synthetic-scorecard-001","scorecardName":"Synthetic discovery quality","callId":"synthetic-call-001","callStartTime":"2026-01-15T15:00:00Z","reviewedUserId":"synthetic-user-001","reviewerUserId":"synthetic-reviewer-001","reviewMethod":"MANUAL","reviewTime":"2026-01-16T15:00:00Z","visibilityType":"PUBLIC","answers":[{"questionId":"synthetic-question-001","isOverall":true,"score":4,"notApplicable":false},{"questionId":"synthetic-question-002","score":5,"notApplicable":false}]}`),
+		json.RawMessage(`{"answeredScorecardId":"synthetic-answered-scorecard-002","scorecardId":"synthetic-scorecard-001","scorecardName":"Synthetic discovery quality","callId":"synthetic-call-002","callStartTime":"2026-01-16T15:00:00Z","reviewedUserId":"synthetic-user-002","reviewerUserId":"synthetic-reviewer-001","reviewMethod":"AUTOMATIC","reviewTime":"2026-01-17T15:00:00Z","visibilityType":"PUBLIC","answers":[{"questionId":"synthetic-question-001","isOverall":true,"score":3,"notApplicable":false},{"questionId":"synthetic-question-002","score":3,"notApplicable":false}]}`),
 	}
 }
 
@@ -946,10 +981,46 @@ func normalizeSyncRunStep(baseDir string, idx int, step *syncRunStepConfig) erro
 		}
 		step.SettingsKind = kind
 		step.WorkspaceID = strings.TrimSpace(step.WorkspaceID)
+	case "scorecard-activity":
+		if strings.TrimSpace(step.CallFrom) == "" {
+			step.CallFrom = strings.TrimSpace(step.From)
+		}
+		if strings.TrimSpace(step.CallTo) == "" {
+			step.CallTo = strings.TrimSpace(step.To)
+		}
+		if strings.TrimSpace(step.CallFrom) == "" {
+			return fmt.Errorf("sync-run step %q requires call_from", step.Name)
+		}
+		if strings.TrimSpace(step.CallTo) == "" {
+			return fmt.Errorf("sync-run step %q requires call_to", step.Name)
+		}
+		step.ReviewFrom = strings.TrimSpace(step.ReviewFrom)
+		step.ReviewTo = strings.TrimSpace(step.ReviewTo)
+		if step.MaxPages < 0 {
+			return fmt.Errorf("sync-run step %q max_pages must be >= 0", step.Name)
+		}
+		reviewMethod, err := normalizeSyncRunReviewMethod(step.ReviewMethod)
+		if err != nil {
+			return fmt.Errorf("sync-run step %q: %w", step.Name, err)
+		}
+		step.ReviewMethod = reviewMethod
 	default:
-		return fmt.Errorf("sync-run step %q action must be one of: calls, users, transcripts, crm-integrations, crm-schema, settings", step.Name)
+		return fmt.Errorf("sync-run step %q action must be one of: calls, users, transcripts, crm-integrations, crm-schema, settings, scorecard-activity", step.Name)
 	}
 	return nil
+}
+
+func normalizeSyncRunReviewMethod(value string) (string, error) {
+	method := strings.ToUpper(strings.TrimSpace(value))
+	if method == "" {
+		return "BOTH", nil
+	}
+	switch method {
+	case "AUTOMATIC", "MANUAL", "BOTH":
+		return method, nil
+	default:
+		return "", fmt.Errorf("review_method must be one of: AUTOMATIC, MANUAL, BOTH")
+	}
 }
 
 func normalizeSyncSettingsKind(value string) (string, error) {
@@ -1009,6 +1080,11 @@ func newSyncRunResponse(config *syncRunConfig, dryRun bool) syncRunResponse {
 			IncludeParties:          step.IncludeParties,
 			SettingsKind:            step.SettingsKind,
 			WorkspaceID:             step.WorkspaceID,
+			CallFrom:                step.CallFrom,
+			CallTo:                  step.CallTo,
+			ReviewFrom:              step.ReviewFrom,
+			ReviewTo:                step.ReviewTo,
+			ReviewMethod:            step.ReviewMethod,
 			IntegrationID:           step.IntegrationID,
 			ObjectTypes:             append([]string(nil), step.ObjectTypes...),
 			OutDir:                  step.OutDir,
@@ -1102,6 +1178,19 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 		syncResult, err := syncsvc.SyncSettings(ctx, client, store, syncsvc.SettingsParams{
 			Kind:        step.SettingsKind,
 			WorkspaceID: step.WorkspaceID,
+		})
+		if err != nil {
+			return err
+		}
+		populateSyncRunServiceResult(result, syncResult)
+	case "scorecard-activity":
+		syncResult, err := syncsvc.SyncScorecardActivity(ctx, client, store, syncsvc.ScorecardActivityParams{
+			CallFrom:     step.CallFrom,
+			CallTo:       step.CallTo,
+			ReviewFrom:   step.ReviewFrom,
+			ReviewTo:     step.ReviewTo,
+			ReviewMethod: step.ReviewMethod,
+			MaxPages:     step.MaxPages,
 		})
 		if err != nil {
 			return err
@@ -1208,6 +1297,11 @@ type syncRunStepConfig struct {
 	To             string   `yaml:"to,omitempty" json:"to,omitempty"`
 	Preset         string   `yaml:"preset,omitempty" json:"preset,omitempty"`
 	MaxPages       int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
+	CallFrom       string   `yaml:"call_from,omitempty" json:"call_from,omitempty"`
+	CallTo         string   `yaml:"call_to,omitempty" json:"call_to,omitempty"`
+	ReviewFrom     string   `yaml:"review_from,omitempty" json:"review_from,omitempty"`
+	ReviewTo       string   `yaml:"review_to,omitempty" json:"review_to,omitempty"`
+	ReviewMethod   string   `yaml:"review_method,omitempty" json:"review_method,omitempty"`
 	OutDir         string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
 	Limit          int      `yaml:"limit,omitempty" json:"limit,omitempty"`
 	BatchSize      int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
@@ -1238,6 +1332,11 @@ type syncRunStepResult struct {
 	To                      string                  `json:"to,omitempty"`
 	Preset                  string                  `json:"preset,omitempty"`
 	MaxPages                int                     `json:"max_pages,omitempty"`
+	CallFrom                string                  `json:"call_from,omitempty"`
+	CallTo                  string                  `json:"call_to,omitempty"`
+	ReviewFrom              string                  `json:"review_from,omitempty"`
+	ReviewTo                string                  `json:"review_to,omitempty"`
+	ReviewMethod            string                  `json:"review_method,omitempty"`
 	SettingsKind            string                  `json:"settings_kind,omitempty"`
 	WorkspaceID             string                  `json:"workspace_id,omitempty"`
 	IntegrationID           string                  `json:"integration_id,omitempty"`

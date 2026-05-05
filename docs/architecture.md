@@ -55,6 +55,8 @@ Current public SQLite-backed commands:
 - `gongctl analyze scorecards --db PATH [--active-only]`
 - `gongctl analyze scorecard --db PATH --scorecard-id ID`
 - `gongctl analyze scorecard-activity --db PATH [--group-by scorecard|review_method|reviewed_user|lifecycle|transcript_status]`
+  (Postgres read-only rejects `reviewed_user` grouping to avoid returning user
+  IDs.)
 - `gongctl analyze transcript-backlog --db PATH [--lifecycle-source auto|profile|builtin] [--lifecycle BUCKET] [--limit N]`
 - `gongctl mcp tools`
 - `gongctl mcp tool-info NAME`
@@ -72,9 +74,11 @@ Behavioral rules:
 - Transcript sync defaults to `--limit 100` and `--batch-size 100`, selects
   calls missing transcripts, writes transcript JSON files, and stores normalized
   transcript segments in SQLite.
-- `sync run --config` resolves relative paths from the YAML file location, but
-  sensitive steps still require runtime authorization; the YAML file cannot
-  self-approve transcript download, business/all call sync, or party capture.
+- `sync run --config` resolves relative paths from the YAML file location and
+  can stage calls, users, transcripts, CRM integrations/schema, settings, and
+  scorecard activity; sensitive steps still require runtime authorization. The
+  YAML file cannot self-approve transcript download, business/all call sync, or
+  party capture.
 - CRM-context call search only works for rows that were synced with stored context.
 - Business profiles are YAML source imported into SQLite runtime state. The rule grammar is closed and evaluated in Go; profiles cannot inject SQL or expressions.
 - Profile import is transactional and idempotent by canonical hash. Identical re-imports are no-ops; source-only changes update source metadata without changing profile meaning. MCP reads only the imported SQLite state.

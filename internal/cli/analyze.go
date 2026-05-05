@@ -42,13 +42,13 @@ func (a *app) analyzeScorecardActivity(ctx context.Context, args []string) error
 	fs := flag.NewFlagSet("analyze scorecard-activity", flag.ContinueOnError)
 	fs.SetOutput(a.err)
 	dbPath := fs.String("db", "", "SQLite database path")
-	groupBy := fs.String("group-by", "scorecard", "dimension: scorecard, review_method, reviewed_user, lifecycle, transcript_status")
+	groupBy := fs.String("group-by", "scorecard", "dimension: scorecard, review_method, reviewed_user, lifecycle, transcript_status; Postgres read-only excludes reviewed_user")
 	limit := fs.Int("limit", 50, "maximum groups to return")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
 
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openReadOnlyScorecardActivityStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -362,6 +362,27 @@ type readOnlySettingsInventoryStore interface {
 	ListScorecards(context.Context, sqlite.ScorecardListParams) ([]sqlite.ScorecardSummary, error)
 	GetScorecardDetail(context.Context, string) (*sqlite.ScorecardDetail, error)
 	storeiface.Closer
+}
+
+type readOnlyScorecardActivityStore interface {
+	SummarizeScorecardActivity(context.Context, sqlite.ScorecardActivitySummaryParams) ([]sqlite.ScorecardActivitySummaryRow, error)
+	storeiface.Closer
+}
+
+func openReadOnlyScorecardActivityStore(ctx context.Context, path string) (readOnlyScorecardActivityStore, error) {
+	if path != "" {
+		return sqlite.OpenReadOnly(ctx, path)
+	}
+	store, err := openReadOnlyStatusStore(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	activityStore, ok := store.(readOnlyScorecardActivityStore)
+	if !ok {
+		_ = store.Close()
+		return nil, fmt.Errorf("selected store does not support scorecard activity")
+	}
+	return activityStore, nil
 }
 
 func openReadOnlySettingsInventoryStore(ctx context.Context, path string) (readOnlySettingsInventoryStore, error) {

@@ -1195,6 +1195,48 @@ func TestSummarizeScorecardActivityRedactsIdentifiersByDefault(t *testing.T) {
 	}
 }
 
+func TestSummarizeScorecardActivityUsesMCPGroupLimitPolicy(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedScorecardActivityMCPFixtures(t, store)
+	seedAdditionalScorecardActivityMCPFixture(t, store)
+
+	policy := DefaultLimitPolicy()
+	policy.CallFactGroups = 1
+	server := NewServerWithOptions(store, "gongmcp", "test", WithLimitPolicy(policy))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "scorecard-activity-limit",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name":      "summarize_scorecard_activity",
+			"arguments": map[string]any{"limit": 100},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var report sqlite.ScorecardActivityOverview
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if len(report.ByScorecard) != 1 || len(report.ByReviewMethod) != 1 || len(report.ByTranscriptStatus) != 1 {
+		t.Fatalf("scorecard activity report did not honor MCP group limit: %+v", report)
+	}
+	if report.TotalAnsweredScorecards != 2 {
+		t.Fatalf("totals were unexpectedly limited: %+v", report)
+	}
+}
+
 func TestSearchTranscriptSegmentsCanOptIntoIdentifiers(t *testing.T) {
 	t.Parallel()
 
@@ -3250,6 +3292,42 @@ func seedScorecardActivityMCPFixtures(t *testing.T, store *sqlite.Store) {
 		},
 	})); err != nil {
 		t.Fatalf("upsert scorecard activity: %v", err)
+	}
+}
+
+func seedAdditionalScorecardActivityMCPFixture(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-activity-002",
+		"title":    "Second raw activity call",
+		"started":  "2026-03-03T15:00:00Z",
+		"duration": 600,
+	})); err != nil {
+		t.Fatalf("upsert second scorecard activity call: %v", err)
+	}
+	if _, err := store.UpsertScorecardActivity(ctx, mustJSON(t, map[string]any{
+		"answeredScorecardId": "answered-activity-002",
+		"scorecardId":         "scorecard-activity-002",
+		"scorecardName":       "Demo QA",
+		"callId":              "call-activity-002",
+		"callStartTime":       "2026-03-03T15:00:00Z",
+		"reviewedUserId":      "user-activity-002",
+		"reviewerUserId":      "reviewer-activity-002",
+		"reviewMethod":        "AUTOMATIC",
+		"reviewTime":          "2026-03-04T15:00:00Z",
+		"answers": []map[string]any{
+			{
+				"questionId":    "question-activity-002",
+				"answerText":    "Confirmed value",
+				"isOverall":     true,
+				"score":         3,
+				"notApplicable": false,
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert second scorecard activity: %v", err)
 	}
 }
 

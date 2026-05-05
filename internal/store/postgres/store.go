@@ -263,6 +263,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
+	`+postgresScorecardActivityFunctionsSQL+`
 	DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
@@ -537,6 +538,7 @@ BEGIN
 				GRANT EXECUTE ON FUNCTION gongmcp_governance_suppressed_call_ids(text) TO gongmcp_reader;
 	`+postgresBusinessAnalysisReaderGrantStatementsSQL+`
 	`+postgresSettingsReaderGrantStatementsSQL+`
+	`+postgresScorecardActivityReaderGrantStatementsSQL+`
 			END IF;
 		END;
 		$$;`)
@@ -572,15 +574,16 @@ func (s *Store) validateSchema(ctx context.Context) error {
 			'profile_validation_warning',
 			'profile_call_fact_cache_meta',
 			'profile_call_fact_cache',
-				'governance_policy_state',
-				'governance_suppressed_calls',
-				'gong_settings'
-			  ]) AS core_table(table_name)
-			 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
+					'governance_policy_state',
+					'governance_suppressed_calls',
+					'gong_settings',
+					'scorecard_activity'
+				  ]) AS core_table(table_name)
+				 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
 		return err
 	}
-	if count != 22 {
-		return fmt.Errorf("postgres schema is not initialized: found %d/22 core tables", count)
+	if count != 23 {
+		return fmt.Errorf("postgres schema is not initialized: found %d/23 core tables", count)
 	}
 	return nil
 }
@@ -611,7 +614,7 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-		   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'gong_settings')
+			   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'gong_settings', 'scorecard_activity')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -643,7 +646,7 @@ SELECT table_name
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-		   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
+			   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'scorecard_activity')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT') OR
 	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
@@ -695,9 +698,11 @@ WITH forbidden(table_name, column_name) AS (
 			('call_facts', 'opportunity_id'),
 			('call_facts', 'opportunity_amount'),
 			('call_facts', 'opportunity_probability'),
-			('call_facts', 'opportunity_procurement_system'),
-			('gong_settings', 'raw_json'),
-			('gong_settings', 'raw_sha256')
+				('call_facts', 'opportunity_procurement_system'),
+				('gong_settings', 'raw_json'),
+				('gong_settings', 'raw_sha256'),
+				('scorecard_activity', 'raw_json'),
+				('scorecard_activity', 'raw_sha256')
 )
 SELECT c.table_name || '.' || c.column_name
   FROM information_schema.columns c
@@ -724,6 +729,34 @@ SELECT c.table_name || '.' || c.column_name
 	}
 	if len(readableForbiddenColumns) > 0 {
 		return fmt.Errorf("postgres read-only URL has forbidden column SELECT: %s", strings.Join(readableForbiddenColumns, ", "))
+	}
+	rows, err = s.db.QueryContext(ctx, `
+WITH required_functions(signature) AS (
+	VALUES
+		('public.gongmcp_scorecard_activity_summary(text, integer)'),
+		('public.gongmcp_scorecard_activity_totals()')
+)
+SELECT signature
+  FROM required_functions
+ WHERE NOT has_function_privilege(current_user, signature, 'EXECUTE')
+ ORDER BY signature`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var missingFunctionGrants []string
+	for rows.Next() {
+		var signature string
+		if err := rows.Scan(&signature); err != nil {
+			return err
+		}
+		missingFunctionGrants = append(missingFunctionGrants, signature)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(missingFunctionGrants) > 0 {
+		return fmt.Errorf("postgres read-only URL is missing required function EXECUTE grants: %s", strings.Join(missingFunctionGrants, ", "))
 	}
 	return nil
 }
@@ -1227,6 +1260,13 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		if err := s.db.QueryRowContext(ctx, item.query).Scan(item.dest); err != nil {
 			return nil, err
 		}
+	}
+	scorecardActivityCountQuery := `SELECT COUNT(*) FROM scorecard_activity`
+	if s.readOnly {
+		scorecardActivityCountQuery = `SELECT total_answered_scorecards FROM gongmcp_scorecard_activity_totals()`
+	}
+	if err := s.db.QueryRowContext(ctx, scorecardActivityCountQuery).Scan(&summary.TotalScorecardActivity); err != nil {
+		return nil, err
 	}
 	lastRun, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, COALESCE(finished_at, ''), records_seen, records_written, error_text FROM gongmcp_sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`)
 	if err != nil {

@@ -20,10 +20,13 @@ Current fixed boundaries:
 	  Postgres `analyst-core` adds reviewed core/profile/lifecycle/CRM-context
 	  inventory tools and scorecard settings inventory without raw CRM field
 	  values or raw settings payloads. Postgres
-		  `analyst-business-core` adds bounded transcript-evidence and
+	  `analyst-business-core` adds bounded transcript-evidence and
 		  business-analysis tools through reviewed read-only functions; direct
 		  reader SQL calls do not receive raw account/opportunity names,
-		  websites, close dates, or probabilities from those functions. Broader
+		  websites, close dates, or probabilities from those functions.
+		  `analyst-core` also includes aggregate answered-scorecard activity
+		  summaries without answered-scorecard IDs, call IDs, user IDs, answer
+		  text, or raw activity payloads. Broader
 		  `analyst` and `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
@@ -61,6 +64,7 @@ Current fixed boundaries:
 | `summarize_call_facts`, `summarize_calls_by_lifecycle` | Safe-default | Aggregate | Return rates, counts, classification logic, or allowlisted business dimensions only | Group labels can still expose tenant-specific terminology |
 | `rank_transcript_backlog`, `prioritize_transcripts_by_lifecycle` | Safe-default with review | Aggregate | Server blanks call IDs and titles before returning ranked backlog rows | Still reveals lifecycle, confidence, duration, and prioritization rationale |
 | `list_scorecards`, `get_scorecard` | Safe-default with review | Config | No raw settings payloads | Exposes scorecard names, question text, and scoring metadata, which may reflect internal QA/coaching policy |
+| `summarize_scorecard_activity` | Safe-default with review | Aggregate | No answered-scorecard IDs, call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, or raw activity payloads | Aggregate scorecard/program shape can still reveal coaching emphasis and review-process coverage |
 | `list_crm_object_types`, `list_crm_fields`, `list_unmapped_crm_fields` | Restricted | Aggregate + Config | Counts and field metadata only; no field values by default | Field names and labels can still reveal tenant business model |
 | `analyze_late_stage_crm_signals`, `crm_field_population_matrix`, `list_lifecycle_buckets`, `compare_lifecycle_crm_fields` | Restricted | Aggregate | Return rates, counts, classification logic, or allowlisted business dimensions only | Business groupings can reveal tenant-specific CRM structure |
 | `list_crm_integrations`, `list_cached_crm_schema_objects`, `list_cached_crm_schema_fields`, `list_gong_settings` | Restricted | Config | No raw settings payloads | Still exposes integration IDs, object IDs, workspace IDs, tracker names, and related inventory metadata |

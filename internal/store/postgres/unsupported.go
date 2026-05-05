@@ -24,9 +24,6 @@ func (s *Store) ListCRMSchemaObjects(ctx context.Context, integrationID string) 
 func (s *Store) ListCRMSchemaFields(ctx context.Context, params sqlite.CRMSchemaFieldListParams) ([]sqlite.CRMSchemaFieldRecord, error) {
 	return nil, unsupported()
 }
-func (s *Store) ScorecardActivityOverview(ctx context.Context, limit int) (*sqlite.ScorecardActivityOverview, error) {
-	return nil, unsupported()
-}
 func (s *Store) ListUnmappedCRMFields(ctx context.Context, params sqlite.UnmappedCRMFieldParams) ([]sqlite.UnmappedCRMField, error) {
 	return nil, unsupported()
 }

@@ -106,6 +106,7 @@ func (a *app) usage() {
   gongctl analyze scorecards --db gong.db [--active-only]
   gongctl analyze scorecard --db gong.db --scorecard-id ID
   gongctl analyze scorecard-activity --db gong.db [--group-by scorecard|review_method|reviewed_user|lifecycle|transcript_status]
+      (Postgres read-only supports aggregate groupings only and rejects reviewed_user)
   gongctl auth check
   gongctl cache inventory --db gong.db
   gongctl cache purge --db gong.db --older-than YYYY-MM-DD [--dry-run|--confirm]

@@ -211,12 +211,12 @@ func SyncSettings(ctx context.Context, client *gong.Client, store storeiface.Set
 	return result, nil
 }
 
-func SyncScorecardActivity(ctx context.Context, client *gong.Client, store *sqlite.Store, params ScorecardActivityParams) (result Result, err error) {
+func SyncScorecardActivity(ctx context.Context, client *gong.Client, store storeiface.ScorecardActivityStore, params ScorecardActivityParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	if strings.TrimSpace(params.CallFrom) == "" {
 		return result, errors.New("call from date is required")
