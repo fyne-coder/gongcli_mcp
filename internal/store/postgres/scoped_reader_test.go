@@ -32,7 +32,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
 		`COMMIT;`,
 	} {
 		if !strings.Contains(sql, want) {
@@ -49,6 +49,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta(bigint, text)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)`,
 		`public.gongmcp_missing_transcripts`,
 		`field_values_json`,
 	} {

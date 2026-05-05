@@ -712,6 +712,10 @@ func (s *Store) summarizeProfileFactsRowsSQL(ctx context.Context, profileID int6
 			transcriptStatus = normalized
 		}
 	}
+	functionName := "gongmcp_profile_call_fact_summary"
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		functionName = "gongmcp_profile_call_fact_summary_sanitized"
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT group_by,
        group_value,
@@ -726,7 +730,7 @@ SELECT group_by,
        total_duration_seconds,
        avg_duration_seconds,
        latest_call_at
-  FROM gongmcp_profile_call_fact_summary($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+  FROM `+functionName+`($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		profileID,
 		canonicalSHA256,
 		groupBy,

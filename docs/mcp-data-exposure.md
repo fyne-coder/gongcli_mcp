@@ -210,7 +210,7 @@ What the conservative defaults give you:
   a service secret because selected functions and sanitized views can still
   expose minimized call metadata, timings, counts, tenant terminology. The
   scoped active-profile and profile-cache helpers redact source metadata and
-  call IDs/titles, and the direct profile-cache helper is capped.
+  call IDs/titles, and the direct profile-cache helper is capped at 1,000 rows per direct helper call.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes

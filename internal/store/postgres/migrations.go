@@ -824,6 +824,71 @@ $function$;
 
 REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 
+CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_summary_sanitized(profile_id_arg bigint, canonical_sha_arg text, group_by_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, row_limit integer)
+RETURNS TABLE(
+	group_by text,
+	group_value text,
+	call_count bigint,
+	transcript_count bigint,
+	missing_transcript_count bigint,
+	opportunity_call_count bigint,
+	account_call_count bigint,
+	external_call_count bigint,
+	internal_call_count bigint,
+	unknown_scope_call_count bigint,
+	total_duration_seconds bigint,
+	avg_duration_seconds double precision,
+	latest_call_at text
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+RETURN QUERY
+SELECT s.group_by,
+       s.group_value,
+       s.call_count,
+       s.transcript_count,
+       s.missing_transcript_count,
+       s.opportunity_call_count,
+       s.account_call_count,
+       s.external_call_count,
+       s.internal_call_count,
+       s.unknown_scope_call_count,
+       s.total_duration_seconds,
+       s.avg_duration_seconds,
+       s.latest_call_at
+  FROM gongmcp_profile_call_fact_summary(
+	profile_id_arg,
+	canonical_sha_arg,
+	CASE lower(trim(COALESCE(group_by_arg, '')))
+		WHEN '' THEN 'lifecycle'
+		WHEN 'lifecycle_bucket' THEN 'lifecycle'
+		WHEN 'lifecycle' THEN 'lifecycle'
+		WHEN 'scope' THEN 'scope'
+		WHEN 'system' THEN 'system'
+		WHEN 'direction' THEN 'direction'
+		WHEN 'transcript_status' THEN 'transcript_status'
+		WHEN 'calendar' THEN 'calendar'
+		WHEN 'calendar_event_status' THEN 'calendar'
+		WHEN 'duration_bucket' THEN 'duration_bucket'
+		WHEN 'month' THEN 'month'
+		WHEN 'call_month' THEN 'month'
+		ELSE '__unsupported_scoped_group__'
+	END,
+	lifecycle_bucket_arg,
+	scope_arg,
+	system_arg,
+	direction_arg,
+	transcript_status_arg,
+	row_limit
+  ) AS s;
+END
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+
 `,
 	`
 CREATE TABLE IF NOT EXISTS governance_policy_state (

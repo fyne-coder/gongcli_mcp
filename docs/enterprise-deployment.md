@@ -139,13 +139,17 @@ flowchart LR
   per-surface maps or governed views/RLS before broad customer role automation.
   Generate the reviewed business-pilot grant block with the canonical operator
   command `gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE
-  --database DB`; `gongmcp --print-postgres-reader-grants --tool-preset
-  business-pilot --postgres-reader-role ROLE --postgres-database DB` is a
-  compatibility path for MCP-only images. Apply the SQL to a fresh `NOINHERIT`
-  role, or revoke stale grants before role reuse. Treat the scoped URL as a
-  `gongmcp` service credential, not an analyst SQL login. The scoped
+  --database DB`. To operationalize that reviewed block, create the LOGIN role
+  and password through the customer secret manager, then run `gongctl mcp
+  postgres-reader-apply --preset business-pilot --role ROLE --database DB
+  --dry-run` for review and `--apply` with a writable `GONG_DATABASE_URL` /
+  `DATABASE_URL` to reconcile grants for the existing role. `gongmcp
+  --print-postgres-reader-grants --tool-preset business-pilot
+  --postgres-reader-role ROLE --postgres-database DB` is a compatibility path
+  for MCP-only images. Treat the scoped URL as a `gongmcp` service credential,
+  not an analyst SQL login. The scoped
   active-profile and profile-cache helpers redact source metadata and call
-  IDs/titles, and the direct profile-cache helper is capped, but selected
+  IDs/titles, and the direct profile-cache helper is capped at 1,000 rows per direct helper call, but selected
   functions still expose minimized operational metadata, timings, counts, and
   tenant terminology.
   This first scoped business-pilot role is profile-backed; explicit

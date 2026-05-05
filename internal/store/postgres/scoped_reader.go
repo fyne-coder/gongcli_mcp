@@ -87,6 +87,9 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM ")
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
+	b.WriteString("REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer) FROM ")
+	b.WriteString(roleIdent)
+	b.WriteString(";\n")
 
 	for _, grant := range groupedColumnGrants(options.RequiredColumnSelectGrants) {
 		b.WriteString("GRANT SELECT (")
@@ -245,6 +248,9 @@ func businessPilotFunctionSignatures(signatures []string) []string {
 		}
 		if signature == "public.gongmcp_profile_call_fact_cache_meta(bigint, text)" {
 			signature = "public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint)"
+		}
+		if signature == "public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)" {
+			signature = "public.gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer)"
 		}
 		if signature == "public.gongmcp_active_business_profile()" {
 			signature = "public.gongmcp_active_business_profile_sanitized()"

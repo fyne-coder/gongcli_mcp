@@ -139,18 +139,20 @@ Configuration contract:
   service role. For the reviewed `business-pilot` scoped reader path, use the
   generated grant block instead of copying baseline `gongmcp_reader` grants.
   The canonical operator command is `gongctl mcp postgres-reader-sql --preset
-  business-pilot --role ROLE --database DB`; `gongmcp
+  business-pilot --role ROLE --database DB`; `gongctl mcp
+  postgres-reader-apply --preset business-pilot --role ROLE --database DB`
+  dry-runs the same SQL by default and applies it only with `--apply` plus a
+  writable `GONG_DATABASE_URL` / `DATABASE_URL`; `gongmcp
   --print-postgres-reader-grants --tool-preset business-pilot
   --postgres-reader-role ROLE --postgres-database DB` is a compatibility path
-  for MCP-only images. Apply the generated grants to a fresh `NOINHERIT` role,
-  or revoke stale grants before reusing an existing role. Create the role and
-  credential separately through the deployment secret manager, then start
+  for MCP-only images. Create the role and credential separately through the
+  deployment secret manager, then reconcile grants for the existing role and start
   `gongmcp` with `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
   `--enforce-tool-scoped-db-grants`. Other presets still need their own
   reviewed maps before customer role automation. A scoped reader URL is still a
   service credential, not an analyst SQL login. The scoped active-profile and
   profile-cache helpers redact source metadata and call IDs/titles, and the
-  direct profile-cache helper is capped, but selected functions still expose
+  direct profile-cache helper is capped at 1,000 rows per direct helper call, but selected functions still expose
   minimized operational metadata, timings, counts, and tenant terminology. This
   first scoped `business-pilot` role is profile-backed; explicit
   `lifecycle_source=builtin` still requires the broader compatibility reader

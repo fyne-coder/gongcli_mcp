@@ -136,17 +136,21 @@ Implementation controls on the CLI side:
   `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`.
   The reviewed business-pilot grant block can be emitted with the canonical
   `gongctl mcp postgres-reader-sql --preset business-pilot` operator command;
+  `gongctl mcp postgres-reader-apply --preset business-pilot --dry-run` emits
+  the same SQL and `--apply` reconciles it for an existing role using a
+  writable `GONG_DATABASE_URL` / `DATABASE_URL`;
   `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
   compatibility path for MCP-only images. It intentionally excludes role
-  credentials and database URLs. Apply it to a fresh `NOINHERIT` role, or
-  revoke stale grants before reuse. This first scoped role is profile-backed;
+  credentials and database URLs. Create LOGIN credentials through the deployment
+  secret manager; the apply command does not manage passwords or create roles.
+  This first scoped role is profile-backed;
   explicit `lifecycle_source=builtin` still requires the broader compatibility
   reader until a sanitized builtin SQL surface exists.
   The scoped reader URL remains a service secret because selected functions and
   sanitized views can still expose minimized operational metadata, timings,
   counts, and tenant terminology. The scoped active-profile and profile-cache
   helpers redact source metadata and call IDs/titles, and direct SQL callers can
-  invoke only the capped sanitized profile-cache helper; MCP result limits are
+  invoke only the capped sanitized profile-cache helper, currently fixed at 1,000 rows per direct helper call; MCP result limits are
   still enforced above that SQL helper.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not

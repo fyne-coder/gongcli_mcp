@@ -614,21 +614,30 @@ compatibility path for MCP-only images:
 gongctl mcp postgres-reader-sql --preset business-pilot \
   --role gongmcp_business_pilot_reader --database gongctl
 
+gongctl mcp postgres-reader-apply --preset business-pilot \
+  --role gongmcp_business_pilot_reader --database gongctl --dry-run
+
+GONG_DATABASE_URL="$WRITER_URL" \
+  gongctl mcp postgres-reader-apply --preset business-pilot \
+  --role gongmcp_business_pilot_reader --database gongctl --apply
+
 gongmcp --print-postgres-reader-grants \
   --tool-preset business-pilot \
   --postgres-reader-role gongmcp_business_pilot_reader \
   --postgres-database gongctl
 ```
 
-The generated SQL does not create credentials or print database URLs. Apply it
-to a fresh `NOINHERIT` role, or explicitly revoke stale grants before reusing
-an existing role. Create the LOGIN role and password through your normal secret
-management process, review/apply the grant block, then run `gongmcp` with the
-scoped reader URL and `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a
-`gongmcp` service credential, not an analyst SQL login. The scoped active-profile
-and profile-cache helpers redact source metadata and call IDs/titles, but
-selected functions still expose minimized operational metadata, timings, counts,
-and tenant terminology. Direct SQL callers can invoke only the capped sanitized
+The generated SQL and apply JSON do not create credentials or print database
+URLs. Create the LOGIN role and password through your normal secret management
+process. Then dry-run/review the grant block and use `--apply` with a writable
+operator URL to reconcile grants for that existing role. The apply command is
+safe to rerun for stale-helper repair, but it is not a password or role-creation
+manager. Run `gongmcp` with the scoped reader URL and
+`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a `gongmcp` service
+credential, not an analyst SQL login. The scoped active-profile and
+profile-cache helpers redact source metadata and call IDs/titles, but selected
+functions still expose minimized operational metadata, timings, counts, and
+tenant terminology. Direct SQL callers can invoke only the capped sanitized
 profile-cache helper; MCP result limits are still enforced above that SQL
 helper.
 This first scoped `business-pilot` role is profile-backed: warm/import an active
