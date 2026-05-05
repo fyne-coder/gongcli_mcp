@@ -28,10 +28,11 @@ Current fixed boundaries:
 		  summaries without answered-scorecard IDs, call IDs, user IDs, answer
 		  text, or raw activity payloads. Explicit Postgres allowlists are also
 		  available for `list_unmapped_crm_fields`, `search_crm_field_values`,
-		  `analyze_late_stage_crm_signals`, and
-		  `opportunities_missing_transcripts`; the late-stage Postgres slice is
-		  limited to `Opportunity.StageName`, and the Opportunity transcript
-		  coverage slice returns only redacted coverage metadata. These stay outside the full
+		  `analyze_late_stage_crm_signals`,
+		  `opportunities_missing_transcripts`, and
+		  `opportunity_call_summary`; the late-stage Postgres slice is limited
+		  to `Opportunity.StageName`, and the Opportunity aggregate slices
+		  return only redacted coverage and call-summary metadata. These stay outside the full
 		  `analyst` preset until the remaining catalog is ready. Broader
 		  `analyst` and `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
@@ -76,7 +77,7 @@ Current fixed boundaries:
 | `list_crm_integrations`, `list_cached_crm_schema_objects`, `list_cached_crm_schema_fields`, `list_gong_settings` | Restricted | Config | No raw CRM schema/settings payloads; Postgres reader grants exclude raw JSON and raw hashes | Still exposes integration IDs, object IDs, workspace IDs, tracker names, field names/labels/types, and related inventory metadata |
 | `get_business_profile`, `list_business_concepts` | Restricted | Config | Redacts source path, source hash, canonical hash, and imported-by identity | Still exposes tenant lifecycle/methodology concepts and mapping logic |
 | `opportunities_missing_transcripts` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, and latest call IDs; Postgres reader function never returns owner IDs, amount, close date, or raw values | Still reveals stage, transcript coverage counts, and latest-call timing at an opportunity-summary level |
-| `opportunity_call_summary` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, owner IDs, amount, close date, and latest call IDs | Still reveals stage, coverage, duration totals, and latest-call timing at an opportunity-summary level |
+| `opportunity_call_summary` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, owner IDs, amount, close date, and latest call IDs; Postgres reader function never returns those fields or raw values | Still reveals stage, coverage, duration totals, and latest-call timing at an opportunity-summary level |
 | `search_transcripts_by_call_facts` | Restricted | Snippet | No call IDs, titles, or speaker IDs in the result shape | Still returns bounded transcript/context excerpts plus lifecycle/scope/system/direction metadata |
 | `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
@@ -202,8 +203,8 @@ How to open up the surface intentionally:
   `business-pilot`, `operator-smoke`, `analyst-core`, `analyst-business-core`,
   `governance-search`, or explicit allowlists such as
   `analyze_late_stage_crm_signals` and
-  `opportunities_missing_transcripts`; full Postgres `all-readonly` is not yet
-  supported.
+  `opportunities_missing_transcripts` or `opportunity_call_summary`; full
+  Postgres `all-readonly` is not yet supported.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.

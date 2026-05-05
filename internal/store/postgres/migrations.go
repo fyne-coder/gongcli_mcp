@@ -939,4 +939,15 @@ BEGIN
 END;
 $$;
 `,
+	`
+DROP FUNCTION IF EXISTS gongmcp_opportunity_call_summary(text, integer);
+` + postgresOpportunityCallSummaryFunctionSQL + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+`,
 }

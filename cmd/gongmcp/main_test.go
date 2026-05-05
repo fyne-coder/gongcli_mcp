@@ -73,6 +73,16 @@ func TestPostgresToolAllowlistAcceptsOpportunitiesMissingTranscripts(t *testing.
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsOpportunityCallSummary(t *testing.T) {
+	allowlist, err := postgresToolAllowlist([]string{"opportunity_call_summary"}, false, "")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, []string{"opportunity_call_summary"}) {
+		t.Fatalf("allowlist=%v want opportunity_call_summary", allowlist)
+	}
+}
+
 func TestPostgresToolAllowlistAcceptsLateStageCRMSignals(t *testing.T) {
 	allowlist, err := postgresToolAllowlist([]string{"analyze_late_stage_crm_signals"}, false, "")
 	if err != nil {

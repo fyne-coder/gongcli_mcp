@@ -402,10 +402,11 @@ opportunities AS (
 stage_fields AS (
 	SELECT f.call_id,
 	       f.object_key,
-	       TRIM(f.field_value_text) AS stage
+	       MAX(TRIM(f.field_value_text)) AS stage
 	  FROM call_context_fields f
 	 WHERE f.field_name = 'StageName'
 	   AND TRIM(f.field_value_text) <> ''
+	 GROUP BY f.call_id, f.object_key
 ),
 opportunity_calls AS (
 	SELECT o.call_id,
@@ -455,6 +456,101 @@ SELECT stage,
 $function$;
 
 REVOKE ALL ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM PUBLIC;
+`
+
+const postgresOpportunityCallSummaryFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_opportunity_call_summary(stage_values_json_arg text, row_limit integer)
+RETURNS TABLE(
+	stage text,
+	call_count bigint,
+	transcript_count bigint,
+	missing_transcript_count bigint,
+	total_duration_seconds bigint,
+	latest_call_at text
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH stage_values_json AS (
+	SELECT COALESCE(NULLIF(stage_values_json_arg, ''), '[]') AS raw_json
+	 WHERE CHAR_LENGTH(COALESCE(stage_values_json_arg, '')) <= 65536
+),
+stage_values AS (
+	SELECT LOWER(TRIM(value)) AS value
+	  FROM stage_values_json,
+	       jsonb_array_elements_text(raw_json::jsonb) AS value
+	 WHERE TRIM(value) <> ''
+	 LIMIT 50
+),
+opportunities AS (
+	SELECT o.call_id,
+	       o.object_key,
+	       o.object_id
+	  FROM call_context_objects o
+	 WHERE o.object_type = 'Opportunity'
+	   AND TRIM(o.object_id) <> ''
+),
+stage_fields AS (
+	SELECT f.call_id,
+	       f.object_key,
+	       MAX(TRIM(f.field_value_text)) AS stage
+	  FROM call_context_fields f
+	 WHERE f.field_name = 'StageName'
+	   AND TRIM(f.field_value_text) <> ''
+	 GROUP BY f.call_id, f.object_key
+),
+opportunity_calls AS (
+	SELECT o.call_id,
+	       o.object_key,
+	       o.object_id,
+	       COALESCE(sf.stage, '') AS stage,
+	       c.started_at,
+	       c.duration_seconds,
+	       t.call_id AS transcript_call_id
+	  FROM opportunities o
+	  JOIN calls c
+	    ON c.call_id = o.call_id
+	  LEFT JOIN stage_fields sf
+	    ON sf.call_id = o.call_id
+	   AND sf.object_key = o.object_key
+	  LEFT JOIN transcripts t
+	    ON t.call_id = o.call_id
+),
+filtered_opportunity_calls AS (
+	SELECT *
+	  FROM opportunity_calls
+	 WHERE COALESCE(NULLIF(TRIM(stage_values_json_arg), ''), '[]') = '[]'
+	    OR LOWER(TRIM(stage)) IN (SELECT value FROM stage_values)
+),
+ranked AS (
+	SELECT *,
+	       ROW_NUMBER() OVER (PARTITION BY object_id ORDER BY started_at DESC, call_id) AS latest_rank
+	  FROM filtered_opportunity_calls
+),
+summaries AS (
+	SELECT COALESCE(MAX(stage) FILTER (WHERE latest_rank = 1), '') AS stage,
+	       COUNT(DISTINCT call_id)::bigint AS call_count,
+	       COUNT(DISTINCT CASE WHEN transcript_call_id IS NOT NULL THEN call_id END)::bigint AS transcript_count,
+	       COUNT(DISTINCT CASE WHEN transcript_call_id IS NULL THEN call_id END)::bigint AS missing_transcript_count,
+	       COALESCE(SUM(duration_seconds), 0)::bigint AS total_duration_seconds,
+	       COALESCE(MAX(started_at), '') AS latest_call_at
+	  FROM ranked
+	 GROUP BY object_id
+)
+SELECT stage,
+       call_count,
+       transcript_count,
+       missing_transcript_count,
+       total_duration_seconds,
+       latest_call_at
+  FROM summaries
+ ORDER BY call_count DESC, latest_call_at DESC
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM PUBLIC;
 `
 
 type postgresCRMIntegrationPayload struct {
@@ -880,6 +976,53 @@ SELECT stage,
 			&row.CallCount,
 			&row.MissingTranscriptCount,
 			&row.TranscriptCount,
+			&row.LatestCallAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SummarizeOpportunityCalls(ctx context.Context, params sqlite.OpportunityCallSummaryParams) ([]sqlite.OpportunityCallSummary, error) {
+	stageValues := cleanStringList(params.StageValues)
+	if len(stageValues) > maxOpportunityStageValueCount {
+		return nil, fmt.Errorf("stage_values supports at most %d entries", maxOpportunityStageValueCount)
+	}
+	for _, value := range stageValues {
+		if len(value) > maxOpportunityStageValueLength {
+			return nil, fmt.Errorf("stage_values entries must be at most %d bytes", maxOpportunityStageValueLength)
+		}
+	}
+	limit := boundedLimit(params.Limit, defaultOpportunitySummaryLimit, maxOpportunitySummaryLimit)
+	stageValuesJSON, err := json.Marshal(stageValues)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+SELECT stage,
+       call_count,
+       transcript_count,
+       missing_transcript_count,
+       total_duration_seconds,
+       latest_call_at
+  FROM gongmcp_opportunity_call_summary($1, $2)`, string(stageValuesJSON), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]sqlite.OpportunityCallSummary, 0)
+	for rows.Next() {
+		var row sqlite.OpportunityCallSummary
+		if err := rows.Scan(
+			&row.Stage,
+			&row.CallCount,
+			&row.TranscriptCount,
+			&row.MissingTranscriptCount,
+			&row.TotalDurationSeconds,
 			&row.LatestCallAt,
 		); err != nil {
 			return nil, err

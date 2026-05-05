@@ -15,9 +15,6 @@ func unsupported() error { return errUnsupported }
 func (s *Store) SearchTranscriptSegmentsByCRMContext(ctx context.Context, params sqlite.TranscriptCRMSearchParams) ([]sqlite.TranscriptCRMSearchResult, error) {
 	return nil, unsupported()
 }
-func (s *Store) SummarizeOpportunityCalls(ctx context.Context, params sqlite.OpportunityCallSummaryParams) ([]sqlite.OpportunityCallSummary, error) {
-	return nil, unsupported()
-}
 func (s *Store) CRMFieldPopulationMatrix(ctx context.Context, params sqlite.CRMFieldPopulationMatrixParams) (*sqlite.CRMFieldPopulationMatrix, error) {
 	return nil, unsupported()
 }

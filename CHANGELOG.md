@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added development-branch Postgres explicit allowlist support for
+  `opportunity_call_summary`, returning redacted Opportunity call coverage
+  aggregates through a reader-executable function without exposing Opportunity
+  IDs/names, owner IDs, amount, close date, latest call IDs, or raw CRM values.
+
 ## 0.3.3 - 2026-05-04
 
 - Hardened lab-auth trusted proxy identity handling so client-supplied

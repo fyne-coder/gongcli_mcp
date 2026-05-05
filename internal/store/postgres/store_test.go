@@ -949,7 +949,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("index %s does not exist", index)
 		}
 	}
-	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_summary", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -2207,6 +2207,138 @@ func TestPostgresListOpportunitiesMissingTranscriptsMatchesSQLiteRedacted(t *tes
 	}
 }
 
+func TestPostgresSummarizeOpportunityCallsMatchesSQLiteRedacted(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	calls := []json.RawMessage{
+		json.RawMessage(`{"id":"pg-opp-summary-001","title":"Summary latest covered call","started":"2026-04-20T12:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-summary-1","name":"Summary One","fields":{"StageName":"Contract Signing","Amount":"50000","CloseDate":"2026-06-01","OwnerId":"owner-001"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-summary-002","title":"Summary earlier transcript call","started":"2026-04-19T12:00:00Z","duration":600,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-summary-1","name":"Summary One","fields":{"StageName":"Contract Signing","Amount":"50000","CloseDate":"2026-06-01","OwnerId":"owner-001"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-summary-003","title":"Summary second latest call","started":"2026-04-21T12:00:00Z","duration":900,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-summary-2","name":"Summary Two","fields":{"StageName":"Contract Signing","Amount":"75000","CloseDate":"2026-06-15","OwnerId":"owner-002"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-summary-004","title":"Summary second earlier call","started":"2026-04-18T12:00:00Z","duration":300,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-summary-2","name":"Summary Two","fields":{"StageName":"Contract Signing","Amount":"75000","CloseDate":"2026-06-15","OwnerId":"owner-002"}}]}}`),
+		json.RawMessage(`{"id":"pg-opp-summary-005","title":"Summary proposal call","started":"2026-04-22T12:00:00Z","duration":1500,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-summary-proposal","name":"Proposal Summary","fields":{"StageName":"Proposal","Amount":"10000","CloseDate":"2026-05-20","OwnerId":"owner-003"}}]}}`),
+	}
+	transcripts := []json.RawMessage{
+		json.RawMessage(`{"callId":"pg-opp-summary-002","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":1000,"text":"Synthetic transcript for covered opportunity summary call."}]}]}`),
+	}
+	for _, store := range []interface {
+		UpsertCall(context.Context, json.RawMessage) (*sqlite.CallRecord, error)
+		UpsertTranscript(context.Context, json.RawMessage) (*sqlite.TranscriptRecord, error)
+	}{pgStore, sqliteStore} {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("UpsertCall returned error: %v", err)
+			}
+		}
+		for _, raw := range transcripts {
+			if _, err := store.UpsertTranscript(ctx, raw); err != nil {
+				t.Fatalf("UpsertTranscript returned error: %v", err)
+			}
+		}
+	}
+
+	params := sqlite.OpportunityCallSummaryParams{StageValues: []string{"Contract Signing"}, Limit: 10}
+	got, err := pgStore.SummarizeOpportunityCalls(ctx, params)
+	if err != nil {
+		t.Fatalf("postgres SummarizeOpportunityCalls returned error: %v", err)
+	}
+	want, err := sqliteStore.SummarizeOpportunityCalls(ctx, params)
+	if err != nil {
+		t.Fatalf("sqlite SummarizeOpportunityCalls returned error: %v", err)
+	}
+	redactOpportunityCallSummaries(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres opportunity summaries=%+v want sqlite %+v", got, want)
+	}
+	if len(got) != 2 || got[0].CallCount != 2 || got[0].LatestCallAt != "2026-04-21T12:00:00Z" || got[0].TotalDurationSeconds != 1200 {
+		t.Fatalf("unexpected ordering/counts/duration: %+v", got)
+	}
+	if got[0].OpportunityID != "" || got[0].OpportunityName != "" || got[0].LatestCallID != "" || got[0].Amount != "" || got[0].CloseDate != "" || got[0].OwnerID != "" {
+		t.Fatalf("postgres exposed opportunity sensitive fields: %+v", got[0])
+	}
+
+	limited, err := pgStore.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{StageValues: []string{"Contract Signing"}, Limit: 1})
+	if err != nil {
+		t.Fatalf("postgres limited SummarizeOpportunityCalls returned error: %v", err)
+	}
+	if len(limited) != 1 || limited[0].LatestCallAt != "2026-04-21T12:00:00Z" {
+		t.Fatalf("unexpected limited summary: %+v", limited)
+	}
+
+	proposalOnly, err := pgStore.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{StageValues: []string{"Proposal"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres Proposal SummarizeOpportunityCalls returned error: %v", err)
+	}
+	if len(proposalOnly) != 1 || proposalOnly[0].Stage != "Proposal" || proposalOnly[0].CallCount != 1 || proposalOnly[0].TotalDurationSeconds != 1500 {
+		t.Fatalf("unexpected proposal-only summary: %+v", proposalOnly)
+	}
+
+	for _, column := range []string{"object_id", "object_name", "opportunity_id", "opportunity_name", "owner_id", "amount", "close_date", "latest_call_id", "field_value_text", "raw_json"} {
+		if _, err := pgStore.DB().ExecContext(ctx, `SELECT `+column+` FROM gongmcp_opportunity_call_summary('["Contract Signing"]', 10)`); err == nil {
+			t.Fatalf("opportunity call summary function exposed %s column", column)
+		}
+	}
+	directRows, err := pgStore.DB().QueryContext(ctx, `SELECT stage, call_count, transcript_count, missing_transcript_count, total_duration_seconds, latest_call_at FROM gongmcp_opportunity_call_summary('["Contract Signing"]', 10)`)
+	if err != nil {
+		t.Fatalf("direct safe opportunity summary function returned error: %v", err)
+	}
+	defer directRows.Close()
+	var directText strings.Builder
+	for directRows.Next() {
+		var stage, latestCallAt string
+		var callCount, transcriptCount, missingCount, totalDuration int64
+		if err := directRows.Scan(&stage, &callCount, &transcriptCount, &missingCount, &totalDuration, &latestCallAt); err != nil {
+			t.Fatalf("scan direct opportunity summary row: %v", err)
+		}
+		directText.WriteString(fmt.Sprintf("%s|%d|%d|%d|%d|%s\n", stage, callCount, transcriptCount, missingCount, totalDuration, latestCallAt))
+	}
+	if err := directRows.Err(); err != nil {
+		t.Fatalf("direct opportunity summary rows error: %v", err)
+	}
+	if strings.Contains(directText.String(), "opp-summary") || strings.Contains(directText.String(), "Summary One") || strings.Contains(directText.String(), "pg-opp-summary") || strings.Contains(directText.String(), "owner-") || strings.Contains(directText.String(), "50000") || strings.Contains(directText.String(), "2026-06") {
+		t.Fatalf("direct safe opportunity summary function leaked identifiers or values: %s", directText.String())
+	}
+
+	wideStageValues := []string{"Contract Signing"}
+	for len(wideStageValues) < maxOpportunityStageValueCount {
+		wideStageValues = append(wideStageValues, strings.Repeat("&", maxOpportunityStageValueLength))
+	}
+	wide, err := pgStore.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{StageValues: wideStageValues, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres wide stage_values SummarizeOpportunityCalls returned error: %v", err)
+	}
+	if !reflect.DeepEqual(wide, got) {
+		t.Fatalf("wide accepted stage_values returned %+v want %+v", wide, got)
+	}
+
+	tooManyStages := make([]string, maxOpportunityStageValueCount+1)
+	for i := range tooManyStages {
+		tooManyStages[i] = fmt.Sprintf("Stage %d", i)
+	}
+	if _, err := pgStore.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{StageValues: tooManyStages}); err == nil {
+		t.Fatal("expected too many stage_values to fail")
+	}
+	if _, err := pgStore.SummarizeOpportunityCalls(ctx, sqlite.OpportunityCallSummaryParams{StageValues: []string{strings.Repeat("x", maxOpportunityStageValueLength+1)}}); err == nil {
+		t.Fatal("expected too-long stage_values entry to fail")
+	}
+}
+
 func TestPostgresReadModelExtractionCapsRecordDiagnostics(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -3029,6 +3161,17 @@ func redactOpportunityMissingTranscriptSummaries(rows []sqlite.OpportunityMissin
 	for idx := range rows {
 		rows[idx].OpportunityID = ""
 		rows[idx].OpportunityName = ""
+		rows[idx].LatestCallID = ""
+	}
+}
+
+func redactOpportunityCallSummaries(rows []sqlite.OpportunityCallSummary) {
+	for idx := range rows {
+		rows[idx].OpportunityID = ""
+		rows[idx].OpportunityName = ""
+		rows[idx].Amount = ""
+		rows[idx].CloseDate = ""
+		rows[idx].OwnerID = ""
 		rows[idx].LatestCallID = ""
 	}
 }

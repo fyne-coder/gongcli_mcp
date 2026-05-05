@@ -402,11 +402,13 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_late_stage_stage_counts(text, text, text);
 	DROP FUNCTION IF EXISTS gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean);
 	DROP FUNCTION IF EXISTS gongmcp_opportunities_missing_transcripts(text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_opportunity_call_summary(text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
 	`+postgresUnmappedCRMFieldInventoryFunctionSQL+`
 	`+postgresLateStageSignalFunctionsSQL+`
 	`+postgresOpportunitiesMissingTranscriptsFunctionSQL+`
+	`+postgresOpportunityCallSummaryFunctionSQL+`
 	`+postgresBusinessAnalysisFunctionsSQL+`
 	`+postgresSettingsFunctionsSQL+`
 	`+postgresScorecardActivityFunctionsSQL+`
@@ -695,6 +697,7 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -969,6 +972,7 @@ WITH required_functions(signature) AS (
 		('public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)'),
 		('public.gongmcp_crm_object_type_summary()'),
 		('public.gongmcp_opportunities_missing_transcripts(text, integer)'),
+		('public.gongmcp_opportunity_call_summary(text, integer)'),
 		('public.gongmcp_cache_purge_plan(text)')
 )
 SELECT signature

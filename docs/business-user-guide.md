@@ -1,8 +1,8 @@
 # Business User Guide
 
 This guide is for the business-user lane of the `Enterprise Pilot Review Packet`.
-It applies only to reviewed pilot use through `gongmcp` over a prebuilt local
-cache.
+It applies only to reviewed pilot use through `gongmcp` over a prebuilt cache
+or shared Postgres reader role.
 
 Business users should not run `gongctl`, should not receive Gong credentials,
 and should not be asked to manage sync jobs, profile imports, raw exports, or
@@ -17,11 +17,13 @@ local database files. Those workflows stay with the pilot operator.
 ## Operating Boundary
 
 - Business users interact with a host application connected to `gongmcp`.
-- `gongmcp` reads a reviewed SQLite cache only; it does not call Gong live.
+- `gongmcp` reads a reviewed cache/store: SQLite by default, or a supported
+  Postgres reader role for shared deployments. It does not call Gong live.
 - `gongmcp` can enforce a reviewed server-side tool subset through
   `--tool-preset business-pilot`, `GONGMCP_TOOL_PRESET=business-pilot`, or a
-  custom allowlist. If no preset or allowlist is set, the full read-only catalog
-  remains visible to stdio hosts.
+  custom allowlist. In SQLite stdio mode, if no preset or allowlist is set,
+  the full read-only catalog remains visible to stdio hosts; Postgres stdio
+  defaults to its supported starter slice.
 - Results reflect the last approved sync and profile state, not current tenant
   state.
 - Outputs must stay aggregate-first, metadata-oriented, and bounded.
@@ -421,17 +423,22 @@ Prompt:
 > needing operator refresh and name the specific sync command the operator
 > should run.
 
+Postgres shared-deployment note: `opportunity_call_summary` only supplies
+redacted stage, call-count, transcript-count, duration, and latest-call timing
+metadata. Opportunity/account names, amount, close date, and other deal fields
+require SQLite/full-catalog mode or a separately reviewed attribution surface.
+
 Tools required: `analyze_late_stage_crm_signals`,
 `opportunities_missing_transcripts`, `opportunity_call_summary`,
 `search_transcript_quotes_with_attribution` (with Opportunity attribution
 opt-ins), `rank_transcript_backlog`, `get_sync_status`. The operator must have
 enabled the wider analyst posture for these tools to be available. In Postgres
-shared deployments, `analyze_late_stage_crm_signals` and
-`opportunities_missing_transcripts` are available through explicit allowlists,
-while `search_transcript_quotes_with_attribution`, `rank_transcript_backlog`,
-and `get_sync_status` are available through the appropriate reviewed
-Postgres presets or allowlists. `opportunity_call_summary` still requires
-SQLite/full-catalog mode until Postgres full parity is complete.
+shared deployments, `analyze_late_stage_crm_signals`,
+`opportunities_missing_transcripts`, and `opportunity_call_summary` are
+available through explicit allowlists, while
+`search_transcript_quotes_with_attribution`, `rank_transcript_backlog`, and
+`get_sync_status` are available through the appropriate reviewed Postgres
+presets or allowlists.
 
 Output discipline: do not turn missing transcript coverage into a forecast
 recommendation by itself; treat it as a refresh request to the operator and a
