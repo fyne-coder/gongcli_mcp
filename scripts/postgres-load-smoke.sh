@@ -75,11 +75,8 @@ READER_NO_ROLE_VIEW_OUT="$ARTIFACT_DIR/reader-no-role-views.txt"
 cd "$ROOT"
 
 reader_psql() {
-  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres sh -s -- "$@" <<'SH'
-set -eu
-export PGPASSWORD="${GONGMCP_READER_PASSWORD:?}"
-exec psql -h 127.0.0.1 -U gongmcp_reader -d gongctl "$@"
-SH
+  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="$GONGMCP_READER_PASSWORD" postgres \
+    psql -h 127.0.0.1 -U gongmcp_reader -d gongctl "$@"
 }
 
 assert_mcp_success() {
@@ -619,10 +616,6 @@ fi
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DELETE FROM profile_call_fact_cache WHERE profile_id = 9001; DELETE FROM profile_call_fact_cache_meta WHERE profile_id = 9001; DELETE FROM profile_lifecycle_rule WHERE profile_id = 9001; DELETE FROM profile_meta WHERE id = 9001" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-SELECT pg_terminate_backend(pid)
-  FROM pg_stat_activity
- WHERE usename = 'gongmcp_business_pilot_reader'
-   AND pid <> pg_backend_pid();
 DROP OWNED BY gongmcp_business_pilot_reader;
 DROP ROLE gongmcp_business_pilot_reader;
 SQL
@@ -636,10 +629,6 @@ DROP VIEW IF EXISTS gongmcp_sync_runs;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
-    PERFORM pg_terminate_backend(pid)
-      FROM pg_stat_activity
-     WHERE usename = 'gongmcp_reader'
-       AND pid <> pg_backend_pid();
     EXECUTE 'DROP OWNED BY gongmcp_reader';
     EXECUTE 'DROP ROLE gongmcp_reader';
   END IF;

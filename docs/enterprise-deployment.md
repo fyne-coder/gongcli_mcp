@@ -545,6 +545,17 @@ not as production capacity proof. Archive its `summary.json`,
 `operation-results.jsonl`, counts, lock samples, reader denial, and MCP
 artifacts with the change record, and run a customer-platform benchmark before
 high-volume rollout.
+
+For profile-backed backlog and transcript-search pre-rollout checks, run
+`scripts/postgres-capacity-drill.sh` in the repo before moving a client pilot
+onto real tenant data. The drill uses synthetic fixtures only, runs the
+Postgres load smoke at a bounded configured size, validates the generated
+profile-cache, scoped `business-pilot` MCP, profile helper-call EXPLAIN,
+profile-cache index-probe EXPLAIN, and transcript-search EXPLAIN artifacts
+directly, and writes `capacity-summary.json`. Keep that summary with the change
+record, but do not treat it as a production capacity claim; customer-owned
+platform benchmarks still need the target Postgres class, concurrency,
+retention, backup/PITR, and monitoring settings.
 Use `cache purge --config retention-policy.yaml` for scheduled retention jobs
 so approval and backup metadata travel with the purge plan. The repo does not
 install the scheduler; cron, launchd, systemd, Kubernetes CronJob, or customer

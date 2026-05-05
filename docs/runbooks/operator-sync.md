@@ -194,6 +194,16 @@ Notes:
   profile-cache refresh, purge, reader status, and MCP smoke. Treat that as a
   repo-local release evidence for shipped writer-lock behavior at the
   configured synthetic size, not a benchmark or customer capacity proof.
+- For profile-backed backlog and transcript-search pre-rollout validation,
+  `scripts/postgres-capacity-drill.sh` runs the Postgres load smoke at a
+  bounded synthetic size, validates the generated profile-cache,
+  profile-backlog, scoped `business-pilot` MCP, profile EXPLAIN, and
+  transcript-search EXPLAIN artifacts directly, and writes a sanitized
+  `capacity-summary.json`. Archive the summary and linked artifact directory
+  with the deployment change record. This is synthetic pre-rollout evidence
+  only; it does not replace a customer-platform benchmark using the approved
+  Postgres service class, backup/PITR settings, concurrency target, retention
+  window, and real deployment limits.
 - For scheduled retention jobs, prefer a reviewed YAML policy instead of
   re-encoding the cutoff and approval state in job flags:
 

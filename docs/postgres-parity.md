@@ -29,7 +29,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Call facts | `call_facts` view | foundation table added | Maintained indexed facts table for grouping/filtering | must match at output layer | Phase 1 | SQLite-vs-Postgres call-fact aggregate tests |
 | Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2c for builtin facts: migration/write refresh plus trigger-maintained readiness counters | Backfill on upgrade, refresh on writes, cheap version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `TestPostgresReadModelReadinessRejectsRebuildInProgressState`; `gongctl sync read-model` |
 | Operator read-model check/rebuild | SQLite profile cache readiness/rebuild is profile-aware | complete for Postgres builtin facts via `gongctl sync read-model [--rebuild]` | Writable CLI can check/rebuild; read-only MCP never rebuilds | postgres-native equivalent | Phase 2 | `GONG_DATABASE_URL=... gongctl sync read-model --rebuild` |
-| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke, 1,200-call contention smoke, and bounded over-cap profile-cache helper-call EXPLAIN evidence | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, post-contention row/profile-cache correctness, and profile-backed helper-call plus equivalent index-probe evidence at synthetic over-cap profile-cache size | postgres-native equivalent | Phase 2/8b/9s | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh` |
+| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke, 1,200-call contention smoke, bounded over-cap profile-cache helper-call EXPLAIN evidence, and a synthetic capacity-drill wrapper | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, post-contention row/profile-cache correctness, profile-backed helper-call plus equivalent index-probe evidence, and a sanitized capacity-drill summary at an explicit synthetic size | postgres-native equivalent | Phase 2/8b/9s/9t | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh`; `./scripts/postgres-capacity-drill.sh` |
 | Transcript FTS | SQLite FTS5 | Postgres `tsvector`/GIN with execute-only snippet function | Equivalent bounded search semantics, documented ranking differences | postgres-native equivalent | Phase 2 | synthetic search comparison tests |
 | Call search | SQLite filters over calls/context | complete for normalized CRM object and builtin call-fact filters | Match safe filters or document intentional exclusions | must match | Phase 2 | `TestPostgresSearchCallsRawSafeFiltersMatchSQLite`; `scripts/postgres-smoke.sh` |
 | MCP `get_call` | SQLite minimized call detail | complete for Postgres normalized context rows | Same minimized JSON contract over Postgres MCP | must match | Phase 2 | `TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext`; `scripts/postgres-smoke.sh` |
@@ -146,6 +146,11 @@ Postgres parity should be added deliberately, with each surface classified as
     sanitized helper-call EXPLAIN artifacts, a writer-only equivalent index
     probe, and assertions that ranked date-bounded backlog rows remain redacted
     and are not limited by the newest-1,000 direct helper cap.
+28. **Phase 9t synthetic capacity drill harness**: add an operator-facing
+    wrapper that runs the existing load smoke at an explicit larger synthetic
+    target, validates generated profile/transcript artifacts directly, and
+    writes a sanitized `capacity-summary.json` without claiming production
+    capacity.
 
 ## Phase 9l Risk Status
 
@@ -221,6 +226,20 @@ Postgres parity should be added deliberately, with each surface classified as
   profiling with real row counts, concurrency, retention windows, and platform
   Postgres settings before treating the profile-cache helper path as fully
   capacity-sized.
+
+## Phase 9t Risk Status
+
+- Added pre-rollout drill coverage: `scripts/postgres-capacity-drill.sh` runs
+  the existing Postgres load smoke at a bounded synthetic target, validates the
+  generated summary, profile-cache counts, redacted profile backlog counts,
+  scoped `business-pilot` profile-source MCP output, profile helper-call
+  EXPLAINs, the profile-cache index probe, and transcript-search EXPLAINs
+  directly, then writes a sanitized `capacity-summary.json`.
+- Remaining risk after 9t: the drill is still synthetic repo-local evidence. It
+  is useful before introducing real tenant data to a client pilot environment,
+  but it does not replace deployment-owned capacity testing against the target
+  Postgres platform, concurrency, retention, backup/PITR, monitoring, and
+  maintenance-window assumptions.
 
 ## Phase 9m/9n/9o Risk Status
 
