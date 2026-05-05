@@ -607,19 +607,30 @@ boundary that avoids direct `calls.call_id`, `calls.title`,
 still a service secret because selected functions and sanitized views can expose
 minimized call metadata, timings, counts, and tenant terminology.
 To generate the reviewed business-pilot grant block without copying smoke
-script internals:
+script internals, use the `gongctl` operator command. The `gongmcp` flag is a
+compatibility path for MCP-only images:
 
 ```bash
-gongctl mcp postgres-reader-sql \
-  --preset business-pilot \
-  --role gongmcp_business_pilot_reader \
-  --database gongctl
+gongctl mcp postgres-reader-sql --preset business-pilot \
+  --role gongmcp_business_pilot_reader --database gongctl
+
+gongmcp --print-postgres-reader-grants \
+  --tool-preset business-pilot \
+  --postgres-reader-role gongmcp_business_pilot_reader \
+  --postgres-database gongctl
 ```
 
-The generated SQL does not create credentials or print database URLs. Create
-the LOGIN role and password through your normal secret-management process,
-review/apply the grant block, then run `gongmcp` with the scoped reader URL and
-`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`.
+The generated SQL does not create credentials or print database URLs. Apply it
+to a fresh `NOINHERIT` role, or explicitly revoke stale grants before reusing
+an existing role. Create the LOGIN role and password through your normal secret
+management process, review/apply the grant block, then run `gongmcp` with the
+scoped reader URL and `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a
+`gongmcp` service credential, not an analyst SQL login: selected security
+definer functions can return minimized call IDs/titles to direct SQL holders.
+This first scoped `business-pilot` role is profile-backed: warm/import an active
+profile and use the default/profile lifecycle path. Explicit
+`lifecycle_source=builtin` still requires the broader compatibility reader role
+until a sanitized builtin SQL surface exists.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),

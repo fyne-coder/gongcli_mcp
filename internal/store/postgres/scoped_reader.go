@@ -11,7 +11,6 @@ type ScopedReaderGrantSQLParams struct {
 	RoleName     string
 	DatabaseName string
 	Generator    string
-	CreateRole   bool
 }
 
 func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
@@ -53,15 +52,13 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString(generator)
 	b.WriteString(".\n")
 	b.WriteString("-- Create credentials outside this grant block using your secret manager.\n")
+	b.WriteString("-- Apply to a fresh NOINHERIT role; revoke stale table/function grants before reusing an existing role.\n")
+	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login: selected SECURITY DEFINER functions can return minimized call IDs/titles to direct SQL holders.\n")
+	b.WriteString("-- This grant block supports the business-pilot scoped reader for profile-backed lifecycle analysis; use the compatibility reader role for builtin lifecycle-source analysis until a sanitized builtin SQL surface is available.\n")
 	b.WriteString("-- Role expected before running this block: ")
 	b.WriteString(roleIdent)
 	b.WriteString("\n")
 	b.WriteString("BEGIN;\n")
-	if params.CreateRole {
-		b.WriteString("CREATE ROLE ")
-		b.WriteString(roleIdent)
-		b.WriteString(" LOGIN;\n")
-	}
 	b.WriteString("REVOKE CREATE ON SCHEMA \"public\" FROM ")
 	b.WriteString(roleIdent)
 	b.WriteString(";\n")
@@ -82,7 +79,7 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 			}
 			b.WriteString(column)
 		}
-		b.WriteString(") ON TABLE ")
+		b.WriteString(") ON TABLE public.")
 		b.WriteString(grant.Table)
 		b.WriteString(" TO ")
 		b.WriteString(roleIdent)

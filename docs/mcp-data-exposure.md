@@ -199,11 +199,18 @@ What the conservative defaults give you:
   functions. For `business-pilot`, startup also validates a first table/column
   boundary that denies direct reads of `calls.call_id`, `calls.title`,
   `call_facts.call_id`, and `call_facts.title`. The reviewed business-pilot
-  grant block is printable with
-  `gongctl mcp postgres-reader-sql --preset business-pilot` and
-  does not include credentials or connection URLs. The scoped reader URL remains
+  grant block is printable with the canonical `gongctl mcp
+  postgres-reader-sql --preset business-pilot` operator command;
+  `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
+  compatibility path for MCP-only images. The SQL does not include credentials
+  or connection URLs. Apply it to a fresh `NOINHERIT` role, or revoke stale
+  grants before reuse. This first scoped role is profile-backed; explicit
+  `lifecycle_source=builtin` still requires the broader compatibility reader
+  until a sanitized builtin SQL surface exists. The scoped reader URL remains
   a service secret because selected functions and sanitized views can still
-  expose minimized call metadata, timings, counts, and tenant terminology.
+  expose minimized call metadata, timings, counts, tenant terminology, and
+  selected security definer functions can return minimized call IDs/titles to
+  direct SQL holders.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes

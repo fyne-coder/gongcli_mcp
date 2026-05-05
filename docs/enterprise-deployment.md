@@ -137,10 +137,17 @@ flowchart LR
   outside the selected preset or allowlist. The `business-pilot` preset also
   has a first reviewed table/column grant boundary; other presets still need
   per-surface maps or governed views/RLS before broad customer role automation.
-  Generate the reviewed business-pilot grant block with
-  `gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE
-  --database DB`, then create credentials
-  and apply the SQL through the customer's normal database change process.
+  Generate the reviewed business-pilot grant block with the canonical operator
+  command `gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE
+  --database DB`; `gongmcp --print-postgres-reader-grants --tool-preset
+  business-pilot --postgres-reader-role ROLE --postgres-database DB` is a
+  compatibility path for MCP-only images. Apply the SQL to a fresh `NOINHERIT`
+  role, or revoke stale grants before role reuse. Treat the scoped URL as a
+  `gongmcp` service credential, not an analyst SQL login: selected security
+  definer functions can return minimized call IDs/titles to direct SQL holders.
+  This first scoped business-pilot role is profile-backed; explicit
+  `lifecycle_source=builtin` still requires the broader compatibility reader
+  until a sanitized builtin SQL surface exists.
 - Operators can check or repair Postgres builtin fact readiness with
   `gongctl sync read-model` and `gongctl sync read-model --rebuild` using a
   writable database URL. MCP remains read-only and will not rebuild stale facts.

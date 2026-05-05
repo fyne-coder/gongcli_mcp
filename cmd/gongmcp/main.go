@@ -49,7 +49,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
 	enforceToolScopedDBGrants := flags.Bool("enforce-tool-scoped-db-grants", false, "For Postgres MCP, validate reader function EXECUTE grants against the selected tool preset/allowlist; defaults to GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")
-	printPostgresReaderGrants := flags.Bool("print-postgres-reader-grants", false, "Print reviewed Postgres reader grant SQL for the selected scoped MCP preset and exit")
+	printPostgresReaderGrants := flags.Bool("print-postgres-reader-grants", false, "Compatibility helper: print reviewed Postgres reader grant SQL for --tool-preset business-pilot and exit; canonical operator command is gongctl mcp postgres-reader-sql")
 	postgresReaderRole := flags.String("postgres-reader-role", "gongmcp_business_pilot_reader", "Postgres role name used by --print-postgres-reader-grants")
 	postgresDatabase := flags.String("postgres-database", "gongctl", "Postgres database name used by --print-postgres-reader-grants")
 	maxSearchResults := flags.Int("max-search-results", 0, "Maximum rows for MCP search-style tools; defaults to GONGMCP_MAX_SEARCH_RESULTS or 100, hard-capped at 1000")

@@ -136,18 +136,23 @@ Configuration contract:
 - Use a writer URL for `gongctl` sync jobs.
 - Use a reader URL for `gongmcp`.
 - The default Compose reader role is the compatibility `gongmcp_reader`
-  service role. To use a narrower function-scoped reader role, grant that role
-  the baseline service-role table/view reads plus only the selected `gongmcp_*`
-  functions, then start `gongmcp` with
-  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
-  `--enforce-tool-scoped-db-grants`. The `business-pilot` preset also has a
-  reviewed table/column grant boundary in this development slice; other
-  presets still need their own reviewed maps before customer role automation.
-  Operators can emit the reviewed business-pilot grant block with
-  `gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE
-  --database DB`; create the role and
-  credential separately through the deployment secret manager.
-  A scoped reader URL is still a service credential, not an analyst SQL login.
+  service role. For the reviewed `business-pilot` scoped reader path, use the
+  generated grant block instead of copying baseline `gongmcp_reader` grants.
+  The canonical operator command is `gongctl mcp postgres-reader-sql --preset
+  business-pilot --role ROLE --database DB`; `gongmcp
+  --print-postgres-reader-grants --tool-preset business-pilot
+  --postgres-reader-role ROLE --postgres-database DB` is a compatibility path
+  for MCP-only images. Apply the generated grants to a fresh `NOINHERIT` role,
+  or revoke stale grants before reusing an existing role. Create the role and
+  credential separately through the deployment secret manager, then start
+  `gongmcp` with `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
+  `--enforce-tool-scoped-db-grants`. Other presets still need their own
+  reviewed maps before customer role automation. A scoped reader URL is still a
+  service credential, not an analyst SQL login; selected security definer
+  functions can return minimized call IDs/titles to direct SQL holders. This
+  first scoped `business-pilot` role is profile-backed; explicit
+  `lifecycle_source=builtin` still requires the broader compatibility reader
+  until a sanitized builtin SQL surface exists.
 - The Compose example binds Postgres to `127.0.0.1` for local smoke use and
   uses explicit dev passwords by default. Company deployments should provide
   `GONGCTL_POSTGRES_PASSWORD` and `GONGMCP_READER_PASSWORD` from an approved

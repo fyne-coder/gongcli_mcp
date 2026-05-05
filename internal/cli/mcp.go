@@ -56,7 +56,6 @@ func (a *app) mcpPostgresReaderSQL(args []string) error {
 	preset := flags.String("preset", "business-pilot", "MCP tool preset to generate scoped reader grants for")
 	roleName := flags.String("role", "gongmcp_business_pilot_reader", "Postgres reader role name")
 	databaseName := flags.String("database", "gongctl", "Postgres database name")
-	createRole := flags.Bool("create-role", false, "Include a CREATE ROLE LOGIN statement without credentials")
 	if err := flags.Parse(args); err != nil {
 		return errUsage
 	}
@@ -72,7 +71,6 @@ func (a *app) mcpPostgresReaderSQL(args []string) error {
 		RoleName:     *roleName,
 		DatabaseName: *databaseName,
 		Generator:    "gongctl mcp postgres-reader-sql",
-		CreateRole:   *createRole,
 	})
 	if err != nil {
 		return err

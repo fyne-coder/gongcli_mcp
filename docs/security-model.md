@@ -134,12 +134,18 @@ Implementation controls on the CLI side:
   the selected surface are executable. For `business-pilot`, startup also
   validates a first table/column boundary that denies direct reads of
   `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`.
-  The reviewed business-pilot grant block can be emitted with
-  `gongctl mcp postgres-reader-sql --preset business-pilot`; it
-  intentionally excludes role credentials and database URLs.
+  The reviewed business-pilot grant block can be emitted with the canonical
+  `gongctl mcp postgres-reader-sql --preset business-pilot` operator command;
+  `gongmcp --print-postgres-reader-grants --tool-preset business-pilot` is a
+  compatibility path for MCP-only images. It intentionally excludes role
+  credentials and database URLs. Apply it to a fresh `NOINHERIT` role, or
+  revoke stale grants before reuse. This first scoped role is profile-backed;
+  explicit `lifecycle_source=builtin` still requires the broader compatibility
+  reader until a sanitized builtin SQL surface exists.
   The scoped reader URL remains a service secret because selected functions and
   sanitized views can still expose minimized call metadata, timings, counts,
-  and tenant terminology.
+  tenant terminology, and selected security definer functions can return
+  minimized call IDs/titles to direct SQL holders.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose
