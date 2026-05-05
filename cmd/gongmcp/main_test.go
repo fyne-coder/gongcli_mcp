@@ -36,7 +36,7 @@ func TestRunRequiresDBFlag(t *testing.T) {
 }
 
 func TestPostgresToolAllowlistDefaultsToSupportedSlice(t *testing.T) {
-	allowlist, err := postgresToolAllowlist(nil, false)
+	allowlist, err := postgresToolAllowlist(nil, false, "")
 	if err != nil {
 		t.Fatalf("postgresToolAllowlist returned error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestPostgresToolAllowlistDefaultsToSupportedSlice(t *testing.T) {
 }
 
 func TestPostgresToolAllowlistAcceptsCoreQueryParityTools(t *testing.T) {
-	allowlist, err := postgresToolAllowlist([]string{"get_sync_status", "search_calls", "get_call", "search_transcript_segments"}, false)
+	allowlist, err := postgresToolAllowlist([]string{"get_sync_status", "search_calls", "get_call", "search_transcript_segments"}, false, "")
 	if err != nil {
 		t.Fatalf("postgresToolAllowlist returned error: %v", err)
 	}
@@ -58,8 +58,23 @@ func TestPostgresToolAllowlistAcceptsCoreQueryParityTools(t *testing.T) {
 }
 
 func TestPostgresToolAllowlistRejectsUnsupportedTools(t *testing.T) {
-	if _, err := postgresToolAllowlist([]string{"list_crm_object_types"}, false); err == nil {
+	if _, err := postgresToolAllowlist([]string{"search_crm_field_values"}, false, ""); err == nil {
 		t.Fatal("postgresToolAllowlist accepted unsupported tool")
+	}
+}
+
+func TestPostgresToolAllowlistAcceptsAnalystCorePreset(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("analyst-core")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "analyst-core")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	want := []string{"get_sync_status", "search_calls", "get_call", "list_crm_object_types", "list_crm_fields", "get_business_profile", "list_business_concepts", "list_lifecycle_buckets", "summarize_calls_by_lifecycle", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "summarize_call_facts", "rank_transcript_backlog", "search_transcript_segments"}
+	if !reflect.DeepEqual(allowlist, want) {
+		t.Fatalf("allowlist=%v want %v", allowlist, want)
 	}
 }
 
@@ -68,7 +83,7 @@ func TestPostgresToolAllowlistAcceptsBusinessPilotPreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset returned error: %v", err)
 	}
-	allowlist, err := postgresToolAllowlist(expanded, true)
+	allowlist, err := postgresToolAllowlist(expanded, true, "business-pilot")
 	if err != nil {
 		t.Fatalf("postgresToolAllowlist returned error: %v", err)
 	}
@@ -83,7 +98,22 @@ func TestPostgresToolAllowlistNarrowsGovernanceSearchPreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset returned error: %v", err)
 	}
-	allowlist, err := postgresToolAllowlist(expanded, true)
+	allowlist, err := postgresToolAllowlist(expanded, true, "governance-search")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	want := []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}
+	if !reflect.DeepEqual(allowlist, want) {
+		t.Fatalf("allowlist=%v want %v", allowlist, want)
+	}
+}
+
+func TestPostgresToolAllowlistNarrowsGovernanceSearchExpandedAllowlist(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("governance-search")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "")
 	if err != nil {
 		t.Fatalf("postgresToolAllowlist returned error: %v", err)
 	}
@@ -99,15 +129,29 @@ func TestPostgresToolAllowlistRejectsUnsupportedPostgresPresets(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
 		}
-		_, err = postgresToolAllowlist(expanded, true)
+		_, err = postgresToolAllowlist(expanded, true, preset)
 		if err == nil || !strings.Contains(err.Error(), "not supported by the postgres vertical slice") {
 			t.Fatalf("postgresToolAllowlist(%q) error=%v, want unsupported postgres error", preset, err)
 		}
 	}
 }
 
+func TestPostgresToolAllowlistRejectsBlockedPresetEvenIfToolsBecomeSupported(t *testing.T) {
+	supportedSubset := []string{"get_sync_status", "search_calls", "list_crm_object_types", "list_crm_fields"}
+	if _, err := postgresToolAllowlist(supportedSubset, true, "analyst"); err == nil {
+		t.Fatal("postgresToolAllowlist accepted blocked analyst preset by supported subset")
+	}
+	allowlist, err := postgresToolAllowlist(supportedSubset, true, "")
+	if err != nil {
+		t.Fatalf("manual supported allowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, supportedSubset) {
+		t.Fatalf("manual allowlist=%v want %v", allowlist, supportedSubset)
+	}
+}
+
 func TestPostgresToolAllowlistRequiresExplicitSelectionForHTTP(t *testing.T) {
-	if _, err := postgresToolAllowlist(nil, true); err == nil {
+	if _, err := postgresToolAllowlist(nil, true, ""); err == nil {
 		t.Fatal("postgresToolAllowlist accepted implicit HTTP tools")
 	}
 }
@@ -217,7 +261,7 @@ func TestRunListToolPresetsDoesNotRequireDB(t *testing.T) {
 			t.Fatalf("incomplete preset entry: %+v", preset)
 		}
 	}
-	for _, name := range []string{"business-pilot", "operator-smoke", "analyst", "governance-search", "all-readonly"} {
+	for _, name := range []string{"business-pilot", "operator-smoke", "analyst-core", "analyst", "governance-search", "all-readonly"} {
 		if _, ok := seen[name]; !ok {
 			t.Fatalf("missing preset %q in %s", name, stdout.String())
 		}
@@ -425,6 +469,11 @@ func TestResolveToolAllowlistPresets(t *testing.T) {
 			name: "operator smoke preset",
 			in:   toolSelection{PresetEnv: "operator-smoke"},
 			want: []string{"get_sync_status", "search_calls", "search_transcript_segments", "get_call", "rank_transcript_backlog"},
+		},
+		{
+			name: "analyst core preset",
+			in:   toolSelection{PresetEnv: "analyst-core"},
+			want: []string{"get_sync_status", "search_calls", "get_call", "list_crm_object_types", "list_crm_fields", "get_business_profile", "list_business_concepts", "list_lifecycle_buckets", "summarize_calls_by_lifecycle", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "summarize_call_facts", "rank_transcript_backlog", "search_transcript_segments"},
 		},
 		{
 			name: "all readonly expands to catalog",

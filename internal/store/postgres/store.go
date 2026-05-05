@@ -23,6 +23,8 @@ const (
 	maxTranscriptSearchLimit     = 1000
 	defaultCallSearchLimit       = 20
 	maxCallSearchLimit           = 1000
+	defaultCRMFieldLimit         = 50
+	maxCRMFieldLimit             = 1000
 )
 
 type Store struct {
@@ -66,6 +68,7 @@ func readOnlyDatabaseURL(databaseURL string) string {
 	}
 	query := parsed.Query()
 	query.Set("default_transaction_read_only", "on")
+	query.Set("search_path", "public,pg_temp")
 	parsed.RawQuery = query.Encode()
 	return parsed.String()
 }
@@ -82,6 +85,10 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	store := &Store{db: db, readOnly: true}
+	if err := store.setReadOnlySearchPath(ctx, "read-only"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := store.validateMigrationVersion(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -126,6 +133,10 @@ func OpenStatus(ctx context.Context, databaseURL string) (*Store, error) {
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
 	store := &Store{db: db, readOnly: true}
+	if err := store.setReadOnlySearchPath(ctx, "profile-inventory"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := store.validateMigrationVersion(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -162,6 +173,20 @@ func OpenProfileInventory(ctx context.Context, databaseURL string) (*Store, erro
 		return nil, fmt.Errorf("enable postgres profile-inventory read-only session mode: %w", err)
 	}
 	return store, nil
+}
+
+func (s *Store) setReadOnlySearchPath(ctx context.Context, purpose string) error {
+	if _, err := s.db.ExecContext(ctx, `SET search_path = public, pg_temp`); err != nil {
+		return fmt.Errorf("set postgres %s search_path: %w", purpose, err)
+	}
+	var currentSchema string
+	if err := s.db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&currentSchema); err != nil {
+		return fmt.Errorf("verify postgres %s search_path: %w", purpose, err)
+	}
+	if strings.TrimSpace(currentSchema) != "public" {
+		return fmt.Errorf("postgres %s search_path resolved current_schema=%q, want public", purpose, currentSchema)
+	}
+	return nil
 }
 
 func (s *Store) Close() error {
@@ -235,6 +260,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
 CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
 DROP VIEW IF EXISTS gongmcp_transcript_segments;
+DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
 DROP FUNCTION IF EXISTS gongmcp_profile_call_fact_cache_meta(bigint, text);
 CREATE OR REPLACE FUNCTION gongmcp_profile_call_fact_cache_meta(profile_id_arg bigint, canonical_sha_arg text)
 RETURNS TABLE(canonical_sha256 text, data_fingerprint text, built_at text, call_count bigint)
@@ -579,13 +605,15 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT table_name
   FROM information_schema.tables
- WHERE table_schema = current_schema()
+ WHERE table_schema = 'public'
 	   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'DELETE') OR
-	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'TRUNCATE')
+	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'TRUNCATE') OR
+	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
+	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE')
    )
  ORDER BY table_name`)
 	if err != nil {
@@ -609,9 +637,12 @@ SELECT table_name
 	rows, err = s.db.QueryContext(ctx, `
 SELECT table_name
   FROM information_schema.tables
- WHERE table_schema = current_schema()
+ WHERE table_schema = 'public'
 	   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls')
-   AND has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
+   AND (
+	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT') OR
+	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
+   )
  ORDER BY table_name`)
 	if err != nil {
 		return err
@@ -630,6 +661,62 @@ SELECT table_name
 	}
 	if len(readableSensitive) > 0 {
 		return fmt.Errorf("postgres read-only URL has direct SELECT on sensitive tables: %s", strings.Join(readableSensitive, ", "))
+	}
+	rows, err = s.db.QueryContext(ctx, `
+WITH forbidden(table_name, column_name) AS (
+	VALUES
+		('calls', 'raw_json'),
+		('calls', 'raw_sha256'),
+		('users', 'email'),
+		('users', 'first_name'),
+		('users', 'last_name'),
+		('users', 'display_name'),
+		('users', 'raw_json'),
+		('users', 'raw_sha256'),
+		('transcripts', 'raw_json'),
+		('transcripts', 'raw_sha256'),
+		('transcript_segments', 'text'),
+		('transcript_segments', 'raw_json'),
+		('transcript_segments', 'search_vector'),
+		('call_context_objects', 'object_name'),
+		('call_context_objects', 'raw_json'),
+		('call_context_fields', 'field_value_text'),
+		('call_context_fields', 'raw_json'),
+		('call_facts', 'primary_user_id'),
+		('call_facts', 'calendar_event_status'),
+		('call_facts', 'sdr_disposition'),
+		('call_facts', 'account_id'),
+		('call_facts', 'account_primary_procurement_system'),
+		('call_facts', 'opportunity_id'),
+		('call_facts', 'opportunity_amount'),
+		('call_facts', 'opportunity_probability'),
+		('call_facts', 'opportunity_procurement_system')
+)
+SELECT c.table_name || '.' || c.column_name
+  FROM information_schema.columns c
+  JOIN forbidden f
+    ON f.table_name = c.table_name
+   AND f.column_name = c.column_name
+ WHERE c.table_schema = 'public'
+   AND has_column_privilege(current_user, quote_ident(c.table_schema) || '.' || quote_ident(c.table_name), c.column_name, 'SELECT')
+ ORDER BY c.table_name, c.column_name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var readableForbiddenColumns []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return err
+		}
+		readableForbiddenColumns = append(readableForbiddenColumns, column)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(readableForbiddenColumns) > 0 {
+		return fmt.Errorf("postgres read-only URL has forbidden column SELECT: %s", strings.Join(readableForbiddenColumns, ", "))
 	}
 	return nil
 }

@@ -16,8 +16,10 @@ Current fixed boundaries:
 	  `search_transcript_segments`. Postgres governance mode supports a prepared
 	  policy for the narrowed `governance-search` preset. Postgres `get_call` is a
 	  record-reference tool and should be enabled only through an explicit
-	  allowlist for reviewed operator use, not through `business-pilot`. Broader
-	  `analyst` and `all-readonly` Postgres parity remains a follow-up.
+	  allowlist for reviewed operator use, not through `business-pilot`.
+	  Postgres `analyst-core` adds reviewed core/profile/lifecycle/CRM-context
+	  inventory tools without raw CRM field values. Broader `analyst` and
+	  `all-readonly` Postgres parity remains a follow-up.
 - MCP does not call Gong live.
 - `gongmcp --tool-preset` / `GONGMCP_TOOL_PRESET` and
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool

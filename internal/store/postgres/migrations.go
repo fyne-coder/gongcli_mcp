@@ -769,4 +769,52 @@ END;
 $$;
 
 `,
+	`
+CREATE OR REPLACE FUNCTION gongmcp_crm_field_summary(object_type_arg text, row_limit integer)
+RETURNS TABLE(
+	object_type text,
+	field_name text,
+	field_label text,
+	row_count bigint,
+	call_count bigint,
+	populated_count bigint,
+	distinct_value_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT o.object_type,
+       f.field_name,
+       MAX(f.field_label) AS field_label,
+       COUNT(*) AS row_count,
+       COUNT(DISTINCT f.call_id) AS call_count,
+       COUNT(NULLIF(TRIM(f.field_value_text), '')) AS populated_count,
+       COUNT(DISTINCT NULLIF(TRIM(f.field_value_text), '')) AS distinct_value_count
+  FROM call_context_fields f
+  JOIN call_context_objects o
+    ON o.call_id = f.call_id
+   AND o.object_key = f.object_key
+ WHERE o.object_type = object_type_arg
+ GROUP BY o.object_type, f.field_name
+ ORDER BY row_count DESC, f.field_name
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 50), 1), 1000)
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_crm_field_summary(text, integer) FROM PUBLIC;
+
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_crm_field_summary(text, integer) TO gongmcp_reader';
+	END IF;
+END;
+$$;
+
+`,
+	`
+DROP FUNCTION IF EXISTS gongmcp_crm_field_summary(text, integer);
+
+`,
 }

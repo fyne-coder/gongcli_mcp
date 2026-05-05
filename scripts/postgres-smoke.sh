@@ -274,6 +274,23 @@ fi
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_crm_object_types","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_crm_fields","arguments":{"object_type":"Opportunity","limit":10}}}'
+} | GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=analyst-core go run ./cmd/gongmcp > /tmp/gongctl-postgres-analyst-core.jsonl
+
+grep -q '"list_crm_object_types"' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q '"list_crm_fields"' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q 'Opportunity' /tmp/gongctl-postgres-analyst-core.jsonl
+grep -q 'StageName' /tmp/gongctl-postgres-analyst-core.jsonl
+assert_mcp_success /tmp/gongctl-postgres-analyst-core.jsonl 3 4
+if grep -q 'Proposal\|Manufacturing\|Profile Account\|raw_json\|field_value_text' /tmp/gongctl-postgres-analyst-core.jsonl; then
+  echo "analyst-core CRM inventory exposed raw CRM values" >&2
+  exit 1
+fi
+
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"transcript_status","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{}}}'
@@ -418,17 +435,67 @@ grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-select-
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-select-drift-repaired.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-select-drift-repaired.json
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT (raw_json) ON calls TO gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-column-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started with raw column SELECT drift" >&2
+  exit 1
+fi
+grep -q 'forbidden column SELECT' /tmp/gongctl-postgres-reader-column-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-column-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-column-drift-repaired.json
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT (field_values_json) ON profile_call_fact_cache TO gongmcp_reader" >/dev/null
+if GONG_DATABASE_URL="${READER_URL}&search_path=pg_catalog,public" GONGMCP_TOOL_PRESET=business-pilot go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-reader-sensitive-column-drift.txt 2>&1; then
+  echo "read-only MCP unexpectedly started with sensitive-table column SELECT drift" >&2
+  exit 1
+fi
+grep -q 'direct SELECT on sensitive tables' /tmp/gongctl-postgres-reader-sensitive-column-drift.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-sensitive-column-drift-repaired.json
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+CREATE OR REPLACE FUNCTION gongmcp_crm_field_summary(object_type_arg text, row_limit integer)
+RETURNS TABLE(
+	object_type text,
+	field_name text,
+	field_label text,
+	row_count bigint,
+	call_count bigint,
+	populated_count bigint,
+	distinct_value_count bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT ''::text, ''::text, ''::text, 0::bigint, 0::bigint, 0::bigint, 0::bigint
+ WHERE false
+$function$;
+GRANT EXECUTE ON FUNCTION gongmcp_crm_field_summary(text, integer) TO gongmcp_reader;
+SQL
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-retired-function-repaired.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tAc "SELECT COALESCE(to_regprocedure('gongmcp_crm_field_summary(text, integer)')::text, '')" >/tmp/gongctl-postgres-retired-function.txt
+if grep -q 'gongmcp_crm_field_summary' /tmp/gongctl-postgres-retired-function.txt; then
+  echo "retired CRM field summary function still exists after reconcile" >&2
+  exit 1
+fi
+
 GONGCTL_TEST_POSTGRES_URL="$WRITER_URL" go test -count=1 ./internal/store/postgres
 
 echo "postgres smoke passed"
 echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
+echo "analyst-core output: /tmp/gongctl-postgres-analyst-core.jsonl"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
 echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"
 echo "reader raw-read denial output: /tmp/gongctl-postgres-reader-raw-read.txt"
 echo "reader sensitive-read denial output: /tmp/gongctl-postgres-reader-sensitive-read.txt"
 echo "reader regrant output: /tmp/gongctl-postgres-reader-regrant.txt"
+echo "reader column-drift denial output: /tmp/gongctl-postgres-reader-column-drift.txt"
+echo "reader sensitive-column-drift denial output: /tmp/gongctl-postgres-reader-sensitive-column-drift.txt"
+echo "retired function output: /tmp/gongctl-postgres-retired-function.txt"
 echo "normalized counts output: /tmp/gongctl-postgres-normalized-counts.txt"
 echo "call facts output: /tmp/gongctl-postgres-call-facts.txt"
 echo "read model state output: /tmp/gongctl-postgres-read-model-state.json"

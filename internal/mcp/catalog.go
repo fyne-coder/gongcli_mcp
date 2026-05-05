@@ -66,6 +66,23 @@ func ExpandToolPreset(name string) ([]string, error) {
 			"get_call",
 			"rank_transcript_backlog",
 		}), nil
+	case "analyst-core", "postgres-analyst-core":
+		return copyStrings([]string{
+			"get_sync_status",
+			"search_calls",
+			"get_call",
+			"list_crm_object_types",
+			"list_crm_fields",
+			"get_business_profile",
+			"list_business_concepts",
+			"list_lifecycle_buckets",
+			"summarize_calls_by_lifecycle",
+			"search_calls_by_lifecycle",
+			"prioritize_transcripts_by_lifecycle",
+			"summarize_call_facts",
+			"rank_transcript_backlog",
+			"search_transcript_segments",
+		}), nil
 	case "analyst", "analyst-expansion":
 		tools := []string{
 			"get_sync_status",
@@ -96,7 +113,7 @@ func ExpandToolPreset(name string) ([]string, error) {
 	case "all-readonly", "all-tools", "all":
 		return ToolCatalogNames(), nil
 	default:
-		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-pilot, strict-business-pilot, operator-smoke, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
 	}
 }
 
@@ -119,10 +136,16 @@ func ToolPresetCatalog() []ToolPresetInfo {
 			recommended: "IT and platform operators validating connectivity",
 		},
 		{
+			name:        "analyst-core",
+			aliases:     []string{"postgres-analyst-core"},
+			purpose:     "Postgres-supported analyst starter surface over core call, CRM context, profile, lifecycle, and transcript search tools.",
+			recommended: "approved analysts validating shared Postgres deployments before full analyst parity",
+		},
+		{
 			name:        "analyst",
 			aliases:     []string{"analyst-expansion"},
 			purpose:     "Broader bounded evidence and profile-aware analysis without admin/config-heavy tools.",
-			recommended: "approved analysts on governed or reviewed caches",
+			recommended: "SQLite analyst sessions, or Postgres only after full analyst parity is complete",
 		},
 		{
 			name:        "governance-search",
@@ -133,7 +156,7 @@ func ToolPresetCatalog() []ToolPresetInfo {
 			name:        "all-readonly",
 			aliases:     []string{"all", "all-tools"},
 			purpose:     "Full read-only MCP catalog.",
-			recommended: "trusted admin/analyst sessions or fully reviewed filtered DB deployments",
+			recommended: "trusted SQLite admin/analyst sessions; Postgres only after full read-only parity is complete",
 		},
 	}
 	out := make([]ToolPresetInfo, 0, len(defs))

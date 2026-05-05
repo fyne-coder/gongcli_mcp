@@ -320,6 +320,15 @@ case "$GONGMCP_TOOL_PRESET" in
       exit 1
     fi
     ;;
+  analyst-core|postgres-analyst-core)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_crm_object_types")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_crm_fields")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_segments")' >/dev/null
+    if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort" or . == "list_scorecards" or . == "search_crm_field_values")' >/dev/null; then
+      echo "unexpected full analyst/all-readonly tool exposed by analyst-core" >&2
+      exit 1
+    fi
+    ;;
   analyst|analyst-expansion|all-readonly|all|all-tools)
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls_by_filters")' >/dev/null

@@ -230,6 +230,8 @@ func TestToolPresetCatalogAliasesAndGovernanceCompatibility(t *testing.T) {
 		"business-pilot",
 		"strict-business-pilot",
 		"operator-smoke",
+		"analyst-core",
+		"postgres-analyst-core",
 		"analyst",
 		"analyst-expansion",
 		"governance-search",

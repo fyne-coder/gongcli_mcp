@@ -224,6 +224,63 @@ func TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext(t *testing.T) {
 	}
 }
 
+func TestPostgresCRMContextInventoryMatchesSQLiteAggregateContract(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqliteStore, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "gong.db"))
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	for _, raw := range businessPilotCallPayloads() {
+		if _, err := pgStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("postgres UpsertCall returned error: %v", err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("sqlite UpsertCall returned error: %v", err)
+		}
+	}
+
+	pgObjects, err := pgStore.ListCRMObjectTypes(ctx)
+	if err != nil {
+		t.Fatalf("postgres ListCRMObjectTypes returned error: %v", err)
+	}
+	sqliteObjects, err := sqliteStore.ListCRMObjectTypes(ctx)
+	if err != nil {
+		t.Fatalf("sqlite ListCRMObjectTypes returned error: %v", err)
+	}
+	if got, want := crmObjectSummaryByType(pgObjects), crmObjectSummaryByType(sqliteObjects); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres CRM object summaries=%+v want sqlite %+v", got, want)
+	}
+
+	pgFields, err := pgStore.ListCRMFields(ctx, "Opportunity", 10)
+	if err != nil {
+		t.Fatalf("postgres ListCRMFields returned error: %v", err)
+	}
+	sqliteFields, err := sqliteStore.ListCRMFields(ctx, "Opportunity", 10)
+	if err != nil {
+		t.Fatalf("sqlite ListCRMFields returned error: %v", err)
+	}
+	if got, want := crmFieldSummaryByName(pgFields), crmFieldSummaryByName(sqliteFields); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres CRM field summaries=%+v want sqlite %+v", got, want)
+	}
+	if _, err := pgStore.ListCRMFields(ctx, "", 10); err == nil || !strings.Contains(err.Error(), "object type is required") {
+		t.Fatalf("empty object type error=%v, want required", err)
+	}
+}
+
 func TestPostgresTranscriptSearchUserVisibleFieldsMatchSQLite(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -688,8 +745,9 @@ func TestPostgresReadOnlyOpenRejectsStaleMigrationVersion(t *testing.T) {
 	defer store.Close()
 	resetPostgresTestStore(t, ctx, store)
 
-	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version = $1`, len(migrations)); err != nil {
-		t.Fatalf("delete latest migration version: %v", err)
+	governanceMigrationVersion := len(migrations) - 2
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM gongctl_schema_migrations WHERE version >= $1`, governanceMigrationVersion); err != nil {
+		t.Fatalf("delete governance-and-later migration versions: %v", err)
 	}
 	if _, err := store.DB().ExecContext(ctx, `DROP TABLE IF EXISTS governance_suppressed_calls, governance_policy_state`); err != nil {
 		t.Fatalf("drop latest governance tables: %v", err)
@@ -1534,6 +1592,23 @@ func factSummaryByValue(rows []sqlite.CallFactsSummaryRow) map[string]sqlite.Cal
 	out := make(map[string]sqlite.CallFactsSummaryRow, len(rows))
 	for _, row := range rows {
 		out[row.GroupValue] = row
+	}
+	return out
+}
+
+func crmObjectSummaryByType(rows []sqlite.CRMObjectTypeSummary) map[string]sqlite.CRMObjectTypeSummary {
+	out := make(map[string]sqlite.CRMObjectTypeSummary, len(rows))
+	for _, row := range rows {
+		out[row.ObjectType] = row
+	}
+	return out
+}
+
+func crmFieldSummaryByName(rows []sqlite.CRMFieldSummary) map[string]sqlite.CRMFieldSummary {
+	out := make(map[string]sqlite.CRMFieldSummary, len(rows))
+	for _, row := range rows {
+		row.ExampleValues = nil
+		out[row.FieldName] = row
 	}
 	return out
 }

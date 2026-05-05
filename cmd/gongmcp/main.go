@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst-core, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -85,21 +85,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	postgresURL := postgres.URLFromEnv(os.Getenv)
 	postgresMode := db == "" && postgresURL != ""
 
-	allowlist, err := resolveToolAllowlist(toolSelection{
+	toolSelection := toolSelection{
 		AllowlistFlag:    *toolAllowlist,
 		AllowlistFlagSet: flagSet["tool-allowlist"],
 		PresetFlag:       *toolPreset,
 		PresetFlagSet:    flagSet["tool-preset"],
 		AllowlistEnv:     os.Getenv("GONGMCP_TOOL_ALLOWLIST"),
 		PresetEnv:        os.Getenv("GONGMCP_TOOL_PRESET"),
-	})
+	}
+	allowlist, err := resolveToolAllowlist(toolSelection)
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid tool selection: %v\n", err)
 		return 2
 	}
 	if postgresMode {
 		postgresHTTPMode := !*forceStdio && firstNonEmpty(*httpAddr, os.Getenv("GONGMCP_HTTP_ADDR")) != ""
-		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode)
+		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode, selectedToolPresetName(toolSelection))
 		if err != nil {
 			fmt.Fprintf(stderr, "invalid postgres tool selection: %v\n", err)
 			return 2
@@ -310,20 +311,31 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func postgresToolAllowlist(allowlist []string, httpMode bool) ([]string, error) {
+func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(presetName)) {
+	case "analyst", "analyst-expansion", "all-readonly", "all-tools", "all":
+		return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", presetName)
+	case "governance-search":
+		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
+	}
 	if postgresGovernanceSearchPreset(allowlist) {
 		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
 	}
 	supported := map[string]struct{}{
-		"get_sync_status":              {},
-		"get_business_profile":         {},
-		"get_call":                     {},
-		"list_business_concepts":       {},
-		"rank_transcript_backlog":      {},
-		"search_calls":                 {},
-		"search_transcript_segments":   {},
-		"summarize_call_facts":         {},
-		"summarize_calls_by_lifecycle": {},
+		"get_sync_status":                     {},
+		"get_business_profile":                {},
+		"get_call":                            {},
+		"list_business_concepts":              {},
+		"list_crm_fields":                     {},
+		"list_crm_object_types":               {},
+		"list_lifecycle_buckets":              {},
+		"prioritize_transcripts_by_lifecycle": {},
+		"rank_transcript_backlog":             {},
+		"search_calls":                        {},
+		"search_calls_by_lifecycle":           {},
+		"search_transcript_segments":          {},
+		"summarize_call_facts":                {},
+		"summarize_calls_by_lifecycle":        {},
 	}
 	if len(allowlist) == 0 {
 		if httpMode {
@@ -458,6 +470,19 @@ func resolveToolAllowlist(selection toolSelection) ([]string, error) {
 		return nil, fmt.Errorf("empty tool selection")
 	}
 	return nil, nil
+}
+
+func selectedToolPresetName(selection toolSelection) string {
+	if preset := strings.TrimSpace(selection.PresetFlag); preset != "" {
+		return preset
+	}
+	if strings.TrimSpace(selection.AllowlistFlag) != "" {
+		return ""
+	}
+	if preset := strings.TrimSpace(selection.PresetEnv); preset != "" && strings.TrimSpace(selection.AllowlistEnv) == "" {
+		return preset
+	}
+	return ""
 }
 
 type getenvFunc func(string) string
