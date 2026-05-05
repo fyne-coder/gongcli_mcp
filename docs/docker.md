@@ -137,18 +137,19 @@ Configuration contract:
 - Use a reader URL for `gongmcp`.
 - The default Compose reader role is the compatibility `gongmcp_reader`
   service role. To use a narrower function-scoped reader role, grant that role
-  the baseline safe table/view reads plus only the selected `gongmcp_*`
+  the baseline service-role table/view reads plus only the selected `gongmcp_*`
   functions, then start `gongmcp` with
   `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
   `--enforce-tool-scoped-db-grants`. The `business-pilot` preset also has a
   reviewed table/column grant boundary in this development slice; other
   presets still need their own reviewed maps before customer role automation.
+  A scoped reader URL is still a service credential, not an analyst SQL login.
 - The Compose example binds Postgres to `127.0.0.1` for local smoke use and
   uses explicit dev passwords by default. Company deployments should provide
   `GONGCTL_POSTGRES_PASSWORD` and `GONGMCP_READER_PASSWORD` from an approved
   secret manager and should not publish the database port directly.
 
-The first Postgres vertical slice supports:
+The current Postgres development branch supports:
 
 - `gongctl sync synthetic`
 - `gongctl sync calls`

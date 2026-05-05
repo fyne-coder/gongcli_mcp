@@ -924,9 +924,9 @@ func (s *Store) validateReadOnlyPrivileges(ctx context.Context, options ReadOnly
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT table_name
-  FROM information_schema.tables
+ FROM information_schema.tables
  WHERE table_schema = 'public'
-			   AND table_name IN ('calls', 'users', 'transcripts', 'transcript_segments', 'sync_runs', 'sync_state', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'governance_policy_state', 'governance_suppressed_calls', 'gong_settings', 'scorecard_activity', 'crm_integrations', 'crm_schema_objects', 'crm_schema_fields')
+   AND table_type = 'BASE TABLE'
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT') OR
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE') OR
@@ -1210,6 +1210,7 @@ SELECT EXISTS (
 			return nil, err
 		}
 		if !exists {
+			missing = append(missing, displayColumnSelectGrant(grant.Table, grant.Column))
 			continue
 		}
 		if err := s.db.QueryRowContext(ctx, `SELECT has_column_privilege(current_user, 'public.' || quote_ident($1), $2, 'SELECT')`, grant.Table, grant.Column).Scan(&ok); err != nil {
@@ -1979,7 +1980,7 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 			{`SELECT COUNT(user_id) FROM users`, &summary.TotalUsers},
 			{`SELECT COUNT(segment_count) FROM transcripts`, &summary.TotalTranscripts},
 			{`SELECT COALESCE(SUM(segment_count), 0) FROM transcripts`, &summary.TotalTranscriptSegments},
-			{`SELECT COUNT(id) FROM gongmcp_call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
+			{`SELECT COUNT(DISTINCT call_id) FROM gongmcp_call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
 			{`SELECT COUNT(id) FROM gongmcp_call_context_objects`, &summary.TotalEmbeddedCRMObjects},
 			{`SELECT COUNT(id) FROM gongmcp_call_context_fields`, &summary.TotalEmbeddedCRMFields},
 			{`SELECT COUNT(integration_id) FROM crm_integrations`, &summary.TotalCRMIntegrations},
@@ -1987,7 +1988,7 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 			{`SELECT COUNT(field_name) FROM crm_schema_fields`, &summary.TotalCRMSchemaFields},
 			{`SELECT COUNT(kind) FROM gong_settings`, &summary.TotalGongSettings},
 			{`SELECT COUNT(kind) FROM gong_settings WHERE kind = 'scorecards'`, &summary.TotalScorecards},
-			{`SELECT GREATEST((SELECT COUNT(started_at) FROM calls) - (SELECT COUNT(segment_count) FROM transcripts), 0)`, &summary.MissingTranscripts},
+			{`SELECT COUNT(transcript_status) FROM call_facts WHERE transcript_status = 'missing'`, &summary.MissingTranscripts},
 			{`SELECT COUNT(status) FROM gongmcp_sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
 			{`SELECT 0`, &summary.AttributionCoverage.CallsWithTitles},
 			{`SELECT COUNT(parties_count) FROM calls WHERE parties_count > 0`, &summary.AttributionCoverage.CallsWithParties},

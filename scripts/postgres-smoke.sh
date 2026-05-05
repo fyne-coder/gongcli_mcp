@@ -553,6 +553,7 @@ GRANT SELECT (sync_key, scope, cursor, last_run_id, last_status, last_error, las
 GRANT SELECT (started_at, parties_count) ON calls TO gongmcp_business_pilot_reader;
 GRANT SELECT (user_id, title) ON users TO gongmcp_business_pilot_reader;
 GRANT SELECT (segment_count) ON transcripts TO gongmcp_business_pilot_reader;
+GRANT SELECT (transcript_status) ON call_facts TO gongmcp_business_pilot_reader;
 GRANT SELECT ON gongmcp_call_context_objects TO gongmcp_business_pilot_reader;
 GRANT SELECT ON gongmcp_call_context_fields TO gongmcp_business_pilot_reader;
 GRANT SELECT (model_name, model_version, rebuilt_at, call_count, fact_count, missing_fact_call_count, orphan_fact_count, stale_reason, updated_at) ON postgres_read_model_state TO gongmcp_business_pilot_reader;
@@ -592,18 +593,22 @@ if business_pilot_reader_psql -c "SELECT call_id FROM calls LIMIT 1" >/tmp/gongc
   echo "business-pilot scoped reader unexpectedly read calls.call_id directly" >&2
   exit 1
 fi
+grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-calls-call-id-denied.txt
 if business_pilot_reader_psql -c "SELECT title FROM calls LIMIT 1" >/tmp/gongctl-postgres-business-pilot-reader-calls-title-denied.txt 2>&1; then
   echo "business-pilot scoped reader unexpectedly read calls.title directly" >&2
   exit 1
 fi
+grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-calls-title-denied.txt
 if business_pilot_reader_psql -c "SELECT call_id FROM call_facts LIMIT 1" >/tmp/gongctl-postgres-business-pilot-reader-call-facts-call-id-denied.txt 2>&1; then
   echo "business-pilot scoped reader unexpectedly read call_facts.call_id directly" >&2
   exit 1
 fi
+grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-call-facts-call-id-denied.txt
 if business_pilot_reader_psql -c "SELECT title FROM call_facts LIMIT 1" >/tmp/gongctl-postgres-business-pilot-reader-call-facts-title-denied.txt 2>&1; then
   echo "business-pilot scoped reader unexpectedly read call_facts.title directly" >&2
   exit 1
 fi
+grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-call-facts-title-denied.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT (title) ON calls TO gongmcp_business_pilot_reader" >/dev/null
 if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-business-pilot-reader-extra-column-grant.txt 2>&1; then
   echo "business-pilot scoped reader unexpectedly started with extra calls.title grant" >&2
@@ -1446,12 +1451,17 @@ echo "MCP late-stage custom-stage denial output: /tmp/gongctl-postgres-late-stag
 echo "analyst rejection output: /tmp/gongctl-postgres-analyst-rejected.txt"
 echo "all-readonly rejection output: /tmp/gongctl-postgres-all-readonly-rejected.txt"
 echo "calls show output: /tmp/gongctl-postgres-calls-show.json"
-echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
-echo "synthetic business-pilot function-scoped reader create output (not customer DDL template): /tmp/gongctl-postgres-business-pilot-reader-create.txt"
-echo "synthetic business-pilot function-scoped reader MCP output: /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl"
-echo "synthetic business-pilot function-scoped reader missing-transcripts denial output: /tmp/gongctl-postgres-business-pilot-reader-missing-transcripts-denied.txt"
-echo "synthetic business-pilot function-scoped reader missing grant denial output: /tmp/gongctl-postgres-business-pilot-reader-missing-grant.txt"
-echo "synthetic business-pilot function-scoped reader extra grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-grant.txt"
+echo "compatibility reader business-pilot MCP output: /tmp/gongctl-postgres-business-pilot.jsonl"
+echo "synthetic business-pilot scoped reader create output (not customer DDL template): /tmp/gongctl-postgres-business-pilot-reader-create.txt"
+echo "synthetic business-pilot scoped reader MCP output: /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl"
+echo "synthetic business-pilot scoped reader missing-transcripts denial output: /tmp/gongctl-postgres-business-pilot-reader-missing-transcripts-denied.txt"
+echo "synthetic business-pilot scoped reader calls.call_id denial output: /tmp/gongctl-postgres-business-pilot-reader-calls-call-id-denied.txt"
+echo "synthetic business-pilot scoped reader calls.title denial output: /tmp/gongctl-postgres-business-pilot-reader-calls-title-denied.txt"
+echo "synthetic business-pilot scoped reader call_facts.call_id denial output: /tmp/gongctl-postgres-business-pilot-reader-call-facts-call-id-denied.txt"
+echo "synthetic business-pilot scoped reader call_facts.title denial output: /tmp/gongctl-postgres-business-pilot-reader-call-facts-title-denied.txt"
+echo "synthetic business-pilot scoped reader extra column grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-column-grant.txt"
+echo "synthetic business-pilot scoped reader missing grant denial output: /tmp/gongctl-postgres-business-pilot-reader-missing-grant.txt"
+echo "synthetic business-pilot scoped reader extra function grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-grant.txt"
 echo "synthetic function-free scoped reader create output: /tmp/gongctl-postgres-function-free-reader-create.txt"
 echo "synthetic function-free scoped reader MCP output: /tmp/gongctl-postgres-function-free-scoped-reader.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"

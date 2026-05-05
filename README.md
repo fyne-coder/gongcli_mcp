@@ -255,6 +255,11 @@ supported MCP tools, and proves the reader role cannot write or directly read
 raw/sensitive tables. It also prepares a synthetic Postgres AI governance
 policy and proves restricted synthetic records are absent from governed MCP
 search outputs.
+The smoke also creates a synthetic `business-pilot` scoped reader role, proves
+the selected business-pilot MCP calls work, denies direct reads of
+`calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`,
+and verifies startup fails on an extra direct column grant; this is validation
+evidence, not customer DDL automation.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 

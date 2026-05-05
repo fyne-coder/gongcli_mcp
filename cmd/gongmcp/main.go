@@ -599,6 +599,7 @@ func postgresBusinessPilotColumnSelectGrants() []postgres.ColumnSelectGrant {
 		{Table: "crm_schema_objects", Column: "object_type"},
 		{Table: "crm_schema_fields", Column: "field_name"},
 		{Table: "gong_settings", Column: "kind"},
+		{Table: "call_facts", Column: "transcript_status"},
 		{Table: "postgres_read_model_state", Column: "model_name"},
 		{Table: "postgres_read_model_state", Column: "model_version"},
 		{Table: "postgres_read_model_state", Column: "rebuilt_at"},
