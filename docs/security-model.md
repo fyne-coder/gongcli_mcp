@@ -147,9 +147,12 @@ Implementation controls on the CLI side:
 	  secret manager as a standalone `NOINHERIT` role with no role memberships; the
 	  apply command rejects inherited/member roles and does not manage passwords or
 	  create roles.
-	  Do not configure default privileges that grant future public tables or
-	  functions to the scoped service role; keep MCP startup privilege enforcement
-	  enabled so stale grants fail closed.
+	  Do not configure default privileges that grant future public tables,
+	  functions, or sequences to the scoped service role or to `PUBLIC`.
+	  MCP startup detects explicit default privilege drift for the role and
+	  `PUBLIC`, but PostgreSQL grants EXECUTE on newly-created functions to
+	  `PUBLIC` by default; keep public function grant drift checks and MCP
+	  startup privilege enforcement enabled so stale grants fail closed.
 	  This first scoped role is profile-backed;
   explicit `lifecycle_source=builtin` still requires the broader compatibility
   reader until a sanitized builtin SQL surface exists.

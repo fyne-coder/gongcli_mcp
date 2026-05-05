@@ -634,10 +634,15 @@ Then dry-run/review the grant block and use `--apply` with a writable operator
 URL to reconcile grants for that existing role. The apply command is safe to
 rerun to clear stale current public table/function grants and regrant the
 reviewed surface, and it validates the role posture plus final effective grants
-for current public objects. It is not a password or role-creation manager and it
-cannot clear default privileges created by other grantors for future objects.
-Avoid default grants to this scoped service role. Run `gongmcp` with the scoped
-reader URL and `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a `gongmcp`
+for current public objects. It also rejects effective sequence grants after
+apply. It is not a password or role-creation manager and it cannot clear
+default privileges created by other grantors for future objects. Avoid default
+grants to this scoped service role or to `PUBLIC`; MCP startup detects explicit
+default privileges targeting the role or `PUBLIC`, but PostgreSQL still grants
+EXECUTE on newly-created functions to `PUBLIC` by default, so keep public
+function grant drift checks and MCP startup privilege enforcement enabled. Run
+`gongmcp` with the scoped reader URL and
+`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a `gongmcp`
 service credential, not an analyst SQL login. The scoped active-profile and
 profile-cache helpers redact source metadata and call IDs/titles, but selected
 functions still expose minimized operational metadata, timings, counts, and

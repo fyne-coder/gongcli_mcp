@@ -151,6 +151,13 @@ func validateScopedReaderEffectiveBoundary(ctx context.Context, db *sql.DB, para
 	if len(extraFunctionGrants) > 0 {
 		return fmt.Errorf("scoped reader role %q has effective extra function EXECUTE grants after apply: %s", roleName, strings.Join(extraFunctionGrants, ", "))
 	}
+	sequenceGrants, err := effectiveSequenceGrantsForRole(ctx, db, roleName)
+	if err != nil {
+		return err
+	}
+	if len(sequenceGrants) > 0 {
+		return fmt.Errorf("scoped reader role %q has effective sequence privileges after apply: %s", roleName, strings.Join(sequenceGrants, ", "))
+	}
 	publicFunctionGrants, err := publicGongMCPFunctionGrants(ctx, db)
 	if err != nil {
 		return err
@@ -218,6 +225,38 @@ SELECT c.table_name, c.column_name
 		return nil, err
 	}
 	return extra, nil
+}
+
+func effectiveSequenceGrantsForRole(ctx context.Context, db *sql.DB, roleName string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT c.relname
+  FROM pg_class c
+  JOIN pg_namespace n
+    ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public'
+   AND c.relkind = 'S'
+   AND (
+	has_sequence_privilege($1, c.oid, 'USAGE') OR
+	has_sequence_privilege($1, c.oid, 'SELECT') OR
+	has_sequence_privilege($1, c.oid, 'UPDATE')
+   )
+ ORDER BY c.relname`, roleName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sequences []string
+	for rows.Next() {
+		var sequence string
+		if err := rows.Scan(&sequence); err != nil {
+			return nil, err
+		}
+		sequences = append(sequences, sequence)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return sequences, nil
 }
 
 func missingFunctionExecuteGrantsForRole(ctx context.Context, db *sql.DB, roleName string, required []string) ([]string, error) {

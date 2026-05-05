@@ -671,13 +671,14 @@ GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model >/tmp/gongc
   printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"scope","lifecycle_source":"profile","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rank_transcript_backlog","arguments":{"lifecycle_source":"profile","from_date":"2026-01-01","to_date":"2026-12-31","limit":5}}}'
 } | GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp > /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q '"get_sync_status"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q '"summarize_call_facts"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q '"rank_transcript_backlog"' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
 grep -q 'priority_score' /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl
-assert_mcp_success /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl 3 4 5 6 7
+assert_mcp_success /tmp/gongctl-postgres-business-pilot-scoped-reader.jsonl 3 4 5 6 7 8
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"lifecycle","lifecycle_source":"builtin","limit":5}}}'
@@ -754,14 +755,29 @@ if business_pilot_reader_psql -c "SELECT last_value FROM profile_meta_id_seq" >/
   exit 1
 fi
 grep -q 'permission denied' /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT SELECT ON SEQUENCE profile_meta_id_seq TO PUBLIC" >/dev/null
+if GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-apply --preset business-pilot --role gongmcp_business_pilot_reader --database gongctl --apply >/tmp/gongctl-postgres-business-pilot-reader-apply-public-sequence-denied.txt 2>&1; then
+  echo "business-pilot scoped reader apply unexpectedly accepted PUBLIC sequence grant" >&2
+  exit 1
+fi
+grep -q 'apply scoped Postgres reader grants failed' /tmp/gongctl-postgres-business-pilot-reader-apply-public-sequence-denied.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE SELECT ON SEQUENCE profile_meta_id_seq FROM PUBLIC" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO gongmcp_business_pilot_reader" >/dev/null
 if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt 2>&1; then
   echo "business-pilot scoped reader unexpectedly started with default privilege drift" >&2
   exit 1
 fi
 grep -q 'default privileges for future public objects' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
-grep -q 'public:tables:SELECT' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
+grep -q 'public:current_user:tables:SELECT' /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM gongmcp_business_pilot_reader" >/dev/null
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC" >/dev/null
+if GONG_DATABASE_URL="$BUSINESS_PILOT_READER_URL" GONGMCP_TOOL_PRESET=business-pilot GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp </dev/null >/tmp/gongctl-postgres-business-pilot-reader-public-default-privilege-drift.txt 2>&1; then
+  echo "business-pilot scoped reader unexpectedly started with PUBLIC default privilege drift" >&2
+  exit 1
+fi
+grep -q 'default privileges for future public objects' /tmp/gongctl-postgres-business-pilot-reader-public-default-privilege-drift.txt
+grep -q 'public:PUBLIC:tables:SELECT' /tmp/gongctl-postgres-business-pilot-reader-public-default-privilege-drift.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM PUBLIC" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE SELECT (title) ON calls FROM gongmcp_business_pilot_reader" >/dev/null
 business_pilot_profile_identity="$(docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "SELECT id, canonical_sha256 FROM profile_meta WHERE is_active = true LIMIT 1")"
 IFS='|' read -r business_pilot_profile_id business_pilot_profile_sha <<EOF
@@ -806,6 +822,11 @@ fi
 business_pilot_backlog_fact_count="$(business_pilot_reader_psql -At -c "SELECT COUNT(*) FROM gongmcp_profile_transcript_backlog_sanitized($business_pilot_profile_id, '$business_pilot_profile_sha', '', '', '', '', '', '', 5) WHERE started_at <> '' AND bucket <> '' AND priority_score > 0" | tee -a /tmp/gongctl-postgres-business-pilot-reader-profile-backlog-sanitized.txt | tr -d '[:space:]')"
 if [ "$business_pilot_backlog_fact_count" -lt 1 ]; then
   echo "business-pilot scoped reader sanitized transcript backlog returned no ranked backlog rows" >&2
+  exit 1
+fi
+business_pilot_dated_backlog_fact_count="$(business_pilot_reader_psql -At -c "SELECT COUNT(*) FROM gongmcp_profile_transcript_backlog_sanitized($business_pilot_profile_id, '$business_pilot_profile_sha', '', '2026-01-01', '2026-12-31', '', '', '', 5) WHERE started_at <> '' AND bucket <> '' AND priority_score > 0" | tee -a /tmp/gongctl-postgres-business-pilot-reader-profile-backlog-sanitized.txt | tr -d '[:space:]')"
+if [ "$business_pilot_dated_backlog_fact_count" -lt 1 ]; then
+  echo "business-pilot scoped reader sanitized transcript backlog date filter returned no ranked backlog rows" >&2
   exit 1
 fi
 if business_pilot_reader_psql -c "SELECT COUNT(*) FROM gongmcp_profile_call_fact_cache($business_pilot_profile_id, '$business_pilot_profile_sha')" >/tmp/gongctl-postgres-business-pilot-reader-profile-cache-identifier-helper-denied.txt 2>&1; then
@@ -1692,6 +1713,7 @@ echo "synthetic business-pilot scoped reader apply wrong-database denial output:
 echo "synthetic business-pilot scoped reader apply column repair JSON: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair.json"
 echo "synthetic business-pilot scoped reader apply column repair calls.title denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-calls-title-denied.txt"
 echo "synthetic business-pilot scoped reader apply column repair sequence denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-column-repair-sequence-denied.txt"
+echo "synthetic business-pilot scoped reader apply PUBLIC sequence denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-public-sequence-denied.txt"
 echo "synthetic business-pilot scoped reader default privilege drift denial output: /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt"
 echo "synthetic business-pilot scoped reader apply repair identifier-helper denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-identifier-helper-denied.txt"
 echo "synthetic business-pilot scoped reader apply repair active-profile denial output: /tmp/gongctl-postgres-business-pilot-reader-apply-repair-active-profile-denied.txt"
@@ -1720,6 +1742,8 @@ echo "synthetic business-pilot scoped reader sanitized lifecycle summary output:
 echo "synthetic business-pilot scoped reader sanitized transcript backlog output: /tmp/gongctl-postgres-business-pilot-reader-profile-backlog-sanitized.txt"
 echo "synthetic business-pilot scoped reader extra column grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-column-grant.txt"
 echo "synthetic business-pilot scoped reader extra sequence grant denial output: /tmp/gongctl-postgres-business-pilot-reader-extra-sequence-grant.txt"
+echo "synthetic business-pilot scoped reader default privilege drift output: /tmp/gongctl-postgres-business-pilot-reader-default-privilege-drift.txt"
+echo "synthetic business-pilot scoped reader PUBLIC default privilege drift output: /tmp/gongctl-postgres-business-pilot-reader-public-default-privilege-drift.txt"
 echo "synthetic business-pilot scoped reader identifier-bearing profile-cache helper denial output: /tmp/gongctl-postgres-business-pilot-reader-profile-cache-identifier-helper-denied.txt"
 echo "synthetic business-pilot scoped reader unbounded sanitized profile-cache denial output: /tmp/gongctl-postgres-business-pilot-reader-profile-cache-unbounded-sanitized-denied.txt"
 echo "synthetic business-pilot scoped reader limited sanitized profile-cache output: /tmp/gongctl-postgres-business-pilot-reader-profile-cache-sanitized-limited.txt"

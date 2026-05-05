@@ -1352,13 +1352,9 @@ SELECT c.relname
 		return fmt.Errorf("postgres read-only URL has sequence privileges: %s", strings.Join(readableSequences, ", "))
 	}
 	rows, err = s.db.QueryContext(ctx, `
-WITH current_reader_role AS (
-	SELECT oid
-	  FROM pg_roles
-	 WHERE rolname = current_user
-),
 default_acl AS (
 	SELECT COALESCE(n.nspname, '<all schemas>') AS schema_name,
+	       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE COALESCE(grantee.rolname, '<unknown>') END AS grantee_name,
 	       CASE d.defaclobjtype
 	         WHEN 'r' THEN 'tables'
 	         WHEN 'S' THEN 'sequences'
@@ -1370,14 +1366,15 @@ default_acl AS (
 	  LEFT JOIN pg_namespace n
 	    ON n.oid = d.defaclnamespace
 	  CROSS JOIN LATERAL aclexplode(d.defaclacl) a
-	  JOIN current_reader_role r
-	    ON r.oid = a.grantee
+	  LEFT JOIN pg_roles grantee
+	    ON grantee.oid = a.grantee
 	 WHERE d.defaclobjtype IN ('r', 'S', 'f')
 	   AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+	   AND (a.grantee = 0 OR pg_has_role(current_user, a.grantee, 'USAGE'))
 )
-SELECT schema_name || ':' || object_type || ':' || privilege_type
+SELECT schema_name || ':' || grantee_name || ':' || object_type || ':' || privilege_type
   FROM default_acl
- ORDER BY schema_name, object_type, privilege_type`)
+ ORDER BY schema_name, grantee_name, object_type, privilege_type`)
 	if err != nil {
 		return err
 	}
