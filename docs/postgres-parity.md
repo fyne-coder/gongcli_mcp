@@ -35,6 +35,8 @@ Postgres parity should be added deliberately, with each surface classified as
 | MCP `get_call` | SQLite minimized call detail | complete for Postgres normalized context rows | Same minimized JSON contract over Postgres MCP | must match | Phase 2 | `TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext`; `scripts/postgres-smoke.sh` |
 | CLI `calls show` | SQLite raw cached JSON behind sensitive-export controls | complete for Postgres minimized call detail | Postgres uses `GetCallDetail` and does not return raw cached JSON, CRM field values, transcript text, or participant payloads | intentionally minimized for shared Postgres | Phase 2 | CLI call-detail smoke/tests |
 | `business-pilot` MCP preset | SQLite full preset | complete/foundation over Postgres facts | Keep supported tools stable and read-only | must match | Phase 1 | `scripts/postgres-smoke.sh` |
+| Tool-scoped Postgres reader roles | SQLite filesystem read-only boundary | complete for selected Postgres function grants | Generic `gongmcp_reader` remains supported; optional scoped mode validates required and extra `gongmcp_*` function EXECUTE grants against the selected preset/allowlist | postgres-native equivalent | Phase 9j | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh` |
+| Business-pilot scoped table grants | SQLite filesystem read-only boundary | complete for first Postgres business-pilot scoped role | Optional scoped startup validation checks selected function grants plus a first business-pilot table/column allowlist that denies direct `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title` while preserving generic reader compatibility | postgres-native hardening | Phase 9k | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
@@ -112,6 +114,52 @@ Postgres parity should be added deliberately, with each surface classified as
 18. **Phase 9i filtered missing transcripts**: explicit Postgres
     `missing_transcripts` allowlist parity for admin transcript-backfill
     record references before broader full-preset enablement.
+19. **Phase 9j tool-scoped reader grants**: optional Postgres reader-role
+    function validation for selected MCP presets/allowlists before broader
+    client deployments.
+20. **Phase 9k business-pilot table grants**: optional Postgres startup
+    validation for the first business-pilot scoped table/column boundary.
+
+## Phase 9k Risk Status
+
+- Closed for the first business-pilot table boundary: scoped startup validation
+  now rejects extra direct column grants outside the reviewed business-pilot
+  table/view surface, and the synthetic scoped role no longer has direct
+  `calls.call_id`, `calls.title`, `call_facts.call_id`, or `call_facts.title`
+  grants.
+- Remaining risk: this is not a universal role generator. Sanitized views still
+  include stable internal references needed by existing code paths, selected
+  profile functions can return minimized call metadata to the MCP process, and
+  non-business-pilot presets still use the generic/shared reader grant model
+  until their own table/column maps are reviewed.
+- Still queued: DDL helpers for customer-managed scoped roles, per-surface
+  table/column maps beyond `business-pilot`, and governed views/RLS/materialized
+  snapshots for broader `analyst` / `all-readonly` readiness.
+
+## Phase 9j Risk Status
+
+- Closed for the first hardening slice: Postgres `gongmcp` can run in optional
+  function-scoped grant-validation mode through
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
+  `--enforce-tool-scoped-db-grants`. In that mode startup checks the selected
+  preset/allowlist's required `gongmcp_*` functions and rejects executable
+  functions outside that selected surface.
+- The compatibility `gongmcp_reader` role remains supported for existing
+  deployments. Treat that generic reader URL as a service secret because it can
+  execute all reviewed reader functions granted to the role.
+- Unresolved after Phase 9j: function-scoped validation does not yet validate
+  table/column grants per selected tool. Scoped reader URLs remain service
+  secrets because the shared baseline grants and selected functions can expose
+  minimized call metadata such as call IDs, titles, timings, counts, and tenant
+  terminology. This is a documented gap, not full SQL-layer preset isolation.
+- Unresolved after Phase 9j: extra-grant validation scans `public.gongmcp_*`
+  functions by prefix. A future app-owned reviewed-function inventory should
+  replace prefix-based detection before broader customer role-generation
+  automation.
+- Still queued: installer/DDL helpers for customer-managed scoped roles,
+  per-surface role templates beyond the synthetic business-pilot smoke, and
+  database-enforced governance views/RLS/materialized snapshots for the broad
+  `analyst` / `all-readonly` path.
 
 ## Phase 9i Risk Status
 

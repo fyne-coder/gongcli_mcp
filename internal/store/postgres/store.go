@@ -46,8 +46,9 @@ const (
 const postgresReadModelBackfillMigrationVersion = 2
 
 type Store struct {
-	db       *sql.DB
-	readOnly bool
+	db              *sql.DB
+	readOnly        bool
+	readOnlyOptions ReadOnlyOptions
 }
 
 func URLFromEnv(getenv func(string) string) string {
@@ -91,7 +92,90 @@ func readOnlyDatabaseURL(databaseURL string) string {
 	return parsed.String()
 }
 
+type ReadOnlyOptions struct {
+	RequiredFunctionSignatures     []string
+	AllowedFunctionSignatures      []string
+	EnforceAllowedFunctionBoundary bool
+	RequiredColumnSelectGrants     []ColumnSelectGrant
+	AllowedColumnSelectGrants      []ColumnSelectGrant
+	EnforceAllowedColumnBoundary   bool
+}
+
+type ColumnSelectGrant struct {
+	Table  string
+	Column string
+}
+
+func DefaultReadOnlyFunctionSignatures() []string {
+	return []string{
+		"public.gongmcp_active_business_profile()",
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"public.gongmcp_cache_purge_plan(text)",
+		"public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)",
+		"public.gongmcp_crm_field_population_matrix(text, text, integer)",
+		"public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean)",
+		"public.gongmcp_crm_object_type_summary()",
+		"public.gongmcp_governance_data_fingerprint()",
+		"public.gongmcp_governance_policy_state(text)",
+		"public.gongmcp_governance_suppressed_call_ids(text)",
+		"public.gongmcp_late_stage_call_counts(text, text, text)",
+		"public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)",
+		"public.gongmcp_late_stage_stage_counts(text, text, text)",
+		"public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_opportunities_missing_transcripts(text, integer)",
+		"public.gongmcp_opportunity_call_summary(text, integer)",
+		"public.gongmcp_profile_call_fact_cache(bigint, text)",
+		"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
+		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_profile_data_fingerprint()",
+		"public.gongmcp_scorecard_activity_summary(text, integer)",
+		"public.gongmcp_scorecard_activity_totals()",
+		"public.gongmcp_scorecard_detail(text)",
+		"public.gongmcp_scorecards(boolean, integer)",
+		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_search_transcript_segments(text, integer)",
+		"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer)",
+		"public.gongmcp_unmapped_crm_field_inventory(integer)",
+	}
+}
+
+func DefaultReadOnlyColumnSelectGrants() []ColumnSelectGrant {
+	return []ColumnSelectGrant{
+		{Table: "gong_settings", Column: "kind"},
+		{Table: "gong_settings", Column: "object_id"},
+		{Table: "gong_settings", Column: "name"},
+		{Table: "gong_settings", Column: "active"},
+		{Table: "gong_settings", Column: "updated_at"},
+		{Table: "crm_integrations", Column: "integration_id"},
+		{Table: "crm_integrations", Column: "name"},
+		{Table: "crm_integrations", Column: "provider"},
+		{Table: "crm_integrations", Column: "first_seen_at"},
+		{Table: "crm_integrations", Column: "updated_at"},
+		{Table: "crm_schema_objects", Column: "integration_id"},
+		{Table: "crm_schema_objects", Column: "object_type"},
+		{Table: "crm_schema_objects", Column: "display_name"},
+		{Table: "crm_schema_objects", Column: "field_count"},
+		{Table: "crm_schema_objects", Column: "first_seen_at"},
+		{Table: "crm_schema_objects", Column: "updated_at"},
+		{Table: "crm_schema_fields", Column: "integration_id"},
+		{Table: "crm_schema_fields", Column: "object_type"},
+		{Table: "crm_schema_fields", Column: "field_name"},
+		{Table: "crm_schema_fields", Column: "field_label"},
+		{Table: "crm_schema_fields", Column: "field_type"},
+		{Table: "crm_schema_fields", Column: "first_seen_at"},
+		{Table: "crm_schema_fields", Column: "updated_at"},
+	}
+}
+
 func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
+	return OpenReadOnlyWithOptions(ctx, databaseURL, ReadOnlyOptions{})
+}
+
+func OpenReadOnlyWithOptions(ctx context.Context, databaseURL string, options ReadOnlyOptions) (*Store, error) {
 	if strings.TrimSpace(databaseURL) == "" {
 		return nil, errors.New("postgres database URL is required")
 	}
@@ -102,7 +186,7 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxLifetime(30 * time.Minute)
-	store := &Store{db: db, readOnly: true}
+	store := &Store{db: db, readOnly: true, readOnlyOptions: options}
 	if err := store.setReadOnlySearchPath(ctx, "read-only"); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -115,7 +199,7 @@ func OpenReadOnly(ctx context.Context, databaseURL string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := store.validateReadOnlyPrivileges(ctx); err != nil {
+	if err := store.validateReadOnlyPrivileges(ctx, options); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -528,9 +612,40 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
-WITH filtered AS (
+WITH args AS (
+	SELECT CASE lower(trim(COALESCE(group_by_arg, '')))
+		WHEN '' THEN 'lifecycle'
+		WHEN 'lifecycle_bucket' THEN 'lifecycle'
+		WHEN 'lifecycle' THEN 'lifecycle'
+		WHEN 'stage' THEN 'deal_stage'
+		WHEN 'opportunity_stage' THEN 'deal_stage'
+		WHEN 'deal_stage' THEN 'deal_stage'
+		WHEN 'opportunity_type' THEN 'deal_type'
+		WHEN 'deal_type' THEN 'deal_type'
+		WHEN 'account_type' THEN 'account_type'
+		WHEN 'industry' THEN 'account_industry'
+		WHEN 'account_industry' THEN 'account_industry'
+		WHEN 'revenue_range' THEN 'account_revenue_range'
+		WHEN 'account_revenue_range' THEN 'account_revenue_range'
+		WHEN 'scope' THEN 'scope'
+		WHEN 'system' THEN 'system'
+		WHEN 'direction' THEN 'direction'
+		WHEN 'transcript_status' THEN 'transcript_status'
+		WHEN 'calendar' THEN 'calendar'
+		WHEN 'calendar_event_status' THEN 'calendar'
+		WHEN 'duration_bucket' THEN 'duration_bucket'
+		WHEN 'month' THEN 'month'
+		WHEN 'call_month' THEN 'month'
+		WHEN 'lead_source' THEN 'lead_source'
+		WHEN 'primary_lead_source' THEN 'lead_source'
+		WHEN 'forecast_category' THEN 'forecast_category'
+		ELSE ''
+	END AS group_by
+),
+filtered AS (
 	SELECT c.*,
-	       CASE group_by_arg
+	       a.group_by,
+	       CASE a.group_by
 		       WHEN 'lifecycle' THEN COALESCE(NULLIF(c.lifecycle_bucket, ''), '<blank>')
 		       WHEN 'scope' THEN COALESCE(NULLIF(c.scope, ''), '<blank>')
 		       WHEN 'system' THEN COALESCE(NULLIF(c.system, ''), '<blank>')
@@ -539,22 +654,31 @@ WITH filtered AS (
 		       WHEN 'duration_bucket' THEN CASE WHEN c.duration_seconds < 60 THEN 'under_1m' WHEN c.duration_seconds < 300 THEN '1_5m' WHEN c.duration_seconds < 900 THEN '5_15m' WHEN c.duration_seconds < 1800 THEN '15_30m' WHEN c.duration_seconds < 2700 THEN '30_45m' ELSE '45m_plus' END
 		       WHEN 'month' THEN COALESCE(NULLIF(left(c.started_at, 7), ''), '<blank>')
 		       WHEN 'calendar' THEN CASE WHEN c.calendar_event_present THEN 'calendar' ELSE 'no_calendar' END
-		       ELSE COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, group_by_arg, '0'), ''), '<blank>')
+		       WHEN 'deal_stage' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'deal_stage', '0'), ''), '<blank>')
+		       WHEN 'deal_type' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'deal_type', '0'), ''), '<blank>')
+		       WHEN 'account_type' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'account_type', '0'), ''), '<blank>')
+		       WHEN 'account_industry' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'account_industry', '0'), ''), '<blank>')
+		       WHEN 'account_revenue_range' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'account_revenue_range', '0'), ''), '<blank>')
+		       WHEN 'lead_source' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'lead_source', '0'), ''), '<blank>')
+		       WHEN 'forecast_category' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'forecast_category', '0'), ''), '<blank>')
+		       ELSE '<blank>'
 	       END AS group_value
-	  FROM profile_call_fact_cache c
-	  JOIN profile_meta p
-	    ON p.id = c.profile_id
-	 WHERE p.is_active = true
-	   AND c.profile_id = profile_id_arg
-	   AND c.canonical_sha256 = canonical_sha_arg
+		  FROM profile_call_fact_cache c
+		  JOIN profile_meta p
+		    ON p.id = c.profile_id
+		  CROSS JOIN args a
+		 WHERE p.is_active = true
+		   AND a.group_by <> ''
+		   AND c.profile_id = profile_id_arg
+		   AND c.canonical_sha256 = canonical_sha_arg
 	   AND (lifecycle_bucket_arg = '' OR c.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (scope_arg = '' OR c.scope = scope_arg)
 	   AND (system_arg = '' OR c.system = system_arg)
 	   AND (direction_arg = '' OR c.direction = direction_arg)
 	   AND (transcript_status_arg = '' OR (transcript_status_arg = 'present' AND c.transcript_present) OR (transcript_status_arg = 'missing' AND NOT c.transcript_present))
 )
-SELECT group_by_arg AS group_by,
-       group_value,
+SELECT filtered.group_by AS group_by,
+	       filtered.group_value AS group_value,
        COUNT(*) AS call_count,
        COALESCE(SUM(CASE WHEN transcript_present THEN 1 ELSE 0 END), 0) AS transcript_count,
        COALESCE(SUM(CASE WHEN NOT transcript_present THEN 1 ELSE 0 END), 0) AS missing_transcript_count,
@@ -567,8 +691,8 @@ SELECT group_by_arg AS group_by,
        COALESCE(AVG(duration_seconds), 0) AS avg_duration_seconds,
        COALESCE(MAX(started_at), '') AS latest_call_at
   FROM filtered
- GROUP BY group_value
- ORDER BY call_count DESC, group_value
+ GROUP BY filtered.group_by, filtered.group_value
+ ORDER BY call_count DESC, filtered.group_value
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
@@ -790,7 +914,7 @@ func (s *Store) validateMigrationVersion(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) validateReadOnlyPrivileges(ctx context.Context) error {
+func (s *Store) validateReadOnlyPrivileges(ctx context.Context, options ReadOnlyOptions) error {
 	var canCreatePublic bool
 	if err := s.db.QueryRowContext(ctx, `SELECT has_schema_privilege(current_user, 'public', 'CREATE')`).Scan(&canCreatePublic); err != nil {
 		return err
@@ -926,99 +1050,47 @@ SELECT c.table_name || '.' || c.column_name
 	if len(readableForbiddenColumns) > 0 {
 		return fmt.Errorf("postgres read-only URL has forbidden column SELECT: %s", strings.Join(readableForbiddenColumns, ", "))
 	}
-	rows, err = s.db.QueryContext(ctx, `
-WITH required(table_name, column_name) AS (
-	VALUES
-		('gong_settings', 'kind'),
-		('gong_settings', 'object_id'),
-		('gong_settings', 'name'),
-		('gong_settings', 'active'),
-		('gong_settings', 'updated_at'),
-		('crm_integrations', 'integration_id'),
-		('crm_integrations', 'name'),
-		('crm_integrations', 'provider'),
-		('crm_integrations', 'first_seen_at'),
-		('crm_integrations', 'updated_at'),
-		('crm_schema_objects', 'integration_id'),
-		('crm_schema_objects', 'object_type'),
-		('crm_schema_objects', 'display_name'),
-		('crm_schema_objects', 'field_count'),
-		('crm_schema_objects', 'first_seen_at'),
-		('crm_schema_objects', 'updated_at'),
-		('crm_schema_fields', 'integration_id'),
-		('crm_schema_fields', 'object_type'),
-		('crm_schema_fields', 'field_name'),
-		('crm_schema_fields', 'field_label'),
-		('crm_schema_fields', 'field_type'),
-		('crm_schema_fields', 'first_seen_at'),
-		('crm_schema_fields', 'updated_at')
-)
-SELECT r.table_name || '.' || r.column_name
-  FROM required r
-  JOIN pg_attribute a
-    ON a.attrelid = to_regclass('public.' || quote_ident(r.table_name))
-   AND a.attname = r.column_name
-   AND NOT a.attisdropped
- WHERE NOT has_column_privilege(current_user, 'public.' || quote_ident(r.table_name), r.column_name, 'SELECT')
- ORDER BY r.table_name, r.column_name`)
+	requiredColumns := cleanColumnSelectGrants(options.RequiredColumnSelectGrants)
+	if len(requiredColumns) == 0 && !options.EnforceAllowedColumnBoundary {
+		requiredColumns = DefaultReadOnlyColumnSelectGrants()
+	}
+	missingColumnGrants, err := s.missingColumnSelectGrants(ctx, requiredColumns)
 	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var missingColumnGrants []string
-	for rows.Next() {
-		var column string
-		if err := rows.Scan(&column); err != nil {
-			return err
-		}
-		missingColumnGrants = append(missingColumnGrants, column)
-	}
-	if err := rows.Err(); err != nil {
 		return err
 	}
 	if len(missingColumnGrants) > 0 {
 		return fmt.Errorf("postgres read-only URL is missing required column SELECT grants: %s", strings.Join(missingColumnGrants, ", "))
 	}
-	rows, err = s.db.QueryContext(ctx, `
-WITH required_functions(signature) AS (
-	VALUES
-		('public.gongmcp_scorecard_activity_summary(text, integer)'),
-		('public.gongmcp_scorecard_activity_totals()'),
-		('public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean)'),
-		('public.gongmcp_unmapped_crm_field_inventory(integer)'),
-		('public.gongmcp_late_stage_call_counts(text, text, text)'),
-		('public.gongmcp_late_stage_stage_counts(text, text, text)'),
-		('public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)'),
-		('public.gongmcp_crm_object_type_summary()'),
-		('public.gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer)'),
-		('public.gongmcp_opportunities_missing_transcripts(text, integer)'),
-		('public.gongmcp_opportunity_call_summary(text, integer)'),
-		('public.gongmcp_crm_field_population_matrix(text, text, integer)'),
-		('public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)'),
-		('public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)'),
-		('public.gongmcp_cache_purge_plan(text)')
-)
-SELECT signature
-  FROM required_functions
- WHERE NOT has_function_privilege(current_user, signature, 'EXECUTE')
- ORDER BY signature`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	var missingFunctionGrants []string
-	for rows.Next() {
-		var signature string
-		if err := rows.Scan(&signature); err != nil {
+	allowedColumns := cleanColumnSelectGrants(options.AllowedColumnSelectGrants)
+	if options.EnforceAllowedColumnBoundary {
+		extraColumnGrants, err := s.extraColumnSelectGrants(ctx, allowedColumns)
+		if err != nil {
 			return err
 		}
-		missingFunctionGrants = append(missingFunctionGrants, signature)
+		if len(extraColumnGrants) > 0 {
+			return fmt.Errorf("postgres read-only URL has extra column SELECT grants outside selected MCP tools: %s", strings.Join(extraColumnGrants, ", "))
+		}
 	}
-	if err := rows.Err(); err != nil {
+	requiredFunctions := cleanPostgresFunctionSignatures(options.RequiredFunctionSignatures)
+	if len(requiredFunctions) == 0 && !options.EnforceAllowedFunctionBoundary {
+		requiredFunctions = DefaultReadOnlyFunctionSignatures()
+	}
+	missingFunctionGrants, err := s.missingFunctionExecuteGrants(ctx, requiredFunctions)
+	if err != nil {
 		return err
 	}
 	if len(missingFunctionGrants) > 0 {
 		return fmt.Errorf("postgres read-only URL is missing required function EXECUTE grants: %s", strings.Join(missingFunctionGrants, ", "))
+	}
+	allowedFunctions := cleanPostgresFunctionSignatures(options.AllowedFunctionSignatures)
+	if options.EnforceAllowedFunctionBoundary {
+		extraFunctionGrants, err := s.extraFunctionExecuteGrants(ctx, allowedFunctions)
+		if err != nil {
+			return err
+		}
+		if len(extraFunctionGrants) > 0 {
+			return fmt.Errorf("postgres read-only URL has extra function EXECUTE grants outside selected MCP tools: %s", strings.Join(extraFunctionGrants, ", "))
+		}
 	}
 	rows, err = s.db.QueryContext(ctx, `
 SELECT p.oid::regprocedure::text AS signature
@@ -1026,7 +1098,6 @@ SELECT p.oid::regprocedure::text AS signature
   JOIN pg_namespace n
     ON n.oid = p.pronamespace
  WHERE n.nspname = 'public'
-   AND p.prosecdef
    AND p.proname LIKE 'gongmcp_%'
    AND has_function_privilege('public', p.oid, 'EXECUTE')
  ORDER BY signature`)
@@ -1049,6 +1120,185 @@ SELECT p.oid::regprocedure::text AS signature
 		return fmt.Errorf("postgres read-only URL has over-broad function EXECUTE grants: %s", strings.Join(publicFunctionGrants, ", "))
 	}
 	return nil
+}
+
+func cleanPostgresFunctionSignatures(signatures []string) []string {
+	out := make([]string, 0, len(signatures))
+	seen := make(map[string]struct{}, len(signatures))
+	for _, signature := range signatures {
+		clean := strings.TrimSpace(signature)
+		if clean == "" {
+			continue
+		}
+		key := normalizePostgresFunctionSignature(clean)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, clean)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return normalizePostgresFunctionSignature(out[i]) < normalizePostgresFunctionSignature(out[j])
+	})
+	return out
+}
+
+func cleanColumnSelectGrants(grants []ColumnSelectGrant) []ColumnSelectGrant {
+	out := make([]ColumnSelectGrant, 0, len(grants))
+	seen := make(map[string]struct{}, len(grants))
+	for _, grant := range grants {
+		table := strings.TrimSpace(grant.Table)
+		column := strings.TrimSpace(grant.Column)
+		if table == "" || column == "" {
+			continue
+		}
+		key := normalizeColumnSelectGrant(table, column)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, ColumnSelectGrant{Table: table, Column: column})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return normalizeColumnSelectGrant(out[i].Table, out[i].Column) < normalizeColumnSelectGrant(out[j].Table, out[j].Column)
+	})
+	return out
+}
+
+func normalizeColumnSelectGrant(table, column string) string {
+	return strings.ToLower(strings.TrimSpace(table)) + "." + strings.ToLower(strings.TrimSpace(column))
+}
+
+func displayColumnSelectGrant(table, column string) string {
+	return strings.TrimSpace(table) + "." + strings.TrimSpace(column)
+}
+
+func normalizePostgresFunctionSignature(signature string) string {
+	clean := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(signature), " ", ""))
+	if clean == "" {
+		return ""
+	}
+	if !strings.Contains(clean, ".") {
+		clean = "public." + clean
+	}
+	return clean
+}
+
+func displayPostgresFunctionSignature(signature string) string {
+	clean := strings.TrimSpace(signature)
+	if clean == "" {
+		return clean
+	}
+	if !strings.Contains(clean, ".") {
+		clean = "public." + clean
+	}
+	return clean
+}
+
+func (s *Store) missingColumnSelectGrants(ctx context.Context, required []ColumnSelectGrant) ([]string, error) {
+	var missing []string
+	for _, grant := range required {
+		var exists, ok bool
+		if err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+	SELECT 1
+	  FROM pg_attribute a
+	 WHERE a.attrelid = to_regclass('public.' || quote_ident($1))
+	   AND a.attname = $2
+	   AND NOT a.attisdropped
+)`, grant.Table, grant.Column).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		if err := s.db.QueryRowContext(ctx, `SELECT has_column_privilege(current_user, 'public.' || quote_ident($1), $2, 'SELECT')`, grant.Table, grant.Column).Scan(&ok); err != nil {
+			return nil, err
+		}
+		if !ok {
+			missing = append(missing, displayColumnSelectGrant(grant.Table, grant.Column))
+		}
+	}
+	return missing, nil
+}
+
+func (s *Store) extraColumnSelectGrants(ctx context.Context, allowed []ColumnSelectGrant) ([]string, error) {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, grant := range allowed {
+		allowedSet[normalizeColumnSelectGrant(grant.Table, grant.Column)] = struct{}{}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT c.table_name, c.column_name
+  FROM information_schema.columns c
+ WHERE c.table_schema = 'public'
+   AND has_column_privilege(current_user, quote_ident(c.table_schema) || '.' || quote_ident(c.table_name), c.column_name, 'SELECT')
+ ORDER BY c.table_name, c.column_name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var extra []string
+	for rows.Next() {
+		var table, column string
+		if err := rows.Scan(&table, &column); err != nil {
+			return nil, err
+		}
+		if _, ok := allowedSet[normalizeColumnSelectGrant(table, column)]; !ok {
+			extra = append(extra, displayColumnSelectGrant(table, column))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return extra, nil
+}
+
+func (s *Store) missingFunctionExecuteGrants(ctx context.Context, required []string) ([]string, error) {
+	var missing []string
+	for _, signature := range required {
+		var ok bool
+		if err := s.db.QueryRowContext(ctx, `SELECT has_function_privilege(current_user, $1, 'EXECUTE')`, signature).Scan(&ok); err != nil {
+			return nil, err
+		}
+		if !ok {
+			missing = append(missing, signature)
+		}
+	}
+	return missing, nil
+}
+
+func (s *Store) extraFunctionExecuteGrants(ctx context.Context, allowed []string) ([]string, error) {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, signature := range allowed {
+		allowedSet[normalizePostgresFunctionSignature(signature)] = struct{}{}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT p.oid::regprocedure::text AS signature
+  FROM pg_proc p
+  JOIN pg_namespace n
+    ON n.oid = p.pronamespace
+ WHERE n.nspname = 'public'
+   AND p.proname LIKE 'gongmcp_%'
+   AND has_function_privilege(current_user, p.oid, 'EXECUTE')
+ ORDER BY signature`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var extra []string
+	for rows.Next() {
+		var signature string
+		if err := rows.Scan(&signature); err != nil {
+			return nil, err
+		}
+		if _, ok := allowedSet[normalizePostgresFunctionSignature(signature)]; !ok {
+			extra = append(extra, displayPostgresFunctionSignature(signature))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return extra, nil
 }
 
 func (s *Store) StartSyncRun(ctx context.Context, params sqlite.StartSyncRunParams) (*sqlite.SyncRun, error) {
@@ -1720,6 +1970,30 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		{`SELECT COUNT(*) FROM calls WHERE parties_count > 0`, &summary.AttributionCoverage.CallsWithParties},
 		{`SELECT COUNT(*) FROM users WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.UsersWithTitles},
 	}
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		counts = []struct {
+			query string
+			dest  *int64
+		}{
+			{`SELECT COUNT(started_at) FROM calls`, &summary.TotalCalls},
+			{`SELECT COUNT(user_id) FROM users`, &summary.TotalUsers},
+			{`SELECT COUNT(segment_count) FROM transcripts`, &summary.TotalTranscripts},
+			{`SELECT COALESCE(SUM(segment_count), 0) FROM transcripts`, &summary.TotalTranscriptSegments},
+			{`SELECT COUNT(id) FROM gongmcp_call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
+			{`SELECT COUNT(id) FROM gongmcp_call_context_objects`, &summary.TotalEmbeddedCRMObjects},
+			{`SELECT COUNT(id) FROM gongmcp_call_context_fields`, &summary.TotalEmbeddedCRMFields},
+			{`SELECT COUNT(integration_id) FROM crm_integrations`, &summary.TotalCRMIntegrations},
+			{`SELECT COUNT(object_type) FROM crm_schema_objects`, &summary.TotalCRMSchemaObjects},
+			{`SELECT COUNT(field_name) FROM crm_schema_fields`, &summary.TotalCRMSchemaFields},
+			{`SELECT COUNT(kind) FROM gong_settings`, &summary.TotalGongSettings},
+			{`SELECT COUNT(kind) FROM gong_settings WHERE kind = 'scorecards'`, &summary.TotalScorecards},
+			{`SELECT GREATEST((SELECT COUNT(started_at) FROM calls) - (SELECT COUNT(segment_count) FROM transcripts), 0)`, &summary.MissingTranscripts},
+			{`SELECT COUNT(status) FROM gongmcp_sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
+			{`SELECT 0`, &summary.AttributionCoverage.CallsWithTitles},
+			{`SELECT COUNT(parties_count) FROM calls WHERE parties_count > 0`, &summary.AttributionCoverage.CallsWithParties},
+			{`SELECT COUNT(title) FROM users WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.UsersWithTitles},
+		}
+	}
 	for _, item := range counts {
 		if err := s.db.QueryRowContext(ctx, item.query).Scan(item.dest); err != nil {
 			return nil, err
@@ -1850,7 +2124,7 @@ func (s *Store) CacheDiagnostics(ctx context.Context) (*CacheDiagnostics, error)
 	} else {
 		diagnostics.ProfileCacheStatus = "unavailable"
 	}
-	if err := s.validateReadOnlyPrivileges(ctx); err == nil {
+	if err := s.validateReadOnlyPrivileges(ctx, s.readOnlyOptions); err == nil {
 		diagnostics.ReaderPrivilegeStatus = "valid_reader"
 	} else {
 		diagnostics.ReaderPrivilegeStatus = "not_valid_reader"

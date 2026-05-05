@@ -616,9 +616,40 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
-WITH filtered AS (
+WITH args AS (
+	SELECT CASE lower(trim(COALESCE(group_by_arg, '')))
+		WHEN '' THEN 'lifecycle'
+		WHEN 'lifecycle_bucket' THEN 'lifecycle'
+		WHEN 'lifecycle' THEN 'lifecycle'
+		WHEN 'stage' THEN 'deal_stage'
+		WHEN 'opportunity_stage' THEN 'deal_stage'
+		WHEN 'deal_stage' THEN 'deal_stage'
+		WHEN 'opportunity_type' THEN 'deal_type'
+		WHEN 'deal_type' THEN 'deal_type'
+		WHEN 'account_type' THEN 'account_type'
+		WHEN 'industry' THEN 'account_industry'
+		WHEN 'account_industry' THEN 'account_industry'
+		WHEN 'revenue_range' THEN 'account_revenue_range'
+		WHEN 'account_revenue_range' THEN 'account_revenue_range'
+		WHEN 'scope' THEN 'scope'
+		WHEN 'system' THEN 'system'
+		WHEN 'direction' THEN 'direction'
+		WHEN 'transcript_status' THEN 'transcript_status'
+		WHEN 'calendar' THEN 'calendar'
+		WHEN 'calendar_event_status' THEN 'calendar'
+		WHEN 'duration_bucket' THEN 'duration_bucket'
+		WHEN 'month' THEN 'month'
+		WHEN 'call_month' THEN 'month'
+		WHEN 'lead_source' THEN 'lead_source'
+		WHEN 'primary_lead_source' THEN 'lead_source'
+		WHEN 'forecast_category' THEN 'forecast_category'
+		ELSE ''
+	END AS group_by
+),
+filtered AS (
 	SELECT c.*,
-	       CASE group_by_arg
+	       a.group_by,
+	       CASE a.group_by
 		       WHEN 'lifecycle' THEN COALESCE(NULLIF(c.lifecycle_bucket, ''), '<blank>')
 		       WHEN 'scope' THEN COALESCE(NULLIF(c.scope, ''), '<blank>')
 		       WHEN 'system' THEN COALESCE(NULLIF(c.system, ''), '<blank>')
@@ -627,22 +658,31 @@ WITH filtered AS (
 		       WHEN 'duration_bucket' THEN CASE WHEN c.duration_seconds < 60 THEN 'under_1m' WHEN c.duration_seconds < 300 THEN '1_5m' WHEN c.duration_seconds < 900 THEN '5_15m' WHEN c.duration_seconds < 1800 THEN '15_30m' WHEN c.duration_seconds < 2700 THEN '30_45m' ELSE '45m_plus' END
 		       WHEN 'month' THEN COALESCE(NULLIF(left(c.started_at, 7), ''), '<blank>')
 		       WHEN 'calendar' THEN CASE WHEN c.calendar_event_present THEN 'calendar' ELSE 'no_calendar' END
-		       ELSE COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, group_by_arg, '0'), ''), '<blank>')
+		       WHEN 'deal_stage' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'deal_stage', '0'), ''), '<blank>')
+		       WHEN 'deal_type' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'deal_type', '0'), ''), '<blank>')
+		       WHEN 'account_type' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'account_type', '0'), ''), '<blank>')
+		       WHEN 'account_industry' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'account_industry', '0'), ''), '<blank>')
+		       WHEN 'account_revenue_range' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'account_revenue_range', '0'), ''), '<blank>')
+		       WHEN 'lead_source' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'lead_source', '0'), ''), '<blank>')
+		       WHEN 'forecast_category' THEN COALESCE(NULLIF(jsonb_extract_path_text(c.field_values_json, 'forecast_category', '0'), ''), '<blank>')
+		       ELSE '<blank>'
 	       END AS group_value
-	  FROM profile_call_fact_cache c
-	  JOIN profile_meta p
-	    ON p.id = c.profile_id
-	 WHERE p.is_active = true
-	   AND c.profile_id = profile_id_arg
-	   AND c.canonical_sha256 = canonical_sha_arg
+		  FROM profile_call_fact_cache c
+		  JOIN profile_meta p
+		    ON p.id = c.profile_id
+		  CROSS JOIN args a
+		 WHERE p.is_active = true
+		   AND a.group_by <> ''
+		   AND c.profile_id = profile_id_arg
+		   AND c.canonical_sha256 = canonical_sha_arg
 	   AND (lifecycle_bucket_arg = '' OR c.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (scope_arg = '' OR c.scope = scope_arg)
 	   AND (system_arg = '' OR c.system = system_arg)
 	   AND (direction_arg = '' OR c.direction = direction_arg)
 	   AND (transcript_status_arg = '' OR (transcript_status_arg = 'present' AND c.transcript_present) OR (transcript_status_arg = 'missing' AND NOT c.transcript_present))
 )
-SELECT group_by_arg AS group_by,
-       group_value,
+SELECT filtered.group_by AS group_by,
+	       filtered.group_value AS group_value,
        COUNT(*) AS call_count,
        COALESCE(SUM(CASE WHEN transcript_present THEN 1 ELSE 0 END), 0) AS transcript_count,
        COALESCE(SUM(CASE WHEN NOT transcript_present THEN 1 ELSE 0 END), 0) AS missing_transcript_count,
@@ -655,8 +695,8 @@ SELECT group_by_arg AS group_by,
        COALESCE(AVG(duration_seconds), 0) AS avg_duration_seconds,
        COALESCE(MAX(started_at), '') AS latest_call_at
   FROM filtered
- GROUP BY group_value
- ORDER BY call_count DESC, group_value
+ GROUP BY filtered.group_by, filtered.group_value
+ ORDER BY call_count DESC, filtered.group_value
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 

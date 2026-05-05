@@ -48,6 +48,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
+	enforceToolScopedDBGrants := flags.Bool("enforce-tool-scoped-db-grants", false, "For Postgres MCP, validate reader function EXECUTE grants against the selected tool preset/allowlist; defaults to GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")
 	maxSearchResults := flags.Int("max-search-results", 0, "Maximum rows for MCP search-style tools; defaults to GONGMCP_MAX_SEARCH_RESULTS or 100, hard-capped at 1000")
 	maxCRMFields := flags.Int("max-crm-fields", 0, "Maximum rows for MCP CRM field inventory tools; defaults to GONGMCP_MAX_CRM_FIELDS or 200, hard-capped at 1000")
 	maxLateStageSignals := flags.Int("max-late-stage-signals", 0, "Maximum rows for late-stage signal analysis; defaults to GONGMCP_MAX_LATE_STAGE_SIGNALS or 100, hard-capped at 500")
@@ -140,6 +141,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
 
 	ctx := context.Background()
 	var store mcp.Store
@@ -147,7 +149,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var postgresStore *postgres.Store
 	var closeStore func() error
 	if postgresMode {
-		pgStore, err := postgres.OpenReadOnly(ctx, postgresURL)
+		readOnlyOptions := postgres.ReadOnlyOptions{}
+		if *enforceToolScopedDBGrants || truthy(os.Getenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")) {
+			readOnlyOptions = postgresReadOnlyOptionsForAllowlist(allowlist)
+			if governanceConfigPath != "" {
+				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
+				readOnlyOptions.AllowedFunctionSignatures = append(readOnlyOptions.AllowedFunctionSignatures, postgresGovernanceFunctionSignatures()...)
+			}
+		}
+		pgStore, err := postgres.OpenReadOnlyWithOptions(ctx, postgresURL, readOnlyOptions)
 		if err != nil {
 			fmt.Fprintf(stderr, "open postgres db: %v\n", err)
 			return 1
@@ -181,7 +191,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	defer closeStore()
 
 	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
-	if configPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG")); configPath != "" {
+	if governanceConfigPath != "" {
+		configPath := governanceConfigPath
 		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
 			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
 			return 2
@@ -401,6 +412,210 @@ func postgresGovernanceSearchPreset(allowlist []string) bool {
 		}
 	}
 	return true
+}
+
+func postgresReadOnlyOptionsForAllowlist(allowlist []string) postgres.ReadOnlyOptions {
+	signatures := postgresFunctionSignaturesForTools(allowlist)
+	options := postgres.ReadOnlyOptions{
+		RequiredFunctionSignatures:     signatures,
+		AllowedFunctionSignatures:      signatures,
+		EnforceAllowedFunctionBoundary: true,
+	}
+	if postgresBusinessPilotScopedColumns(allowlist) {
+		columns := postgresBusinessPilotColumnSelectGrants()
+		options.RequiredColumnSelectGrants = columns
+		options.AllowedColumnSelectGrants = columns
+		options.EnforceAllowedColumnBoundary = true
+	}
+	return options
+}
+
+func postgresGovernanceFunctionSignatures() []string {
+	return []string{
+		"public.gongmcp_governance_data_fingerprint()",
+		"public.gongmcp_governance_policy_state(text)",
+		"public.gongmcp_governance_suppressed_call_ids(text)",
+	}
+}
+
+func postgresFunctionSignaturesForTools(allowlist []string) []string {
+	profileReadinessFunctions := []string{
+		"public.gongmcp_active_business_profile()",
+		"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
+		"public.gongmcp_profile_data_fingerprint()",
+	}
+	profileRowsFunctions := append(copyPostgresFunctionSignatures(profileReadinessFunctions),
+		"public.gongmcp_profile_call_fact_cache(bigint, text)",
+	)
+	profileSummaryFunctions := append(copyPostgresFunctionSignatures(profileReadinessFunctions),
+		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
+	)
+	businessAnalysisCoreFunctions := []string{
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+	}
+	businessAnalysisEvidenceFunctions := append(copyPostgresFunctionSignatures(businessAnalysisCoreFunctions),
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+	)
+	businessAnalysisDimensionFunctions := append(copyPostgresFunctionSignatures(businessAnalysisCoreFunctions),
+		"public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+	)
+	functionsByTool := map[string][]string{
+		"analyze_late_stage_crm_signals": {
+			"public.gongmcp_late_stage_call_counts(text, text, text)",
+			"public.gongmcp_late_stage_stage_counts(text, text, text)",
+			"public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)",
+		},
+		"build_call_cohort": businessAnalysisCoreFunctions,
+		"compare_lifecycle_crm_fields": {
+			"public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)",
+		},
+		"crm_field_population_matrix": {
+			"public.gongmcp_crm_field_population_matrix(text, text, integer)",
+		},
+		"diagnose_attribution_coverage": businessAnalysisCoreFunctions,
+		"discover_themes_in_cohort":     businessAnalysisEvidenceFunctions,
+		"explain_analysis_limitations":  businessAnalysisCoreFunctions,
+		"extract_theme_quotes":          businessAnalysisEvidenceFunctions,
+		"get_sync_status": {
+			"public.gongmcp_active_business_profile()",
+			"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
+			"public.gongmcp_profile_data_fingerprint()",
+			"public.gongmcp_scorecard_activity_totals()",
+		},
+		"get_business_profile": {
+			"public.gongmcp_active_business_profile()",
+		},
+		"get_scorecard": {
+			"public.gongmcp_scorecard_detail(text)",
+		},
+		"inspect_call_cohort": businessAnalysisCoreFunctions,
+		"list_business_concepts": {
+			"public.gongmcp_active_business_profile()",
+		},
+		"list_crm_object_types": {
+			"public.gongmcp_crm_object_type_summary()",
+		},
+		"list_lifecycle_buckets": profileReadinessFunctions,
+		"list_scorecards": {
+			"public.gongmcp_scorecards(boolean, integer)",
+		},
+		"list_unmapped_crm_fields": append([]string{
+			"public.gongmcp_unmapped_crm_field_inventory(integer)",
+		}, profileReadinessFunctions...),
+		"missing_transcripts": {
+			"public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)",
+		},
+		"opportunities_missing_transcripts": {
+			"public.gongmcp_opportunities_missing_transcripts(text, integer)",
+		},
+		"opportunity_call_summary": {
+			"public.gongmcp_opportunity_call_summary(text, integer)",
+		},
+		"prioritize_transcripts_by_lifecycle": profileRowsFunctions,
+		"rank_transcript_backlog":             profileRowsFunctions,
+		"score_cohort_evidence_quality":       businessAnalysisCoreFunctions,
+		"search_calls_by_filters":             businessAnalysisCoreFunctions,
+		"search_calls_by_lifecycle":           profileRowsFunctions,
+		"search_crm_field_values": {
+			"public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean)",
+		},
+		"search_quotes_in_cohort": businessAnalysisEvidenceFunctions,
+		"search_transcript_quotes_with_attribution": {
+			"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
+		},
+		"search_transcript_segments": {
+			"public.gongmcp_search_transcript_segments(text, integer)",
+			"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
+		},
+		"search_transcripts_by_call_facts": {
+			"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
+		},
+		"search_transcripts_by_crm_context": {
+			"public.gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer)",
+		},
+		"search_transcripts_by_filters": businessAnalysisEvidenceFunctions,
+		"suggest_filter_refinements":    businessAnalysisCoreFunctions,
+		"summarize_call_facts":          profileSummaryFunctions,
+		"summarize_calls_by_filters":    businessAnalysisDimensionFunctions,
+		"summarize_calls_by_lifecycle":  profileRowsFunctions,
+		"summarize_scorecard_activity": {
+			"public.gongmcp_scorecard_activity_summary(text, integer)",
+			"public.gongmcp_scorecard_activity_totals()",
+		},
+		"summarize_themes_by_dimension": businessAnalysisDimensionFunctions,
+	}
+	var signatures []string
+	for _, name := range allowlist {
+		signatures = append(signatures, functionsByTool[name]...)
+	}
+	return signatures
+}
+
+func copyPostgresFunctionSignatures(signatures []string) []string {
+	out := make([]string, len(signatures))
+	copy(out, signatures)
+	return out
+}
+
+func postgresBusinessPilotScopedColumns(allowlist []string) bool {
+	want := map[string]struct{}{
+		"get_sync_status":              {},
+		"summarize_call_facts":         {},
+		"summarize_calls_by_lifecycle": {},
+		"rank_transcript_backlog":      {},
+	}
+	if len(allowlist) != len(want) {
+		return false
+	}
+	for _, name := range allowlist {
+		if _, ok := want[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func postgresBusinessPilotColumnSelectGrants() []postgres.ColumnSelectGrant {
+	grants := []postgres.ColumnSelectGrant{
+		{Table: "gongctl_schema_migrations", Column: "version"},
+		{Table: "calls", Column: "started_at"},
+		{Table: "calls", Column: "parties_count"},
+		{Table: "users", Column: "user_id"},
+		{Table: "users", Column: "title"},
+		{Table: "transcripts", Column: "segment_count"},
+		{Table: "gongmcp_call_context_objects", Column: "id"},
+		{Table: "gongmcp_call_context_objects", Column: "call_id"},
+		{Table: "gongmcp_call_context_objects", Column: "object_key"},
+		{Table: "gongmcp_call_context_objects", Column: "object_type"},
+		{Table: "gongmcp_call_context_fields", Column: "id"},
+		{Table: "gongmcp_call_context_fields", Column: "call_id"},
+		{Table: "gongmcp_call_context_fields", Column: "object_key"},
+		{Table: "gongmcp_call_context_fields", Column: "field_name"},
+		{Table: "gongmcp_call_context_fields", Column: "field_label"},
+		{Table: "gongmcp_call_context_fields", Column: "field_type"},
+		{Table: "gongmcp_call_context_fields", Column: "field_populated"},
+		{Table: "crm_integrations", Column: "integration_id"},
+		{Table: "crm_schema_objects", Column: "object_type"},
+		{Table: "crm_schema_fields", Column: "field_name"},
+		{Table: "gong_settings", Column: "kind"},
+		{Table: "postgres_read_model_state", Column: "model_name"},
+		{Table: "postgres_read_model_state", Column: "model_version"},
+		{Table: "postgres_read_model_state", Column: "rebuilt_at"},
+		{Table: "postgres_read_model_state", Column: "call_count"},
+		{Table: "postgres_read_model_state", Column: "fact_count"},
+		{Table: "postgres_read_model_state", Column: "missing_fact_call_count"},
+		{Table: "postgres_read_model_state", Column: "orphan_fact_count"},
+		{Table: "postgres_read_model_state", Column: "stale_reason"},
+		{Table: "postgres_read_model_state", Column: "updated_at"},
+	}
+	for _, column := range []string{"id", "scope", "sync_key", "cursor", "from_value", "to_value", "request_context", "status", "started_at", "finished_at", "records_seen", "records_written", "error_text"} {
+		grants = append(grants, postgres.ColumnSelectGrant{Table: "gongmcp_sync_runs", Column: column})
+	}
+	for _, column := range []string{"sync_key", "scope", "cursor", "last_run_id", "last_status", "last_error", "last_success_at", "updated_at"} {
+		grants = append(grants, postgres.ColumnSelectGrant{Table: "gongmcp_sync_state", Column: column})
+	}
+	return grants
 }
 
 type toolSelection struct {

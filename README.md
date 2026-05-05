@@ -589,6 +589,18 @@ surface (`get_sync_status`, `search_calls`, and `search_transcript_segments`).
 Broader Postgres tools require a supported preset such as `business-pilot`,
 `analyst-core`, or `analyst-business-core`, or an explicit
 `GONGMCP_TOOL_ALLOWLIST`; full `analyst` and `all-readonly` remain rejected.
+The default Postgres reader contract preserves the broad `gongmcp_reader`
+service role for compatibility. Operators who create a narrower function-scoped
+role for a specific preset or allowlist can start `gongmcp` with
+`--enforce-tool-scoped-db-grants` or `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`;
+startup then requires exactly the reviewed `gongmcp_*` function grants for the
+selected tool surface and fails closed on extra function grants such as
+admin-only `missing_transcripts` helpers outside `business-pilot`. For the
+`business-pilot` preset, startup also validates a first table/column grant
+boundary that avoids direct `calls.call_id`, `calls.title`,
+`call_facts.call_id`, and `call_facts.title` reads. The scoped reader URL is
+still a service secret because selected functions and sanitized views can expose
+minimized call metadata, timings, counts, and tenant terminology.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),
@@ -693,7 +705,17 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `compare_lifecycle_crm_fields` returns aggregate CRM field-population differences between two lifecycle buckets for the reviewed `Opportunity` object type. The Postgres reader function returns only object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta; it omits call IDs, call titles, CRM object IDs/names/keys, raw CRM values, raw JSON, raw hashes, and transcript text, rejects unreviewed object types, and excludes governance-suppressed calls inside SQL. This Postgres slice is development-branch work after `v0.3.3` until a tagged release includes it.
 `search_transcripts_by_crm_context` returns CRM-constrained transcript snippets. MCP output redacts call IDs, call titles, speaker IDs, CRM object IDs/names, and object keys. The Postgres reader function filters governance-suppressed calls inside SQL and returns only started time, object type, matching-object count, segment timing, and snippet; it omits call IDs, call titles, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, and full transcript text.
 `missing_transcripts` returns direct missing-transcript call references for admin transcript-backfill workflows. Postgres supports the reviewed filter set: date range, lifecycle bucket, scope, system, direction, CRM object type, and CRM object ID; `crm_object_id` requires `crm_object_type` to avoid cross-object probing. It returns call IDs, titles, and start times, but not raw cached JSON, transcript text, CRM field values, raw JSON, or raw hashes. Use explicit allowlists; do not put it in business-user presets.
-The Postgres reader role can execute the reviewed bounded reader functions, so treat the reader database URL as a service secret rather than a general-purpose SQL login; direct table reads of raw CRM values, object names, and transcript text remain denied.
+The generic Postgres reader role can execute the reviewed bounded reader
+functions, so treat that database URL as a service secret rather than a
+general-purpose SQL login; direct table reads of raw CRM values, object names,
+and transcript text remain denied. For narrower deployments, use a tool-scoped
+reader role plus `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`; startup rejects a
+role that can currently execute functions outside the selected preset/allowlist.
+For `business-pilot`, startup also validates the first reviewed table/column
+boundary and rejects direct `calls.call_id`, `calls.title`,
+`call_facts.call_id`, and `call_facts.title` grants. The scoped reader URL
+remains a service secret because selected functions and sanitized views can
+still expose minimized call metadata, timings, counts, and tenant terminology.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 

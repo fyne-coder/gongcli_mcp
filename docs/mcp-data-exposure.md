@@ -191,6 +191,16 @@ What the conservative defaults give you:
 - Pilot deployments are expected to layer `--tool-preset business-pilot` or a
   custom allowlist on top so business users see only the approved subset rather
   than the full catalog.
+- Postgres deployments can keep the generic `gongmcp_reader` service role for
+  compatibility, or use a narrower tool-scoped reader role with
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. Tool-scoped mode rejects roles
+  that can currently execute extra `gongmcp_*` functions outside the selected
+  preset/allowlist, which reduces direct-SQL bypass risk for admin-only helper
+  functions. For `business-pilot`, startup also validates a first table/column
+  boundary that denies direct reads of `calls.call_id`, `calls.title`,
+  `call_facts.call_id`, and `call_facts.title`. The scoped reader URL remains
+  a service secret because selected functions and sanitized views can still
+  expose minimized call metadata, timings, counts, and tenant terminology.
 - Company-managed `gongctl` jobs are expected to run with `GONGCTL_RESTRICTED=1`
   so high-risk raw API, raw call JSON, transcript export, and extended
   CRM-context flows fail closed unless the operator passes

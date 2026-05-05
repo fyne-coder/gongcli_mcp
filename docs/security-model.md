@@ -32,7 +32,7 @@ non-sensitive.
 | Gong API boundary | `internal/gong`, `internal/auth`, `gongctl sync ...`, `gongctl calls ...`, `gongctl api raw ...` | Live Gong API responses, credentials in process memory | HTTPS to Gong, documented rate limiting, operator-supplied credentials |
 | Local operator boundary | shell, `.env`, exported env vars, CLI stdout/stderr, local files | Full tenant data when the operator runs live or export commands | User/workstation access control, keep secrets out of git, keep outputs outside the repo |
 | Local data-store boundary | SQLite cache, transcript JSON files, tenant profile YAML | Cached call metadata, CRM context, transcript snippets/full transcripts, settings inventory, profile state | External data directory, read-only mount for MCP, repo ignores local data as a safety net |
-| MCP boundary | `gongmcp`, `internal/mcp`, connected host app/model | Read-only SQLite query results only | SQLite opened read-only, no live Gong credentials required, no raw API passthrough, no write tools, optional bearer auth for HTTP |
+| MCP boundary | `gongmcp`, `internal/mcp`, connected host app/model | Read-only SQLite or Postgres cache query results | SQLite opened read-only or Postgres opened with reader-role grants, no live Gong credentials required, no raw API passthrough, no write tools, optional bearer auth for HTTP |
 | Public source boundary | repo source, docs, tests, examples | Sanitized code and docs only | No live tenant names, transcripts, IDs, secrets, or private local paths in tracked files |
 
 ## Credential Flow
@@ -125,6 +125,18 @@ Implementation controls on the CLI side:
   The reader role also has execute-only access to selected metadata helpers,
   including retention purge planning counts; treat those count-only diagnostics
   as tenant operational metadata.
+- For deployments that do not want a broad generic reader service credential,
+  operators can provision a function-scoped Postgres reader role and run
+  `gongmcp` with `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
+  `--enforce-tool-scoped-db-grants`. In that mode startup validates the selected
+  preset or allowlist against the role's `gongmcp_*` function grants, failing
+  closed when required functions are missing or when extra functions outside
+  the selected surface are executable. For `business-pilot`, startup also
+  validates a first table/column boundary that denies direct reads of
+  `calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`.
+  The scoped reader URL remains a service secret because selected functions and
+  sanitized views can still expose minimized call metadata, timings, counts,
+  and tenant terminology.
 - MCP profile tools return tenant business terminology, lifecycle labels,
   methodology aliases, and validation warning text. They are intentionally not
   in the default Postgres `business-pilot` or `operator-smoke` presets; expose

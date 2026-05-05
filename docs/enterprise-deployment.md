@@ -129,6 +129,14 @@ flowchart LR
   `DATABASE_URL`.
 - `gongmcp` uses a read-only database URL and must not receive Gong
   credentials.
+- The compatibility `gongmcp_reader` role is still supported as a service
+  secret. For business-user deployments that need a narrower SQL credential,
+  provision a function-scoped reader role and set
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`; `gongmcp` will reject missing
+  selected-surface function grants and reject extra `gongmcp_*` function grants
+  outside the selected preset or allowlist. The `business-pilot` preset also
+  has a first reviewed table/column grant boundary; other presets still need
+  per-surface maps or governed views/RLS before broad customer role automation.
 - Operators can check or repair Postgres builtin fact readiness with
   `gongctl sync read-model` and `gongctl sync read-model --rebuild` using a
   writable database URL. MCP remains read-only and will not rebuild stale facts.

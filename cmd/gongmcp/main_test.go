@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -100,6 +101,105 @@ func TestPostgresToolAllowlistAcceptsMissingTranscripts(t *testing.T) {
 	}
 	if !reflect.DeepEqual(allowlist, []string{"missing_transcripts"}) {
 		t.Fatalf("allowlist=%v want missing_transcripts", allowlist)
+	}
+}
+
+func TestPostgresReadOnlyOptionsForBusinessPilotAllowlist(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("business-pilot")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "business-pilot")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	options := postgresReadOnlyOptionsForAllowlist(allowlist)
+	if !options.EnforceAllowedFunctionBoundary {
+		t.Fatal("expected tool-scoped grant enforcement")
+	}
+	for _, signature := range options.AllowedFunctionSignatures {
+		if strings.Contains(signature, "gongmcp_missing_transcripts") {
+			t.Fatalf("business-pilot scoped functions included admin missing_transcripts function: %v", options.AllowedFunctionSignatures)
+		}
+	}
+	if !options.EnforceAllowedColumnBoundary {
+		t.Fatal("expected business-pilot scoped column grant enforcement")
+	}
+	for _, grant := range options.AllowedColumnSelectGrants {
+		if grant.Table == "calls" && (grant.Column == "call_id" || grant.Column == "title") {
+			t.Fatalf("business-pilot scoped columns included direct calls.%s grant: %v", grant.Column, options.AllowedColumnSelectGrants)
+		}
+		if grant.Table == "call_facts" && (grant.Column == "call_id" || grant.Column == "title") {
+			t.Fatalf("business-pilot scoped columns included direct call_facts.%s grant: %v", grant.Column, options.AllowedColumnSelectGrants)
+		}
+	}
+	for _, want := range []postgres.ColumnSelectGrant{
+		{Table: "gongctl_schema_migrations", Column: "version"},
+		{Table: "calls", Column: "started_at"},
+		{Table: "postgres_read_model_state", Column: "model_name"},
+		{Table: "gongmcp_sync_runs", Column: "status"},
+		{Table: "gongmcp_sync_state", Column: "sync_key"},
+	} {
+		if !containsColumnSelectGrant(options.RequiredColumnSelectGrants, want) {
+			t.Fatalf("business-pilot required columns=%v missing %s.%s", options.RequiredColumnSelectGrants, want.Table, want.Column)
+		}
+	}
+	for _, want := range []string{
+		"public.gongmcp_active_business_profile()",
+		"public.gongmcp_profile_call_fact_cache(bigint, text)",
+		"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
+		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_profile_data_fingerprint()",
+		"public.gongmcp_scorecard_activity_totals()",
+	} {
+		if !containsString(options.RequiredFunctionSignatures, want) {
+			t.Fatalf("business-pilot required functions=%v missing %s", options.RequiredFunctionSignatures, want)
+		}
+	}
+}
+
+func TestPostgresReadOnlyOptionsForMissingTranscriptsAllowlist(t *testing.T) {
+	options := postgresReadOnlyOptionsForAllowlist([]string{"missing_transcripts"})
+	want := "public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)"
+	if !containsString(options.RequiredFunctionSignatures, want) {
+		t.Fatalf("missing_transcripts required functions=%v missing %s", options.RequiredFunctionSignatures, want)
+	}
+	if !reflect.DeepEqual(options.RequiredFunctionSignatures, options.AllowedFunctionSignatures) {
+		t.Fatalf("required=%v allowed=%v", options.RequiredFunctionSignatures, options.AllowedFunctionSignatures)
+	}
+}
+
+func TestPostgresReadOnlyOptionsAllowFunctionFreeAllowlist(t *testing.T) {
+	options := postgresReadOnlyOptionsForAllowlist([]string{"search_calls", "get_call"})
+	if !options.EnforceAllowedFunctionBoundary {
+		t.Fatal("expected tool-scoped grant enforcement")
+	}
+	if len(options.RequiredFunctionSignatures) != 0 {
+		t.Fatalf("function-free allowlist required functions=%v, want none", options.RequiredFunctionSignatures)
+	}
+	if len(options.AllowedFunctionSignatures) != 0 {
+		t.Fatalf("function-free allowlist allowed functions=%v, want none", options.AllowedFunctionSignatures)
+	}
+}
+
+func TestPostgresReadOnlyOptionsForFilteredTranscriptSearchIncludesCallFactFunction(t *testing.T) {
+	options := postgresReadOnlyOptionsForAllowlist([]string{"search_transcript_segments"})
+	want := "public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)"
+	if !containsString(options.RequiredFunctionSignatures, want) {
+		t.Fatalf("search_transcript_segments required functions=%v missing %s", options.RequiredFunctionSignatures, want)
+	}
+}
+
+func TestPostgresReadOnlyOptionsForBusinessAnalysisToolsIncludeCoreFunctions(t *testing.T) {
+	options := postgresReadOnlyOptionsForAllowlist([]string{"extract_theme_quotes"})
+	for _, want := range []string{
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+	} {
+		if !containsString(options.RequiredFunctionSignatures, want) {
+			t.Fatalf("extract_theme_quotes required functions=%v missing %s", options.RequiredFunctionSignatures, want)
+		}
 	}
 }
 
@@ -731,6 +831,15 @@ func TestResolveLimitPolicyRejectsInvalidValues(t *testing.T) {
 func containsString(values []string, needle string) bool {
 	for _, value := range values {
 		if value == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func containsColumnSelectGrant(values []postgres.ColumnSelectGrant, needle postgres.ColumnSelectGrant) bool {
+	for _, value := range values {
+		if value.Table == needle.Table && value.Column == needle.Column {
 			return true
 		}
 	}
