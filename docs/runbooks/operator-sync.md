@@ -194,10 +194,12 @@ Notes:
   profile-cache refresh, purge, reader status, and MCP smoke. Treat that as a
   repo-local release evidence for shipped writer-lock behavior at the
   configured synthetic size, not a benchmark or customer capacity proof.
-- For profile-backed backlog and transcript-search pre-rollout validation,
+- For profile-backed backlog, analyst presence dimensions, and
+  transcript-search pre-rollout validation,
   `scripts/postgres-capacity-drill.sh` runs the Postgres load smoke at a
   bounded synthetic size, validates the generated profile-cache,
-  profile-backlog, scoped `business-pilot` MCP, profile EXPLAIN, and
+  profile-backlog, scoped `business-pilot` MCP, scoped `analyst` dimension MCP,
+  profile EXPLAIN, analyst persona/loss-reason dimension EXPLAIN, and
   transcript-search EXPLAIN artifacts directly, and writes a sanitized
   `capacity-summary.json`. Archive `capacity-summary.json` plus only the
   generated files named in its `evidence` map after the drill and load-smoke

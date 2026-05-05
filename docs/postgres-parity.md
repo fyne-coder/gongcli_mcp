@@ -29,7 +29,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Call facts | `call_facts` view | foundation table added | Maintained indexed facts table for grouping/filtering | must match at output layer | Phase 1 | SQLite-vs-Postgres call-fact aggregate tests |
 | Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2c for builtin facts: migration/write refresh plus trigger-maintained readiness counters | Backfill on upgrade, refresh on writes, cheap version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `TestPostgresReadModelReadinessRejectsRebuildInProgressState`; `gongctl sync read-model` |
 | Operator read-model check/rebuild | SQLite profile cache readiness/rebuild is profile-aware | complete for Postgres builtin facts via `gongctl sync read-model [--rebuild]` | Writable CLI can check/rebuild; read-only MCP never rebuilds | postgres-native equivalent | Phase 2 | `GONG_DATABASE_URL=... gongctl sync read-model --rebuild` |
-| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke, 1,200-call contention smoke, bounded over-cap profile-cache helper-call EXPLAIN evidence, and a synthetic capacity-drill wrapper | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, post-contention row/profile-cache correctness, profile-backed helper-call plus equivalent index-probe evidence, and a sanitized capacity-drill summary at an explicit synthetic size | postgres-native equivalent | Phase 2/8b/9s/9t | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh`; `./scripts/postgres-capacity-drill.sh` |
+| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call serial smoke, 1,200-call contention smoke, bounded over-cap profile-cache helper-call EXPLAIN evidence, analyst presence-dimension EXPLAIN evidence, and a synthetic capacity-drill wrapper | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, stale startup denial, advisory-lock samples, post-contention row/profile-cache correctness, profile-backed helper-call plus equivalent index-probe evidence, analyst persona/loss-reason dimension evidence, and a sanitized capacity-drill summary at an explicit synthetic size | postgres-native equivalent | Phase 2/8b/9s/9t/9w | `./scripts/postgres-load-smoke.sh`; `./scripts/postgres-contention-smoke.sh`; `./scripts/postgres-capacity-drill.sh` |
 | Transcript FTS | SQLite FTS5 | Postgres `tsvector`/GIN with execute-only snippet function | Equivalent bounded search semantics, documented ranking differences | postgres-native equivalent | Phase 2 | synthetic search comparison tests |
 | Call search | SQLite filters over calls/context | complete for normalized CRM object and builtin call-fact filters | Match safe filters or document intentional exclusions | must match | Phase 2 | `TestPostgresSearchCallsRawSafeFiltersMatchSQLite`; `scripts/postgres-smoke.sh` |
 | MCP `get_call` | SQLite minimized call detail | complete for Postgres normalized context rows | Same minimized JSON contract over Postgres MCP | must match | Phase 2 | `TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext`; `scripts/postgres-smoke.sh` |
@@ -41,6 +41,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Business-pilot scoped grant reconciliation | Manual SQL apply/stale grant repair | complete for existing Postgres business-pilot scoped roles | `gongctl mcp postgres-reader-apply --preset business-pilot` dry-runs the reviewed SQL by default and applies it only with `--apply` plus a writable `GONG_DATABASE_URL` / `DATABASE_URL`; role credentials remain external, output never includes database URLs or passwords, and smoke proves stale grants are repaired while scoped startup and direct-denial checks still pass | postgres-native operator lifecycle | Phase 9p | `TestMCPPostgresReaderApplySuccessJSONOmitsURL`; `scripts/postgres-smoke.sh` |
 | Business-pilot sanitized profile-cache grants | SQLite filesystem read-only boundary | complete for first Postgres business-pilot scoped role | Exact `business-pilot` scoped roles grant `gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)` instead of the identifier-bearing or unbounded sanitized profile-cache helpers; direct SQL through the scoped role is denied on both unbounded helpers and receives blank call IDs/titles from the capped helper | postgres-native hardening | Phase 9m/9o | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `TestBuildScopedReaderGrantSQLBusinessPilot`; `scripts/postgres-smoke.sh` |
 | Business-pilot scoped profile aggregate helpers | SQLite profile-cache aggregation | complete for exact Postgres business-pilot scoped role | Exact `business-pilot` scoped role grants sanitized lifecycle-summary and transcript-backlog helpers so profile aggregate MCP tools aggregate/filter in SQL before applying output limits instead of aggregating over the 1,000-row direct cache helper cap; bounded load smoke captures EXPLAIN for sanitized helper calls plus an equivalent profile-cache index probe and proves high-priority backlog rows outside the direct cap are still returned redacted | postgres-native hardening | Phase 9q/9s | `TestPostgresReadOnlyOptionsForBusinessPilotAllowlist`; `scripts/postgres-smoke.sh`; `scripts/postgres-load-smoke.sh` |
+| Analyst presence dimensions | SQLite dimension helpers derive from cached JSON/context at read time | complete for materialized Postgres presence buckets | `call_facts` stores non-sensitive `participant_title_present` and `loss_reason_present` booleans; `gongmcp_business_analysis_dimension` uses those booleans for persona/title and loss-reason buckets, while raw title/loss-reason strings remain absent from analyst outputs | postgres-native hardening | Phase 9w | `TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice`; `scripts/postgres-load-smoke.sh` |
 | `operator-smoke` MCP preset | SQLite health/search smoke | complete for Postgres core validation | Includes `get_sync_status`, `search_calls`, `search_transcript_segments`, `get_call`, and `rank_transcript_backlog` | must match | Phase 2 | MCP tools/list and tools/call smoke |
 | `governance-search` MCP preset | SQLite governed search | complete for narrowed Postgres search slice | Postgres loads a prepared governance policy through the read-only role and narrows the preset to supported search tools | postgres-native equivalent | Phase 4 | governed synthetic smoke |
 | `analyst-core` MCP preset | Postgres-specific starter surface | complete for core/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and aggregate scorecard activity tools | Exposes only implemented Postgres analyst starter tools and keeps raw CRM values/raw settings payloads/raw scorecard activity payloads out of reader output | intentionally narrower than SQLite `analyst` | Phase 5a/5c/5d/5e | analyst-core tools/list, CRM inventory, cached schema/settings inventory, scorecard inventory, and scorecard activity smoke |
@@ -151,6 +152,11 @@ Postgres parity should be added deliberately, with each surface classified as
     target, validates generated profile/transcript artifacts directly, and
     writes a sanitized `capacity-summary.json` without claiming production
     capacity.
+29. **Phase 9w analyst presence dimension scale hardening**: materialize
+    participant-title and loss-reason presence booleans in `call_facts`, route
+    persona/loss-reason dimension buckets through those booleans, and extend
+    the bounded load smoke with analyst scoped-reader MCP plus direct EXPLAIN
+    evidence for those dimension functions.
 
 ## Phase 9l Risk Status
 
@@ -240,6 +246,24 @@ Postgres parity should be added deliberately, with each surface classified as
   but it does not replace deployment-owned capacity testing against the target
   Postgres platform, concurrency, retention, backup/PITR, monitoring, and
   maintenance-window assumptions.
+
+## Phase 9w Risk Status
+
+- Closed for analyst presence dimension query shape: Postgres now materializes
+  `participant_title_present` and `loss_reason_present` in `call_facts`, and
+  the persona/title plus loss-reason dimension buckets use those booleans
+  instead of recomputing presence from raw party JSON or CRM field values.
+- Covered for bounded synthetic evidence: `scripts/postgres-load-smoke.sh`
+  seeds synthetic participant-title and loss-reason coverage, validates the
+  materialized counts, captures direct `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
+  artifacts for analyst persona and loss-reason dimension calls, and runs
+  `summarize_themes_by_persona`, `rank_personas_by_insight_quality`, and
+  `summarize_loss_reasons_by_theme` through a scoped analyst reader role.
+- Remaining risk after 9w: EXPLAIN output is function-boundary evidence over a
+  bounded synthetic data set, not a production customer-capacity claim.
+  Participant-title text filtering is now presence-backed in the Postgres
+  aggregate path; exact title-text filtering remains a follow-up if customers
+  need it without raw JSON/context scans.
 
 ## Phase 9m/9n/9o Risk Status
 

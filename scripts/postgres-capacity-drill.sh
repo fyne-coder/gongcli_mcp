@@ -12,6 +12,7 @@ PROFILE_ROWS="${GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS:-$CALL_COUNT}"
 export GONGCTL_POSTGRES_PASSWORD="${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}"
 export GONGMCP_READER_PASSWORD="${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}"
 export GONGMCP_BUSINESS_PILOT_READER_PASSWORD="${GONGMCP_BUSINESS_PILOT_READER_PASSWORD:-gongmcp_business_pilot_reader_dev_password}"
+export GONGMCP_ANALYST_READER_PASSWORD="${GONGMCP_ANALYST_READER_PASSWORD:-gongmcp_analyst_reader_dev_password}"
 
 case "$PROJECT" in
   ''|*[!a-zA-Z0-9_-]*)
@@ -145,13 +146,17 @@ end_seconds = int(sys.argv[7])
 
 required_files = {
     "load_summary": "summary.json",
+    "load_counts": "counts.txt",
     "profile_counts": "profile-cache-counts.txt",
     "profile_backlog": "profile-backlog-sanitized-rows.txt",
     "profile_mcp": "business-pilot-profile-load.jsonl",
+    "analyst_mcp": "analyst-dimensions.jsonl",
     "profile_summary_explain": "explain-profile-lifecycle-summary.json",
     "profile_backlog_explain": "explain-profile-transcript-backlog.json",
     "profile_backlog_dated_explain": "explain-profile-transcript-backlog-dated.json",
     "profile_backlog_index_explain": "explain-profile-transcript-backlog-index-probe.json",
+    "analyst_persona_dimension_explain": "explain-analyst-dimension-persona.json",
+    "analyst_loss_reason_dimension_explain": "explain-analyst-dimension-loss-reason.json",
     "transcript_search_explain": "explain-transcript-search.json",
 }
 paths = {name: load_dir / rel for name, rel in required_files.items()}
@@ -180,6 +185,7 @@ def parse_counts(path: Path) -> dict[str, int]:
         out[key] = int(value)
     return out
 
+load_counts = parse_counts(paths["load_counts"])
 profile_counts = parse_counts(paths["profile_counts"])
 profile_backlog = parse_counts(paths["profile_backlog"])
 checks = []
@@ -196,6 +202,8 @@ require("profile_lifecycle_summary_full_count", profile_counts.get("profile_life
 require("profile_backlog_ranked_rows_25", profile_backlog.get("ranked_rows") == 25)
 require("profile_backlog_identifier_rows_0", profile_backlog.get("identifier_rows") == 0)
 require("profile_backlog_closed_won_rows_25", profile_backlog.get("closed_won_rows") == 25)
+require("participant_title_presence_rows", load_counts.get("participant_title_present", 0) > 0)
+require("loss_reason_presence_rows", load_counts.get("loss_reason_present", 0) > 0)
 
 def walk_plan_nodes(plan: dict):
     yield plan
@@ -221,6 +229,8 @@ plans = {
         "profile_backlog_explain",
         "profile_backlog_dated_explain",
         "profile_backlog_index_explain",
+        "analyst_persona_dimension_explain",
+        "analyst_loss_reason_dimension_explain",
         "transcript_search_explain",
     )
 }
@@ -257,15 +267,43 @@ require("profile_mcp_backlog_uses_profile_source", profile_payloads.get(4, {}).g
 require("profile_mcp_redacts_profile_call_ids", "profile-load-call-" not in profile_mcp_text)
 require("profile_mcp_redacts_profile_titles", "Synthetic profile load call" not in profile_mcp_text)
 
+analyst_mcp_text = paths["analyst_mcp"].read_text(encoding="utf-8")
+analyst_payloads = {}
+for raw in analyst_mcp_text.splitlines():
+    if not raw.strip():
+        continue
+    message = json.loads(raw)
+    request_id = message.get("id")
+    if request_id not in {3, 4, 5}:
+        continue
+    result = message.get("result") or {}
+    content = result.get("content") or []
+    if not content:
+        raise SystemExit(f"analyst MCP id {request_id} missing content")
+    analyst_payloads[request_id] = json.loads(content[0]["text"])
+
+require("analyst_mcp_persona_payload", 3 in analyst_payloads)
+require("analyst_mcp_persona_rank_payload", 4 in analyst_payloads)
+require("analyst_mcp_loss_reason_payload", 5 in analyst_payloads)
+require("analyst_mcp_has_participant_title_presence", "participant_title_present" in analyst_mcp_text)
+require("analyst_mcp_has_loss_reason_presence", "loss_reason_present" in analyst_mcp_text)
+require("analyst_mcp_redacts_call_ids", "load-call-" not in analyst_mcp_text)
+require("analyst_mcp_redacts_call_titles", "Synthetic load call" not in analyst_mcp_text)
+
 forbidden_public_markers = [
     ("url_scheme", "postgres://"),
     ("writer_secret", "gongctl_dev_password"),
     ("reader_secret", "gongmcp_reader_dev_password"),
     ("pilot_secret", "gongmcp_business_pilot_reader_dev_password"),
+    ("analyst_secret", "gongmcp_analyst_reader_dev_password"),
     ("raw_blob_key", "raw_json"),
     ("crm_blob_key", "crmObjects"),
     ("profile_id_pattern", "profile-load-call-"),
     ("profile_title_pattern", "Synthetic profile load call"),
+    ("analyst_title_pattern", "Synthetic load buyer title"),
+    ("analyst_loss_reason_pattern", "Synthetic load loss reason"),
+    ("analyst_contact_pattern", "synthetic-load-contact-"),
+    ("analyst_opp_pattern", "synthetic-load-opp-"),
     ("transcript_body_phrase", "This synthetic segment validates"),
     ("crm_context_phrase", "Renewal implementation evidence"),
 ]
@@ -273,6 +311,7 @@ for env_name in (
     "GONGCTL_POSTGRES_PASSWORD",
     "GONGMCP_READER_PASSWORD",
     "GONGMCP_BUSINESS_PILOT_READER_PASSWORD",
+    "GONGMCP_ANALYST_READER_PASSWORD",
 ):
     value = os.environ.get(env_name, "")
     if value:
@@ -300,6 +339,7 @@ capacity_summary = {
         "decision": load_summary.get("decision"),
     },
     "profile_counts": profile_counts,
+    "load_counts": load_counts,
     "profile_backlog": profile_backlog,
     "evidence": {name: str(path.relative_to(artifact_dir)) for name, path in archive_paths.items()},
     "evidence_files": {name: evidence_record(path) for name, path in archive_paths.items()},
