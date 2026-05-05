@@ -7,6 +7,7 @@ COMPOSE_FILE="$ROOT/docker-compose.postgres.yml"
 PROJECT="${GONGCTL_POSTGRES_LOAD_COMPOSE_PROJECT:-gongctl-postgres-load-smoke}"
 PORT="${GONGCTL_POSTGRES_LOAD_PORT:-55433}"
 CALL_COUNT="${GONGCTL_POSTGRES_LOAD_CALLS:-750}"
+PROFILE_CACHE_COUNT="${GONGCTL_POSTGRES_LOAD_PROFILE_CACHE_ROWS:-$CALL_COUNT}"
 case "$CALL_COUNT" in
   ''|*[!0-9]*)
     echo "GONGCTL_POSTGRES_LOAD_CALLS must be an integer" >&2
@@ -16,6 +17,15 @@ esac
 if [ "$CALL_COUNT" -lt 100 ]; then
   echo "GONGCTL_POSTGRES_LOAD_CALLS must be at least 100 for fixed probe call coverage" >&2
   exit 1
+fi
+case "$PROFILE_CACHE_COUNT" in
+  ''|*[!0-9]*)
+    echo "GONGCTL_POSTGRES_LOAD_PROFILE_CACHE_ROWS must be an integer" >&2
+    exit 1
+    ;;
+esac
+if [ "$PROFILE_CACHE_COUNT" -lt 1001 ]; then
+  PROFILE_CACHE_COUNT=1500
 fi
 export GONGCTL_POSTGRES_PORT="$PORT"
 export GONGCTL_POSTGRES_PASSWORD="${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_password}"
@@ -34,6 +44,12 @@ EXPLAIN_SEARCH_CALLS_OUT="$ARTIFACT_DIR/explain-search-calls.json"
 EXPLAIN_GET_CALL_OUT="$ARTIFACT_DIR/explain-get-call.json"
 EXPLAIN_TRANSCRIPT_OUT="$ARTIFACT_DIR/explain-transcript-search.json"
 EXPLAIN_BUSINESS_OUT="$ARTIFACT_DIR/explain-business-pilot.json"
+PROFILE_COUNTS_OUT="$ARTIFACT_DIR/profile-cache-counts.txt"
+PROFILE_BACKLOG_ROWS_OUT="$ARTIFACT_DIR/profile-backlog-sanitized-rows.txt"
+EXPLAIN_PROFILE_SUMMARY_OUT="$ARTIFACT_DIR/explain-profile-lifecycle-summary.json"
+EXPLAIN_PROFILE_BACKLOG_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog.json"
+EXPLAIN_PROFILE_BACKLOG_DATED_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog-dated.json"
+EXPLAIN_PROFILE_BACKLOG_INDEX_OUT="$ARTIFACT_DIR/explain-profile-transcript-backlog-index-probe.json"
 MCP_OUT="$ARTIFACT_DIR/mcp.jsonl"
 OPERATOR_SMOKE_OUT="$ARTIFACT_DIR/operator-smoke.jsonl"
 BUSINESS_PILOT_OUT="$ARTIFACT_DIR/business-pilot.jsonl"
@@ -259,6 +275,130 @@ grep -q "lifecycle_unknown|0" "$COUNTS_OUT"
 grep -q "read_model_missing|0" "$COUNTS_OUT"
 grep -q "read_model_orphan|0" "$COUNTS_OUT"
 
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v profile_cache_count="$PROFILE_CACHE_COUNT" <<'SQL'
+DELETE FROM profile_call_fact_cache WHERE profile_id = 9001;
+DELETE FROM profile_call_fact_cache_meta WHERE profile_id = 9001;
+DELETE FROM profile_lifecycle_rule WHERE profile_id = 9001;
+DELETE FROM profile_meta WHERE id = 9001;
+
+INSERT INTO profile_meta(id, name, version, source_path, source_sha256, canonical_sha256, imported_at, imported_by, is_active, raw_yaml, canonical_json)
+VALUES(
+	9001,
+	'Synthetic load profile',
+	1,
+	'',
+	'synthetic-load-profile-source-sha',
+	'synthetic-load-profile-sha',
+	'2026-03-01T00:00:00Z',
+	'synthetic-load',
+	true,
+	convert_to('name: Synthetic load profile', 'UTF8'),
+	'{"name":"Synthetic load profile","synthetic":true}'::jsonb
+);
+
+INSERT INTO profile_lifecycle_rule(profile_id, bucket, ordinal, label, description, rule_index, rule_json)
+VALUES
+	(9001, 'closed_won', 10, 'Closed Won', 'Synthetic closed won load bucket', 0, '{}'::jsonb),
+	(9001, 'active_sales_pipeline', 100, 'Active Sales Pipeline', 'Synthetic active pipeline load bucket', 0, '{}'::jsonb),
+	(9001, 'renewal', 200, 'Renewal', 'Synthetic renewal load bucket', 0, '{}'::jsonb),
+	(9001, 'unknown', 900, 'Unknown', 'Synthetic unknown load bucket', 0, '{}'::jsonb);
+
+WITH synthetic AS (
+	SELECT gs AS n,
+	       'profile-load-call-' || lpad(gs::text, 6, '0') AS call_id,
+	       to_char(timestamp '2026-03-01 00:00:00' + (gs * interval '1 minute'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS started_at,
+	       CASE
+	         WHEN gs <= 50 THEN 'closed_won'
+	         WHEN gs % 3 = 0 THEN 'active_sales_pipeline'
+	         WHEN gs % 3 = 1 THEN 'renewal'
+	         ELSE 'unknown'
+	       END AS bucket
+	  FROM generate_series(1, :profile_cache_count) AS gs
+)
+INSERT INTO profile_call_fact_cache(
+	profile_id,
+	canonical_sha256,
+	call_id,
+	title,
+	started_at,
+	duration_seconds,
+	system,
+	direction,
+	scope,
+	purpose,
+	calendar_event_present,
+	transcript_present,
+	lifecycle_bucket,
+	lifecycle_confidence,
+	lifecycle_reason,
+	evidence_fields_json,
+	deal_count,
+	account_count,
+	field_values_json
+)
+SELECT 9001,
+       'synthetic-load-profile-sha',
+       call_id,
+       'Synthetic profile load call ' || n,
+       started_at,
+       CASE WHEN n <= 50 THEN 3600 ELSE 600 + ((n % 6) * 300) END,
+       CASE WHEN n % 2 = 0 THEN 'Zoom' ELSE 'Gong Connect' END,
+       CASE WHEN n <= 50 OR n % 3 = 0 THEN 'Conference' ELSE 'Outbound' END,
+       CASE WHEN n % 5 = 0 THEN 'Internal' ELSE 'External' END,
+       'Synthetic profile load validation',
+       n % 7 = 0,
+       n > 50 AND n % 12 = 0,
+       bucket,
+       CASE WHEN n <= 50 THEN 'high' WHEN n % 3 = 0 THEN 'medium' ELSE 'low' END,
+       'Synthetic profile load reason',
+       '["synthetic_profile_load"]'::jsonb,
+       CASE WHEN n <= 50 OR n % 2 = 0 THEN 1 ELSE 0 END,
+       CASE WHEN n % 3 = 0 THEN 1 ELSE 0 END,
+       '{}'::jsonb
+  FROM synthetic;
+
+INSERT INTO profile_call_fact_cache_meta(profile_id, canonical_sha256, data_fingerprint, built_at, call_count)
+VALUES(9001, 'synthetic-load-profile-sha', 'synthetic-load-profile-fingerprint', '2026-03-01T00:00:00Z', :profile_cache_count);
+SQL
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "
+SELECT 'profile_cache_rows', COUNT(*) FROM profile_call_fact_cache WHERE profile_id = 9001
+UNION ALL SELECT 'profile_cache_missing_transcripts', COUNT(*) FROM profile_call_fact_cache WHERE profile_id = 9001 AND transcript_present = false
+UNION ALL SELECT 'profile_cache_direct_cap_rows', COUNT(*) FROM gongmcp_profile_call_fact_cache_sanitized_limited(9001, 'synthetic-load-profile-sha', 1000)
+UNION ALL SELECT 'profile_cache_direct_cap_closed_won_rows', COUNT(*) FROM gongmcp_profile_call_fact_cache_sanitized_limited(9001, 'synthetic-load-profile-sha', 1000) WHERE lifecycle_bucket = 'closed_won'
+UNION ALL SELECT 'profile_lifecycle_summary_rows', COUNT(*) FROM gongmcp_profile_lifecycle_summary_sanitized(9001, 'synthetic-load-profile-sha', '')
+UNION ALL SELECT 'profile_lifecycle_summary_call_count', COALESCE(SUM(call_count), 0) FROM gongmcp_profile_lifecycle_summary_sanitized(9001, 'synthetic-load-profile-sha', '')
+UNION ALL SELECT 'profile_lifecycle_summary_missing_count', COALESCE(SUM(missing_transcript_count), 0) FROM gongmcp_profile_lifecycle_summary_sanitized(9001, 'synthetic-load-profile-sha', '')
+ORDER BY 1" >"$PROFILE_COUNTS_OUT"
+grep -q "profile_cache_rows|$PROFILE_CACHE_COUNT" "$PROFILE_COUNTS_OUT"
+grep -Eq "profile_cache_missing_transcripts\\|[1-9][0-9][0-9][0-9]*" "$PROFILE_COUNTS_OUT"
+grep -q "profile_cache_direct_cap_rows|1000" "$PROFILE_COUNTS_OUT"
+grep -q "profile_cache_direct_cap_closed_won_rows|0" "$PROFILE_COUNTS_OUT"
+grep -Eq "profile_lifecycle_summary_rows\\|[1-9][0-9]*" "$PROFILE_COUNTS_OUT"
+grep -q "profile_lifecycle_summary_call_count|$PROFILE_CACHE_COUNT" "$PROFILE_COUNTS_OUT"
+grep -Eq "profile_lifecycle_summary_missing_count\\|[1-9][0-9][0-9][0-9]*" "$PROFILE_COUNTS_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -F '|' -c "
+SELECT 'ranked_rows', COUNT(*)
+  FROM gongmcp_profile_transcript_backlog_sanitized(9001, 'synthetic-load-profile-sha', '', '2026-03-01', '2026-12-31', '', '', '', 25)
+ WHERE call_id = ''
+   AND title = ''
+   AND started_at <> ''
+   AND bucket <> ''
+   AND priority_score > 0
+UNION ALL
+SELECT 'identifier_rows', COUNT(*)
+  FROM gongmcp_profile_transcript_backlog_sanitized(9001, 'synthetic-load-profile-sha', '', '2026-03-01', '2026-12-31', '', '', '', 25)
+ WHERE call_id <> '' OR title <> ''
+UNION ALL
+SELECT 'closed_won_rows', COUNT(*)
+  FROM gongmcp_profile_transcript_backlog_sanitized(9001, 'synthetic-load-profile-sha', '', '2026-03-01', '2026-12-31', '', '', '', 25)
+ WHERE bucket = 'closed_won'
+ORDER BY 1" >"$PROFILE_BACKLOG_ROWS_OUT"
+grep -q "ranked_rows|25" "$PROFILE_BACKLOG_ROWS_OUT"
+grep -q "identifier_rows|0" "$PROFILE_BACKLOG_ROWS_OUT"
+grep -q "closed_won_rows|25" "$PROFILE_BACKLOG_ROWS_OUT"
+
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
 EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
 SELECT jsonb_build_object(
@@ -321,7 +461,38 @@ SELECT transcript_status,
  ORDER BY call_count DESC, transcript_status
  LIMIT 20" >"$EXPLAIN_BUSINESS_OUT"
 
-for explain_file in "$EXPLAIN_SEARCH_CALLS_OUT" "$EXPLAIN_GET_CALL_OUT" "$EXPLAIN_TRANSCRIPT_OUT" "$EXPLAIN_BUSINESS_OUT"; do
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT *
+  FROM gongmcp_profile_lifecycle_summary_sanitized(9001, 'synthetic-load-profile-sha', '')" >"$EXPLAIN_PROFILE_SUMMARY_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT *
+  FROM gongmcp_profile_transcript_backlog_sanitized(9001, 'synthetic-load-profile-sha', '', '', '', '', '', '', 25)" >"$EXPLAIN_PROFILE_BACKLOG_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT *
+  FROM gongmcp_profile_transcript_backlog_sanitized(9001, 'synthetic-load-profile-sha', '', '2026-03-01', '2026-12-31', '', '', '', 25)" >"$EXPLAIN_PROFILE_BACKLOG_DATED_OUT"
+
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "
+EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+SELECT c.started_at,
+       c.lifecycle_bucket,
+       c.scope,
+       c.system,
+       c.direction
+  FROM profile_call_fact_cache c
+ WHERE c.profile_id = 9001
+   AND c.canonical_sha256 = 'synthetic-load-profile-sha'
+   AND NOT c.transcript_present
+   AND c.started_at >= '2026-03-01'
+   AND c.started_at < '2027-01-01'
+ ORDER BY c.started_at DESC
+ LIMIT 25" >"$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
+
+for explain_file in "$EXPLAIN_SEARCH_CALLS_OUT" "$EXPLAIN_GET_CALL_OUT" "$EXPLAIN_TRANSCRIPT_OUT" "$EXPLAIN_BUSINESS_OUT" "$EXPLAIN_PROFILE_SUMMARY_OUT" "$EXPLAIN_PROFILE_BACKLOG_OUT" "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"; do
   grep -q '"Plan"' "$explain_file"
   grep -q '"Execution Time"' "$explain_file"
   grep -q '"Actual Rows"' "$explain_file"
@@ -331,9 +502,19 @@ grep -q '"Index Name": "idx_pg_call_context_objects_call_id"' "$EXPLAIN_GET_CALL
 grep -Eq '"Actual Rows": 20' "$EXPLAIN_SEARCH_CALLS_OUT"
 grep -Eq '"Actual Rows": 20' "$EXPLAIN_TRANSCRIPT_OUT"
 grep -Eq '"Actual Rows": [1-9][0-9]*' "$EXPLAIN_BUSINESS_OUT"
-# Keep transcript and aggregate plan artifacts as evidence, but do not force a
-# specific index shape at this bounded synthetic size. PostgreSQL can correctly
-# choose sequential scans for small tables and all-row aggregates.
+grep -Eq '"Actual Rows": [1-9][0-9]*' "$EXPLAIN_PROFILE_SUMMARY_OUT"
+grep -Eq '"Actual Rows": 25' "$EXPLAIN_PROFILE_BACKLOG_OUT"
+grep -Eq '"Actual Rows": 25' "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT"
+grep -Eq '"Actual Rows": 25' "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
+grep -Eq '"Index Name": "(idx_pg_profile_call_fact_cache_started|idx_pg_profile_call_fact_cache_backlog|idx_pg_profile_call_fact_cache_bucket)"' "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
+# Keep transcript and aggregate/function-scan plan artifacts as evidence, but
+# do not force a specific internal helper plan shape at this bounded synthetic
+# size. PostgreSQL can correctly choose sequential scans for small tables and
+# SECURITY DEFINER SQL functions report as Function Scan at the call boundary.
+if grep -Eq 'profile-load-call-|Synthetic profile load call' "$PROFILE_COUNTS_OUT" "$PROFILE_BACKLOG_ROWS_OUT" "$EXPLAIN_PROFILE_SUMMARY_OUT" "$EXPLAIN_PROFILE_BACKLOG_OUT" "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"; then
+  echo "profile helper load evidence unexpectedly exposed synthetic call identifiers or titles" >&2
+  exit 1
+fi
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >"$READER_NO_ROLE_VIEW_OUT" <<'SQL'
 DROP VIEW IF EXISTS gongmcp_transcript_segments;
@@ -479,10 +660,11 @@ cat >"$SUMMARY_OUT" <<JSON
   "status": "ok",
   "artifact_dir": "$ARTIFACT_DIR",
   "synthetic_calls": $CALL_COUNT,
+  "synthetic_profile_cache_rows": $PROFILE_CACHE_COUNT,
   "synthetic_transcript_segments": $((CALL_COUNT * 2)),
   "bulk_insert_command_seconds": $load_insert_seconds,
   "read_model_rebuild_command_seconds": $rebuild_command_seconds,
-  "decision": "Bounded serial rebuild and read-path smoke passed at this synthetic size. EXPLAIN artifacts prove analyzed execution and expected selective index use where stable at this scale; this is not a concurrent contention benchmark, so keep larger customer-scale benchmarking queued before GA."
+  "decision": "Bounded serial rebuild, read-path smoke, and over-cap profile-helper evidence passed at this synthetic size. EXPLAIN artifacts prove analyzed execution and expected selective profile-cache index use where stable at this scale; this is not a concurrent contention benchmark or customer-capacity claim, so keep larger customer-scale benchmarking queued before GA."
 }
 JSON
 
@@ -498,6 +680,12 @@ echo "search_calls explain output: $EXPLAIN_SEARCH_CALLS_OUT"
 echo "get_call explain output: $EXPLAIN_GET_CALL_OUT"
 echo "transcript search explain output: $EXPLAIN_TRANSCRIPT_OUT"
 echo "business-pilot explain output: $EXPLAIN_BUSINESS_OUT"
+echo "profile cache counts output: $PROFILE_COUNTS_OUT"
+echo "profile backlog rows output: $PROFILE_BACKLOG_ROWS_OUT"
+echo "profile lifecycle summary explain output: $EXPLAIN_PROFILE_SUMMARY_OUT"
+echo "profile transcript backlog explain output: $EXPLAIN_PROFILE_BACKLOG_OUT"
+echo "profile transcript backlog dated explain output: $EXPLAIN_PROFILE_BACKLOG_DATED_OUT"
+echo "profile transcript backlog index probe explain output: $EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
 echo "mcp output: $MCP_OUT"
 echo "operator-smoke output: $OPERATOR_SMOKE_OUT"
 echo "business-pilot output: $BUSINESS_PILOT_OUT"
