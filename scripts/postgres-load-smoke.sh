@@ -75,8 +75,31 @@ READER_NO_ROLE_VIEW_OUT="$ARTIFACT_DIR/reader-no-role-views.txt"
 cd "$ROOT"
 
 reader_psql() {
-  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T -e PGPASSWORD="$GONGMCP_READER_PASSWORD" postgres \
-    psql -h 127.0.0.1 -U gongmcp_reader -d gongctl "$@"
+  if [ "$#" -ne 2 ] || [ "$1" != "-c" ]; then
+    echo "reader_psql supports only -c SQL" >&2
+    exit 1
+  fi
+  printf '%s\n' "$2" | docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres sh -c '
+set -eu
+export PGPASSWORD="${GONGMCP_READER_PASSWORD:?}"
+exec psql -h 127.0.0.1 -U gongmcp_reader -d gongctl -v ON_ERROR_STOP=1
+'
+}
+
+sql_quote_literal() {
+  python3 -c 'import sys; value=sys.stdin.read(); print("'"'"'" + value.replace("'"'"'", "'"'"''"'"'") + "'"'"'")'
+}
+
+assert_no_public_secret_values() {
+  local label="$1"
+  shift
+  local secret_value
+  for secret_value in "$GONGCTL_POSTGRES_PASSWORD" "$GONGMCP_READER_PASSWORD" "$GONGMCP_BUSINESS_PILOT_READER_PASSWORD"; do
+    if [ -n "$secret_value" ] && grep -Fq -- "$secret_value" "$@"; then
+      echo "$label exposed a configured connection secret" >&2
+      exit 1
+    fi
+  done
 }
 
 assert_mcp_success() {
@@ -561,21 +584,76 @@ SELECT c.started_at,
  ORDER BY c.started_at DESC
  LIMIT 25" >"$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
 
-for explain_file in "$EXPLAIN_SEARCH_CALLS_OUT" "$EXPLAIN_GET_CALL_OUT" "$EXPLAIN_TRANSCRIPT_OUT" "$EXPLAIN_BUSINESS_OUT" "$EXPLAIN_PROFILE_SUMMARY_OUT" "$EXPLAIN_PROFILE_BACKLOG_OUT" "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"; do
-  grep -q '"Plan"' "$explain_file"
-  grep -q '"Execution Time"' "$explain_file"
-  grep -q '"Actual Rows"' "$explain_file"
-done
-grep -Eq '"Index Name": "(idx_pg_call_facts_search_filters|idx_pg_call_facts_transcript_status|idx_pg_call_facts_lifecycle)"' "$EXPLAIN_SEARCH_CALLS_OUT"
-grep -q '"Index Name": "idx_pg_call_context_objects_call_id"' "$EXPLAIN_GET_CALL_OUT"
-grep -Eq '"Actual Rows": 20' "$EXPLAIN_SEARCH_CALLS_OUT"
-grep -Eq '"Actual Rows": 20' "$EXPLAIN_TRANSCRIPT_OUT"
-grep -Eq '"Actual Rows": [1-9][0-9]*' "$EXPLAIN_BUSINESS_OUT"
-grep -Eq '"Actual Rows": [1-9][0-9]*' "$EXPLAIN_PROFILE_SUMMARY_OUT"
-grep -Eq '"Actual Rows": 25' "$EXPLAIN_PROFILE_BACKLOG_OUT"
-grep -Eq '"Actual Rows": 25' "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT"
-grep -Eq '"Actual Rows": 25' "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
-grep -Eq '"Index Name": "(idx_pg_profile_call_fact_cache_started|idx_pg_profile_call_fact_cache_backlog|idx_pg_profile_call_fact_cache_bucket)"' "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT"
+python3 - \
+  "$EXPLAIN_SEARCH_CALLS_OUT" \
+  "$EXPLAIN_GET_CALL_OUT" \
+  "$EXPLAIN_TRANSCRIPT_OUT" \
+  "$EXPLAIN_BUSINESS_OUT" \
+  "$EXPLAIN_PROFILE_SUMMARY_OUT" \
+  "$EXPLAIN_PROFILE_BACKLOG_OUT" \
+  "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" \
+  "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+expected = {
+    Path(sys.argv[1]): {
+        "min_rows": 20,
+        "indexes": {
+            "idx_pg_call_facts_search_filters",
+            "idx_pg_call_facts_transcript_status",
+            "idx_pg_call_facts_lifecycle",
+        },
+    },
+    Path(sys.argv[2]): {"indexes": {"idx_pg_call_context_objects_call_id"}},
+    Path(sys.argv[3]): {"min_rows": 20},
+    Path(sys.argv[4]): {"min_rows": 1},
+    Path(sys.argv[5]): {"min_rows": 1},
+    Path(sys.argv[6]): {"min_rows": 25},
+    Path(sys.argv[7]): {"min_rows": 25},
+    Path(sys.argv[8]): {
+        "min_rows": 25,
+        "indexes": {
+            "idx_pg_profile_call_fact_cache_started",
+            "idx_pg_profile_call_fact_cache_backlog",
+            "idx_pg_profile_call_fact_cache_bucket",
+        },
+    },
+}
+
+def walk(node):
+    yield node
+    for child in node.get("Plans") or []:
+        yield from walk(child)
+
+for path, checks in expected.items():
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list) or not raw or not isinstance(raw[0].get("Plan"), dict):
+        raise SystemExit(f"{path}: missing EXPLAIN root Plan")
+    if not isinstance(raw[0].get("Execution Time"), (int, float)):
+        raise SystemExit(f"{path}: missing EXPLAIN Execution Time")
+    nodes = list(walk(raw[0]["Plan"]))
+    actual_rows = [
+        node.get("Actual Rows")
+        for node in nodes
+        if isinstance(node.get("Actual Rows"), (int, float))
+    ]
+    if not actual_rows:
+        raise SystemExit(f"{path}: missing EXPLAIN Actual Rows")
+    min_rows = checks.get("min_rows")
+    if min_rows is not None and max(actual_rows) < min_rows:
+        raise SystemExit(f"{path}: expected at least {min_rows} actual rows, saw {max(actual_rows)}")
+    indexes = checks.get("indexes")
+    if indexes:
+        actual_indexes = {
+            node.get("Index Name")
+            for node in nodes
+            if node.get("Index Name")
+        }
+        if not (actual_indexes & indexes):
+            raise SystemExit(f"{path}: expected one of {sorted(indexes)}, saw {sorted(actual_indexes)}")
+PY
 # Keep transcript and aggregate/function-scan plan artifacts as evidence, but
 # do not force a specific internal helper plan shape at this bounded synthetic
 # size. PostgreSQL can correctly choose sequential scans for small tables and
@@ -585,13 +663,15 @@ if grep -Eq 'profile-load-call-|Synthetic profile load call' "$PROFILE_COUNTS_OU
   exit 1
 fi
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T -e GONGMCP_BUSINESS_PILOT_READER_PASSWORD="$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" postgres sh -s >/dev/null <<'SH'
-set -eu
-psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v reader_password="$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" <<'SQL'
+business_pilot_reader_password_sql="$(printf '%s' "$GONGMCP_BUSINESS_PILOT_READER_PASSWORD" | sql_quote_literal)"
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/dev/null <<SQL
+SELECT pg_terminate_backend(pid)
+  FROM pg_stat_activity
+ WHERE usename = 'gongmcp_business_pilot_reader'
+   AND pid <> pg_backend_pid();
 DROP ROLE IF EXISTS gongmcp_business_pilot_reader;
-CREATE ROLE gongmcp_business_pilot_reader LOGIN NOINHERIT PASSWORD :'reader_password';
+CREATE ROLE gongmcp_business_pilot_reader LOGIN NOINHERIT PASSWORD ${business_pilot_reader_password_sql};
 SQL
-SH
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-apply --preset business-pilot --role gongmcp_business_pilot_reader --database gongctl --apply >"$ARTIFACT_DIR/business-pilot-reader-apply.json"
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
 UPDATE profile_call_fact_cache_meta
@@ -613,9 +693,14 @@ if grep -Eq 'profile-load-call-|Synthetic profile load call|postgres://|gongctl_
   echo "business-pilot profile MCP load evidence exposed identifiers, titles, or connection secrets" >&2
   exit 1
 fi
+assert_no_public_secret_values "business-pilot profile MCP load evidence" "$PROFILE_MCP_OUT" "$ARTIFACT_DIR/business-pilot-reader-apply.json"
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "DELETE FROM profile_call_fact_cache WHERE profile_id = 9001; DELETE FROM profile_call_fact_cache_meta WHERE profile_id = 9001; DELETE FROM profile_lifecycle_rule WHERE profile_id = 9001; DELETE FROM profile_meta WHERE id = 9001" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+SELECT pg_terminate_backend(pid)
+  FROM pg_stat_activity
+ WHERE usename = 'gongmcp_business_pilot_reader'
+   AND pid <> pg_backend_pid();
 DROP OWNED BY gongmcp_business_pilot_reader;
 DROP ROLE gongmcp_business_pilot_reader;
 SQL
@@ -629,6 +714,10 @@ DROP VIEW IF EXISTS gongmcp_sync_runs;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+    PERFORM pg_terminate_backend(pid)
+      FROM pg_stat_activity
+     WHERE usename = 'gongmcp_reader'
+       AND pid <> pg_backend_pid();
     EXECUTE 'DROP OWNED BY gongmcp_reader';
     EXECUTE 'DROP ROLE gongmcp_reader';
   END IF;
@@ -636,19 +725,11 @@ END;
 $$;
 SQL
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >>"$READER_NO_ROLE_VIEW_OUT"
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA >>"$READER_NO_ROLE_VIEW_OUT" <<'SQL'
-SELECT COUNT(*)::int
-  FROM (
-    SELECT to_regclass('public.gongmcp_sync_runs') IS NOT NULL AS found
-    UNION ALL SELECT to_regclass('public.gongmcp_sync_state') IS NOT NULL
-    UNION ALL SELECT to_regclass('public.gongmcp_call_context_fields') IS NOT NULL
-    UNION ALL SELECT to_regprocedure('public.gongmcp_search_transcript_segments(text, integer)') IS NOT NULL
-  ) expected
- WHERE found;
-SQL
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -tA -c "SELECT COUNT(*)::int FROM (SELECT to_regclass('public.gongmcp_sync_runs') IS NOT NULL AS found UNION ALL SELECT to_regclass('public.gongmcp_sync_state') IS NOT NULL UNION ALL SELECT to_regclass('public.gongmcp_call_context_fields') IS NOT NULL UNION ALL SELECT to_regprocedure('public.gongmcp_search_transcript_segments(text, integer)') IS NOT NULL) expected WHERE found" >>"$READER_NO_ROLE_VIEW_OUT"
 grep -q '^4$' "$READER_NO_ROLE_VIEW_OUT"
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -v reader_password="$GONGMCP_READER_PASSWORD" >>"$READER_NO_ROLE_VIEW_OUT" <<'SQL'
-CREATE ROLE gongmcp_reader LOGIN PASSWORD :'reader_password';
+reader_password_sql="$(printf '%s' "$GONGMCP_READER_PASSWORD" | sql_quote_literal)"
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 >>"$READER_NO_ROLE_VIEW_OUT" <<SQL
+CREATE ROLE gongmcp_reader LOGIN PASSWORD ${reader_password_sql};
 SQL
 
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader" >"$READER_REGRANT_OUT"
@@ -707,6 +788,7 @@ if grep -q 'raw_json\|crmObjects' "$MCP_OUT"; then
   echo "load MCP smoke exposed raw call payload fields" >&2
   exit 1
 fi
+assert_no_public_secret_values "load MCP smoke evidence" "$MCP_OUT"
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -733,6 +815,7 @@ if grep -Eq 'Synthetic load profile|Synthetic profile load call|profile-load-cal
   echo "operator-smoke load MCP smoke was polluted by synthetic profile cache identifiers or titles" >&2
   exit 1
 fi
+assert_no_public_secret_values "operator-smoke load MCP evidence" "$OPERATOR_SMOKE_OUT"
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -751,6 +834,7 @@ if grep -Eq 'Synthetic load profile|Synthetic profile load call|profile-load-cal
   echo "business-pilot builtin load MCP smoke was polluted by synthetic profile cache" >&2
   exit 1
 fi
+assert_no_public_secret_values "business-pilot builtin load MCP evidence" "$BUSINESS_PILOT_OUT"
 
 if reader_psql -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('load-should-fail', '{}'::jsonb, 'x', now()::text, now()::text)" >"$READER_WRITE_OUT" 2>&1; then
   echo "reader role unexpectedly wrote to Postgres during load smoke" >&2
@@ -779,6 +863,27 @@ JSON
 
 grep -q '"status": "ok"' "$SUMMARY_OUT"
 grep -q "\"synthetic_calls\": $CALL_COUNT" "$SUMMARY_OUT"
+assert_no_public_secret_values "postgres load smoke artifacts" \
+  "$SUMMARY_OUT" \
+  "$COUNTS_OUT" \
+  "$REBUILD_OUT" \
+  "$EXPLAIN_SEARCH_CALLS_OUT" \
+  "$EXPLAIN_GET_CALL_OUT" \
+  "$EXPLAIN_TRANSCRIPT_OUT" \
+  "$EXPLAIN_BUSINESS_OUT" \
+  "$PROFILE_COUNTS_OUT" \
+  "$PROFILE_BACKLOG_ROWS_OUT" \
+  "$PROFILE_MCP_OUT" \
+  "$EXPLAIN_PROFILE_SUMMARY_OUT" \
+  "$EXPLAIN_PROFILE_BACKLOG_OUT" \
+  "$EXPLAIN_PROFILE_BACKLOG_DATED_OUT" \
+  "$EXPLAIN_PROFILE_BACKLOG_INDEX_OUT" \
+  "$MCP_OUT" \
+  "$OPERATOR_SMOKE_OUT" \
+  "$BUSINESS_PILOT_OUT" \
+  "$STALE_MCP_OUT" \
+  "$READER_REGRANT_OUT" \
+  "$READER_NO_ROLE_VIEW_OUT"
 
 echo "postgres load smoke passed"
 echo "artifact directory: $ARTIFACT_DIR"

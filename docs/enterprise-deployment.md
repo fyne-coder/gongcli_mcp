@@ -552,10 +552,31 @@ onto real tenant data. The drill uses synthetic fixtures only, runs the
 Postgres load smoke at a bounded configured size, validates the generated
 profile-cache, scoped `business-pilot` MCP, profile helper-call EXPLAIN,
 profile-cache index-probe EXPLAIN, and transcript-search EXPLAIN artifacts
-directly, and writes `capacity-summary.json`. Keep that summary with the change
-record, but do not treat it as a production capacity claim; customer-owned
-platform benchmarks still need the target Postgres class, concurrency,
-retention, backup/PITR, and monitoring settings.
+directly, and writes `capacity-summary.json`. Keep `capacity-summary.json` plus
+only the files named in its `evidence` map after the leak scans pass; do not
+archive whole artifact directories or stdout/stderr unless separately reviewed
+for the customer record. Do not treat the drill as a production capacity claim;
+customer-owned platform benchmarks still need the target Postgres class,
+concurrency, retention, backup/PITR, and monitoring settings.
+
+```bash
+# Default bounded synthetic drill: 5,000 calls and 5,000 profile-cache rows.
+./scripts/postgres-capacity-drill.sh
+
+# Smaller local review run.
+GONGCTL_POSTGRES_CAPACITY_COMPOSE_PROJECT=gongctl-postgres-capacity-review \
+GONGCTL_POSTGRES_CAPACITY_PORT=55545 \
+GONGCTL_POSTGRES_CAPACITY_CALLS=1200 \
+GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS=1200 \
+./scripts/postgres-capacity-drill.sh
+```
+
+The supported knobs are `GONGCTL_POSTGRES_CAPACITY_COMPOSE_PROJECT`,
+`GONGCTL_POSTGRES_CAPACITY_PORT`, `GONGCTL_POSTGRES_CAPACITY_CALLS`,
+`GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS`, and
+`GONGCTL_POSTGRES_CAPACITY_ARTIFACT_DIR`; call/profile sizes are bounded to
+1,200-5,000 rows and explicit artifact directories must be under
+`/tmp/gongctl-postgres-capacity.*`.
 Use `cache purge --config retention-policy.yaml` for scheduled retention jobs
 so approval and backup metadata travel with the purge plan. The repo does not
 install the scheduler; cron, launchd, systemd, Kubernetes CronJob, or customer

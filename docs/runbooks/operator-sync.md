@@ -199,11 +199,34 @@ Notes:
   bounded synthetic size, validates the generated profile-cache,
   profile-backlog, scoped `business-pilot` MCP, profile EXPLAIN, and
   transcript-search EXPLAIN artifacts directly, and writes a sanitized
-  `capacity-summary.json`. Archive the summary and linked artifact directory
-  with the deployment change record. This is synthetic pre-rollout evidence
-  only; it does not replace a customer-platform benchmark using the approved
-  Postgres service class, backup/PITR settings, concurrency target, retention
-  window, and real deployment limits.
+  `capacity-summary.json`. Archive `capacity-summary.json` plus only the
+  generated files named in its `evidence` map after the drill and load-smoke
+  leak scans pass; do not archive whole artifact directories, stdout/stderr, or
+  intermediate files unless separately reviewed for the customer record. This
+  is synthetic pre-rollout evidence only; it does not replace a
+  customer-platform benchmark using the approved Postgres service class,
+  backup/PITR settings, concurrency target, retention window, and real
+  deployment limits.
+
+```bash
+# Default bounded synthetic drill: 5,000 calls and 5,000 profile-cache rows.
+./scripts/postgres-capacity-drill.sh
+
+# Smaller repo validation run used in CI/local review.
+GONGCTL_POSTGRES_CAPACITY_COMPOSE_PROJECT=gongctl-postgres-capacity-review \
+GONGCTL_POSTGRES_CAPACITY_PORT=55545 \
+GONGCTL_POSTGRES_CAPACITY_CALLS=1200 \
+GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS=1200 \
+./scripts/postgres-capacity-drill.sh
+```
+
+Supported sizing/path knobs are
+`GONGCTL_POSTGRES_CAPACITY_COMPOSE_PROJECT`,
+`GONGCTL_POSTGRES_CAPACITY_PORT`, `GONGCTL_POSTGRES_CAPACITY_CALLS`,
+`GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS`, and
+`GONGCTL_POSTGRES_CAPACITY_ARTIFACT_DIR`. The drill accepts 1,200-5,000 calls
+and profile rows and requires explicit artifact directories to live under
+`/tmp/gongctl-postgres-capacity.*`.
 - For scheduled retention jobs, prefer a reviewed YAML policy instead of
   re-encoding the cutoff and approval state in job flags:
 
