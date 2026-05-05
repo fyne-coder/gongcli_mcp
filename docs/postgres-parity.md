@@ -29,6 +29,7 @@ Postgres parity should be added deliberately, with each surface classified as
 | Call facts | `call_facts` view | foundation table added | Maintained indexed facts table for grouping/filtering | must match at output layer | Phase 1 | SQLite-vs-Postgres call-fact aggregate tests |
 | Derived read-model lifecycle | SQLite views rebuild from base tables at read time | complete in Phase 2c for builtin facts: migration/write refresh plus trigger-maintained readiness counters | Backfill on upgrade, refresh on writes, cheap version/stale detection before profile/governance phases | postgres-native equivalent | Phase 2 | `TestPostgresReadModelStateDetectsDeletedFactRowsAsStaleAndRebuildRepairs`; `TestPostgresReadModelReadinessRejectsRebuildInProgressState`; `gongctl sync read-model` |
 | Operator read-model check/rebuild | SQLite profile cache readiness/rebuild is profile-aware | complete for Postgres builtin facts via `gongctl sync read-model [--rebuild]` | Writable CLI can check/rebuild; read-only MCP never rebuilds | postgres-native equivalent | Phase 2 | `GONG_DATABASE_URL=... gongctl sync read-model --rebuild` |
+| Read-model load/performance smoke | SQLite local cache has no shared write contention | complete for deterministic 750-call synthetic smoke; broader customer-scale benchmark queued before GA | Capture rebuild timing, representative EXPLAIN plans, read-only MCP success, reader write/raw-read denial, and stale startup denial | postgres-native equivalent | Phase 2 | `./scripts/postgres-load-smoke.sh` |
 | Transcript FTS | SQLite FTS5 | Postgres `tsvector`/GIN | Equivalent bounded search semantics, documented ranking differences | postgres-native equivalent | Phase 2 | synthetic search comparison tests |
 | Call search | SQLite filters over calls/context | complete for normalized CRM object and builtin call-fact filters | Match safe filters or document intentional exclusions | must match | Phase 2 | `TestPostgresSearchCallsRawSafeFiltersMatchSQLite`; `scripts/postgres-smoke.sh` |
 | MCP `get_call` | SQLite minimized call detail | complete for Postgres normalized context rows | Same minimized JSON contract over Postgres MCP | must match | Phase 2 | `TestPostgresGetCallDetailMatchesSQLiteForNormalizedContext`; `scripts/postgres-smoke.sh` |
@@ -86,7 +87,14 @@ Postgres parity should be added deliberately, with each surface classified as
 - Closed: operators can run `gongctl sync read-model` to check state and
   `gongctl sync read-model --rebuild` with a writable Postgres URL to repair
   builtin facts.
+- Closed for bounded synthetic validation: `scripts/postgres-load-smoke.sh`
+  creates 750 synthetic calls and 1,500 transcript segments, rebuilds the
+  Postgres read model, captures EXPLAIN artifacts for representative read
+  paths, proves read-only MCP success through operator-smoke and business-pilot
+  presets after rebuild, proves the reader role cannot write or directly read
+  raw JSON payload columns, and proves stale startup denial. Keep a larger
+  customer-scale benchmark queued before GA.
 - Still queued: profile cache parity, governance filtering/RLS, analyst and
-  all-readonly query parity, support/cache inventory, purge/retention, large
-  tenant load testing for read-model counter write contention, and release
-  rollback/backup hardening.
+  all-readonly query parity, support/cache inventory, purge/retention, larger
+  customer-scale load benchmarking for read-model counter write contention, and
+  release rollback/backup hardening.

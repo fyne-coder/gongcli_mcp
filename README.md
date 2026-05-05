@@ -284,9 +284,10 @@ gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-ru
 ## Advanced Local Operator Commands
 
 These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
-When using Postgres, `gongctl search calls` is a raw cached-call export path and
-requires `--allow-sensitive-export`; use `gongmcp` `search_calls` for minimized
-model-facing search output.
+When using Postgres, `gongctl search calls` returns minimized call metadata from
+the read model. Use explicit raw-export commands such as `calls show --json` or
+`calls export` with `--allow-sensitive-export` for operator-controlled raw
+payload access.
 
 ```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db

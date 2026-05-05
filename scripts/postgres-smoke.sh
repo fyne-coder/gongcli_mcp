@@ -9,9 +9,51 @@ export GONGCTL_POSTGRES_PASSWORD="${GONGCTL_POSTGRES_PASSWORD:-gongctl_dev_passw
 export GONGMCP_READER_PASSWORD="${GONGMCP_READER_PASSWORD:-gongmcp_reader_dev_password}"
 WRITER_URL="postgres://gongctl:${GONGCTL_POSTGRES_PASSWORD}@127.0.0.1:${PORT}/gongctl?sslmode=disable"
 READER_URL="postgres://gongmcp_reader:${GONGMCP_READER_PASSWORD}@127.0.0.1:${PORT}/gongctl?sslmode=disable"
-READER_CONTAINER_URL="postgres://gongmcp_reader:${GONGMCP_READER_PASSWORD}@127.0.0.1:5432/gongctl?sslmode=disable"
 
 cd "$ROOT"
+
+reader_psql() {
+  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres sh -s -- "$@" <<'SH'
+set -eu
+export PGPASSWORD="${GONGMCP_READER_PASSWORD:?}"
+exec psql -h 127.0.0.1 -U gongmcp_reader -d gongctl "$@"
+SH
+}
+
+assert_mcp_success() {
+  local file="$1"
+  shift
+  python3 - "$file" "$@" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+required = {int(value) for value in sys.argv[2:]}
+seen = set()
+with open(path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        request_id = message.get("id")
+        if request_id not in required:
+            continue
+        seen.add(request_id)
+        if "error" in message:
+            raise SystemExit(f"MCP id {request_id} returned JSON-RPC error: {message['error']}")
+        result = message.get("result")
+        if isinstance(result, dict) and result.get("isError") is True:
+            raise SystemExit(f"MCP id {request_id} returned tool isError=true: {result}")
+
+missing = required - seen
+if missing:
+    raise SystemExit(f"missing MCP result ids: {sorted(missing)}")
+PY
+}
 
 cleanup() {
   docker compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
@@ -42,8 +84,6 @@ docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl
 grep -q 'synthetic-call-001|0|0|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
 grep -q 'synthetic-call-002|0|0|f|f|' /tmp/gongctl-postgres-read-model-diagnostics.txt
 
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "GRANT SELECT ON ALL TABLES IN SCHEMA public TO gongmcp_reader" >/dev/null
-
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "DELETE FROM call_facts WHERE call_id = 'synthetic-call-002'" >/dev/null
 docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -c "INSERT INTO call_facts(call_id, title, updated_at) VALUES('synthetic-orphan-fact', 'orphan fact', now()::text)" >/dev/null
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model >/tmp/gongctl-postgres-integrity-gap.json
@@ -58,8 +98,44 @@ grep -q 'postgres read model is missing or stale' /tmp/gongctl-postgres-stale-mc
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-read-model-rebuild.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-read-model-rebuild.json
 grep -q '"ready": true' /tmp/gongctl-postgres-read-model-rebuild.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader" >/tmp/gongctl-postgres-reader-regrant.txt
+GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >>/tmp/gongctl-postgres-reader-regrant.txt
+grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-reader-regrant.txt
 
-if docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql "$READER_CONTAINER_URL" -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('should-fail', '{}'::jsonb, 'x', now()::text, now()::text)" >/tmp/gongctl-postgres-reader-write.txt 2>&1; then
+if reader_psql -c "SELECT raw_json FROM calls LIMIT 1" >/tmp/gongctl-postgres-reader-raw-read.txt 2>&1; then
+  echo "reader role unexpectedly read raw call JSON" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT cursor FROM sync_runs LIMIT 1" >/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read sync cursor" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT field_value_text FROM call_context_fields LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read normalized CRM field values" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT object_name FROM call_context_objects LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read normalized CRM object names" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT text FROM transcript_segments LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read full transcript text" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT search_vector FROM transcript_segments LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read transcript search vector" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT * FROM gongmcp_transcript_segments LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read retired transcript segment view" >&2
+  exit 1
+fi
+if reader_psql -c "SELECT opportunity_amount FROM call_facts LIMIT 1" >>/tmp/gongctl-postgres-reader-sensitive-read.txt 2>&1; then
+  echo "reader role unexpectedly read sensitive opportunity amount" >&2
+  exit 1
+fi
+
+if reader_psql -c "INSERT INTO users(user_id, raw_json, raw_sha256, first_seen_at, updated_at) VALUES('should-fail', '{}'::jsonb, 'x', now()::text, now()::text)" >/tmp/gongctl-postgres-reader-write.txt 2>&1; then
   echo "reader role unexpectedly wrote to Postgres" >&2
   exit 1
 fi
@@ -79,7 +155,7 @@ grep -q '"search_transcript_segments"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q '"get_call"' /tmp/gongctl-postgres-mcp.jsonl
 grep -q 'synthetic-call-001' /tmp/gongctl-postgres-mcp.jsonl
 grep -q 'shared.*Postgres' /tmp/gongctl-postgres-mcp.jsonl
-grep -q '"id":6,"result"' /tmp/gongctl-postgres-mcp.jsonl
+assert_mcp_success /tmp/gongctl-postgres-mcp.jsonl 3 4 5 6
 if grep -q 'raw_json\|crmObjects' /tmp/gongctl-postgres-mcp.jsonl; then
   echo "get_call/search smoke exposed raw call payload fields" >&2
   exit 1
@@ -99,14 +175,7 @@ grep -q '"summarize_call_facts"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q '"summarize_calls_by_lifecycle"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q '"rank_transcript_backlog"' /tmp/gongctl-postgres-business-pilot.jsonl
 grep -q 'transcript_status' /tmp/gongctl-postgres-business-pilot.jsonl
-grep -q '"id":6,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
-grep -q '"id":7,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
-grep -q '"id":8,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
-grep -q '"id":9,"result"' /tmp/gongctl-postgres-business-pilot.jsonl
-if grep -q '"id":[6789],"error"' /tmp/gongctl-postgres-business-pilot.jsonl; then
-  echo "business-pilot MCP call returned an error" >&2
-  exit 1
-fi
+assert_mcp_success /tmp/gongctl-postgres-business-pilot.jsonl 6 7 8 9
 
 GONGCTL_TEST_POSTGRES_URL="$WRITER_URL" go test -count=1 ./internal/store/postgres
 
@@ -115,6 +184,9 @@ echo "sync output: /tmp/gongctl-postgres-sync.json"
 echo "mcp output: /tmp/gongctl-postgres-mcp.jsonl"
 echo "business-pilot output: /tmp/gongctl-postgres-business-pilot.jsonl"
 echo "reader denial output: /tmp/gongctl-postgres-reader-write.txt"
+echo "reader raw-read denial output: /tmp/gongctl-postgres-reader-raw-read.txt"
+echo "reader sensitive-read denial output: /tmp/gongctl-postgres-reader-sensitive-read.txt"
+echo "reader regrant output: /tmp/gongctl-postgres-reader-regrant.txt"
 echo "normalized counts output: /tmp/gongctl-postgres-normalized-counts.txt"
 echo "call facts output: /tmp/gongctl-postgres-call-facts.txt"
 echo "read model state output: /tmp/gongctl-postgres-read-model-state.json"

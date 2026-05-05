@@ -188,10 +188,76 @@ ON CONFLICT(version) DO NOTHING`, idx+1, nowUTC()); err != nil {
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	if err := s.reconcileReaderGrants(ctx); err != nil {
+		return err
+	}
 	if startingVersion < len(migrations) {
 		if _, err := s.RebuildReadModel(ctx); err != nil {
 			return fmt.Errorf("backfill postgres read model: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) reconcileReaderGrants(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("postgres store is not open")
+	}
+	_, err := s.db.ExecContext(ctx, `
+CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text AS cursor, from_value, to_value, ''::text AS request_context, status, started_at, finished_at, records_seen, records_written, ''::text AS error_text FROM sync_runs;
+CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
+CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
+DROP VIEW IF EXISTS gongmcp_transcript_segments;
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments(search_text text, row_limit integer)
+RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH q AS (
+	SELECT websearch_to_tsquery('simple', search_text) AS query
+),
+bounded AS (
+	SELECT LEAST(GREATEST(COALESCE(row_limit, 20), 1), 1000) AS limit_value
+)
+SELECT ts.call_id,
+       ts.speaker_id,
+       ts.segment_index,
+       ts.start_ms,
+       ts.end_ms,
+       ''::text AS text,
+       ts_headline('simple', ts.text, q.query, 'StartSel=[, StopSel=], MaxWords=12, MinWords=4, ShortWord=2') AS snippet
+  FROM transcript_segments ts, q, bounded
+ WHERE ts.search_vector @@ q.query
+ ORDER BY ts_rank_cd(ts.search_vector, q.query) DESC, ts.call_id, ts.segment_index
+ LIMIT (SELECT limit_value FROM bounded)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments(text, integer) FROM PUBLIC;
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader;
+		ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM gongmcp_reader;
+		EXECUTE 'GRANT CONNECT ON DATABASE ' || quote_ident(current_database()) || ' TO gongmcp_reader';
+		GRANT USAGE ON SCHEMA public TO gongmcp_reader;
+		GRANT SELECT ON TABLE gongctl_schema_migrations TO gongmcp_reader;
+		GRANT SELECT ON TABLE gongmcp_sync_runs TO gongmcp_reader;
+		GRANT SELECT ON TABLE gongmcp_sync_state TO gongmcp_reader;
+		GRANT SELECT (call_id, title, started_at, duration_seconds, parties_count, context_present, first_seen_at, updated_at) ON calls TO gongmcp_reader;
+		GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader;
+		GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
+		GRANT SELECT (id, call_id, object_key, object_type, object_id) ON call_context_objects TO gongmcp_reader;
+		GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader;
+		GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader;
+		GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader;
+		GRANT SELECT ON TABLE call_read_model_diagnostics TO gongmcp_reader;
+	END IF;
+END;
+$$;`)
+	if err != nil {
+		return fmt.Errorf("reconcile postgres reader grants: %w", err)
 	}
 	return nil
 }
@@ -201,7 +267,21 @@ func (s *Store) validateSchema(ctx context.Context) error {
 		return errors.New("postgres store is not open")
 	}
 	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('sync_runs', 'sync_state', 'calls', 'users', 'transcripts', 'transcript_segments', 'call_context_objects', 'call_context_fields', 'call_facts', 'postgres_read_model_state', 'call_read_model_diagnostics')`).Scan(&count); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)
+	  FROM unnest(ARRAY[
+		'sync_runs',
+		'sync_state',
+		'calls',
+		'users',
+		'transcripts',
+		'transcript_segments',
+		'call_context_objects',
+		'call_context_fields',
+		'call_facts',
+		'postgres_read_model_state',
+		'call_read_model_diagnostics'
+	  ]) AS core_table(table_name)
+	 WHERE to_regclass(core_table.table_name) IS NOT NULL`).Scan(&count); err != nil {
 		return err
 	}
 	if count != 11 {
@@ -549,20 +629,8 @@ func (s *Store) SearchTranscriptSegments(ctx context.Context, query string, limi
 		return nil, errors.New("search query is required")
 	}
 	limit = boundedLimit(limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
-	rows, err := s.db.QueryContext(ctx, `WITH q AS (
-	SELECT websearch_to_tsquery('simple', $1) AS query
-)
-SELECT ts.call_id,
-       ts.speaker_id,
-       ts.segment_index,
-       ts.start_ms,
-       ts.end_ms,
-       ts.text,
-       ts_headline('simple', ts.text, q.query, 'StartSel=[, StopSel=], MaxWords=12, MinWords=4, ShortWord=2')
-  FROM transcript_segments ts, q
- WHERE ts.search_vector @@ q.query
- ORDER BY ts_rank_cd(ts.search_vector, q.query) DESC, ts.call_id, ts.segment_index
- LIMIT $2`, query, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, speaker_id, segment_index, start_ms, end_ms, text, snippet
+  FROM gongmcp_search_transcript_segments($1, $2)`, query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -583,7 +651,13 @@ func (s *Store) SearchCallsRaw(ctx context.Context, params sqlite.CallSearchPara
 		return nil, err
 	}
 	limit := boundedLimit(params.Limit, defaultCallSearchLimit, maxCallSearchLimit)
-	query := `SELECT c.raw_json::text FROM calls c`
+	query := `SELECT jsonb_build_object(
+		'id', c.call_id,
+		'title', c.title,
+		'started', c.started_at,
+		'duration', c.duration_seconds,
+		'parties', COALESCE((SELECT jsonb_agg(jsonb_build_object('id', 'redacted')) FROM generate_series(1::bigint, c.parties_count)), '[]'::jsonb)
+	)::text FROM calls c`
 	where := []string{}
 	args := []any{}
 	addArg := func(value any) string {
@@ -701,15 +775,15 @@ func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallD
 SELECT o.object_type,
        o.object_id,
        '' AS object_name,
-       COUNT(f.id) AS field_count,
-       COUNT(NULLIF(TRIM(f.field_value_text), '')) AS populated_field_count,
-       COALESCE(string_agg(DISTINCT f.field_name, ',' ORDER BY f.field_name), '') AS field_names
-  FROM call_context_objects o
-  LEFT JOIN call_context_fields f
-    ON f.call_id = o.call_id
-   AND f.object_key = o.object_key
+	       COUNT(f.id) AS field_count,
+	       COUNT(CASE WHEN f.field_populated THEN 1 END) AS populated_field_count,
+	       COALESCE(string_agg(DISTINCT f.field_name, ',' ORDER BY f.field_name), '') AS field_names
+	  FROM call_context_objects o
+	  LEFT JOIN gongmcp_call_context_fields f
+	    ON f.call_id = o.call_id
+	   AND f.object_key = o.object_key
  WHERE o.call_id = $1
- GROUP BY o.object_key, o.object_type, o.object_id, o.object_name
+	 GROUP BY o.object_key, o.object_type, o.object_id
  ORDER BY o.object_type, o.object_id, o.object_key`, callID)
 	if err != nil {
 		return nil, err
@@ -747,12 +821,12 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		{`SELECT COUNT(*) FROM calls`, &summary.TotalCalls},
 		{`SELECT COUNT(*) FROM users`, &summary.TotalUsers},
 		{`SELECT COUNT(*) FROM transcripts`, &summary.TotalTranscripts},
-		{`SELECT COUNT(*) FROM transcript_segments`, &summary.TotalTranscriptSegments},
+		{`SELECT COALESCE(SUM(segment_count), 0) FROM transcripts`, &summary.TotalTranscriptSegments},
 		{`SELECT COUNT(DISTINCT call_id) FROM call_context_objects`, &summary.TotalEmbeddedCRMContextCalls},
 		{`SELECT COUNT(*) FROM call_context_objects`, &summary.TotalEmbeddedCRMObjects},
-		{`SELECT COUNT(*) FROM call_context_fields`, &summary.TotalEmbeddedCRMFields},
+		{`SELECT COUNT(*) FROM gongmcp_call_context_fields`, &summary.TotalEmbeddedCRMFields},
 		{`SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id WHERE t.call_id IS NULL`, &summary.MissingTranscripts},
-		{`SELECT COUNT(*) FROM sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
+		{`SELECT COUNT(*) FROM gongmcp_sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
 		{`SELECT COUNT(*) FROM calls WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.CallsWithTitles},
 		{`SELECT COUNT(*) FROM calls WHERE parties_count > 0`, &summary.AttributionCoverage.CallsWithParties},
 		{`SELECT COUNT(*) FROM users WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.UsersWithTitles},
@@ -762,12 +836,12 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 			return nil, err
 		}
 	}
-	lastRun, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, COALESCE(finished_at, ''), records_seen, records_written, error_text FROM sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`)
+	lastRun, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, COALESCE(finished_at, ''), records_seen, records_written, error_text FROM gongmcp_sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`)
 	if err != nil {
 		return nil, err
 	}
 	summary.LastRun = lastRun
-	lastSuccess, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, COALESCE(finished_at, ''), records_seen, records_written, error_text FROM sync_runs WHERE status = 'success' ORDER BY finished_at DESC, id DESC LIMIT 1`)
+	lastSuccess, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, COALESCE(finished_at, ''), records_seen, records_written, error_text FROM gongmcp_sync_runs WHERE status = 'success' ORDER BY finished_at DESC, id DESC LIMIT 1`)
 	if err != nil {
 		return nil, err
 	}
@@ -825,7 +899,7 @@ func (s *Store) latestSyncRun(ctx context.Context, query string) (*sqlite.SyncRu
 }
 
 func (s *Store) syncStates(ctx context.Context) ([]sqlite.SyncState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT sync_key, scope, cursor, COALESCE(last_run_id, 0), last_status, last_error, COALESCE(last_success_at, ''), updated_at FROM sync_state ORDER BY scope, sync_key`)
+	rows, err := s.db.QueryContext(ctx, `SELECT sync_key, scope, cursor, COALESCE(last_run_id, 0), last_status, last_error, COALESCE(last_success_at, ''), updated_at FROM gongmcp_sync_state ORDER BY scope, sync_key`)
 	if err != nil {
 		return nil, err
 	}

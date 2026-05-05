@@ -334,5 +334,60 @@ DROP TRIGGER IF EXISTS gongctl_read_model_facts_truncate_resync ON call_facts;
 CREATE TRIGGER gongctl_read_model_facts_truncate_resync
 AFTER TRUNCATE ON call_facts
 FOR EACH STATEMENT EXECUTE FUNCTION gongctl_read_model_recalculate_counters_fn();
+	`,
+	`
+CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text AS cursor, from_value, to_value, ''::text AS request_context, status, started_at, finished_at, records_seen, records_written, ''::text AS error_text FROM sync_runs;
+CREATE OR REPLACE VIEW gongmcp_sync_state AS SELECT sync_key, scope, ''::text AS cursor, last_run_id, last_status, ''::text AS last_error, last_success_at, updated_at FROM sync_state;
+CREATE OR REPLACE VIEW gongmcp_call_context_fields AS SELECT id, call_id, object_key, field_name, field_label, field_type, (TRIM(field_value_text) <> '') AS field_populated FROM call_context_fields;
+DROP VIEW IF EXISTS gongmcp_transcript_segments;
+CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments(search_text text, row_limit integer)
+RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH q AS (
+	SELECT websearch_to_tsquery('simple', search_text) AS query
+),
+bounded AS (
+	SELECT LEAST(GREATEST(COALESCE(row_limit, 20), 1), 1000) AS limit_value
+)
+SELECT ts.call_id,
+       ts.speaker_id,
+       ts.segment_index,
+       ts.start_ms,
+       ts.end_ms,
+       ''::text AS text,
+       ts_headline('simple', ts.text, q.query, 'StartSel=[, StopSel=], MaxWords=12, MinWords=4, ShortWord=2') AS snippet
+  FROM transcript_segments ts, q, bounded
+ WHERE ts.search_vector @@ q.query
+ ORDER BY ts_rank_cd(ts.search_vector, q.query) DESC, ts.call_id, ts.segment_index
+ LIMIT (SELECT limit_value FROM bounded)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments(text, integer) FROM PUBLIC;
+
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader';
+		EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE SELECT ON TABLES FROM gongmcp_reader';
+		EXECUTE 'GRANT CONNECT ON DATABASE ' || quote_ident(current_database()) || ' TO gongmcp_reader';
+		EXECUTE 'GRANT USAGE ON SCHEMA public TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE gongctl_schema_migrations TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE gongmcp_sync_runs TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE gongmcp_sync_state TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (call_id, title, started_at, duration_seconds, parties_count, context_present, first_seen_at, updated_at) ON calls TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (id, call_id, object_key, object_type, object_id) ON call_context_objects TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT ON TABLE call_read_model_diagnostics TO gongmcp_reader';
+	END IF;
+END;
+$$;
 `,
 }

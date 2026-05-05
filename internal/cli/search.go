@@ -3,13 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"os"
-	"strings"
 
-	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 	transcriptsearch "github.com/fyne-coder/gongcli_mcp/internal/transcripts"
 )
@@ -80,13 +76,11 @@ func (a *app) searchCalls(ctx context.Context, args []string) error {
 	crmObjectType := fs.String("crm-object-type", "", "CRM object type filter")
 	crmObjectID := fs.String("crm-object-id", "", "CRM object ID filter")
 	limit := fs.Int("limit", 20, "maximum results to return")
-	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "Allow Postgres raw call JSON output for operator-controlled exports")
+	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "accepted for backward compatibility; Postgres search calls returns minimized call metadata")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
-	if strings.TrimSpace(*dbPath) == "" && postgres.URLFromEnv(os.Getenv) != "" && !*allowSensitiveExport {
-		return errors.New("postgres search calls returns raw cached call JSON; pass --allow-sensitive-export for operator-controlled exports or use gongmcp search_calls for minimized output")
-	}
+	_ = allowSensitiveExport
 
 	store, err := openReadOnlyCallSearchStore(ctx, *dbPath)
 	if err != nil {

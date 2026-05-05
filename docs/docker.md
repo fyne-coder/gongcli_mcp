@@ -149,8 +149,8 @@ The first Postgres vertical slice supports:
 - `gongctl sync status`
 - `gongctl sync read-model` and `gongctl sync read-model --rebuild` for
   Postgres builtin fact readiness and repair
-- `gongctl search calls` only for operator-controlled raw exports with
-  `--allow-sensitive-export`; use MCP `search_calls` for minimized output
+- `gongctl search calls` for minimized read-model call metadata; use explicit
+  raw-export commands with `--allow-sensitive-export` for raw payload access
 - `gongctl search transcripts`
 - `gongmcp --tool-preset business-pilot`: `get_sync_status`,
   `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
