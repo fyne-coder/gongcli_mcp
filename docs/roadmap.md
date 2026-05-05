@@ -66,6 +66,9 @@ item 6 have shipped. Item 3 remains partial because regression tests and the
 exposure-classification table exist, but a written tool-intake checklist is not
 in the repo. Item 6 still needs customer-platform restore drills for production
 PITR/replica workflows before broad GA.
+The Postgres client pilot release packet and onboarding checklist now document
+the controlled shared-deployment handoff, but they do not replace a published
+tag, image digest verification, or customer-platform dry run.
 
 Required outcomes:
 

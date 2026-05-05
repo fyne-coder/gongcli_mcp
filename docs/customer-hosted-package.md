@@ -29,6 +29,7 @@ of the package supports deployment, security review, support, and operations.
 | Smoke-test scripts | `scripts/docker-smoke.sh`, `scripts/smoke-http-mcp.sh`, [Docker deployment](docker.md), [Customer implementation checklist](implementation-checklist.md#smoke-tests) |
 | Example security questionnaire answers | [Security questionnaire](security-questionnaire.md) |
 | Postgres shared-deployment pilot packet | [Postgres client pilot release packet](postgres-client-pilot-release-packet.md) |
+| Postgres operator onboarding checklist | [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md) |
 
 ## Data-Flow Diagram
 

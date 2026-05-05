@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added development-branch Postgres client pilot release packet and onboarding
+  checklist for controlled shared deployments, including scoped-role,
+  synthetic-evidence, customer-platform dry-run, digest-pinning, and rollback
+  requirements.
+- Added development-branch scoped Postgres analyst reader support for reviewed
+  `analyst` and `analyst-expansion` sessions under
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`, while keeping Postgres
+  `all-readonly`, `all-tools`, and `all` rejected.
+- Added MCP-layer small-cell suppression for enforced scoped Postgres analyst
+  dimension outputs, omitting buckets below 3 calls with explicit
+  `small_cell_suppression_applied` metadata while leaving SQLite defaults
+  unchanged.
 - Added development-branch Postgres explicit allowlist support for filtered
   `missing_transcripts`, matching SQLite date, lifecycle, scope, system,
   direction, and CRM object filters for admin transcript-backfill workflows.

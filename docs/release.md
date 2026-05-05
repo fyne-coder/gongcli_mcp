@@ -151,3 +151,8 @@ For a controlled shared Postgres client pilot, use the
 as the handoff checklist. It narrows the supported pilot surface, evidence
 bundle, digest-pinning expectations, and non-GA limitations before business
 users connect.
+
+The shorter operator sequence is the
+[Postgres client onboarding checklist](postgres-client-onboarding-checklist.md).
+Completing that checklist is publish-readiness evidence for a controlled pilot;
+it is not by itself a tag, image publication, or GA certification.

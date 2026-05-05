@@ -6,6 +6,10 @@ Use this packet when preparing a controlled customer-hosted Postgres pilot where
 sync and MCP run in separate containers or hosts. It is a client-sharing
 checklist, not a GA claim.
 
+For the short operator sequence, use the
+[Postgres client onboarding checklist](postgres-client-onboarding-checklist.md)
+after this packet is reviewed.
+
 SQLite remains the complete/default local workflow. Postgres is the shared
 deployment path for multi-container pilots that cannot rely on a shared
 filesystem.
