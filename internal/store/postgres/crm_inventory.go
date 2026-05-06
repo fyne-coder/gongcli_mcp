@@ -264,7 +264,10 @@ SELECT c.call_id,
   CROSS JOIN input
   LEFT JOIN transcripts t
     ON t.call_id = c.call_id
+  LEFT JOIN governance_ingest_skipped_calls gisc
+    ON gisc.call_id = c.call_id
  WHERE t.call_id IS NULL
+   AND gisc.call_id IS NULL
    AND (
 		(input.crm_object_type_value = '' AND input.crm_object_id_value = '')
 		OR (input.crm_object_type_value <> '' AND EXISTS (
@@ -294,6 +297,27 @@ SELECT c.call_id,
 $function$;
 
 REVOKE ALL ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+`
+
+const postgresMissingTranscriptCountFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_missing_transcript_count()
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT COUNT(*)
+  FROM calls c
+  LEFT JOIN transcripts t
+    ON t.call_id = c.call_id
+  LEFT JOIN governance_ingest_skipped_calls gisc
+    ON gisc.call_id = c.call_id
+ WHERE t.call_id IS NULL
+   AND gisc.call_id IS NULL
+$function$;
+
+REVOKE ALL ON FUNCTION gongmcp_missing_transcript_count() FROM PUBLIC;
 `
 
 const postgresCRMFieldValueSearchFunctionSQL = `

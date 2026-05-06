@@ -71,6 +71,14 @@ type FinishSyncRunParams struct {
 	RequestContext string
 }
 
+type GovernanceIngestSkippedCallParams struct {
+	CallID         string
+	ConfigSHA256   string
+	MatchedList    string
+	SourceCategory string
+	RunID          int64
+}
+
 type SyncRun struct {
 	ID             int64
 	Scope          string
@@ -1130,6 +1138,9 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*CallRecor
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := ensureSQLiteCallNotGovernanceSkippedTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
 
 	query := `INSERT INTO calls(
 				call_id, title, started_at, duration_seconds, parties_count, context_present,
@@ -1208,6 +1219,141 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*CallRecor
 		return nil, err
 	}
 	return record, nil
+}
+
+func (s *Store) RecordGovernanceIngestSkippedCall(ctx context.Context, params GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO governance_ingest_skipped_calls(
+		call_id, config_sha256, matched_list, source_category, run_id, skipped_at
+	) VALUES(?, ?, ?, ?, ?, ?)
+	ON CONFLICT(call_id) DO UPDATE SET
+		config_sha256 = excluded.config_sha256,
+		matched_list = excluded.matched_list,
+		source_category = excluded.source_category,
+		run_id = excluded.run_id,
+		skipped_at = excluded.skipped_at`,
+		callID,
+		strings.TrimSpace(params.ConfigSHA256),
+		strings.TrimSpace(params.MatchedList),
+		strings.TrimSpace(params.SourceCategory),
+		params.RunID,
+		nowUTC(),
+	)
+	return err
+}
+
+func (s *Store) RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx context.Context, params GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := recordGovernanceIngestSkippedCallTx(ctx, tx, params); err != nil {
+		return err
+	}
+	if err := deleteGovernanceIngestCachedCallTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ClearGovernanceIngestSkippedCall(ctx context.Context, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM governance_ingest_skipped_calls WHERE call_id = ?`, callID)
+	return err
+}
+
+func (s *Store) DeleteGovernanceIngestCachedCall(ctx context.Context, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("governance ingest cached call_id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteGovernanceIngestCachedCallTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func recordGovernanceIngestSkippedCallTx(ctx context.Context, tx *sql.Tx, params GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO governance_ingest_skipped_calls(
+		call_id, config_sha256, matched_list, source_category, run_id, skipped_at
+	) VALUES(?, ?, ?, ?, ?, ?)
+	ON CONFLICT(call_id) DO UPDATE SET
+		config_sha256 = excluded.config_sha256,
+		matched_list = excluded.matched_list,
+		source_category = excluded.source_category,
+		run_id = excluded.run_id,
+		skipped_at = excluded.skipped_at`,
+		callID,
+		strings.TrimSpace(params.ConfigSHA256),
+		strings.TrimSpace(params.MatchedList),
+		strings.TrimSpace(params.SourceCategory),
+		params.RunID,
+		nowUTC(),
+	)
+	return err
+}
+
+func deleteGovernanceIngestCachedCallTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	for _, query := range []string{
+		`DELETE FROM profile_call_fact_cache WHERE call_id = ?`,
+		`DELETE FROM scorecard_activity WHERE call_id = ?`,
+		`DELETE FROM transcript_segments WHERE call_id = ?`,
+		`DELETE FROM transcripts WHERE call_id = ?`,
+		`DELETE FROM call_context_fields WHERE call_id = ?`,
+		`DELETE FROM call_context_objects WHERE call_id = ?`,
+		`DELETE FROM calls WHERE call_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, callID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transcript_segments_fts(transcript_segments_fts) VALUES ('rebuild')`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureSQLiteCallNotGovernanceSkippedTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM governance_ingest_skipped_calls WHERE call_id = ?`, callID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return fmt.Errorf("call %q was previously skipped by governance ingest", callID)
+	}
+	return nil
+}
+
+func (s *Store) CallRawJSON(ctx context.Context, callID string) (json.RawMessage, error) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil, errors.New("call id is required")
+	}
+	var raw []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT raw_json FROM calls WHERE call_id = ?`, callID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (s *Store) UpsertCallContext(ctx context.Context, callID string, raw json.RawMessage) (ContextCounts, error) {
@@ -1621,9 +1767,10 @@ func (s *Store) FindCallsMissingTranscriptsByFilters(ctx context.Context, params
 
 	query := `SELECT c.call_id, c.title, c.started_at
 		   FROM calls c
-		   LEFT JOIN transcripts t ON t.call_id = c.call_id`
+		   LEFT JOIN transcripts t ON t.call_id = c.call_id
+		   LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id`
 	var args []any
-	where := []string{`t.call_id IS NULL`}
+	where := []string{`t.call_id IS NULL`, `gisc.call_id IS NULL`}
 	factWhere, factArgs, err := callFactFilterWhere("cf", callFactFilterParams{
 		FromDate:        params.FromDate,
 		ToDate:          params.ToDate,
@@ -4201,7 +4348,8 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 		`SELECT COUNT(*)
 		   FROM calls c
 		   LEFT JOIN transcripts t ON t.call_id = c.call_id
-		  WHERE t.call_id IS NULL`,
+		   LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id
+		  WHERE t.call_id IS NULL AND gisc.call_id IS NULL`,
 	).Scan(&summary.MissingTranscripts); err != nil {
 		return nil, err
 	}

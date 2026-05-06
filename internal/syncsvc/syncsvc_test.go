@@ -12,6 +12,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/auth"
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -172,6 +173,177 @@ func TestSyncCallsPaginatesAndStoresContext(t *testing.T) {
 	if seen != 2 || written != 2 {
 		t.Fatalf("seen/written=%d/%d want 2/2", seen, written)
 	}
+}
+
+func TestSyncCallsGovernanceIngestSkipsRestrictedSyntheticCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	cfg, err := governance.ParseYAML([]byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example Restricted Corp"
+        aliases:
+          - "restricted.example"
+`))
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"call-governance-skip","title":"Example Restricted Corp cached","started":"2026-04-19T14:00:00Z","context":{"crmObjects":[{"type":"Account","name":"Example Restricted Corp"}]}}`)); err != nil {
+		t.Fatalf("precache restricted call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"call-governance-skip","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":1000,"text":"cached restricted transcript"}]}]}`)); err != nil {
+		t.Fatalf("precache restricted transcript: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 2},
+			"calls": []map[string]any{
+				{
+					"id":      "call-governance-skip",
+					"title":   "Example Restricted Corp discovery",
+					"started": "2026-04-20T14:00:00Z",
+					"context": map[string]any{"crmObjects": []map[string]any{{
+						"type": "Account",
+						"name": "Example Restricted Corp",
+					}}},
+				},
+				{
+					"id":      "call-governance-allowed",
+					"title":   "Allowed account discovery",
+					"started": "2026-04-21T14:00:00Z",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result, err := SyncCalls(ctx, newTestClient(t, server), store, CallsParams{
+		From:       "2026-04-20",
+		To:         "2026-04-24",
+		Governance: cfg,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.RecordsSeen != 2 || result.RecordsWritten != 1 || result.RecordsSkipped != 1 {
+		t.Fatalf("seen/written/skipped=%d/%d/%d want 2/1/1", result.RecordsSeen, result.RecordsWritten, result.RecordsSkipped)
+	}
+	assertCount(t, store.DB(), "calls", 1)
+	assertCount(t, store.DB(), "transcripts", 0)
+	assertCount(t, store.DB(), "transcript_segments", 0)
+
+	var callID, configSHA, matchedList, sourceCategory string
+	if err := store.DB().QueryRowContext(ctx, `SELECT call_id, config_sha256, matched_list, source_category FROM governance_ingest_skipped_calls`).Scan(&callID, &configSHA, &matchedList, &sourceCategory); err != nil {
+		t.Fatalf("query skipped ledger: %v", err)
+	}
+	if callID != "call-governance-skip" || configSHA == "" || matchedList != governance.ListNoAI || sourceCategory != "call_payload" {
+		t.Fatalf("unexpected ledger row call_id=%q sha=%q list=%q source=%q", callID, configSHA, matchedList, sourceCategory)
+	}
+	var ledgerText string
+	if err := store.DB().QueryRowContext(ctx, `SELECT config_sha256 || ' ' || matched_list || ' ' || source_category FROM governance_ingest_skipped_calls`).Scan(&ledgerText); err != nil {
+		t.Fatalf("query ledger text: %v", err)
+	}
+	if strings.Contains(ledgerText, "Example Restricted Corp") || strings.Contains(ledgerText, "restricted.example") {
+		t.Fatalf("ledger leaked restricted name or alias: %q", ledgerText)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(ctx, `SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync request context: %v", err)
+	}
+	if !strings.Contains(requestContext, "governance_config_sha256="+cfg.Fingerprint()) {
+		t.Fatalf("request_context=%q missing governance fingerprint", requestContext)
+	}
+}
+
+func TestSyncCallsGovernanceClearsStaleSkipLedgerForAllowedCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	cfg, err := governance.ParseYAML([]byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example Stale Restricted Corp"
+`))
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+		CallID:         "call-governance-stale",
+		ConfigSHA256:   "old-config",
+		MatchedList:    governance.ListNoAI,
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall returned error: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 1},
+			"calls": []map[string]any{{
+				"id":      "call-governance-stale",
+				"title":   "Allowed after governance relaxation",
+				"started": "2026-04-22T14:00:00Z",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	result, err := SyncCalls(ctx, newTestClient(t, server), store, CallsParams{Governance: cfg})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.RecordsWritten != 1 || result.RecordsSkipped != 0 {
+		t.Fatalf("written/skipped=%d/%d want 1/0", result.RecordsWritten, result.RecordsSkipped)
+	}
+	assertCount(t, store.DB(), "calls", 1)
+	assertCount(t, store.DB(), "governance_ingest_skipped_calls", 0)
+}
+
+func TestSyncCallsNoGovernanceCannotRehydrateLedgeredCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+		CallID:         "call-governance-tombstone",
+		ConfigSHA256:   "old-config",
+		MatchedList:    governance.ListNoAI,
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall returned error: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 1},
+			"calls": []map[string]any{{
+				"id":      "call-governance-tombstone",
+				"title":   "Ungoverned rehydrate attempt",
+				"started": "2026-04-22T14:00:00Z",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	_, err := SyncCalls(ctx, newTestClient(t, server), store, CallsParams{})
+	if err == nil || !strings.Contains(err.Error(), "previously skipped by governance ingest") {
+		t.Fatalf("SyncCalls error=%v, want governance tombstone error", err)
+	}
+	assertCount(t, store.DB(), "calls", 0)
 }
 
 func TestSyncCallsFallsBackWhenExposedPartiesRejected(t *testing.T) {

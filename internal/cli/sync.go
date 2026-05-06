@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
@@ -225,6 +226,7 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 	maxPages := fs.Int("max-pages", 0, "maximum pages to sync; 0 means all pages")
 	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow extended CRM-context sync in restricted mode")
 	includeParties := fs.Bool("include-parties", false, "request Gong call participant fields such as names, emails, and titles")
+	governanceConfig := fs.String("governance-config", "", "private AI governance YAML config for ingest-time call exclusion")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -257,6 +259,14 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	var ingestGovernance *governance.Config
+	if strings.TrimSpace(*governanceConfig) != "" {
+		var err error
+		ingestGovernance, err = governance.LoadFile(*governanceConfig)
+		if err != nil {
+			return err
+		}
+	}
 
 	store, err := openWritableCoreStore(ctx, *dbPath)
 	if err != nil {
@@ -276,13 +286,15 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 		Preset:        presetName,
 		MaxPages:      *maxPages,
 		ExposeParties: *includeParties,
+		Governance:    ingestGovernance,
 	})
 	fmt.Fprintf(
 		a.err,
-		"synced calls: pages=%d seen=%d written=%d preset=%s context=%s cursor=%s%s db=%s\n",
+		"synced calls: pages=%d seen=%d written=%d skipped=%d preset=%s context=%s cursor=%s%s db=%s\n",
 		result.Pages,
 		result.RecordsSeen,
 		result.RecordsWritten,
+		result.RecordsSkipped,
 		presetName,
 		displayContext(requestContext),
 		displayCursor(result.Cursor),
@@ -439,8 +451,17 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 	limit := fs.Int("limit", 100, "maximum missing transcripts to fetch")
 	batchSize := fs.Int("batch-size", 100, "maximum call IDs per Gong transcript request")
 	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow transcript sync in restricted mode")
+	governanceConfig := fs.String("governance-config", "", "private AI governance YAML config; transcript sync skips calls ledgered by governed call sync")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
+	}
+	var ingestGovernance *governance.Config
+	if strings.TrimSpace(*governanceConfig) != "" {
+		loadedGovernance, err := governance.LoadFile(*governanceConfig)
+		if err != nil {
+			return err
+		}
+		ingestGovernance = loadedGovernance
 	}
 	if strings.TrimSpace(*outDir) == "" {
 		return fmt.Errorf("--out-dir is required")
@@ -460,7 +481,7 @@ func (a *app) syncTranscripts(ctx context.Context, args []string) error {
 		return err
 	}
 
-	result, err := transcriptsync.SyncMissingWithBatch(ctx, client, store, *outDir, *limit, *batchSize)
+	result, err := transcriptsync.SyncMissingWithBatchGoverned(ctx, client, store, *outDir, *limit, *batchSize, ingestGovernance)
 	fmt.Fprintf(
 		a.err,
 		"synced transcripts: considered=%d downloaded=%d stored=%d failed=%d requests=%d batch_size=%d out_dir=%s db=%s\n",
@@ -1009,6 +1030,7 @@ func normalizeSyncRunStep(baseDir string, idx int, step *syncRunStepConfig) erro
 
 	switch step.Action {
 	case "calls":
+		step.GovernanceConfig = resolveConfigPath(baseDir, step.GovernanceConfig)
 		if strings.TrimSpace(step.From) == "" {
 			return fmt.Errorf("sync-run step %q requires from", step.Name)
 		}
@@ -1032,6 +1054,7 @@ func normalizeSyncRunStep(baseDir string, idx int, step *syncRunStepConfig) erro
 			return fmt.Errorf("sync-run step %q max_pages must be >= 0", step.Name)
 		}
 	case "transcripts":
+		step.GovernanceConfig = resolveConfigPath(baseDir, step.GovernanceConfig)
 		step.OutDir = resolveConfigPath(baseDir, step.OutDir)
 		if strings.TrimSpace(step.OutDir) == "" {
 			return fmt.Errorf("sync-run step %q requires out_dir", step.Name)
@@ -1162,6 +1185,7 @@ func newSyncRunResponse(config *syncRunConfig, dryRun bool) syncRunResponse {
 			Preset:                  step.Preset,
 			MaxPages:                step.MaxPages,
 			IncludeParties:          step.IncludeParties,
+			GovernanceConfig:        step.GovernanceConfig,
 			SettingsKind:            step.SettingsKind,
 			WorkspaceID:             step.WorkspaceID,
 			CallFrom:                step.CallFrom,
@@ -1222,6 +1246,10 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 		if err != nil {
 			return err
 		}
+		ingestGovernance, err := loadOptionalGovernanceConfig(step.GovernanceConfig)
+		if err != nil {
+			return err
+		}
 		syncResult, err := syncsvc.SyncCalls(ctx, client, store, syncsvc.CallsParams{
 			From:          step.From,
 			To:            step.To,
@@ -1229,6 +1257,7 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 			Preset:        presetName,
 			MaxPages:      step.MaxPages,
 			ExposeParties: step.IncludeParties,
+			Governance:    ingestGovernance,
 		})
 		if err != nil {
 			return err
@@ -1281,7 +1310,11 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 		}
 		populateSyncRunServiceResult(result, syncResult)
 	case "transcripts":
-		syncResult, err := transcriptsync.SyncMissingWithBatch(ctx, client, store, step.OutDir, step.Limit, step.BatchSize)
+		ingestGovernance, err := loadOptionalGovernanceConfig(step.GovernanceConfig)
+		if err != nil {
+			return err
+		}
+		syncResult, err := transcriptsync.SyncMissingWithBatchGoverned(ctx, client, store, step.OutDir, step.Limit, step.BatchSize, ingestGovernance)
 		if err != nil {
 			return err
 		}
@@ -1296,11 +1329,19 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 			Failed:     syncResult.Failed,
 			Requests:   syncResult.Requests,
 			BatchSize:  syncResult.BatchSize,
+			Skipped:    syncResult.Skipped,
 		}
 	default:
 		return fmt.Errorf("unsupported sync-run action %q", step.Action)
 	}
 	return nil
+}
+
+func loadOptionalGovernanceConfig(path string) (*governance.Config, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	return governance.LoadFile(path)
 }
 
 func populateSyncRunServiceResult(target *syncRunStepResult, source syncsvc.Result) {
@@ -1311,6 +1352,7 @@ func populateSyncRunServiceResult(target *syncRunStepResult, source syncsvc.Resu
 	target.Pages = source.Pages
 	target.RecordsSeen = source.RecordsSeen
 	target.RecordsWritten = source.RecordsWritten
+	target.RecordsSkipped = source.RecordsSkipped
 }
 
 type syncStatusResponse struct {
@@ -1375,25 +1417,26 @@ type syncRunConfig struct {
 }
 
 type syncRunStepConfig struct {
-	Name           string   `yaml:"name,omitempty" json:"name,omitempty"`
-	Action         string   `yaml:"action" json:"action"`
-	From           string   `yaml:"from,omitempty" json:"from,omitempty"`
-	To             string   `yaml:"to,omitempty" json:"to,omitempty"`
-	Preset         string   `yaml:"preset,omitempty" json:"preset,omitempty"`
-	MaxPages       int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
-	CallFrom       string   `yaml:"call_from,omitempty" json:"call_from,omitempty"`
-	CallTo         string   `yaml:"call_to,omitempty" json:"call_to,omitempty"`
-	ReviewFrom     string   `yaml:"review_from,omitempty" json:"review_from,omitempty"`
-	ReviewTo       string   `yaml:"review_to,omitempty" json:"review_to,omitempty"`
-	ReviewMethod   string   `yaml:"review_method,omitempty" json:"review_method,omitempty"`
-	OutDir         string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
-	Limit          int      `yaml:"limit,omitempty" json:"limit,omitempty"`
-	BatchSize      int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
-	IncludeParties bool     `yaml:"include_parties,omitempty" json:"include_parties,omitempty"`
-	IntegrationID  string   `yaml:"integration_id,omitempty" json:"integration_id,omitempty"`
-	ObjectTypes    []string `yaml:"object_types,omitempty" json:"object_types,omitempty"`
-	SettingsKind   string   `yaml:"settings_kind,omitempty" json:"settings_kind,omitempty"`
-	WorkspaceID    string   `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	Name             string   `yaml:"name,omitempty" json:"name,omitempty"`
+	Action           string   `yaml:"action" json:"action"`
+	From             string   `yaml:"from,omitempty" json:"from,omitempty"`
+	To               string   `yaml:"to,omitempty" json:"to,omitempty"`
+	Preset           string   `yaml:"preset,omitempty" json:"preset,omitempty"`
+	MaxPages         int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
+	CallFrom         string   `yaml:"call_from,omitempty" json:"call_from,omitempty"`
+	CallTo           string   `yaml:"call_to,omitempty" json:"call_to,omitempty"`
+	ReviewFrom       string   `yaml:"review_from,omitempty" json:"review_from,omitempty"`
+	ReviewTo         string   `yaml:"review_to,omitempty" json:"review_to,omitempty"`
+	ReviewMethod     string   `yaml:"review_method,omitempty" json:"review_method,omitempty"`
+	OutDir           string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
+	Limit            int      `yaml:"limit,omitempty" json:"limit,omitempty"`
+	BatchSize        int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
+	IncludeParties   bool     `yaml:"include_parties,omitempty" json:"include_parties,omitempty"`
+	IntegrationID    string   `yaml:"integration_id,omitempty" json:"integration_id,omitempty"`
+	ObjectTypes      []string `yaml:"object_types,omitempty" json:"object_types,omitempty"`
+	SettingsKind     string   `yaml:"settings_kind,omitempty" json:"settings_kind,omitempty"`
+	WorkspaceID      string   `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	GovernanceConfig string   `yaml:"governance_config,omitempty" json:"governance_config,omitempty"`
 }
 
 type syncRunResponse struct {
@@ -1429,6 +1472,7 @@ type syncRunStepResult struct {
 	Limit                   int                     `json:"limit,omitempty"`
 	BatchSize               int                     `json:"batch_size,omitempty"`
 	IncludeParties          bool                    `json:"include_parties,omitempty"`
+	GovernanceConfig        string                  `json:"governance_config,omitempty"`
 	Scope                   string                  `json:"scope,omitempty"`
 	SyncKey                 string                  `json:"sync_key,omitempty"`
 	RunID                   int64                   `json:"run_id,omitempty"`
@@ -1436,6 +1480,7 @@ type syncRunStepResult struct {
 	Pages                   int                     `json:"pages,omitempty"`
 	RecordsSeen             int64                   `json:"records_seen,omitempty"`
 	RecordsWritten          int64                   `json:"records_written,omitempty"`
+	RecordsSkipped          int64                   `json:"records_skipped,omitempty"`
 	TranscriptResult        *syncRunTranscriptStats `json:"transcript_result,omitempty"`
 	Error                   string                  `json:"error,omitempty"`
 }
@@ -1447,6 +1492,7 @@ type syncRunTranscriptStats struct {
 	Failed     int `json:"failed"`
 	Requests   int `json:"requests"`
 	BatchSize  int `json:"batch_size"`
+	Skipped    int `json:"skipped,omitempty"`
 }
 
 type repeatedStringFlag []string

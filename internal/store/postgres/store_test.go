@@ -1191,7 +1191,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "purged_call_ids", "governance_policy_state", "governance_suppressed_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "purged_call_ids", "governance_policy_state", "governance_suppressed_calls", "governance_ingest_skipped_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -1265,6 +1265,20 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 		}
 		if !exists {
 			t.Fatalf("read model trigger %s does not exist", trigger)
+		}
+	}
+}
+
+func TestPostgresMissingTranscriptFunctionsReferenceGovernanceIngestLedger(t *testing.T) {
+	for name, sqlText := range map[string]string{
+		"missing_transcripts":      postgresMissingTranscriptsFunctionSQL,
+		"missing_transcript_count": postgresMissingTranscriptCountFunctionSQL,
+	} {
+		if !strings.Contains(sqlText, "governance_ingest_skipped_calls") {
+			t.Fatalf("%s SQL does not reference governance ingest ledger", name)
+		}
+		if !strings.Contains(sqlText, "gisc.call_id IS NULL") {
+			t.Fatalf("%s SQL does not exclude ledgered calls", name)
 		}
 	}
 }

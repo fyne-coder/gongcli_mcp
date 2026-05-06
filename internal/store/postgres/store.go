@@ -127,6 +127,7 @@ func DefaultReadOnlyFunctionSignatures() []string {
 		"public.gongmcp_late_stage_call_counts(text, text, text)",
 		"public.gongmcp_late_stage_signal_inventory(text, text, text, integer, boolean)",
 		"public.gongmcp_late_stage_stage_counts(text, text, text)",
+		"public.gongmcp_missing_transcript_count()",
 		"public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_opportunities_missing_transcripts(text, integer)",
 		"public.gongmcp_opportunity_call_summary(text, integer)",
@@ -501,6 +502,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_compare_lifecycle_crm_fields(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_missing_transcript_count();
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
@@ -512,6 +514,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresLifecycleCRMFieldComparisonFunctionSQL+`
 	`+postgresTranscriptCRMContextSearchFunctionSQL+`
 	`+postgresMissingTranscriptsFunctionSQL+`
+	`+postgresMissingTranscriptCountFunctionSQL+`
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments(search_text text, row_limit integer)
 RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
 LANGUAGE sql
@@ -1254,6 +1257,7 @@ BEGIN
 			GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader;
+			GRANT EXECUTE ON FUNCTION gongmcp_missing_transcript_count() TO gongmcp_reader;
 			GRANT EXECUTE ON FUNCTION gongmcp_cache_purge_plan(text) TO gongmcp_reader;
 		END IF;
 	END;
@@ -1922,6 +1926,9 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*sqlite.Ca
 	if err := ensurePostgresCallNotPurgedTx(ctx, tx, payload.CallID); err != nil {
 		return nil, err
 	}
+	if err := ensurePostgresCallNotGovernanceSkippedTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO calls(
 	call_id, title, started_at, duration_seconds, parties_count, context_present, raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
@@ -1959,6 +1966,159 @@ ON CONFLICT(call_id) DO UPDATE SET
 		return nil, err
 	}
 	return s.callByID(ctx, payload.CallID)
+}
+
+func (s *Store) RecordGovernanceIngestSkippedCall(ctx context.Context, params sqlite.GovernanceIngestSkippedCallParams) error {
+	if err := s.ensureWritable(); err != nil {
+		return err
+	}
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO governance_ingest_skipped_calls(
+	call_id, config_sha256, matched_list, source_category, run_id, skipped_at
+) VALUES($1, $2, $3, $4, $5, $6)
+ON CONFLICT(call_id) DO UPDATE SET
+	config_sha256 = EXCLUDED.config_sha256,
+	matched_list = EXCLUDED.matched_list,
+	source_category = EXCLUDED.source_category,
+	run_id = EXCLUDED.run_id,
+	skipped_at = EXCLUDED.skipped_at`,
+		callID,
+		strings.TrimSpace(params.ConfigSHA256),
+		strings.TrimSpace(params.MatchedList),
+		strings.TrimSpace(params.SourceCategory),
+		params.RunID,
+		nowUTC(),
+	)
+	return err
+}
+
+func (s *Store) RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx context.Context, params sqlite.GovernanceIngestSkippedCallParams) error {
+	if err := s.ensureWritable(); err != nil {
+		return err
+	}
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := recordPostgresGovernanceIngestSkippedCallTx(ctx, tx, params); err != nil {
+		return err
+	}
+	if err := deletePostgresGovernanceIngestCachedCallTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ClearGovernanceIngestSkippedCall(ctx context.Context, callID string) error {
+	if err := s.ensureWritable(); err != nil {
+		return err
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM governance_ingest_skipped_calls WHERE call_id = $1`, callID)
+	return err
+}
+
+func (s *Store) DeleteGovernanceIngestCachedCall(ctx context.Context, callID string) error {
+	if err := s.ensureWritable(); err != nil {
+		return err
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("governance ingest cached call_id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockPostgresWriterTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := deletePostgresGovernanceIngestCachedCallTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func recordPostgresGovernanceIngestSkippedCallTx(ctx context.Context, tx *sql.Tx, params sqlite.GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO governance_ingest_skipped_calls(
+	call_id, config_sha256, matched_list, source_category, run_id, skipped_at
+) VALUES($1, $2, $3, $4, $5, $6)
+ON CONFLICT(call_id) DO UPDATE SET
+	config_sha256 = EXCLUDED.config_sha256,
+	matched_list = EXCLUDED.matched_list,
+	source_category = EXCLUDED.source_category,
+	run_id = EXCLUDED.run_id,
+	skipped_at = EXCLUDED.skipped_at`,
+		callID,
+		strings.TrimSpace(params.ConfigSHA256),
+		strings.TrimSpace(params.MatchedList),
+		strings.TrimSpace(params.SourceCategory),
+		params.RunID,
+		nowUTC(),
+	)
+	return err
+}
+
+func deletePostgresGovernanceIngestCachedCallTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	for _, query := range []string{
+		`DELETE FROM profile_call_fact_cache WHERE call_id = $1`,
+		`DELETE FROM scorecard_activity WHERE call_id = $1`,
+		`DELETE FROM governance_suppressed_calls WHERE call_id = $1`,
+		`DELETE FROM call_read_model_diagnostics WHERE call_id = $1`,
+		`DELETE FROM call_facts WHERE call_id = $1`,
+		`DELETE FROM transcript_segments WHERE call_id = $1`,
+		`DELETE FROM transcripts WHERE call_id = $1`,
+		`DELETE FROM call_context_fields WHERE call_id = $1`,
+		`DELETE FROM call_context_objects WHERE call_id = $1`,
+		`DELETE FROM calls WHERE call_id = $1`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, callID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensurePostgresCallNotGovernanceSkippedTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM governance_ingest_skipped_calls WHERE call_id = $1)`, callID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("call %q was previously skipped by governance ingest", callID)
+	}
+	return nil
+}
+
+func (s *Store) CallRawJSON(ctx context.Context, callID string) (json.RawMessage, error) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil, errors.New("call id is required")
+	}
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT raw_json::text FROM calls WHERE call_id = $1`, callID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (s *Store) UpsertUser(ctx context.Context, raw json.RawMessage) (*sqlite.UserRecord, error) {
@@ -2078,7 +2238,8 @@ func (s *Store) FindCallsMissingTranscriptsByFilters(ctx context.Context, params
 	query := `SELECT c.call_id, c.title, c.started_at
 FROM calls c
 LEFT JOIN transcripts t ON t.call_id = c.call_id
-WHERE t.call_id IS NULL`
+LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id
+WHERE t.call_id IS NULL AND gisc.call_id IS NULL`
 	args := []any{}
 	addArg := func(value any) string {
 		args = append(args, value)
@@ -2440,6 +2601,10 @@ SELECT o.object_type,
 
 func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummary, error) {
 	summary := &sqlite.SyncStatusSummary{}
+	missingTranscriptsQuery := `SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id WHERE t.call_id IS NULL AND gisc.call_id IS NULL`
+	if s.readOnly {
+		missingTranscriptsQuery = `SELECT gongmcp_missing_transcript_count()`
+	}
 	counts := []struct {
 		query string
 		dest  *int64
@@ -2456,7 +2621,7 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		{`SELECT COUNT(*) FROM crm_schema_fields`, &summary.TotalCRMSchemaFields},
 		{`SELECT COUNT(*) FROM gong_settings`, &summary.TotalGongSettings},
 		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &summary.TotalScorecards},
-		{`SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id WHERE t.call_id IS NULL`, &summary.MissingTranscripts},
+		{missingTranscriptsQuery, &summary.MissingTranscripts},
 		{`SELECT COUNT(*) FROM gongmcp_sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
 		{`SELECT COUNT(*) FROM calls WHERE TRIM(title) <> ''`, &summary.AttributionCoverage.CallsWithTitles},
 		{`SELECT COUNT(*) FROM calls WHERE parties_count > 0`, &summary.AttributionCoverage.CallsWithParties},
@@ -2479,7 +2644,7 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 			{`SELECT COUNT(field_name) FROM crm_schema_fields`, &summary.TotalCRMSchemaFields},
 			{`SELECT COUNT(kind) FROM gong_settings`, &summary.TotalGongSettings},
 			{`SELECT COUNT(kind) FROM gong_settings WHERE kind = 'scorecards'`, &summary.TotalScorecards},
-			{`SELECT COUNT(transcript_status) FROM call_facts WHERE transcript_status = 'missing'`, &summary.MissingTranscripts},
+			{missingTranscriptsQuery, &summary.MissingTranscripts},
 			{`SELECT COUNT(status) FROM gongmcp_sync_runs WHERE status = 'running'`, &summary.RunningSyncRuns},
 			{`SELECT 0`, &summary.AttributionCoverage.CallsWithTitles},
 			{`SELECT COUNT(parties_count) FROM calls WHERE parties_count > 0`, &summary.AttributionCoverage.CallsWithParties},
@@ -2682,6 +2847,7 @@ ON CONFLICT(call_id) DO UPDATE SET
 		`DELETE FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM scorecard_activity WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM governance_suppressed_calls WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM governance_ingest_skipped_calls WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM call_read_model_diagnostics WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM call_facts WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM transcript_segments WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,

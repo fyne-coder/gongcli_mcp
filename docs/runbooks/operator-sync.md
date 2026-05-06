@@ -131,6 +131,13 @@ steps:
     from: 2026-04-01
     to: 2026-04-02
     preset: minimal
+    governance_config: ../private/ai-governance.yaml
+  - name: missing_transcripts
+    action: transcripts
+    out_dir: ../transcripts
+    limit: 50
+    batch_size: 100
+    governance_config: ../private/ai-governance.yaml
   - name: directory_users
     action: users
   - name: tracker_settings
@@ -155,6 +162,16 @@ Notes:
 
 - Use `--preset minimal` unless approved business questions require embedded CRM
   context from `business` or `all`.
+- For clients with restricted-customer rules, supply the private governance
+  config during call and transcript sync, either as direct CLI flags or as
+  per-step `governance_config` values in reviewed `sync run --config` YAML.
+  Example:
+  `sync calls --governance-config /srv/gongctl/private/ai-governance.yaml` and
+  `sync transcripts --governance-config /srv/gongctl/private/ai-governance.yaml`.
+  Governed call sync skips matched calls before writing them to the cache and
+  removes previously cached call-scoped rows for matched call IDs. Transcript
+  sync re-evaluates cached call payloads for transcript candidates and excludes
+  matches before making transcript requests.
 - Transcript sync increases the sensitivity of the stored data. Only run it when
   transcript-backed search or analysis is in scope.
 - In restricted mode, `sync transcripts`, `sync calls --preset business`,

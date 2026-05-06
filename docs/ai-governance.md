@@ -88,6 +88,48 @@ fingerprint, a data fingerprint, and suppressed call IDs. It does not grant the
 `gongmcp_reader` role direct access to raw candidate values or governance policy
 tables.
 
+## Ingest-Time Exclusion
+
+For customer deployments where restricted customer data must not enter the
+MCP/AI cache, pass the private governance config during sync:
+
+```bash
+gongctl sync calls \
+  --from 2026-02-01 \
+  --to 2026-05-01 \
+  --preset business \
+  --allow-sensitive-export \
+  --governance-config /srv/gongctl/private/ai-governance.yaml
+```
+
+When the current call-list payload contains a configured restricted customer
+name or alias, the call is skipped before it is written to the cache. If the
+call was already cached before governance was enabled, governed sync removes the
+call-scoped cache rows it owns before recording the skip. The skip ledger stores
+minimized operator metadata: call ID, config fingerprint, matched list name,
+source category, run ID, and timestamp. Treat that ledger as customer
+operational metadata and exclude it from public support artifacts and shared
+logs by default. It does not store the restricted customer name, alias, raw
+matched value, transcript text, CRM field value, or raw call payload.
+
+Then pass the same config to transcript sync. Transcript sync loads the
+governance YAML, re-evaluates cached call payloads selected as transcript
+candidates, records newly restricted candidates in the skip ledger, removes
+their call-scoped cache rows, and excludes them before making Gong transcript
+requests:
+
+```bash
+gongctl sync transcripts \
+  --out-dir /srv/gongctl/transcripts \
+  --allow-sensitive-export \
+  --governance-config /srv/gongctl/private/ai-governance.yaml
+```
+
+This is a first ingest-time guard. It matches only data visible in the cached
+call-list payload. Keep runtime governance and, for SQLite, filtered MCP DB
+exports as defense in depth. If a later sync adds aliases or richer metadata,
+rerun the governed sync or audit/export flow before MCP use.
+
 ## Filtered MCP Database
 
 For MCP/LLM use, the preferred deployment is a physically filtered SQLite copy:
@@ -189,9 +231,9 @@ unmatched entries are expected for the current cache.
 ## Current Boundary
 
 Filtered export physically removes matched call-dependent rows from the MCP copy
-only; it does not delete data from the source operator SQLite cache. Raw-DB
-governance remains query/output-time suppression and does not prevent local
-operators from running raw CLI cache inspection commands. Postgres governance in
-this slice is a prepared-policy MCP search boundary, not database-enforced RLS.
-Environments that cannot store restricted customer data at all should add
-sync-time exclusion before ingesting those records.
+only; it does not delete data from the source operator SQLite cache. Ingest-time
+exclusion is the deployment path for environments that cannot store restricted
+customer data in the source cache. Raw-DB governance remains query/output-time
+suppression and does not prevent local operators from running raw CLI cache
+inspection commands. Postgres governance in this slice is a prepared-policy MCP
+search boundary, not database-enforced RLS.

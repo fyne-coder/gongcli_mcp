@@ -205,6 +205,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 		"generate_sales_hooks_from_themes":  businessAnalysisEvidenceFunctions,
 		"get_sync_status": {
 			"public.gongmcp_active_business_profile()",
+			"public.gongmcp_missing_transcript_count()",
 			"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
 			"public.gongmcp_profile_data_fingerprint()",
 			"public.gongmcp_scorecard_activity_totals()",
@@ -234,6 +235,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 			"public.gongmcp_unmapped_crm_field_inventory(integer)",
 		}, profileReadinessFunctions...),
 		"missing_transcripts": {
+			"public.gongmcp_missing_transcript_count()",
 			"public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer)",
 		},
 		"opportunities_missing_transcripts": {

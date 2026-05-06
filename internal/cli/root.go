@@ -124,9 +124,9 @@ func (a *app) usage() {
   gongctl governance export-filtered-db --db gong.db --config ai-governance.yaml --out governed.db [--overwrite]
   gongctl support bundle --db gong.db --out support-bundle [--include-env]  # or omit --db with GONG_DATABASE_URL for Postgres
   gongctl sync run --config company-sync.yaml [--dry-run]
-  gongctl sync calls --db gong.db --from YYYY-MM-DD --to YYYY-MM-DD --preset business|minimal|all [--max-pages N] [--allow-sensitive-export]
+  gongctl sync calls --db gong.db --from YYYY-MM-DD --to YYYY-MM-DD --preset business|minimal|all [--max-pages N] [--allow-sensitive-export] [--governance-config ai-governance.yaml]
   gongctl sync users --db gong.db [--max-pages N]
-  gongctl sync transcripts --db gong.db --out-dir transcripts [--limit N] [--batch-size N] [--allow-sensitive-export]
+  gongctl sync transcripts --db gong.db --out-dir transcripts [--limit N] [--batch-size N] [--allow-sensitive-export] [--governance-config ai-governance.yaml]
   gongctl sync crm-integrations --db gong.db
   gongctl sync crm-schema --db gong.db --integration-id ID --object-type ACCOUNT --object-type DEAL
   gongctl sync settings --db gong.db --kind trackers|scorecards|workspaces [--workspace-id ID]

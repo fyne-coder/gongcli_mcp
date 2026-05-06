@@ -20,6 +20,20 @@ type CallWriter interface {
 	UpsertCall(ctx context.Context, raw json.RawMessage) (*sqlite.CallRecord, error)
 }
 
+type GovernanceIngestSkipWriter interface {
+	RecordGovernanceIngestSkippedCall(ctx context.Context, params sqlite.GovernanceIngestSkippedCallParams) error
+	RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx context.Context, params sqlite.GovernanceIngestSkippedCallParams) error
+	ClearGovernanceIngestSkippedCall(ctx context.Context, callID string) error
+}
+
+type GovernanceIngestCacheCleaner interface {
+	DeleteGovernanceIngestCachedCall(ctx context.Context, callID string) error
+}
+
+type CallRawReader interface {
+	CallRawJSON(ctx context.Context, callID string) (json.RawMessage, error)
+}
+
 type UserWriter interface {
 	UpsertUser(ctx context.Context, raw json.RawMessage) (*sqlite.UserRecord, error)
 }
@@ -48,6 +62,8 @@ type SyncStore interface {
 	SyncRunStore
 	CallWriter
 	UserWriter
+	GovernanceIngestSkipWriter
+	GovernanceIngestCacheCleaner
 }
 
 type SettingsStore interface {
@@ -83,6 +99,9 @@ type TranscriptStore interface {
 	TranscriptWriter
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
 	SearchTranscriptSegments(ctx context.Context, query string, limit int) ([]sqlite.TranscriptSearchResult, error)
+	GovernanceIngestSkipWriter
+	GovernanceIngestCacheCleaner
+	CallRawReader
 }
 
 type CoreReadStore interface {

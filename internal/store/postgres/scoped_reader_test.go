@@ -40,6 +40,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer) TO "gongmcp_business_pilot_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_missing_transcript_count() TO "gongmcp_business_pilot_reader";`,
 		`COMMIT;`,
 	} {
 		if !strings.Contains(sql, want) {

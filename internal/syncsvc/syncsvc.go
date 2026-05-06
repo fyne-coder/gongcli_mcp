@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
@@ -30,6 +31,7 @@ type CallsParams struct {
 	Preset        string
 	MaxPages      int
 	ExposeParties bool
+	Governance    *governance.Config
 }
 
 type UsersParams struct {
@@ -70,6 +72,7 @@ type Result struct {
 	RecordsSeen              int64
 	RecordsWritten           int64
 	ParticipantCaptureStatus string
+	RecordsSkipped           int64
 }
 
 func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store storeiface.CRMIntegrationStore, params CRMIntegrationsParams) (result Result, err error) {
@@ -316,6 +319,11 @@ func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncSt
 	result.Scope = scopeCalls
 	result.SyncKey = buildSyncKey(scopeCalls, params.Preset, params.Context, params.From, params.To)
 	baseRequestContext := buildRequestContext(params.Preset, params.Context)
+	governanceFingerprint := ""
+	if params.Governance != nil {
+		governanceFingerprint = params.Governance.Fingerprint()
+		baseRequestContext = appendRequestContextPart(baseRequestContext, "governance_config_sha256="+governanceFingerprint)
+	}
 	requestContext := buildCallRequestContext(baseRequestContext, params.ExposeParties, false)
 	if params.ExposeParties {
 		result.ParticipantCaptureStatus = "requested"
@@ -391,7 +399,32 @@ func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncSt
 		result.Pages++
 		result.RecordsSeen += int64(len(page.Items))
 		for _, raw := range page.Items {
+			if params.Governance != nil {
+				decision, err := governance.EvaluateCallPayload(raw, params.Governance)
+				if err != nil {
+					return result, err
+				}
+				if decision.Skip {
+					if err := store.RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+						CallID:         decision.CallID,
+						ConfigSHA256:   governanceFingerprint,
+						MatchedList:    strings.Join(decision.MatchedLists, ","),
+						SourceCategory: decision.SourceCategory,
+						RunID:          run.ID,
+					}); err != nil {
+						return result, err
+					}
+					result.RecordsSkipped++
+					continue
+				}
+				if err := store.ClearGovernanceIngestSkippedCall(ctx, decision.CallID); err != nil {
+					return result, err
+				}
+			}
 			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				if params.Governance == nil && strings.Contains(err.Error(), "previously skipped by governance ingest") {
+					return result, fmt.Errorf("%w; rerun sync with --governance-config to re-evaluate or clear the governance ledger explicitly", err)
+				}
 				return result, err
 			}
 			result.RecordsWritten++
@@ -717,6 +750,18 @@ func buildRequestContext(preset string, requestContext string) string {
 		parts = append(parts, "context="+value)
 	}
 	return strings.Join(parts, ",")
+}
+
+func appendRequestContextPart(base string, part string) string {
+	part = strings.TrimSpace(part)
+	if part == "" {
+		return strings.TrimSpace(base)
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return part
+	}
+	return base + "," + part
 }
 
 func buildCallRequestContext(base string, includeParties bool, fallbackWithoutParties bool) string {

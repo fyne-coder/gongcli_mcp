@@ -42,6 +42,43 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsGovernanceIngestLedgerToExistingDB(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "existing.db")
+	db, err := sql.Open("sqlite", sqliteFileURI(path, nil))
+	if err != nil {
+		t.Fatalf("open pre-migration db: %v", err)
+	}
+	for idx := 0; idx < len(migrations)-1; idx++ {
+		if _, err := db.ExecContext(ctx, migrations[idx]); err != nil {
+			_ = db.Close()
+			t.Fatalf("apply pre-existing migration %d: %v", idx+1, err)
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", idx+1)); err != nil {
+			_ = db.Close()
+			t.Fatalf("set pre-existing user_version %d: %v", idx+1, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pre-migration db: %v", err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open migrated db: %v", err)
+	}
+	defer store.Close()
+	var tableName string
+	if err := store.DB().QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'governance_ingest_skipped_calls'`).Scan(&tableName); err != nil {
+		t.Fatalf("governance_ingest_skipped_calls missing after migrate: %v", err)
+	}
+	if tableName != "governance_ingest_skipped_calls" {
+		t.Fatalf("ledger table name=%q", tableName)
+	}
+}
+
 func TestUpsertIdempotency(t *testing.T) {
 	t.Parallel()
 
@@ -2476,6 +2513,14 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 	})); err != nil {
 		t.Fatalf("UpsertTranscript blocked returned error: %v", err)
 	}
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, GovernanceIngestSkippedCallParams{
+		CallID:         "call-governance-export-blocked",
+		ConfigSHA256:   "synthetic-export-config",
+		MatchedList:    "no_ai",
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall blocked returned error: %v", err)
+	}
 	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
 		"id":       "call-governance-export-allowed",
 		"title":    "Allowed export call",
@@ -2565,7 +2610,7 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 	if err != nil {
 		t.Fatalf("ExportGovernanceFilteredDB returned error: %v", err)
 	}
-	if plan.DeletedCalls != 3 || plan.DeletedTranscripts != 2 || plan.DeletedTranscriptSegments != 2 || plan.RemainingSuppressedCandidates != 0 {
+	if plan.DeletedCalls != 3 || plan.DeletedTranscripts != 2 || plan.DeletedTranscriptSegments != 2 || plan.DeletedGovernanceIngestRows != 1 || plan.RemainingSuppressedCandidates != 0 {
 		t.Fatalf("unexpected export plan: %+v", plan)
 	}
 
@@ -2596,6 +2641,32 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 		if strings.Contains(candidate.Value, "Blocked Export Corp") || candidate.CallID == "call-governance-export-blocked" {
 			t.Fatalf("filtered DB retained blocked governance candidate: %+v", candidate)
 		}
+	}
+	var ledgerRows int
+	if err := filtered.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM governance_ingest_skipped_calls WHERE call_id = 'call-governance-export-blocked'`).Scan(&ledgerRows); err != nil {
+		t.Fatalf("query filtered ledger rows: %v", err)
+	}
+	if ledgerRows != 0 {
+		t.Fatalf("filtered DB retained governance ingest ledger rows=%d want 0", ledgerRows)
+	}
+}
+
+func TestExportGovernanceFilteredDBRejectsSourceSidecarOutputOverlap(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source-overlap.db")
+	store, err := Open(ctx, sourcePath)
+	if err != nil {
+		t.Fatalf("Open source returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close source returned error: %v", err)
+	}
+	_, err = ExportGovernanceFilteredDB(ctx, sourcePath, sourcePath+"-wal", nil, true)
+	if err == nil || !strings.Contains(err.Error(), "must not overlap source") {
+		t.Fatalf("ExportGovernanceFilteredDB error=%v, want source sidecar overlap rejection", err)
 	}
 }
 

@@ -26,6 +26,7 @@ type GovernanceFilteredExportPlan struct {
 	DeletedContextFields          int64  `json:"deleted_context_fields"`
 	DeletedProfileCallFactRows    int64  `json:"deleted_profile_call_fact_rows"`
 	DeletedScorecardActivityRows  int64  `json:"deleted_scorecard_activity_rows"`
+	DeletedGovernanceIngestRows   int64  `json:"deleted_governance_ingest_rows"`
 	RemainingSuppressedCandidates int64  `json:"remaining_suppressed_candidates"`
 }
 
@@ -113,6 +114,9 @@ func ExportGovernanceFilteredDB(ctx context.Context, sourcePath, outputPath stri
 	if sourceAbs == outputAbs {
 		return nil, errors.New("output db path must be different from source db path")
 	}
+	if sqlitePathSetsOverlap(sourceAbs, outputAbs) {
+		return nil, errors.New("output db path and SQLite sidecars must not overlap source db path or sidecars")
+	}
 	if _, err := os.Stat(sourceAbs); err != nil {
 		return nil, err
 	}
@@ -173,14 +177,15 @@ func vacuumReadOnlyDBInto(ctx context.Context, sourceAbs, outputAbs string) erro
 
 func governanceCallIDTableRegistry() map[string]string {
 	return map[string]string{
-		"calls":                   "delete",
-		"transcripts":             "delete",
-		"transcript_segments":     "delete",
-		"call_context_objects":    "delete",
-		"call_context_fields":     "delete",
-		"profile_call_fact_cache": "delete",
-		"scorecard_activity":      "delete",
-		"transcript_segments_fts": "rebuild",
+		"calls":                           "delete",
+		"transcripts":                     "delete",
+		"transcript_segments":             "delete",
+		"call_context_objects":            "delete",
+		"call_context_fields":             "delete",
+		"profile_call_fact_cache":         "delete",
+		"scorecard_activity":              "delete",
+		"governance_ingest_skipped_calls": "delete",
+		"transcript_segments_fts":         "rebuild",
 	}
 }
 
@@ -232,6 +237,7 @@ func (s *Store) DeleteGovernanceSuppressedCalls(ctx context.Context, callIDs []s
 		{&plan.DeletedContextFields, `DELETE FROM call_context_fields WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
 		{&plan.DeletedContextObjects, `DELETE FROM call_context_objects WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
 		{&plan.DeletedCalls, `DELETE FROM calls WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
+		{&plan.DeletedGovernanceIngestRows, `DELETE FROM governance_ingest_skipped_calls WHERE call_id IN (SELECT call_id FROM governance_suppressed_call_ids)`},
 	} {
 		result, err := tx.ExecContext(ctx, item.query)
 		if err != nil {
@@ -292,6 +298,7 @@ SELECT
 	(SELECT COUNT(*) FROM call_context_objects WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
 	(SELECT COUNT(*) FROM call_context_fields WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
 	(SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
+	(SELECT COUNT(*) FROM governance_ingest_skipped_calls WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids)) +
 	(SELECT COUNT(*) FROM transcript_segments_fts WHERE call_id IN (SELECT call_id FROM governance_remaining_call_ids))
 `).Scan(&count)
 	if err != nil {
@@ -328,4 +335,23 @@ func removeSQLiteFiles(path string) error {
 		}
 	}
 	return nil
+}
+
+func sqlitePathSetsOverlap(left string, right string) bool {
+	leftPaths := sqliteRelatedPaths(left)
+	for candidate := range sqliteRelatedPaths(right) {
+		if _, ok := leftPaths[candidate]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func sqliteRelatedPaths(path string) map[string]struct{} {
+	clean := filepath.Clean(path)
+	return map[string]struct{}{
+		clean:          {},
+		clean + "-wal": {},
+		clean + "-shm": {},
+	}
 }

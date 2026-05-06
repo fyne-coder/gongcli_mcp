@@ -185,6 +185,84 @@ steps:
 	}
 }
 
+func TestSyncRunGovernanceConfigSkipsRestrictedCall(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "cache", "gong.db")
+	configPath := filepath.Join(dir, "sync-run.yaml")
+	if err := os.MkdirAll(filepath.Join(dir, "private"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	governancePath := filepath.Join(dir, "private", "ai-governance.yaml")
+	if err := os.WriteFile(governancePath, []byte(`version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example Sync Run Restricted Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write governance config: %v", err)
+	}
+	body := []byte(`version: 1
+db: ./cache/gong.db
+steps:
+  - name: governed_calls
+    action: calls
+    from: 2026-04-01
+    to: 2026-04-02
+    preset: minimal
+    governance_config: ./private/ai-governance.yaml
+`)
+	if err := os.WriteFile(configPath, body, 0o600); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/extensive" {
+			t.Fatalf("path=%q want /v2/calls/extensive", r.URL.Path)
+		}
+		writeCLIJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 2},
+			"calls": []map[string]any{
+				{"id": "call-sync-run-skip", "title": "Example Sync Run Restricted Corp discovery", "started": "2026-04-01T14:00:00Z"},
+				{"id": "call-sync-run-allowed", "title": "Allowed account discovery", "started": "2026-04-01T15:00:00Z"},
+			},
+		})
+	}))
+	defer server.Close()
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"sync", "run", "--config", configPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(sync run governed calls) code=%d stderr=%q", code, stderr.String())
+	}
+	var resp struct {
+		Steps []struct {
+			GovernanceConfig string `json:"governance_config"`
+			RecordsWritten   int64  `json:"records_written"`
+			RecordsSkipped   int64  `json:"records_skipped"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+	if len(resp.Steps) != 1 {
+		t.Fatalf("step count=%d want 1", len(resp.Steps))
+	}
+	if resp.Steps[0].GovernanceConfig != governancePath || resp.Steps[0].RecordsWritten != 1 || resp.Steps[0].RecordsSkipped != 1 {
+		t.Fatalf("unexpected governed step: %+v", resp.Steps[0])
+	}
+	store := openCLITestStore(t, dbPath)
+	defer store.Close()
+	var requestContext string
+	if err := store.DB().QueryRowContext(context.Background(), `SELECT request_context FROM sync_runs WHERE scope = 'calls' ORDER BY id DESC LIMIT 1`).Scan(&requestContext); err != nil {
+		t.Fatalf("query request context: %v", err)
+	}
+	if !strings.Contains(requestContext, "governance_config_sha256=") {
+		t.Fatalf("request_context=%q missing governance fingerprint", requestContext)
+	}
+}
+
 func TestSyncRunDryRunFlagsSensitiveSteps(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "sync-run.yaml")

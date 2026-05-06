@@ -907,6 +907,88 @@ func TestSyncTranscriptsDownloadsMissingCalls(t *testing.T) {
 	}
 }
 
+func TestSyncTranscriptsGovernanceConfigSkipsCachedRestrictedCall(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gong.db")
+	outDir := filepath.Join(dir, "transcripts")
+	governancePath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(governancePath, []byte(`version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example CLI Transcript Restricted Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write governance config: %v", err)
+	}
+	store := openCLITestStore(t, dbPath)
+	if _, err := store.UpsertCall(context.Background(), mustMarshalJSON(t, map[string]any{
+		"id":      "call-cli-transcript-skip",
+		"title":   "Example CLI Transcript Restricted Corp discovery",
+		"started": "2026-04-21T14:00:00Z",
+	})); err != nil {
+		t.Fatalf("UpsertCall restricted returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(context.Background(), mustMarshalJSON(t, map[string]any{
+		"id":      "call-cli-transcript-allowed",
+		"title":   "Allowed CLI transcript",
+		"started": "2026-04-21T15:00:00Z",
+	})); err != nil {
+		t.Fatalf("UpsertCall allowed returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/transcript" {
+			t.Fatalf("path=%q want /v2/calls/transcript", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		filter := body["filter"].(map[string]any)
+		callIDs := filter["callIds"].([]any)
+		if len(callIDs) != 1 || callIDs[0] != "call-cli-transcript-allowed" {
+			t.Fatalf("callIds=%v want [call-cli-transcript-allowed]", callIDs)
+		}
+		writeCLIJSON(t, w, map[string]any{
+			"callTranscripts": []map[string]any{{
+				"callId": "call-cli-transcript-allowed",
+				"transcript": []map[string]any{{
+					"speakerId": "speaker-001",
+					"sentences": []map[string]any{{"start": 0, "end": 1000, "text": "Allowed transcript sentence."}},
+				}},
+			}},
+		})
+	}))
+	defer server.Close()
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	err := a.sync(context.Background(), []string{
+		"transcripts",
+		"--db", dbPath,
+		"--out-dir", outDir,
+		"--limit", "10",
+		"--governance-config", governancePath,
+	})
+	if err != nil {
+		t.Fatalf("sync transcripts returned error: %v", err)
+	}
+	store = openCLITestStore(t, dbPath)
+	defer store.Close()
+	var restrictedRows int
+	if err := store.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM calls WHERE call_id = 'call-cli-transcript-skip'`).Scan(&restrictedRows); err != nil {
+		t.Fatalf("query restricted rows: %v", err)
+	}
+	if restrictedRows != 0 {
+		t.Fatalf("restricted rows=%d want 0", restrictedRows)
+	}
+}
+
 func TestSearchCommandsAndCallsShowJSON(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "gong.db")
 	store := openCLITestStore(t, dbPath)

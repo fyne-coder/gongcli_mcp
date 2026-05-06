@@ -1332,14 +1332,26 @@ BEGIN
 	END IF;
 END;
 $$;
-`,
+	`,
 	`
 DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
-` + postgresMissingTranscriptsFunctionSQL + `
+CREATE TABLE IF NOT EXISTS governance_ingest_skipped_calls (
+	call_id TEXT PRIMARY KEY,
+	config_sha256 TEXT NOT NULL,
+	matched_list TEXT NOT NULL,
+	source_category TEXT NOT NULL,
+	run_id BIGINT,
+	skipped_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pg_governance_ingest_skipped_calls_config
+	ON governance_ingest_skipped_calls(config_sha256);
+` + postgresMissingTranscriptsFunctionSQL + postgresMissingTranscriptCountFunctionSQL + `
 DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_missing_transcript_count() TO gongmcp_reader';
 	END IF;
 END;
 $$;
@@ -1668,5 +1680,19 @@ ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS loss_reason_present BOOLEAN NOT 
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_participant_title_present ON call_facts(participant_title_present, call_date, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_loss_reason_present ON call_facts(loss_reason_present, call_date, started_at DESC);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
+	`
+CREATE TABLE IF NOT EXISTS governance_ingest_skipped_calls (
+	call_id TEXT PRIMARY KEY,
+	config_sha256 TEXT NOT NULL,
+	matched_list TEXT NOT NULL,
+	source_category TEXT NOT NULL,
+	run_id BIGINT,
+	skipped_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pg_governance_ingest_skipped_calls_config
+	ON governance_ingest_skipped_calls(config_sha256);
+` + postgresMissingTranscriptsFunctionSQL + postgresMissingTranscriptCountFunctionSQL + `
 `,
 }
