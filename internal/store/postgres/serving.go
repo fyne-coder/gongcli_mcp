@@ -265,6 +265,7 @@ func refreshServingDBCopy(ctx context.Context, sourceDB, targetDB *sql.DB, suppr
 	if _, err := tx.ExecContext(ctx, `TRUNCATE TABLE
 call_read_model_diagnostics,
 call_facts,
+call_ai_highlights,
 call_context_fields,
 call_context_objects,
 transcript_segments,

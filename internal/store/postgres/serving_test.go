@@ -114,6 +114,11 @@ func TestRefreshServingDBVerticalSliceCopiesAllowedRows(t *testing.T) {
 			"title":    "Allowed serving call one",
 			"started":  "2026-04-24T12:00:00Z",
 			"duration": 900,
+			"content": map[string]any{
+				"highlights": []map[string]any{
+					{"type": "summary", "text": "Allowed synthetic highlight."},
+				},
+			},
 			"context": []any{
 				map[string]any{
 					"objectType": "Account",
@@ -138,6 +143,11 @@ func TestRefreshServingDBVerticalSliceCopiesAllowedRows(t *testing.T) {
 			"title":    "Blocked serving call one",
 			"started":  "2026-04-24T14:00:00Z",
 			"duration": 700,
+			"content": map[string]any{
+				"highlights": []map[string]any{
+					{"type": "summary", "text": "Restricted synthetic highlight."},
+				},
+			},
 			"context": []any{
 				map[string]any{
 					"objectType": "Account",
@@ -257,8 +267,10 @@ lists:
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM transcript_segments WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-serving-blocked-001'`, 0)
+	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM calls`, 2)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM transcripts WHERE call_id = 'pg-serving-allowed-001'`, 1)
+	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-serving-allowed-001'`, 1)
 	// call_facts should be rebuilt for allowed calls.
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_facts WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_facts`, 2)

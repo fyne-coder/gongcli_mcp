@@ -1,10 +1,11 @@
 # Gong-native enrichment endpoint review (Phase 13k)
 
 This document captures the Phase 13k decision matrix for adding Gong-native
-enrichment paths to `gongctl` and `gongmcp`. It is intentionally narrow:
-the slice that lands with this document only adds an opt-in raw capture flag
-for AI Highlights/brief/next-step content. No MCP tool exposure, no new DB
-schema, no new aggregate/dimension tools.
+enrichment paths to `gongctl` and `gongmcp`. Phase 13k added an opt-in raw
+capture flag for AI Highlights/brief/next-step content. The follow-up
+read-model slice adds a typed Postgres `call_ai_highlights` table populated
+from `content.highlights`, but still adds no MCP tool exposure and no
+aggregate/dimension tools.
 
 The review is meant to keep follow-up work reviewable. Treat each row as
 "approved/queued/deferred for now"; do not add MCP exposure for any row
@@ -15,28 +16,37 @@ governance/serving-DB filtering.
 
 | Endpoint | Phase 13k status | What it adds | Why it is gated |
 | --- | --- | --- | --- |
-| `POST /v2/calls/extensive` with `contentSelector.exposedFields.highlights=true` | Approved as **opt-in raw-capture prototype only**. No MCP exposure yet. Capture goes only through `--include-highlights` + `--allow-sensitive-export`. | Returns the call's AI Highlights / brief / next steps under `content.highlights` (replacing the deprecated `pointsOfInterest` and `actionItems` fields). | Highlights and next steps can include customer-facing summaries and named individuals. They must be treated like participant fields: opt-in, restricted-mode blocked unless explicit, and stored only in raw call payloads until a typed redacted read model exists. |
+| `POST /v2/calls/extensive` with `contentSelector.exposedFields.highlights=true` | Approved as **opt-in raw capture plus typed Postgres read model**. No MCP exposure yet. Capture goes only through `--include-highlights` + `--allow-sensitive-export`; `call_ai_highlights` is populated during Postgres read-model refresh. | Returns the call's AI Highlights / brief / next steps under `content.highlights` (replacing the deprecated `pointsOfInterest` and `actionItems` fields). | Highlights and next steps can include customer-facing summaries and named individuals. They must be treated like participant fields: opt-in, restricted-mode blocked unless explicit, excluded for governed/skipped calls, and copied into the redacted serving DB only for non-restricted calls. |
 | `POST /v2/calls/transcript` | Already supported. No change. | Authoritative transcript evidence for analyst tools. | Continues to be the evidence source; review/redaction for MCP exposure already exists. |
 | `POST /v2/entities/get-brief` | **Queued as beta / operator-only review.** Not added to `gongctl` or `gongmcp` in Phase 13k. | Returns Gong's CRM-entity brief synthesized across calls, emails, and other signals. | The brief crosses call boundaries and may include AI summaries built from data outside any single call. Plan/scope validation, retention rules, and governance/serving-DB redaction need explicit review before caching or MCP exposure. |
 | Topics, trackers, comments, interaction stats, outcomes | **Queued for follow-up review.** Classify likely safe-aggregate vs sensitive record-level exposure before any code work. | Could enable theme/coverage analyst flows, coaching aggregates, and outcome rollups. | Some of these are aggregate-friendly; others surface per-call or per-rep content. The exposure level must be classified per-endpoint, like the existing `internal/mcp` exposure matrix, before any MCP wiring. |
 
-## Implementation note for the next slice
+## Implementation status and next slice
 
-The next code slice after this one should:
+Implemented in the read-model follow-up:
 
-1. Extract a typed, redacted `call_ai_highlights` table (or read model) from
-   raw call payloads, not a fresh raw column.
-2. Apply governance ingest filtering and redacted-serving-DB
-   (`gongctl_mcp`) filtering to that read model so highlights for
-   blocklisted calls never reach MCP.
-3. Only after the read model and filters exist, add a facade operation
+1. Extracted a typed `call_ai_highlights` Postgres read model from raw call
+   payloads, not a fresh raw column.
+2. Kept `call_ai_highlights` out of generic read-only grants; read-only
+   validation treats it as sensitive until a reviewed facade operation exists.
+3. Applied redacted-serving-DB filtering by rebuilding the table only from
+   allowed calls in `gongctl_mcp`; restricted calls have no highlight rows.
+
+The next code slice should:
+
+1. Add a facade operation
    (e.g. `evidence.highlights.list`) routed by the existing Phase 13e2
    facade registry (see `internal/mcp/facade.go` and
    `docs/mcp-data-exposure.md`). Do not expose raw highlight payloads
    directly through MCP.
+2. Add output redaction, evidence limits, and small-cell/cohort safeguards
+   appropriate for AI-generated summary text.
+3. Decide whether highlights are evidence, accelerators for navigation, or
+   both. Transcript quotes remain the stronger evidentiary layer.
 
-Until that slice lands, the only sanctioned consumer of highlight content
-is operator review of stored raw call JSON.
+Until the facade slice lands, sanctioned consumers of highlight content are
+operator review of stored raw call JSON and the internal typed
+`call_ai_highlights` read model.
 
 ## Authorization contract for `--include-highlights`
 

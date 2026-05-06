@@ -181,6 +181,10 @@ Implementation controls on the CLI side:
   `include_highlights_result=request_sent` in sync history. There is no
   fallback path; if Gong rejects the selector, rerun without
   `--include-highlights`.
+- In Postgres, approved highlights are typed into `call_ai_highlights` during
+  read-model refresh. Treat that table as sensitive AI-generated call content:
+  it is not granted to generic readers and is not exposed through MCP until a
+  separate facade operation is reviewed.
 - `gongctl cache inventory --db ...` is read-only and returns cache metadata,
   sync history, profile status, and a sensitive-data warning. With Postgres,
   omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL`; the command adds

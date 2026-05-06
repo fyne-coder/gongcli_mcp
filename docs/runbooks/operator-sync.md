@@ -181,6 +181,9 @@ Notes:
   passthrough, and raw call JSON require `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`. Treat that override as an approval gate,
   not a convenience flag.
+- Postgres highlight capture also populates `call_ai_highlights` during
+  read-model refresh. The table is sensitive and remains operator/internal
+  until a reviewed MCP facade operation is added.
 - `sync run --config` files cannot contain a per-step sensitive-export bypass.
   Sensitive steps are visible in dry-run output, but restricted-mode approval is
   supplied only at runtime by the operator.

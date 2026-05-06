@@ -200,7 +200,7 @@ func TestPostgresCachePurgeBeforePlansAndDeletesCacheRows(t *testing.T) {
 	defer store.Close()
 	resetPostgresTestStore(t, ctx, store)
 
-	oldCall := json.RawMessage(`{"id":"pg-purge-old","title":"Old purge call","started":"2026-04-20T14:00:00Z","duration":1200,"context":{"crmObjects":[{"type":"Opportunity","id":"opp-purge-old","name":"Old purge opportunity","fields":{"StageName":"Discovery"}}]}}`)
+	oldCall := json.RawMessage(`{"id":"pg-purge-old","title":"Old purge call","started":"2026-04-20T14:00:00Z","duration":1200,"content":{"highlights":[{"type":"summary","text":"Old purge synthetic highlight."}]},"context":{"crmObjects":[{"type":"Opportunity","id":"opp-purge-old","name":"Old purge opportunity","fields":{"StageName":"Discovery"}}]}}`)
 	newCall := json.RawMessage(`{"id":"pg-purge-new","title":"New retained call","started":"2026-04-24T14:00:00Z","duration":900}`)
 	if _, err := store.UpsertCall(ctx, oldCall); err != nil {
 		t.Fatalf("UpsertCall old returned error: %v", err)
@@ -272,6 +272,7 @@ func TestPostgresCachePurgeBeforePlansAndDeletesCacheRows(t *testing.T) {
 		{"old context objects", `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-purge-old'`},
 		{"old context fields", `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-purge-old'`},
 		{"old call facts", `SELECT COUNT(*) FROM call_facts WHERE call_id = 'pg-purge-old'`},
+		{"old call AI highlights", `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-purge-old'`},
 		{"old read-model diagnostics", `SELECT COUNT(*) FROM call_read_model_diagnostics WHERE call_id = 'pg-purge-old'`},
 		{"old profile cache", `SELECT COUNT(*) FROM profile_call_fact_cache WHERE call_id = 'pg-purge-old'`},
 		{"old scorecard activity", `SELECT COUNT(*) FROM scorecard_activity WHERE call_id = 'pg-purge-old'`},
@@ -1191,7 +1192,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("postgres migration version=%d want at least 2", version)
 	}
-	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "purged_call_ids", "governance_policy_state", "governance_suppressed_calls", "governance_ingest_skipped_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
+	for _, table := range []string{"call_context_objects", "call_context_fields", "call_facts", "call_ai_highlights", "profile_meta", "profile_object_alias", "profile_field_concept", "profile_lifecycle_rule", "profile_methodology_concept", "profile_validation_warning", "profile_call_fact_cache_meta", "profile_call_fact_cache", "purged_call_ids", "governance_policy_state", "governance_suppressed_calls", "governance_ingest_skipped_calls", "gong_settings", "scorecard_activity", "crm_integrations", "crm_schema_objects", "crm_schema_fields"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1)`, table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -1200,7 +1201,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("table %s does not exist", table)
 		}
 	}
-	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started", "idx_pg_profile_call_fact_cache_call", "idx_pg_crm_integrations_provider_name", "idx_pg_crm_schema_objects_type", "idx_pg_crm_schema_fields_object_name"} {
+	for _, index := range []string{"idx_pg_call_facts_lifecycle", "idx_pg_call_facts_transcript_status", "idx_pg_call_facts_search_filters", "idx_pg_call_ai_highlights_call", "idx_pg_call_ai_highlights_type", "idx_pg_call_ai_highlights_search", "idx_pg_calls_started_call_id", "idx_pg_call_context_objects_type_object_call", "idx_pg_call_context_fields_name_call_key_value", "idx_pg_profile_call_fact_cache_bucket", "idx_pg_profile_call_fact_cache_started", "idx_pg_profile_call_fact_cache_call", "idx_pg_crm_integrations_provider_name", "idx_pg_crm_schema_objects_type", "idx_pg_crm_schema_fields_object_name"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)`, index).Scan(&exists); err != nil {
 			t.Fatalf("check index %s: %v", index, err)
@@ -1880,6 +1881,9 @@ func TestShouldBackfillReadModelAfterMigrations(t *testing.T) {
 	if !shouldBackfillReadModelAfterMigrations(postgresReadModelPresenceMigrationVersion - 1) {
 		t.Fatalf("database before read-model presence migration should rebuild")
 	}
+	if !shouldBackfillReadModelAfterMigrations(postgresAIHighlightsMigrationVersion - 1) {
+		t.Fatalf("database before AI highlights read-model migration should rebuild")
+	}
 	if shouldBackfillReadModelAfterMigrations(len(migrations)) {
 		t.Fatalf("current migration version should not force unrelated read-model rebuild")
 	}
@@ -2012,6 +2016,73 @@ func TestPostgresUpsertRefreshesNormalizedReadModel(t *testing.T) {
 	if summary.TotalEmbeddedCRMContextCalls != 0 || summary.TotalEmbeddedCRMObjects != 0 || summary.TotalEmbeddedCRMFields != 0 {
 		t.Fatalf("empty context summary counts not cleared: calls=%d objects=%d fields=%d", summary.TotalEmbeddedCRMContextCalls, summary.TotalEmbeddedCRMObjects, summary.TotalEmbeddedCRMFields)
 	}
+}
+
+func TestPostgresUpsertRefreshesCallAIHighlightsReadModel(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer store.Close()
+	resetPostgresTestStore(t, ctx, store)
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{
+		"id":"pg-highlights-001",
+		"title":"Synthetic highlights read model",
+		"started":"2026-04-22T15:00:00Z",
+		"duration":600,
+		"content":{
+			"highlights":[
+				{"type":"summary","text":"Synthetic executive summary."},
+				{"type":"next_steps","text":"Synthetic follow-up next step."},
+				{"type":"empty","text":"   "}
+			]
+		}
+	}`)); err != nil {
+		t.Fatalf("UpsertCall returned error: %v", err)
+	}
+
+	rows, err := store.DB().QueryContext(ctx, `SELECT highlight_index, highlight_type, highlight_text FROM call_ai_highlights WHERE call_id = $1 ORDER BY highlight_index`, "pg-highlights-001")
+	if err != nil {
+		t.Fatalf("read call_ai_highlights: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var idx int
+		var typ, text string
+		if err := rows.Scan(&idx, &typ, &text); err != nil {
+			t.Fatalf("scan call_ai_highlights: %v", err)
+		}
+		got = append(got, fmt.Sprintf("%d:%s:%s", idx, typ, text))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate call_ai_highlights: %v", err)
+	}
+	want := []string{
+		"0:summary:Synthetic executive summary.",
+		"1:next_steps:Synthetic follow-up next step.",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("call_ai_highlights rows = %#v want %#v", got, want)
+	}
+
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{
+		"id":"pg-highlights-001",
+		"title":"Synthetic highlights cleared",
+		"started":"2026-04-23T15:00:00Z",
+		"duration":300,
+		"content":{"highlights":[]}
+	}`)); err != nil {
+		t.Fatalf("minimal UpsertCall returned error: %v", err)
+	}
+	assertPostgresCount(t, ctx, store, `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-highlights-001'`, 0)
 }
 
 func TestPostgresBackfillReadModelFromExistingCoreRows(t *testing.T) {
@@ -3661,7 +3732,7 @@ lists:
 
 func resetPostgresTestStore(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
-	_, err := store.DB().ExecContext(ctx, `TRUNCATE crm_schema_fields, crm_schema_objects, crm_integrations, scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, purged_call_ids, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
+	_, err := store.DB().ExecContext(ctx, `TRUNCATE crm_schema_fields, crm_schema_objects, crm_integrations, scorecard_activity, gong_settings, governance_suppressed_calls, governance_policy_state, profile_call_fact_cache, profile_call_fact_cache_meta, profile_validation_warning, profile_methodology_concept, profile_lifecycle_rule, profile_field_concept, profile_object_alias, profile_meta, purged_call_ids, call_read_model_diagnostics, postgres_read_model_state, call_facts, call_ai_highlights, call_context_fields, call_context_objects, transcript_segments, transcripts, calls, users, sync_state, sync_runs RESTART IDENTITY CASCADE`)
 	if err != nil {
 		t.Fatalf("reset postgres test store: %v", err)
 	}

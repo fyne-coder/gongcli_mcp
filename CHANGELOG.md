@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a Postgres `call_ai_highlights` read model for opt-in Gong AI
+  Highlights captured under `content.highlights`. The table is rebuilt from
+  raw call payloads, excluded from generic read-only grants, purged with
+  call-scoped cache cleanup, and rebuilt on the redacted serving database only
+  for allowed calls. No MCP operation exposes highlight text yet.
 - Added environment defaults for
   `gongctl governance refresh-serving-db`: source URL from
   `GONGCTL_SOURCE_DATABASE_URL`, target URL from `GONGCTL_MCP_DATABASE_URL`,

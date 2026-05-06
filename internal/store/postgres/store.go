@@ -46,6 +46,7 @@ const (
 const (
 	postgresReadModelBackfillMigrationVersion = 2
 	postgresReadModelPresenceMigrationVersion = 24
+	postgresAIHighlightsMigrationVersion      = 30
 )
 
 type Store struct {
@@ -422,7 +423,8 @@ func (s *Store) ensureConcurrentOperationalIndexes(ctx context.Context) error {
 
 func shouldBackfillReadModelAfterMigrations(startingVersion int) bool {
 	return startingVersion < postgresReadModelBackfillMigrationVersion ||
-		startingVersion < postgresReadModelPresenceMigrationVersion
+		startingVersion < postgresReadModelPresenceMigrationVersion ||
+		startingVersion < postgresAIHighlightsMigrationVersion
 }
 
 func rate(part int64, total int64) float64 {
@@ -1449,7 +1451,7 @@ SELECT schema_name || ':' || grantee_name || ':' || object_type || ':' || privil
 SELECT table_name
   FROM information_schema.tables
  WHERE table_schema = 'public'
-				   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'purged_call_ids', 'governance_policy_state', 'governance_suppressed_calls', 'scorecard_activity')
+				   AND table_name IN ('transcript_segments', 'sync_runs', 'sync_state', 'call_context_fields', 'call_ai_highlights', 'profile_meta', 'profile_object_alias', 'profile_field_concept', 'profile_lifecycle_rule', 'profile_methodology_concept', 'profile_validation_warning', 'profile_call_fact_cache_meta', 'profile_call_fact_cache', 'purged_call_ids', 'governance_policy_state', 'governance_suppressed_calls', 'scorecard_activity')
    AND (
 	has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT') OR
 	has_any_column_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
@@ -1495,6 +1497,8 @@ WITH forbidden(table_name, column_name) AS (
 		('call_context_objects', 'raw_json'),
 		('call_context_fields', 'field_value_text'),
 		('call_context_fields', 'raw_json'),
+		('call_ai_highlights', 'highlight_text'),
+		('call_ai_highlights', 'search_vector'),
 		('call_facts', 'primary_user_id'),
 		('call_facts', 'calendar_event_status'),
 		('call_facts', 'sdr_disposition'),
@@ -2849,6 +2853,7 @@ ON CONFLICT(call_id) DO UPDATE SET
 		`DELETE FROM governance_suppressed_calls WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM governance_ingest_skipped_calls WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM call_read_model_diagnostics WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
+		`DELETE FROM call_ai_highlights WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM call_facts WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM transcript_segments WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
 		`DELETE FROM transcripts WHERE call_id IN (SELECT call_id FROM gongctl_purge_call_ids)`,
@@ -2935,6 +2940,7 @@ func postgresInventoryTables() []string {
 		"call_context_objects",
 		"call_context_fields",
 		"call_facts",
+		"call_ai_highlights",
 		"postgres_read_model_state",
 		"call_read_model_diagnostics",
 		"gong_settings",

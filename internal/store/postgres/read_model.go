@@ -12,7 +12,7 @@ import (
 
 const (
 	postgresReadModelName            = "builtin_call_facts"
-	postgresReadModelVersion         = 3
+	postgresReadModelVersion         = 4
 	maxPostgresContextObjectsPerCall = 200
 	maxPostgresContextFieldsPerCall  = 2000
 )
@@ -47,8 +47,14 @@ func refreshCallReadModelTx(ctx context.Context, tx *sql.Tx, callID string) erro
 	var raw string
 	if err := tx.QueryRowContext(ctx, `SELECT raw_json::text FROM calls WHERE call_id = $1`, callID).Scan(&raw); err != nil {
 		if err == sql.ErrNoRows {
+			if err := deleteCallAIHighlightsTx(ctx, tx, callID); err != nil {
+				return err
+			}
 			return refreshCallFactsTx(ctx, tx, callID)
 		}
+		return err
+	}
+	if err := refreshCallAIHighlightsTx(ctx, tx, callID); err != nil {
 		return err
 	}
 	objects, diag, err := boundedPostgresContextRows(json.RawMessage(raw))
@@ -381,6 +387,10 @@ func (s *Store) RebuildReadModel(ctx context.Context) (*ReadModelStatus, error) 
 		tx.Rollback()
 		return nil, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM call_ai_highlights`); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM call_facts`); err != nil {
 		tx.Rollback()
 		return nil, err
@@ -427,6 +437,19 @@ func (s *Store) RebuildReadModel(ctx context.Context) (*ReadModelStatus, error) 
 		return nil, err
 	}
 	return s.ReadModelStatus(ctx)
+}
+
+func deleteCallAIHighlightsTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM call_ai_highlights WHERE call_id = $1`, callID)
+	return err
+}
+
+func refreshCallAIHighlightsTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	if err := deleteCallAIHighlightsTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, postgresInsertCallAIHighlightsSQL, callID, nowUTC())
+	return err
 }
 
 func (s *Store) readModelCallIDBatch(ctx context.Context, afterCallID string, limit int) ([]string, error) {
@@ -607,6 +630,44 @@ ON CONFLICT(call_id, object_key, field_name) DO UPDATE SET
 	field_type = EXCLUDED.field_type,
 	field_value_text = EXCLUDED.field_value_text,
 	raw_json = EXCLUDED.raw_json`
+
+const postgresInsertCallAIHighlightsSQL = `
+WITH raw_highlights AS (
+	SELECT c.call_id,
+	       highlight_item.value AS raw_highlight,
+	       (highlight_item.ordinality - 1)::integer AS highlight_index
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(
+		CASE
+			WHEN jsonb_typeof(c.raw_json#>'{content,highlights}') = 'array' THEN c.raw_json#>'{content,highlights}'
+			ELSE '[]'::jsonb
+		END
+	  ) WITH ORDINALITY AS highlight_item(value, ordinality)
+	 WHERE c.call_id = $1
+),
+typed_highlights AS (
+	SELECT call_id,
+	       highlight_index,
+	       COALESCE(NULLIF(TRIM(CASE
+		       WHEN jsonb_typeof(raw_highlight) = 'object' THEN COALESCE(raw_highlight->>'type', raw_highlight->>'kind', raw_highlight->>'category', '')
+		       ELSE ''
+	       END), ''), 'highlight') AS highlight_type,
+	       TRIM(CASE
+		       WHEN jsonb_typeof(raw_highlight) = 'string' THEN raw_highlight#>>'{}'
+		       WHEN jsonb_typeof(raw_highlight) = 'object' THEN COALESCE(raw_highlight->>'text', raw_highlight->>'summary', raw_highlight->>'description', raw_highlight->>'value', '')
+		       ELSE ''
+	       END) AS highlight_text
+	  FROM raw_highlights
+)
+INSERT INTO call_ai_highlights(call_id, highlight_index, highlight_type, highlight_text, source_path, updated_at)
+SELECT call_id, highlight_index, highlight_type, highlight_text, 'content.highlights', $2
+  FROM typed_highlights
+ WHERE highlight_text <> ''
+ON CONFLICT(call_id, highlight_index) DO UPDATE SET
+	highlight_type = EXCLUDED.highlight_type,
+	highlight_text = EXCLUDED.highlight_text,
+	source_path = EXCLUDED.source_path,
+	updated_at = EXCLUDED.updated_at`
 
 const postgresInsertCallFactsSQL = `
 WITH selected_account AS (

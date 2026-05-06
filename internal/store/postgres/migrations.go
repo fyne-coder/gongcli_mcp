@@ -1695,4 +1695,25 @@ CREATE INDEX IF NOT EXISTS idx_pg_governance_ingest_skipped_calls_config
 	ON governance_ingest_skipped_calls(config_sha256);
 ` + postgresMissingTranscriptsFunctionSQL + postgresMissingTranscriptCountFunctionSQL + `
 `,
+	`
+CREATE TABLE IF NOT EXISTS call_ai_highlights (
+	call_id TEXT NOT NULL,
+	highlight_index INTEGER NOT NULL,
+	highlight_type TEXT NOT NULL DEFAULT '',
+	highlight_text TEXT NOT NULL DEFAULT '',
+	source_path TEXT NOT NULL DEFAULT 'content.highlights',
+	updated_at TEXT NOT NULL,
+	search_vector TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(highlight_text, ''))) STORED,
+	PRIMARY KEY (call_id, highlight_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_call
+	ON call_ai_highlights(call_id, highlight_index);
+
+CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_type
+	ON call_ai_highlights(highlight_type, call_id);
+
+CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
+	ON call_ai_highlights USING GIN(search_vector);
+`,
 }
