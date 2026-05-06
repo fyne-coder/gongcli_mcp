@@ -6,6 +6,10 @@ customer-hosted deployment using the redacted serving database and scoped
 `analyst-expansion` reader role.
 Deployment steps live in the
 [Postgres client deployment runbook](runbooks/postgres-client-deployment.md).
+Use the
+[Postgres question-parity matrix](postgres-question-parity.md)
+to decide whether a manual-test prompt should be marked supported, caveated, or
+blocked.
 
 Do not paste passwords, database URLs, raw transcripts, restricted customer
 names, or whole tool transcripts into this checklist. Record pass/fail status,

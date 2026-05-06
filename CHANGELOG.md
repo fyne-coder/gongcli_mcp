@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a Postgres question-parity matrix that maps SQLite-era business
+  questions to the reviewed Postgres pilot status: supported, supported with
+  caveats, or blocked.
 - Added a Postgres client manual-test checklist with first-session prompts,
   expected tool sequences, pass/fail criteria, restricted-customer negative
   probes, transcript-summary caveats, scorecard preset checks, and rollback

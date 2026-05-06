@@ -13,6 +13,8 @@ pass/fail recording, use the
 [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md).
 For the customer-hosted deployment sequence, use the
 [Postgres client deployment runbook](runbooks/postgres-client-deployment.md).
+For client-facing question scope, use the
+[Postgres question-parity matrix](postgres-question-parity.md).
 
 SQLite remains the complete/default local workflow. Postgres is the shared
 deployment path for multi-container pilots that cannot rely on a shared

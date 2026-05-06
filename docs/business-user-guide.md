@@ -108,6 +108,10 @@ structured inputs for ChatGPT, Claude, or another reviewed host to finish the
 business narrative; they should not be treated as hidden model conclusions from
 inside `gongmcp`.
 
+For a concise supported/caveated/blocked mapping of the SQLite-era question set
+to the reviewed Postgres pilot surface, see the
+[Postgres question-parity matrix](postgres-question-parity.md).
+
 ### ChatGPT Usage
 
 Use the remote HTTPS MCP connector path documented in

@@ -5,6 +5,11 @@ current SQLite backend. SQLite remains the complete/default implementation.
 Postgres parity should be added deliberately, with each surface classified as
 `must match`, `postgres-native equivalent`, or `sqlite-only by design`.
 
+For client-demo question scope, use
+[Postgres question-parity matrix](postgres-question-parity.md). This file tracks
+backend/query parity; the question matrix tracks which business questions are
+currently supported, caveated, or blocked in Postgres pilots.
+
 ## Status Legend
 
 - `complete`: implemented and covered by tests/smoke.

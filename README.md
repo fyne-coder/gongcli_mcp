@@ -81,6 +81,7 @@ For company evaluation, start with the enterprise pilot packet:
 - [Postgres client onboarding checklist](docs/postgres-client-onboarding-checklist.md)
 - [Postgres client manual-test checklist](docs/postgres-client-manual-test-checklist.md)
 - [Postgres client deployment runbook](docs/runbooks/postgres-client-deployment.md)
+- [Postgres question-parity matrix](docs/postgres-question-parity.md)
 - [Data Boundary Statement](docs/data-boundary-statement.md)
 - [Support model](docs/support.md)
 - [Enterprise deployment](docs/enterprise-deployment.md)
