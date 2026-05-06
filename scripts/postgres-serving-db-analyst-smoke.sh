@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Phase 13h focused smoke: scoped analyst reader on the redacted Postgres
-# serving database.
+# Phase 13h + 13b focused smoke: scoped analyst reader and broad analyst /
+# company-search behavior on the redacted Postgres serving database.
 #
-# This script proves the customer-recommended Phase 13e4/13h pipeline end to
-# end on a single Postgres server using two databases:
+# This script proves the customer-recommended Phase 13e4/13h/13b pipeline end
+# to end on a single Postgres server using two databases:
 #
 #   gongctl_source  full operator cache (operator role, write access)
 #   gongctl_mcp     redacted MCP serving cache (analyst-scoped reader, no
@@ -32,6 +32,16 @@
 #      payload columns and the operator-only sync_runs table.
 #   9. Confirm the restricted synthetic call ID, customer name, transcript
 #      content, and DB URLs do not appear in any artifact.
+#  10. (Phase 13b) Run a broad analyst MCP session against the same scoped
+#      reader URL with GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 to prove
+#      non-restricted company/title/transcript searches return non-zero
+#      results (search_calls_by_filters,
+#      search_transcripts_by_filters, summarize_calls_by_lifecycle,
+#      crm_field_population_matrix, search_transcripts_by_crm_context,
+#      build_quote_pack, diagnose_attribution_coverage,
+#      explain_analysis_limitations) while restricted-company probes return
+#      zero results without leaking the restricted name. Reject the
+#      `all-readonly` preset under Postgres mode.
 #
 # Synthetic-only fixtures and synthetic dev passwords are used. Real customer
 # names, real Gong IDs, and real secrets must NEVER appear in this script.
@@ -76,13 +86,17 @@ chmod 700 "$ARTIFACT_DIR"
 REFRESH_OUT="$ARTIFACT_DIR/refresh-serving-db.json"
 ANALYST_APPLY_OUT="$ARTIFACT_DIR/analyst-reader-apply.json"
 ANALYST_MCP_OUT="$ARTIFACT_DIR/analyst-mcp.jsonl"
+BROAD_MCP_OUT="$ARTIFACT_DIR/broad-analyst-mcp.jsonl"
+ALL_READONLY_REJECTED_OUT="$ARTIFACT_DIR/all-readonly-rejected.txt"
 TARGET_RESTRICTED_COUNTS_OUT="$ARTIFACT_DIR/target-restricted-counts.txt"
+TARGET_RESTRICTED_TEXT_COUNTS_OUT="$ARTIFACT_DIR/target-restricted-text-counts.txt"
 TARGET_ALLOWED_COUNTS_OUT="$ARTIFACT_DIR/target-allowed-counts.txt"
 ANALYST_RAW_DENIED_OUT="$ARTIFACT_DIR/analyst-raw-denied.txt"
 ANALYST_SYNC_DENIED_OUT="$ARTIFACT_DIR/analyst-sync-denied.txt"
 ANALYST_PROFILE_DENIED_OUT="$ARTIFACT_DIR/analyst-profile-meta-denied.txt"
 GOVERNANCE_CONFIG="$(mktemp /tmp/gongctl-postgres-13h-governance.XXXXXX.yaml)"
 PHASE13H_SUMMARY="$ARTIFACT_DIR/summary.json"
+PHASE13B_SUMMARY="$ARTIFACT_DIR/broad-analyst-summary.json"
 
 cd "$ROOT"
 
@@ -300,6 +314,32 @@ UNION ALL SELECT 'transcript_segments', COUNT(*) FROM transcript_segments
 UNION ALL SELECT 'call_facts', COUNT(*) FROM call_facts
 ORDER BY 1" >"$TARGET_ALLOWED_COUNTS_OUT"
 
+# Phase 13b: prove the redacted serving DB physically lacks the restricted
+# synthetic customer name in any text or JSON column we copy.
+operator_psql "$TARGET_DB" -tA -F '|' -c "
+SELECT 'calls.title', COUNT(*) FROM calls WHERE title ILIKE '%Blocked Synthetic Corp%'
+UNION ALL SELECT 'calls.raw_json', COUNT(*) FROM calls WHERE raw_json::text ILIKE '%Blocked Synthetic Corp%'
+UNION ALL SELECT 'context_objects.name', COUNT(*) FROM call_context_objects WHERE object_name ILIKE '%Blocked Synthetic Corp%'
+UNION ALL SELECT 'context_fields.value', COUNT(*) FROM call_context_fields WHERE field_value_text ILIKE '%Blocked Synthetic Corp%'
+UNION ALL SELECT 'transcript_segments.text', COUNT(*) FROM transcript_segments WHERE text ILIKE '%Blocked Synthetic Corp%'
+UNION ALL SELECT 'call_facts.title', COUNT(*) FROM call_facts WHERE title ILIKE '%Blocked Synthetic Corp%'
+ORDER BY 1" >"$TARGET_RESTRICTED_TEXT_COUNTS_OUT"
+python3 - "$TARGET_RESTRICTED_TEXT_COUNTS_OUT" <<'PY'
+import sys
+
+bad = []
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        column, count = line.split("|")
+        if int(count) != 0:
+            bad.append((column, count))
+if bad:
+    raise SystemExit(f"redacted target still contains restricted name in: {bad}")
+PY
+
 # Step 6: create the scoped analyst reader role on the Postgres server. Roles
 # are server-wide; we create it once and apply scoped grants on the target DB.
 analyst_password_sql="$(printf "%s" "$GONGMCP_ANALYST_READER_PASSWORD" | python3 -c "import sys; v=sys.stdin.read(); print(\"'\" + v.replace(\"'\", \"''\") + \"'\")")"
@@ -364,6 +404,126 @@ grep -q '"summarize_themes_by_dimension"' "$ANALYST_MCP_OUT"
 grep -q 'small_cell_suppression_applied' "$ANALYST_MCP_OUT"
 grep -q 'small_cell_suppression_min_3' "$ANALYST_MCP_OUT"
 assert_no_leak "analyst MCP evidence" "$ANALYST_MCP_OUT"
+
+# Phase 13b: broad analyst / company-search behavior over the redacted serving
+# DB. Every probe runs as the scoped analyst-expansion reader against
+# gongctl_mcp. Allowed-company probes must succeed with non-zero results;
+# restricted-company probes must return zero results without leaking the
+# restricted name through any field.
+{
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_calls_by_filters","arguments":{"filter":{"account_query":"Allowed Synthetic Co","from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"include_account_names":true,"limit":10}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_calls_by_filters","arguments":{"filter":{"account_query":"Blocked Synthetic Corp","from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"include_account_names":true,"limit":10}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"search_transcripts_by_filters","arguments":{"filter":{"account_query":"Allowed Synthetic Co","from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"include_account_names":true,"theme_query":"shared Postgres","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_transcripts_by_filters","arguments":{"filter":{"account_query":"Blocked Synthetic Corp","from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"include_account_names":true,"theme_query":"shared Postgres","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"summarize_calls_by_lifecycle","arguments":{}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"crm_field_population_matrix","arguments":{"object_type":"Account","group_by_field":"industry","limit":25}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"search_transcripts_by_crm_context","arguments":{"object_type":"Account","query":"shared Postgres","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"build_quote_pack","arguments":{"filter":{"from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"theme_query":"shared Postgres","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"build_quote_pack","arguments":{"filter":{"account_query":"Blocked Synthetic Corp","from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"include_account_names":true,"theme_query":"Blocked Synthetic Corp","limit":5}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"diagnose_attribution_coverage","arguments":{"filter":{"from_date":"2026-04-10","to_date":"2026-04-30","limit":25}}}}'
+  printf '%s\n' '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"explain_analysis_limitations","arguments":{"filter":{"from_date":"2026-04-10","to_date":"2026-04-30","limit":25}}}}'
+} | GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=analyst-expansion GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 go run ./cmd/gongmcp >"$BROAD_MCP_OUT"
+assert_mcp_success "$BROAD_MCP_OUT" 3 4 5 6 7 8 9 10 11 12 13
+
+python3 - "$BROAD_MCP_OUT" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+required_present = {3, 5, 7, 8, 9, 10, 12, 13}
+required_zero = {4, 6, 11}
+seen = {}
+with open(path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rid = message.get("id")
+        if not isinstance(rid, int):
+            continue
+        seen[rid] = message
+
+missing = (required_present | required_zero) - set(seen)
+if missing:
+    raise SystemExit(f"missing MCP result ids: {sorted(missing)}")
+
+def tool_payload(message):
+    result = message.get("result") or {}
+    contents = result.get("content") or []
+    for entry in contents:
+        if entry.get("type") == "text":
+            text = entry.get("text") or ""
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                pass
+    raise SystemExit(f"id {message.get('id')} has no JSON content payload")
+
+for rid in sorted(required_present):
+    message = seen[rid]
+    payload = tool_payload(message)
+    if rid == 7:
+        if not isinstance(payload, list) or len(payload) == 0:
+            raise SystemExit(f"id 7 expected non-empty lifecycle summary list, got {payload}")
+        continue
+    if rid == 8:
+        cells = payload.get("cells") if isinstance(payload, dict) else None
+        if not isinstance(cells, list) or len(cells) == 0:
+            raise SystemExit(f"id 8 expected non-empty CRM matrix cells, got {payload}")
+        continue
+    tool = payload.get("tool")
+    if not tool:
+        raise SystemExit(f"id {rid} payload missing tool name: {payload}")
+    if rid in (3, 5, 10):
+        count = payload.get("count")
+        if not isinstance(count, int) or count <= 0:
+            raise SystemExit(f"id {rid} ({tool}) expected non-zero count over the allowed cohort, got {count}")
+
+# Restricted-company probes must produce zero results.
+for rid in sorted(required_zero):
+    message = seen[rid]
+    payload = tool_payload(message)
+    count = payload.get("count")
+    if count not in (0, None):
+        raise SystemExit(f"id {rid} restricted-company probe leaked {count} results: {payload}")
+    results = payload.get("results") or []
+    quotes = payload.get("quotes") or []
+    summaries = payload.get("summaries") or []
+    if results or quotes or summaries:
+        raise SystemExit(f"id {rid} restricted-company probe returned non-empty results/quotes/summaries")
+PY
+
+# Redact analyst-supplied restricted query strings before retaining the JSON-RPC
+# transcript as evidence. The validation above runs against the raw response;
+# retained artifacts must not contain blocklist values even when gongmcp echoes
+# normalized_filter.account_query/theme_query.
+python3 - "$BROAD_MCP_OUT" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+body = path.read_text(encoding="utf-8")
+body = body.replace("Blocked Synthetic Corp", "[REDACTED_RESTRICTED_QUERY]")
+path.write_text(body, encoding="utf-8")
+PY
+assert_no_leak "broad analyst MCP evidence" "$BROAD_MCP_OUT"
+
+# Phase 13b: confirm Postgres mode rejects the all-readonly preset entirely,
+# even when the scoped analyst reader role is configured. all-readonly stays
+# off-limits for the redacted serving DB.
+if GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=all-readonly GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 go run ./cmd/gongmcp </dev/null >"$ALL_READONLY_REJECTED_OUT" 2>&1; then
+  echo "all-readonly preset unexpectedly accepted under Postgres mode" >&2
+  cat "$ALL_READONLY_REJECTED_OUT" >&2
+  exit 1
+fi
+grep -q 'all-readonly is not supported by the postgres vertical slice' "$ALL_READONLY_REJECTED_OUT"
+assert_no_leak "all-readonly rejection" "$ALL_READONLY_REJECTED_OUT"
 
 # Step 9: direct SQL denial as the scoped analyst role on the serving DB.
 if analyst_psql -c "SELECT raw_json FROM calls LIMIT 1" >"$ANALYST_RAW_DENIED_OUT" 2>&1; then
@@ -433,7 +593,70 @@ with open(out_path, "w", encoding="utf-8") as handle:
 PY
 assert_no_leak "phase 13h summary" "$PHASE13H_SUMMARY"
 
+# Phase 13b sanitized summary: counts only, no URLs/customer names/IDs/text.
+python3 - "$BROAD_MCP_OUT" "$PHASE13B_SUMMARY" <<'PY'
+import json
+import sys
+
+path, out_path = sys.argv[1:]
+
+allowed_ids = {3, 5, 7, 8, 9, 10, 12, 13}
+restricted_ids = {4, 6, 11}
+tools_seen = {}
+restricted_counts = {}
+allowed_counts = {}
+with open(path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rid = message.get("id")
+        if not isinstance(rid, int):
+            continue
+        result = message.get("result") or {}
+        contents = result.get("content") or []
+        payload = None
+        for entry in contents:
+            if entry.get("type") == "text":
+                try:
+                    payload = json.loads(entry.get("text") or "")
+                except json.JSONDecodeError:
+                    payload = None
+                break
+        if not payload:
+            continue
+        if isinstance(payload, list):
+            tool = "summarize_calls_by_lifecycle" if rid == 7 else "list_payload"
+            count = len(payload)
+        else:
+            tool = payload.get("tool") or ("crm_field_population_matrix" if rid == 8 else "")
+            count = payload.get("count")
+            if rid == 8 and count is None:
+                count = len(payload.get("cells") or [])
+        tools_seen[rid] = tool
+        if rid in allowed_ids:
+            allowed_counts[rid] = count
+        if rid in restricted_ids:
+            restricted_counts[rid] = count
+
+summary = {
+    "phase": "13b",
+    "allowed_company_search_tools": [tools_seen.get(rid) for rid in sorted(allowed_ids)],
+    "restricted_probe_tools": [tools_seen.get(rid) for rid in sorted(restricted_ids)],
+    "allowed_company_search_counts": [allowed_counts.get(rid) for rid in sorted(allowed_ids)],
+    "restricted_probe_counts": [restricted_counts.get(rid) for rid in sorted(restricted_ids)],
+    "all_readonly_rejected": True,
+}
+with open(out_path, "w", encoding="utf-8") as handle:
+    json.dump(summary, handle, indent=2, sort_keys=True)
+PY
+assert_no_leak "phase 13b summary" "$PHASE13B_SUMMARY"
+
 if [ "${GONGCTL_PHASE13H_KEEP_ARTIFACTS:-0}" = "1" ]; then
-  echo "Phase 13h smoke evidence retained at: $ARTIFACT_DIR" >&2
+  echo "Phase 13h+13b smoke evidence retained at: $ARTIFACT_DIR" >&2
 fi
-echo "Phase 13h scoped analyst smoke on redacted Postgres serving DB: ok"
+echo "Phase 13h scoped analyst + Phase 13b broad analyst smoke on redacted Postgres serving DB: ok"

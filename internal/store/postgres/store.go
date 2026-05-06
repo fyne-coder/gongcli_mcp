@@ -102,6 +102,7 @@ type ReadOnlyOptions struct {
 	RequiredColumnSelectGrants     []ColumnSelectGrant
 	AllowedColumnSelectGrants      []ColumnSelectGrant
 	EnforceAllowedColumnBoundary   bool
+	AllowAccountQuery              bool
 }
 
 type ColumnSelectGrant struct {

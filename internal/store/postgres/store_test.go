@@ -1445,6 +1445,14 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if _, err := pgStore.SearchTranscriptQuotesWithAttribution(ctx, sqlite.TranscriptAttributionSearchParams{Query: "implementation", AccountQuery: "Example"}); err == nil || !strings.Contains(err.Error(), "account_query is not supported") {
 		t.Fatalf("postgres attribution account_query error=%v, want unsupported account_query error", err)
 	}
+	pgServingView := &Store{db: pgStore.DB(), readOnly: true, readOnlyOptions: ReadOnlyOptions{EnforceAllowedColumnBoundary: true, AllowAccountQuery: true}}
+	pgServingAttributed, err := pgServingView.SearchTranscriptQuotesWithAttribution(ctx, sqlite.TranscriptAttributionSearchParams{Query: "implementation", AccountQuery: "Example", Limit: 10})
+	if err != nil {
+		t.Fatalf("redacted serving Postgres SearchTranscriptQuotesWithAttribution account_query: %v", err)
+	}
+	if len(pgServingAttributed) != 1 || pgServingAttributed[0].AccountName != "" || pgServingAttributed[0].CallID != "" || pgServingAttributed[0].Title != "" {
+		t.Fatalf("redacted serving Postgres account_query attribution result not sanitized: %+v", pgServingAttributed)
+	}
 
 	filter := sqlite.BusinessAnalysisFilter{Quarter: "2026-Q1", Industry: "manufacturing", Limit: 10}
 	pgCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: filter, Limit: 10})
@@ -1483,6 +1491,13 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	}
 	if _, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: sqlite.BusinessAnalysisFilter{AccountQuery: "Example"}, Limit: 10}); err == nil || !strings.Contains(err.Error(), "account_query is not supported") {
 		t.Fatalf("postgres business account_query error=%v, want unsupported account_query error", err)
+	}
+	pgServingAccountCalls, err := pgServingView.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: sqlite.BusinessAnalysisFilter{AccountQuery: "Example", Limit: 10}, Limit: 10})
+	if err != nil {
+		t.Fatalf("redacted serving Postgres SearchBusinessAnalysisCalls account_query: %v", err)
+	}
+	if pgServingAccountCalls.Summary.CallCount != 1 || len(pgServingAccountCalls.Rows) != 1 || pgServingAccountCalls.Rows[0].CallID != "" || pgServingAccountCalls.Rows[0].Title != "" {
+		t.Fatalf("redacted serving Postgres account_query calls not sanitized: summary=%+v rows=%+v", pgServingAccountCalls.Summary, pgServingAccountCalls.Rows)
 	}
 
 	pgEvidence, err := pgStore.SearchBusinessAnalysisEvidence(ctx, sqlite.BusinessAnalysisEvidenceSearchParams{Filter: filter, Query: "implementation", Limit: 10})

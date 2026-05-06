@@ -65,8 +65,12 @@ func (s *Store) SummarizeCallsByLifecycle(ctx context.Context, params sqlite.Lif
 	if bucket != "" {
 		where = " WHERE lifecycle_bucket = " + postgresAddArg(&args, bucket)
 	}
+	factsSQL := postgresCallFactsSQL()
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		factsSQL = postgresLifecycleSummaryFactsSQL()
+	}
 	rows, err := s.db.QueryContext(ctx, `
-WITH facts AS (`+postgresCallFactsSQL()+`)
+WITH facts AS (`+factsSQL+`)
 SELECT lifecycle_bucket,
        COUNT(*) AS call_count,
        COALESCE(SUM(CASE WHEN transcript_present THEN 1 ELSE 0 END), 0) AS transcript_count,
@@ -692,6 +696,18 @@ SELECT call_id,
        opportunity_primary_lead_source,
        opportunity_forecast_category,
        duration_bucket
+  FROM call_facts`
+}
+
+func postgresLifecycleSummaryFactsSQL() string {
+	return `
+SELECT lifecycle_bucket,
+       transcript_present,
+       duration_seconds,
+       started_at,
+       lifecycle_confidence,
+       opportunity_count,
+       account_count
   FROM call_facts`
 }
 

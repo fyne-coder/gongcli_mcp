@@ -92,7 +92,7 @@ func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, param
 	if transcriptStatus == "missing" {
 		return nil, errors.New("transcript_status=missing is not supported for transcript quote search")
 	}
-	if strings.TrimSpace(params.AccountQuery) != "" {
+	if strings.TrimSpace(params.AccountQuery) != "" && !s.readOnlyOptions.AllowAccountQuery {
 		return nil, errors.New("account_query is not supported by the Postgres analyst-business-core reader because it can probe customer names")
 	}
 	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
@@ -127,7 +127,7 @@ func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, param
 }
 
 func (s *Store) SearchBusinessAnalysisCalls(ctx context.Context, params sqlite.BusinessAnalysisCallSearchParams) (*sqlite.BusinessAnalysisCallSearchResult, error) {
-	filter, err := normalizePostgresBusinessAnalysisFilter(params.Filter)
+	filter, err := s.normalizePostgresBusinessAnalysisFilter(params.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,7 @@ func (s *Store) SearchBusinessAnalysisCalls(ctx context.Context, params sqlite.B
 }
 
 func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlite.BusinessAnalysisEvidenceSearchParams) ([]sqlite.BusinessAnalysisEvidenceRow, error) {
-	filter, err := normalizePostgresBusinessAnalysisFilter(params.Filter)
+	filter, err := s.normalizePostgresBusinessAnalysisFilter(params.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 }
 
 func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params sqlite.BusinessAnalysisDimensionSummaryParams) ([]sqlite.BusinessAnalysisDimensionRow, error) {
-	filter, err := normalizePostgresBusinessAnalysisFilter(params.Filter)
+	filter, err := s.normalizePostgresBusinessAnalysisFilter(params.Filter)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +352,7 @@ func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqli
 	return summary, nil
 }
 
-func normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAnalysisFilter) (sqlite.BusinessAnalysisFilter, error) {
+func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAnalysisFilter) (sqlite.BusinessAnalysisFilter, error) {
 	filter.TitleQuery = strings.ToLower(strings.TrimSpace(filter.TitleQuery))
 	filter.Query = strings.TrimSpace(filter.Query)
 	filter.FromDate = strings.TrimSpace(filter.FromDate)
@@ -398,7 +398,7 @@ func normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAnalysisFilte
 	if filter.Scope, err = postgresNormalizeOptionalScope(filter.Scope); err != nil {
 		return sqlite.BusinessAnalysisFilter{}, err
 	}
-	if filter.AccountQuery != "" {
+	if filter.AccountQuery != "" && !s.readOnlyOptions.AllowAccountQuery {
 		return sqlite.BusinessAnalysisFilter{}, errors.New("account_query is not supported by the Postgres analyst-business-core reader because it can probe customer names")
 	}
 	if filter.TranscriptStatus, err = postgresNormalizeOptionalTranscriptStatus(filter.TranscriptStatus); err != nil {

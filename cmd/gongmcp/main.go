@@ -173,6 +173,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 				readOnlyOptions.AllowedFunctionSignatures = append(readOnlyOptions.AllowedFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 			}
+			readOnlyOptions.AllowAccountQuery = truthy(os.Getenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB"))
 		}
 		pgStore, err := postgres.OpenReadOnlyWithOptions(ctx, postgresURL, readOnlyOptions)
 		if err != nil {

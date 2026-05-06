@@ -33,7 +33,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
-		`GRANT SELECT ("transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("account_count", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,

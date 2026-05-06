@@ -114,6 +114,20 @@ matched_segments AS (
 		      AND filter_f.field_name = 'Industry'
 		      AND LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(left(industry_arg, 160)) || '%'
 	   ))
+	   AND (account_query_arg = '' OR EXISTS (
+		   SELECT 1
+		     FROM call_context_objects filter_o
+		     LEFT JOIN call_context_fields filter_f
+		       ON filter_f.call_id = filter_o.call_id
+		      AND filter_f.object_key = filter_o.object_key
+		      AND filter_f.field_name = 'Name'
+		    WHERE filter_o.call_id = ts.call_id
+		      AND filter_o.object_type = 'Account'
+		      AND (
+		          LOWER(TRIM(filter_o.object_name)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		       OR LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		      )
+	   ))
 	   AND (opportunity_stage_arg = '' OR EXISTS (
 		   SELECT 1
 		     FROM call_context_objects filter_o
@@ -215,6 +229,20 @@ WITH filtered AS (
 	   AND (direction_arg = '' OR cf.direction = direction_arg)
 	   AND (transcript_status_arg = '' OR cf.transcript_status = transcript_status_arg)
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
+	   AND (account_query_arg = '' OR EXISTS (
+		   SELECT 1
+		     FROM call_context_objects filter_o
+		     LEFT JOIN call_context_fields filter_f
+		       ON filter_f.call_id = filter_o.call_id
+		      AND filter_f.object_key = filter_o.object_key
+		      AND filter_f.field_name = 'Name'
+		    WHERE filter_o.call_id = cf.call_id
+		      AND filter_o.object_type = 'Account'
+		      AND (
+		          LOWER(TRIM(filter_o.object_name)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		       OR LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		      )
+	   ))
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
 	   AND (participant_title_query_arg = '' OR
@@ -281,6 +309,20 @@ WITH rows AS (
 	   AND (direction_arg = '' OR cf.direction = direction_arg)
 	   AND (transcript_status_arg = '' OR cf.transcript_status = transcript_status_arg)
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
+	   AND (account_query_arg = '' OR EXISTS (
+		   SELECT 1
+		     FROM call_context_objects filter_o
+		     LEFT JOIN call_context_fields filter_f
+		       ON filter_f.call_id = filter_o.call_id
+		      AND filter_f.object_key = filter_o.object_key
+		      AND filter_f.field_name = 'Name'
+		    WHERE filter_o.call_id = cf.call_id
+		      AND filter_o.object_type = 'Account'
+		      AND (
+		          LOWER(TRIM(filter_o.object_name)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		       OR LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		      )
+	   ))
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
 	   AND (participant_title_query_arg = '' OR
@@ -350,6 +392,20 @@ matched AS (
 	   AND (direction_arg = '' OR cf.direction = direction_arg)
 	   AND (transcript_status_arg = '' OR cf.transcript_status = transcript_status_arg)
 	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
+	   AND (account_query_arg = '' OR EXISTS (
+		   SELECT 1
+		     FROM call_context_objects filter_o
+		     LEFT JOIN call_context_fields filter_f
+		       ON filter_f.call_id = filter_o.call_id
+		      AND filter_f.object_key = filter_o.object_key
+		      AND filter_f.field_name = 'Name'
+		    WHERE filter_o.call_id = cf.call_id
+		      AND filter_o.object_type = 'Account'
+		      AND (
+		          LOWER(TRIM(filter_o.object_name)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		       OR LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		      )
+	   ))
 	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
 	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
 	   AND (participant_title_query_arg = '' OR
