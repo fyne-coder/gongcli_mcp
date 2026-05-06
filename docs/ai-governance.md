@@ -198,6 +198,54 @@ tables, `scorecard_activity`, `governance_ingest_skipped_calls`, and
 `gongctl_mcp_next` option for near-zero-downtime refresh in larger deployments
 remain follow-ups.
 
+### Phase 13h scoped analyst reader on the redacted serving DB
+
+Once the redacted serving DB exists, the recommended customer-facing posture
+is a preset-scoped analyst reader against `gongctl_mcp` with `gongmcp` running
+under `GONGMCP_TOOL_PRESET=analyst-expansion` and
+`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. The scoped analyst reader role is
+created on the Postgres server and granted only the column SELECTs and
+function EXECUTEs that the analyst preset needs; raw call payloads, sync
+state, and profile metadata stay denied at the database layer.
+
+```bash
+# 1. Refresh the redacted MCP serving DB from the operator cache.
+gongctl governance refresh-serving-db \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --config /run/secrets/ai-governance.yaml
+
+# 2. Apply the analyst-expansion scoped reader on the serving DB.
+GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
+gongctl mcp postgres-reader-apply \
+  --preset analyst-expansion \
+  --role gongmcp_analyst_reader \
+  --database gongctl_mcp \
+  --apply
+
+# 3. Run gongmcp against the scoped analyst reader URL on the serving DB.
+GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \
+GONGMCP_TOOL_PRESET=analyst-expansion \
+GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
+  gongmcp
+```
+
+The combination of `analyst-expansion` plus `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`
+on Postgres mode activates a small-cell suppression minimum cohort size of 3
+on business-analysis dimension tools, so analyst dimension responses include
+`small_cell_suppression_min_3` (limitation) and `small_cell_suppression_applied`
+(warning) when any bucket falls below the threshold.
+
+A focused local smoke that exercises this end to end, including direct-SQL
+denial of raw call payloads and operator tables under the scoped role, lives
+at `scripts/postgres-serving-db-analyst-smoke.sh`. It uses the existing
+`docker-compose.postgres.yml` to start a disposable Postgres container, seeds
+synthetic source data including a clearly-synthetic restricted customer
+("Blocked Synthetic Corp"), and asserts that the restricted call rows are
+absent from the redacted serving DB and from MCP outputs. The smoke writes
+sanitized artifacts under a temporary directory with no DB URLs, secrets, or
+restricted-customer values.
+
 ## Raw-DB MCP Enforcement
 
 Raw-DB governance is a fallback when a filtered DB has not been generated. Start
