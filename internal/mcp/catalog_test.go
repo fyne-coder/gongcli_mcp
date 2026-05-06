@@ -74,6 +74,21 @@ func TestToolCatalogInvariants(t *testing.T) {
 	if err := ValidateGovernanceAllowlist(governanceTools); err != nil {
 		t.Fatalf("governance-search preset rejected by governance validator: %v", err)
 	}
+
+	facadeTools, err := ExpandToolPreset("analyst-facade")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst-facade) returned error: %v", err)
+	}
+	assertStringSlicesEqual(t, facadeTools, FacadeToolNames(), "analyst-facade visible tools")
+	facadeRoutedTools, err := ExpandToolPresetFacadeRoutedTools("analyst-facade")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetFacadeRoutedTools(analyst-facade) returned error: %v", err)
+	}
+	analystTools, err := ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
+	}
+	assertStringSlicesEqual(t, facadeRoutedTools, analystTools, "analyst-facade hidden routed tools")
 }
 
 func registerPresetName(t *testing.T, seen map[string]string, name, preset string) {

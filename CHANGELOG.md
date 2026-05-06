@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a stable MCP facade vertical slice with `analyst-facade`,
+  `gong_discover_capabilities`, and routed `gong_query` /
+  `gong_analyze` / `gong_get_evidence` operations so approved clients can use
+  a smaller durable tool surface while existing analyst tools remain available
+  for operator testing.
 - Added a Postgres question-parity matrix that maps SQLite-era business
   questions to the reviewed Postgres pilot status: supported, supported with
   caveats, or blocked.

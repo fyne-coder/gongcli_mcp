@@ -48,6 +48,8 @@ gongmcp --list-tool-presets
 
 | Profile | Tools | Use |
 | --- | --- | --- |
+| `analyst-facade` | `gong_status,gong_discover_capabilities,gong_query,gong_analyze,gong_get_evidence,gong_explain_limitations` | stable facade-only client MCP surface for approved analyst sessions |
+| `facade-analyst` | alias for `analyst-facade` | backward-compatible wording alias |
 | `business-pilot` | `get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog` | default business-user lane |
 | `strict-business-pilot` | alias for `business-pilot` | backward-compatible docs/scripts alias |
 | `operator-smoke` | `get_sync_status,search_calls,search_transcript_segments,get_call,rank_transcript_backlog` | operator-only install validation |

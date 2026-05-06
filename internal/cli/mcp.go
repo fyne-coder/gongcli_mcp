@@ -67,7 +67,7 @@ func (a *app) mcpPostgresReaderSQL(args []string) error {
 	if flags.NArg() != 0 {
 		return errUsage
 	}
-	allowlist, err := mcp.ExpandToolPreset(*preset)
+	allowlist, err := mcp.ExpandToolPresetReaderGrantTools(*preset)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (a *app) mcpPostgresReaderApply(ctx context.Context, args []string) error {
 	if *apply && *dryRun {
 		return errors.New("--apply and --dry-run cannot be used together")
 	}
-	allowlist, err := mcp.ExpandToolPreset(*preset)
+	allowlist, err := mcp.ExpandToolPresetReaderGrantTools(*preset)
 	if err != nil {
 		return err
 	}

@@ -51,6 +51,8 @@ func ParseToolAllowlist(raw string) ([]string, error) {
 
 func ExpandToolPreset(name string) ([]string, error) {
 	switch normalizedToolPresetName(name) {
+	case "analyst-facade", "facade-analyst":
+		return copyStrings(FacadeToolNames()), nil
 	case "business-pilot", "strict-business-pilot":
 		return copyStrings([]string{
 			"get_sync_status",
@@ -159,8 +161,45 @@ func ExpandToolPreset(name string) ([]string, error) {
 	case "all-readonly", "all-tools", "all":
 		return ToolCatalogNames(), nil
 	default:
-		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
 	}
+}
+
+func FacadeToolNames() []string {
+	return []string{
+		FacadeToolStatus,
+		FacadeToolDiscoverCapabilities,
+		FacadeToolQuery,
+		FacadeToolAnalyze,
+		FacadeToolGetEvidence,
+		FacadeToolExplainLimitations,
+	}
+}
+
+func ExpandToolPresetFacadeRoutedTools(name string) ([]string, error) {
+	switch normalizedToolPresetName(name) {
+	case "analyst-facade", "facade-analyst":
+		return ExpandToolPreset("analyst")
+	default:
+		if strings.TrimSpace(name) == "" {
+			return nil, nil
+		}
+		if _, err := ExpandToolPreset(name); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+}
+
+func ExpandToolPresetReaderGrantTools(name string) ([]string, error) {
+	routed, err := ExpandToolPresetFacadeRoutedTools(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(routed) > 0 {
+		return routed, nil
+	}
+	return ExpandToolPreset(name)
 }
 
 func ToolPresetCatalog() []ToolPresetInfo {
@@ -170,6 +209,12 @@ func ToolPresetCatalog() []ToolPresetInfo {
 		purpose     string
 		recommended string
 	}{
+		{
+			name:        "analyst-facade",
+			aliases:     []string{"facade-analyst"},
+			purpose:     "Stable facade-only MCP surface for approved analyst sessions; routes internally through the reviewed analyst operation set.",
+			recommended: "client MCP hosts that should avoid fast-changing top-level tool lists",
+		},
 		{
 			name:        "business-pilot",
 			aliases:     []string{"strict-business-pilot"},

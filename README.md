@@ -102,8 +102,10 @@ gongmcp --list-tool-presets
 gongctl profile schema
 ```
 
-Use `business-pilot` for first business-user access, `analyst-core` for the
-reviewed Postgres analyst starter surface including cached CRM schema/settings
+Use `business-pilot` for first business-user access, `analyst-facade` when a
+client MCP host should see only the stable `gong_*` facade tools,
+`analyst-core` for the reviewed Postgres analyst starter surface including
+cached CRM schema/settings
 inventory, scorecard inventory, and scorecard activity aggregates,
 `analyst-business-core` for bounded Postgres
 transcript-evidence/business analysis workflows. For directed Postgres CRM

@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -103,6 +103,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	selectedPreset := selectedToolPresetName(toolSelection)
+	facadeRoutedAllowlist, err := mcp.ExpandToolPresetFacadeRoutedTools(selectedPreset)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid facade routed tool selection: %v\n", err)
+		return 2
+	}
 	if postgresMode || *printPostgresReaderGrants {
 		postgresHTTPMode := !*forceStdio && firstNonEmpty(*httpAddr, os.Getenv("GONGMCP_HTTP_ADDR")) != ""
 		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode, selectedPreset)
@@ -112,7 +117,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 	if *printPostgresReaderGrants {
-		sql, err := buildPostgresReaderGrantSQL(allowlist, *postgresReaderRole, *postgresDatabase)
+		sql, err := buildPostgresReaderGrantSQL(readerGrantAllowlist(allowlist, facadeRoutedAllowlist), *postgresReaderRole, *postgresDatabase)
 		if err != nil {
 			fmt.Fprintf(stderr, "print postgres reader grants: %v\n", err)
 			return 2
@@ -168,7 +173,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if postgresMode {
 		readOnlyOptions := postgres.ReadOnlyOptions{}
 		if enforceScopedDBGrants {
-			readOnlyOptions = postgresReadOnlyOptionsForAllowlist(allowlist)
+			readOnlyOptions = postgresReadOnlyOptionsForAllowlist(readerGrantAllowlist(allowlist, facadeRoutedAllowlist))
 			if governanceConfigPath != "" {
 				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 				readOnlyOptions.AllowedFunctionSignatures = append(readOnlyOptions.AllowedFunctionSignatures, postgresGovernanceFunctionSignatures()...)
@@ -208,7 +213,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closeStore()
 
-	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
+	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithFacadeRoutedToolAllowlist(facadeRoutedAllowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
 	if min := postgresAnalystSmallCellMin(postgresMode, selectedPreset, enforceScopedDBGrants); min > 1 {
 		serverOptions = append(serverOptions, mcp.WithBusinessAnalysisSmallCellMin(min))
 	}
@@ -361,6 +366,12 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 	}
 	supported := map[string]struct{}{
 		"analyze_late_stage_crm_signals":            {},
+		"gong_analyze":                              {},
+		"gong_discover_capabilities":                {},
+		"gong_explain_limitations":                  {},
+		"gong_get_evidence":                         {},
+		"gong_query":                                {},
+		"gong_status":                               {},
 		"get_sync_status":                           {},
 		"get_business_profile":                      {},
 		"get_scorecard":                             {},
@@ -673,11 +684,18 @@ func postgresAnalystSmallCellMin(postgresMode bool, presetName string, enforceSc
 		return 0
 	}
 	switch strings.ToLower(strings.TrimSpace(presetName)) {
-	case "analyst", "analyst-expansion":
+	case "analyst", "analyst-expansion", "analyst-facade", "facade-analyst":
 		return 3
 	default:
 		return 0
 	}
+}
+
+func readerGrantAllowlist(visible []string, facadeRouted []string) []string {
+	if len(facadeRouted) > 0 {
+		return facadeRouted
+	}
+	return visible
 }
 
 type getenvFunc func(string) string

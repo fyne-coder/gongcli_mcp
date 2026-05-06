@@ -88,6 +88,7 @@ type Server struct {
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
 	businessAnalysisSmallCellMin int
 	allowedToolNames             map[string]struct{}
+	facadeRoutedToolNames        map[string]struct{}
 	suppressedCallIDs            map[string]struct{}
 	governanceCheck              func(context.Context) error
 }
@@ -521,6 +522,23 @@ func WithToolAllowlist(names []string) ServerOption {
 	}
 	return func(s *Server) {
 		s.allowedToolNames = allowset
+	}
+}
+
+func WithFacadeRoutedToolAllowlist(names []string) ServerOption {
+	allowset := make(map[string]struct{}, len(names))
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" || isFacadeTool(name) {
+			continue
+		}
+		allowset[name] = struct{}{}
+	}
+	if len(allowset) == 0 {
+		return nil
+	}
+	return func(s *Server) {
+		s.facadeRoutedToolNames = allowset
 	}
 }
 
@@ -960,7 +978,9 @@ func defaultTools(policy LimitPolicy) []tool {
 			),
 		},
 	}
-	return append(tools, businessAnalysisTools(policy)...)
+	tools = append(tools, businessAnalysisTools(policy)...)
+	tools = append(tools, facadeTools(policy)...)
+	return tools
 }
 
 func ToolCatalog() []ToolInfo {
@@ -1166,9 +1186,19 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 			return toolCallResult{}, err
 		}
 	}
+	if isFacadeTool(params.Name) {
+		return s.executeFacadeTool(ctx, params)
+	}
 	if isBusinessAnalysisTool(params.Name) {
 		return s.executeBusinessAnalysisTool(ctx, params)
 	}
+	return s.executeNonFacadeTool(ctx, params)
+}
+
+// executeNonFacadeTool dispatches the original top-level tool catalog. The
+// facade module also calls into this helper so a facade-routed call exercises
+// the same handlers as a direct tools/call against the routed tool.
+func (s *Server) executeNonFacadeTool(ctx context.Context, params toolsCallParams) (toolCallResult, error) {
 	switch params.Name {
 	case "get_sync_status":
 		return s.getSyncStatus(ctx, params.Arguments)

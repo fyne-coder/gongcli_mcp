@@ -89,6 +89,47 @@ Current fixed boundaries:
 | `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; Postgres read-only also redacts CRM object IDs | Still exposes call ID/title plus CRM object/field shape for one call; SQLite/full-catalog mode can include CRM object IDs |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
 
+## Stable MCP Facade Tools (Phase 13e2 vertical slice)
+
+In addition to the top-level individual tools above, `gongmcp` now exposes a
+small, stable facade that lets MCP clients depend on a few names while
+internal operations evolve underneath:
+
+| Facade tool | Purpose | Operations routed |
+| --- | --- | --- |
+| `gong_status` | Cache and sync status | `status.sync` -> `get_sync_status` |
+| `gong_discover_capabilities` | Return the operation registry, including the routed tool, exposure level, allowed presets, input schema, examples, and whether the routed tool is currently exposed | n/a (no operation argument) |
+| `gong_query` | Bounded query operations | `query.calls` -> `search_calls_by_filters` (fallback `search_calls`); `query.transcript_segments` -> `search_transcript_segments` (fallback `search_transcripts_by_filters`) |
+| `gong_analyze` | Bounded analysis operations | `analyze.cohort.build` -> `build_call_cohort`; `analyze.cohort.inspect` -> `inspect_call_cohort`; `analyze.themes.discover` -> `discover_themes_in_cohort`; `analyze.limitations.explain` -> `explain_analysis_limitations` |
+| `gong_get_evidence` | Bounded evidence operations | `evidence.quotes.search` -> `search_quotes_in_cohort` (fallback `search_transcript_quotes_with_attribution`); `evidence.quote_pack.build` -> `build_quote_pack` |
+| `gong_explain_limitations` | Cache/governance/facade limitations summary | `analyze.limitations.explain` -> `explain_analysis_limitations`; with no operation, returns a high-level facade-limitations summary plus available/unavailable operation lists |
+
+The facade is additive. Top-level individual tools (`search_calls`,
+`get_sync_status`, `build_call_cohort`, `search_transcript_segments`,
+`build_quote_pack`, etc.) remain available for operator and analyst testing.
+
+The facade does not introduce new data paths or weaken governance:
+
+- Each routed call goes through the same handler and the same governance,
+  small-cell, and exposure protections as a direct `tools/call` against the
+  routed tool.
+- A facade dispatch fails closed if the routed tool is not in the active
+  preset/allowlist. The error response names the missing routed tool, the
+  fallback (when defined), and the presets that expose it.
+- The facade does not extend Postgres `all-readonly`; broad read-only
+  exposure remains gated by the existing slice rules.
+
+Use `--tool-preset analyst-facade` / `GONGMCP_TOOL_PRESET=analyst-facade`
+when a client MCP host should see only the stable facade tool names. The
+server keeps the reviewed analyst operation set available only for internal
+facade routing, so `tools/list` stays small while `gong_query`,
+`gong_analyze`, and `gong_get_evidence` can dispatch to reviewed analyst
+operations. In Postgres scoped-reader mode, `analyst-facade` uses the same
+reviewed reader grants as `analyst` while exposing only the facade tools to
+the MCP client. `gong_discover_capabilities` reports
+`routed_tool_available` per operation so callers can detect which operations
+are reachable in the active configuration.
+
 ## Analyst Cohort Tool Exposure
 
 The full analyst cohort surface in `executor_tasks.md` is intended for trusted

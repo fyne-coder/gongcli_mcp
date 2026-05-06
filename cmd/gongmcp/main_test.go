@@ -505,6 +505,37 @@ func TestPostgresToolAllowlistAcceptsAnalystBusinessCorePreset(t *testing.T) {
 	}
 }
 
+func TestPostgresToolAllowlistAcceptsAnalystFacadePreset(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("analyst-facade")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "analyst-facade")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, mcp.FacadeToolNames()) {
+		t.Fatalf("allowlist=%v want facade tools", allowlist)
+	}
+	routed, err := mcp.ExpandToolPresetFacadeRoutedTools("analyst-facade")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetFacadeRoutedTools returned error: %v", err)
+	}
+	analyst, err := mcp.ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
+	}
+	if !reflect.DeepEqual(routed, analyst) {
+		t.Fatalf("routed=%v want analyst tools", routed)
+	}
+	if min := postgresAnalystSmallCellMin(true, "analyst-facade", true); min != 3 {
+		t.Fatalf("postgresAnalystSmallCellMin=%d want 3", min)
+	}
+	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, analyst) {
+		t.Fatalf("readerGrantAllowlist=%v want analyst tools", got)
+	}
+}
+
 func TestPostgresToolAllowlistAcceptsBusinessPilotPreset(t *testing.T) {
 	expanded, err := mcp.ExpandToolPreset("business-pilot")
 	if err != nil {
