@@ -7,6 +7,8 @@ umask 077
 LAB_VM="${LAB_VM:-}"
 LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-}"
 LAB_DB="${LAB_DB:-}"
+LAB_GONGMCP_IMAGE="${LAB_GONGMCP_IMAGE:-}"
+LAB_GONG_DATABASE_URL="${LAB_GONG_DATABASE_URL:-${GONG_DATABASE_URL:-}}"
 LAB_TOOL_PRESET="${LAB_TOOL_PRESET:-${GONGMCP_TOOL_PRESET:-business-pilot}}"
 LAB_APPROVED_EMAIL="${LAB_APPROVED_EMAIL:-approved-user@example.test}"
 LAB_SECONDARY_EMAIL="${LAB_SECONDARY_EMAIL:-secondary-user@example.test}"
@@ -66,7 +68,9 @@ require scp
 require openssl
 require_env LAB_VM
 require_env LAB_PUBLIC_BASE_URL
-require_env LAB_DB
+if [[ -z "$LAB_GONG_DATABASE_URL" ]]; then
+  require_env LAB_DB
+fi
 
 case "$LAB_VM" in
   -*|*[[:space:]]*)
@@ -84,8 +88,14 @@ case "$REMOTE_ROOT" in
     exit 2
     ;;
 esac
+case "$LAB_GONGMCP_IMAGE" in
+  *\'*|*\"*|*[\;\`\$[:space:]]*)
+    echo "LAB_GONGMCP_IMAGE contains unsupported shell metacharacters or whitespace" >&2
+    exit 2
+    ;;
+esac
 
-if [[ ! -f "$LAB_DB" ]]; then
+if [[ -n "$LAB_DB" && ! -f "$LAB_DB" ]]; then
   echo "lab DB not found: $LAB_DB" >&2
   exit 1
 fi
@@ -107,7 +117,9 @@ COPYFILE_DISABLE=1 tar --no-xattrs -C "$ROOT" \
   -czf - . \
 | ssh "$LAB_VM" "rm -rf '$REMOTE_SOURCE' && mkdir -p '$REMOTE_SOURCE' && tar -xzf - -C '$REMOTE_SOURCE'"
 
-scp "$LAB_DB" "$LAB_VM:$REMOTE_ROOT/runtime/gong-mcp-governed.db" >/dev/null
+if [[ -n "$LAB_DB" ]]; then
+  scp "$LAB_DB" "$LAB_VM:$REMOTE_ROOT/runtime/gong-mcp-governed.db" >/dev/null
+fi
 
 if ssh "$LAB_VM" "test -f '$REMOTE_LAB/.env'"; then
   scp "$LAB_VM:$REMOTE_LAB/.env" "$tmpdir/.env" >/dev/null
@@ -128,6 +140,8 @@ LAB_SECONDARY_PASSWORD=$(rand_b64 18)
 EOF
 fi
 set_env_value "$tmpdir/.env" GONGMCP_TOOL_PRESET "$LAB_TOOL_PRESET"
+set_env_value "$tmpdir/.env" LAB_GONGMCP_IMAGE "$LAB_GONGMCP_IMAGE"
+set_env_value "$tmpdir/.env" GONG_DATABASE_URL "$LAB_GONG_DATABASE_URL"
 set_env_value "$tmpdir/.env" LAB_PUBLIC_BASE_URL "$LAB_PUBLIC_BASE_URL"
 set_env_value "$tmpdir/.env" REMOTE_ROOT "$REMOTE_ROOT"
 set_env_value "$tmpdir/.env" LAB_APPROVED_EMAIL "$LAB_APPROVED_EMAIL"
@@ -190,9 +204,13 @@ if [ ! -f '$REMOTE_ROOT/secrets/gongmcp_token' ]; then
 fi
 chown 65532:65532 '$REMOTE_ROOT/secrets/gongmcp_token'
 chmod 400 '$REMOTE_ROOT/secrets/gongmcp_token'
-DOCKER_BUILDKIT=1 docker build --target mcp -t gongctl:mcp-local '$REMOTE_SOURCE'
+if [ -n '$LAB_GONGMCP_IMAGE' ]; then
+  docker pull '$LAB_GONGMCP_IMAGE' >/dev/null
+else
+  DOCKER_BUILDKIT=1 docker build --target mcp -t gongctl:mcp-local '$REMOTE_SOURCE'
+fi
 cd '$REMOTE_LAB'
-docker-compose down -v >/dev/null
+docker-compose down -v >/dev/null || true
 docker-compose up -d --build
 for _ in \$(seq 1 60); do
   if docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh config credentials \
