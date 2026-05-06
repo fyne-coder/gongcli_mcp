@@ -6,6 +6,9 @@
   expected tool sequences, pass/fail criteria, restricted-customer negative
   probes, transcript-summary caveats, scorecard preset checks, and rollback
   guidance for controlled client pilots.
+- Added a Postgres client deployment runbook for the two-database
+  source/serving layout, scoped analyst reader grants, auth gateway checks,
+  smoke tests, backup/restore, and rollback.
 
 ## 0.3.4 - 2026-05-05
 

@@ -4,6 +4,8 @@ Use this checklist after the operator has deployed the controlled Postgres pilot
 and before a client-facing walkthrough. It is written for a reviewed
 customer-hosted deployment using the redacted serving database and scoped
 `analyst-expansion` reader role.
+Deployment steps live in the
+[Postgres client deployment runbook](runbooks/postgres-client-deployment.md).
 
 Do not paste passwords, database URLs, raw transcripts, restricted customer
 names, or whole tool transcripts into this checklist. Record pass/fail status,
@@ -326,4 +328,3 @@ If manual testing fails:
 
 Do not run a fresh Gong sync as the first rollback action. First restore the
 last known-good MCP serving path, then investigate sync or refresh separately.
-

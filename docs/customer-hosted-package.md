@@ -31,6 +31,7 @@ of the package supports deployment, security review, support, and operations.
 | Postgres shared-deployment pilot packet | [Postgres client pilot release packet](postgres-client-pilot-release-packet.md) |
 | Postgres operator onboarding checklist | [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md) |
 | Postgres manual-test checklist | [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md) |
+| Postgres deployment runbook | [Postgres client deployment runbook](runbooks/postgres-client-deployment.md) |
 
 ## Data-Flow Diagram
 

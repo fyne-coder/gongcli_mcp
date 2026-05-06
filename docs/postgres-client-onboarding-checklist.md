@@ -7,6 +7,10 @@ Use the
 [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md)
 for first-session prompts, pass/fail notes, expected tool sequences, and
 restricted-customer negative probes.
+Use the
+[Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
+for the two-database source/serving setup, scoped reader grant sequence,
+gateway smoke, backup/restore, and rollback.
 
 ## 1. Choose The Pilot Surface
 

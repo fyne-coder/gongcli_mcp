@@ -11,6 +11,8 @@ For the short operator sequence, use the
 after this packet is reviewed. For business-user acceptance prompts and
 pass/fail recording, use the
 [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md).
+For the customer-hosted deployment sequence, use the
+[Postgres client deployment runbook](runbooks/postgres-client-deployment.md).
 
 SQLite remains the complete/default local workflow. Postgres is the shared
 deployment path for multi-container pilots that cannot rely on a shared
