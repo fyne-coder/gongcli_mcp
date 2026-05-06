@@ -1450,7 +1450,12 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if err != nil {
 		t.Fatalf("redacted serving Postgres SearchTranscriptQuotesWithAttribution account_query: %v", err)
 	}
-	if len(pgServingAttributed) != 1 || pgServingAttributed[0].AccountName != "" || pgServingAttributed[0].CallID != "" || pgServingAttributed[0].Title != "" {
+	if len(pgServingAttributed) != 1 ||
+		pgServingAttributed[0].AccountName != "" ||
+		pgServingAttributed[0].OpportunityName != "" ||
+		pgServingAttributed[0].CallID == "" ||
+		pgServingAttributed[0].CallID == "pg-ba-001" ||
+		pgServingAttributed[0].Title != "" {
 		t.Fatalf("redacted serving Postgres account_query attribution result not sanitized: %+v", pgServingAttributed)
 	}
 
@@ -1496,7 +1501,11 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if err != nil {
 		t.Fatalf("redacted serving Postgres SearchBusinessAnalysisCalls account_query: %v", err)
 	}
-	if pgServingAccountCalls.Summary.CallCount != 1 || len(pgServingAccountCalls.Rows) != 1 || pgServingAccountCalls.Rows[0].CallID != "" || pgServingAccountCalls.Rows[0].Title != "" {
+	if pgServingAccountCalls.Summary.CallCount != 1 ||
+		len(pgServingAccountCalls.Rows) != 1 ||
+		pgServingAccountCalls.Rows[0].CallID == "" ||
+		pgServingAccountCalls.Rows[0].CallID == "pg-ba-001" ||
+		pgServingAccountCalls.Rows[0].Title != "" {
 		t.Fatalf("redacted serving Postgres account_query calls not sanitized: summary=%+v rows=%+v", pgServingAccountCalls.Summary, pgServingAccountCalls.Rows)
 	}
 
