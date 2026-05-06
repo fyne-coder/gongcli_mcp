@@ -386,7 +386,6 @@ func AnalystScopedColumns(allowlist []string) bool {
 		"get_sync_status":                           {},
 		"inspect_call_cohort":                       {},
 		"list_business_concepts":                    {},
-		"list_call_ai_highlights":                   {},
 		"list_call_cohorts":                         {},
 		"list_crm_fields":                           {},
 		"list_crm_object_types":                     {},
@@ -418,10 +417,17 @@ func AnalystScopedColumns(allowlist []string) bool {
 		"summarize_themes_by_industry":              {},
 		"summarize_themes_by_persona":               {},
 	}
-	if len(allowlist) != len(want) {
+	const facadeOnlyAIHighlightsTool = "list_call_ai_highlights"
+	if len(allowlist) != len(want) && len(allowlist) != len(want)+1 {
 		return false
 	}
 	for _, name := range allowlist {
+		if name == facadeOnlyAIHighlightsTool {
+			if len(allowlist) != len(want)+1 {
+				return false
+			}
+			continue
+		}
 		if _, ok := want[name]; !ok {
 			return false
 		}

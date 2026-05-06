@@ -227,7 +227,6 @@ func TestBuildScopedReaderGrantSQLAnalystExpansionGrantsScorecardInventory(t *te
 		"search_quotes_in_cohort",
 		"rank_quotes_for_sales_use",
 		"build_quote_pack",
-		"list_call_ai_highlights",
 		"compare_theme_outcomes",
 		"summarize_pipeline_progression_by_theme",
 		"summarize_loss_reasons_by_theme",
