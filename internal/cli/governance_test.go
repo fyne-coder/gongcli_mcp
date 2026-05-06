@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 )
 
 func TestGovernanceAuditReportsMatchedAndUnmatchedSyntheticNames(t *testing.T) {
@@ -109,6 +111,8 @@ lists:
 }
 
 func TestGovernanceRefreshServingDBRequiresFlags(t *testing.T) {
+	clearRefreshServingDBEnv(t)
+
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ai-governance.yaml")
 	if err := os.WriteFile(configPath, []byte(`
@@ -156,7 +160,150 @@ lists:
 	}
 }
 
+func TestGovernanceRefreshServingDBUsesEnvDefaults(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	sourceURL := "postgres://operator:source-secret@localhost:5432/gongctl_source"
+	targetURL := "postgres://operator:target-secret@localhost:5432/gongctl_mcp"
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", sourceURL)
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", targetURL)
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+
+	var captured postgres.RefreshServingDBOptions
+	withRefreshServingDBFake(t, func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+		captured = opts
+		return &postgres.ServingDBRefreshResult{Backend: "postgres", SourceCalls: 3, TargetCalls: 2, RemovedCalls: 1}, nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"governance", "refresh-serving-db"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(governance refresh-serving-db) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if captured.SourceURL != sourceURL {
+		t.Fatalf("source URL default mismatch: got %q want %q", captured.SourceURL, sourceURL)
+	}
+	if captured.TargetURL != targetURL {
+		t.Fatalf("target URL default mismatch: got %q want %q", captured.TargetURL, targetURL)
+	}
+	if captured.Config == nil {
+		t.Fatalf("expected governance config to be loaded")
+	}
+	if !strings.Contains(stdout.String(), `"removed_calls": 1`) {
+		t.Fatalf("expected sanitized refresh JSON; got stdout=%q", stdout.String())
+	}
+	combined := stdout.String() + stderr.String()
+	for _, leak := range []string{sourceURL, targetURL, "source-secret", "target-secret", configPath} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("refresh output leaked %q: %s", leak, combined)
+		}
+	}
+}
+
+func TestGovernanceRefreshServingDBFlagsOverrideEnv(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	envConfigPath := filepath.Join(dir, "ignored-ai-governance.yaml")
+	if err := os.WriteFile(envConfigPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Ignored Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write ignored config: %v", err)
+	}
+
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://env:secret@localhost:5432/env_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://env:secret@localhost:5432/env_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", envConfigPath)
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+
+	sourceURL := "postgres://operator:source-secret@localhost:5432/gongctl_source"
+	targetURL := "postgres://operator:target-secret@localhost:5432/gongctl_mcp"
+
+	var captured postgres.RefreshServingDBOptions
+	withRefreshServingDBFake(t, func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+		captured = opts
+		return &postgres.ServingDBRefreshResult{Backend: "postgres"}, nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--source", sourceURL,
+		"--target", targetURL,
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(governance refresh-serving-db) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if captured.SourceURL != sourceURL {
+		t.Fatalf("source URL override mismatch: got %q want %q", captured.SourceURL, sourceURL)
+	}
+	if captured.TargetURL != targetURL {
+		t.Fatalf("target URL override mismatch: got %q want %q", captured.TargetURL, targetURL)
+	}
+}
+
+func TestGovernanceRefreshServingDBUsesGONGMCPConfigFallback(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Fallback Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@localhost:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@localhost:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", "")
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", configPath)
+
+	var captured postgres.RefreshServingDBOptions
+	withRefreshServingDBFake(t, func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+		captured = opts
+		return &postgres.ServingDBRefreshResult{Backend: "postgres"}, nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"governance", "refresh-serving-db"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(governance refresh-serving-db) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if captured.Config == nil {
+		t.Fatalf("expected fallback governance config to be loaded")
+	}
+}
+
 func TestGovernanceRefreshServingDBSanitizesConnectionErrors(t *testing.T) {
+	clearRefreshServingDBEnv(t)
+
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ai-governance.yaml")
 	if err := os.WriteFile(configPath, []byte(`
@@ -193,6 +340,8 @@ lists:
 }
 
 func TestGovernanceRefreshServingDBSanitizesMalformedURLs(t *testing.T) {
+	clearRefreshServingDBEnv(t)
+
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "ai-governance.yaml")
 	if err := os.WriteFile(configPath, []byte(`
@@ -226,6 +375,23 @@ lists:
 			t.Fatalf("error output leaked %q: %s", leak, combined)
 		}
 	}
+}
+
+func clearRefreshServingDBEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", "")
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+}
+
+func withRefreshServingDBFake(t *testing.T, fn func(context.Context, postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error)) {
+	t.Helper()
+	original := refreshServingDB
+	refreshServingDB = fn
+	t.Cleanup(func() {
+		refreshServingDB = original
+	})
 }
 
 func TestGovernanceExportFilteredDBWritesPhysicalMCPDB(t *testing.T) {

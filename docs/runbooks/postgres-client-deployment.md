@@ -141,6 +141,16 @@ Rebuild the MCP serving database from the source database after each approved
 sync or governance/blocklist change:
 
 ```bash
+export GONGCTL_SOURCE_DATABASE_URL="postgres://..."
+export GONGCTL_MCP_DATABASE_URL="postgres://..."
+export GONGCTL_AI_GOVERNANCE_CONFIG=/run/secrets/ai-governance.yaml
+
+gongctl governance refresh-serving-db > refresh-serving-db.json
+```
+
+For one-off runs, explicit flags still override the environment:
+
+```bash
 gongctl governance refresh-serving-db \
   --source "$GONGCTL_SOURCE_DATABASE_URL" \
   --target "$GONGCTL_MCP_DATABASE_URL" \
@@ -156,6 +166,14 @@ transcript text.
 The current refresh rebuilds the target in place. For larger deployments, queue
 or implement a later blue/green flow with `gongctl_mcp_next` and a controlled
 reader cutover.
+
+When the same `gongctl_mcp` database, reader role/grants, auth settings,
+binary/image, and tool preset remain in place, `gongmcp` does not need to be
+recreated or restarted after this refresh; new MCP calls read the refreshed
+serving database. Restart or redeploy `gongmcp` when changing
+`GONG_DATABASE_URL`, the reader role or grants, auth/gateway settings, the
+binary/image version, the tool preset/allowlist, or when cutting over to a
+different serving database URL.
 
 ## 8. Reconcile Scoped Reader Grants
 
@@ -322,4 +340,3 @@ chat transcripts:
 - restricted customer names
 - unrestricted tool transcripts
 - temporary artifact directories that have not been reviewed
-

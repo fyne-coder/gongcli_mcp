@@ -155,6 +155,8 @@ type governanceAuditResponse struct {
 	PostgresPolicy        *postgres.GovernancePolicyState `json:"postgres_policy,omitempty"`
 }
 
+var refreshServingDB = postgres.RefreshServingDB
+
 func (a *app) governanceExportFilteredDB(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("governance export-filtered-db", flag.ContinueOnError)
 	fs.SetOutput(a.err)
@@ -219,10 +221,13 @@ func (a *app) governanceExportFilteredDB(ctx context.Context, args []string) err
 // governanceRefreshServingDB rebuilds a redacted Postgres MCP serving database
 // (target) from the operator cache (source) using the private governance YAML.
 //
-// Required flags:
-//   - --source: Postgres operator-cache database URL (gongctl_source).
-//   - --target: Postgres redacted MCP serving database URL (gongctl_mcp).
-//   - --config: Private AI governance YAML path.
+// Inputs:
+//   - --source or GONGCTL_SOURCE_DATABASE_URL: Postgres operator-cache
+//     database URL (gongctl_source).
+//   - --target or GONGCTL_MCP_DATABASE_URL: Postgres redacted MCP serving
+//     database URL (gongctl_mcp).
+//   - --config or GONGCTL_AI_GOVERNANCE_CONFIG / GONGMCP_AI_GOVERNANCE_CONFIG:
+//     Private AI governance YAML path.
 //
 // Source and target must be present and refer to different databases. Output
 // is sanitized JSON with row counts and policy/data fingerprints; it never
@@ -236,24 +241,28 @@ func (a *app) governanceRefreshServingDB(ctx context.Context, args []string) err
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
-	if strings.TrimSpace(*sourceURL) == "" {
-		return fmt.Errorf("--source database URL is required")
+	source := refreshServingDBInput(*sourceURL, "GONGCTL_SOURCE_DATABASE_URL")
+	target := refreshServingDBInput(*targetURL, "GONGCTL_MCP_DATABASE_URL")
+	config := refreshServingDBInput(*configPath, "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG")
+
+	if source == "" {
+		return fmt.Errorf("--source database URL is required; pass --source or set GONGCTL_SOURCE_DATABASE_URL")
 	}
-	if strings.TrimSpace(*targetURL) == "" {
-		return fmt.Errorf("--target database URL is required")
+	if target == "" {
+		return fmt.Errorf("--target database URL is required; pass --target or set GONGCTL_MCP_DATABASE_URL")
 	}
-	if strings.TrimSpace(*configPath) == "" {
-		return fmt.Errorf("--config is required")
+	if config == "" {
+		return fmt.Errorf("--config is required; pass --config or set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG")
 	}
 
-	cfg, err := governance.LoadFile(*configPath)
+	cfg, err := governance.LoadFile(config)
 	if err != nil {
 		return err
 	}
 
-	result, err := postgres.RefreshServingDB(ctx, postgres.RefreshServingDBOptions{
-		SourceURL: *sourceURL,
-		TargetURL: *targetURL,
+	result, err := refreshServingDB(ctx, postgres.RefreshServingDBOptions{
+		SourceURL: source,
+		TargetURL: target,
 		Config:    cfg,
 	})
 	if err != nil {
@@ -263,6 +272,18 @@ func (a *app) governanceRefreshServingDB(ctx context.Context, args []string) err
 		Result:               result,
 		SensitiveDataWarning: cacheSensitiveDataWarning,
 	})
+}
+
+func refreshServingDBInput(flagValue string, envNames ...string) string {
+	if value := strings.TrimSpace(flagValue); value != "" {
+		return value
+	}
+	for _, name := range envNames {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func sanitizeRefreshServingDBError(err error) error {

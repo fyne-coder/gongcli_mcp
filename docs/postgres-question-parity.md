@@ -43,7 +43,7 @@ still gated.
 | Pull live data from Gong during a business-user MCP session. | blocked | none | `gongmcp` reads the reviewed cache only. Operators refresh data through `gongctl` outside the business-user session. |
 | Dump full transcripts, raw call JSON, raw CRM JSON, or arbitrary SQL. | blocked | none | Postgres MCP is not a raw database/API bridge. Use bounded snippets, aggregate tools, and operator-only exports when separately approved. |
 | Use the full SQLite `all-readonly` catalog over Postgres. | blocked | queued | Postgres rejects `all-readonly`, `all-tools`, and `all` until full catalog parity and governance review are complete. |
-| Apply customer blocklist changes without reloading all Gong data. | supported with caveats | `governance refresh-serving-db` design path | The current design refreshes/rebuilds the redacted serving DB from the source DB. Hot-reload policy ergonomics remain Phase 13e3 follow-up. |
+| Apply customer blocklist changes without reloading all Gong data. | supported | `gongctl governance refresh-serving-db` | Edit the private YAML and rerun the serving DB refresh. `gongmcp` does not need restart when the same serving DB URL, reader role/grants, auth, binary, and preset stay unchanged. |
 
 ## Demo Guidance
 

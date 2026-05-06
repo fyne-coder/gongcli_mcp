@@ -174,6 +174,16 @@ allowed support tables. `gongmcp` connects only to `gongctl_mcp` with a
 read-only role and never receives credentials for the source database.
 
 ```bash
+export GONGCTL_SOURCE_DATABASE_URL="postgres://..."
+export GONGCTL_MCP_DATABASE_URL="postgres://..."
+export GONGCTL_AI_GOVERNANCE_CONFIG=/run/secrets/ai-governance.yaml
+
+gongctl governance refresh-serving-db
+```
+
+Explicit flags can still be used for one-off operator runs:
+
+```bash
 gongctl governance refresh-serving-db \
   --source "$GONGCTL_SOURCE_DATABASE_URL" \
   --target "$GONGCTL_MCP_DATABASE_URL" \
@@ -188,6 +198,15 @@ rebuilds the Postgres read model on the target, and re-applies the governance
 policy on the target. Output is sanitized JSON with row counts, removed-call
 counts, and policy/data fingerprints; it does not include database URLs,
 customer names, blocklist values, call IDs, or call titles.
+
+For the recommended two-database serving deployment, customer blocklist/config
+updates are applied by editing the private YAML and rerunning
+`gongctl governance refresh-serving-db` against the same target database.
+`gongmcp` does not need to be recreated or restarted when
+`GONG_DATABASE_URL`, reader role/grants, auth settings, binary/image, and
+`GONGMCP_TOOL_PRESET` are unchanged; subsequent MCP calls read the refreshed
+serving database. Restart or redeploy `gongmcp` when those deployment knobs
+change, or when cutting over to a different serving database URL.
 
 The first slice intentionally skips several global metadata tables on the
 target. The skipped list is included in the sanitized refresh output so a
@@ -210,10 +229,8 @@ state, and profile metadata stay denied at the database layer.
 
 ```bash
 # 1. Refresh the redacted MCP serving DB from the operator cache.
-gongctl governance refresh-serving-db \
-  --source "$GONGCTL_SOURCE_DATABASE_URL" \
-  --target "$GONGCTL_MCP_DATABASE_URL" \
-  --config /run/secrets/ai-governance.yaml
+GONGCTL_AI_GOVERNANCE_CONFIG=/run/secrets/ai-governance.yaml \
+gongctl governance refresh-serving-db
 
 # 2. Apply the analyst-expansion scoped reader on the serving DB.
 GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
@@ -341,11 +358,14 @@ MCP responses do not include configured restricted customer names or filtered
 match counts. Aggregate tools that are not yet recomputed over the filtered call
 set fail closed instead of returning counts that include excluded customers.
 
-Restart `gongmcp` after cache refreshes or config changes. This is mandatory:
-SQLite `gongmcp` fingerprints the config and cache at startup. Postgres
-`gongmcp` validates the prepared policy, config fingerprint, and current data
-fingerprint at startup and on each tool call. Both modes fail closed if the
-governance state changes while the process is running.
+Restart `gongmcp` after SQLite/raw-DB cache refreshes or config changes. This
+is mandatory for those fallback modes: SQLite `gongmcp` fingerprints the config
+and cache at startup. Raw-DB Postgres `gongmcp` validates the prepared policy,
+config fingerprint, and current data fingerprint at startup and on each tool
+call. Both fallback modes fail closed if the governance state changes while the
+process is running. The recommended redacted serving DB path above avoids this
+by physically refreshing `gongctl_mcp` in place while `gongmcp` keeps the same
+reader URL and deployment settings.
 
 By default, `gongmcp` refuses governance configs with unmatched entries. Use
 `--allow-unmatched-ai-governance` only after the local audit confirms the

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added environment defaults for
+  `gongctl governance refresh-serving-db`: source URL from
+  `GONGCTL_SOURCE_DATABASE_URL`, target URL from `GONGCTL_MCP_DATABASE_URL`,
+  and private governance config from `GONGCTL_AI_GOVERNANCE_CONFIG` or
+  `GONGMCP_AI_GOVERNANCE_CONFIG`. Docs now clarify that redacted serving DB
+  blocklist refreshes do not require recreating `gongmcp` when the serving DB
+  URL, reader grants, auth, binary, and preset are unchanged.
 - Added Phase 13k opt-in capture of Gong AI Highlights / brief /
   next-step content via `gongctl sync calls --include-highlights`. The
   flag mirrors `--include-parties`: it requires `--allow-sensitive-export`
