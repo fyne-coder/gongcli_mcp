@@ -345,6 +345,15 @@ case "$GONGMCP_TOOL_PRESET" in
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_scorecards")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_scorecard")' >/dev/null
     ;;
+  redacted-all-readonly|redacted-all|redacted-search-lab)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_call")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_crm_field_values")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_gong_settings")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "summarize_scorecard_activity")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_theme_brief")' >/dev/null
+    ;;
   *)
     echo "warning: smoke did not apply preset-specific tool assertions for $GONGMCP_TOOL_PRESET" >&2
     ;;

@@ -2450,6 +2450,10 @@ func (s *Store) SearchCallsRaw(ctx context.Context, params sqlite.CallSearchPara
 		return nil, errors.New("postgres read-only call search does not support crm_object_id filters; use explicit MCP tools that preserve identifier boundaries")
 	}
 	if objectType != "" || objectID != "" {
+		objectSource := `call_context_objects`
+		if s.readOnly {
+			objectSource = `gongmcp_call_context_objects`
+		}
 		subquery := []string{`o.call_id = c.call_id`}
 		if objectType != "" {
 			subquery = append(subquery, `o.object_type = `+addArg(objectType))
@@ -2457,7 +2461,7 @@ func (s *Store) SearchCallsRaw(ctx context.Context, params sqlite.CallSearchPara
 		if objectID != "" {
 			subquery = append(subquery, `o.object_id = `+addArg(objectID))
 		}
-		where = append(where, `EXISTS (SELECT 1 FROM call_context_objects o WHERE `+strings.Join(subquery, ` AND `)+`)`)
+		where = append(where, `EXISTS (SELECT 1 FROM `+objectSource+` o WHERE `+strings.Join(subquery, ` AND `)+`)`)
 	}
 
 	factWhere := []string{`cf.call_id = c.call_id`}

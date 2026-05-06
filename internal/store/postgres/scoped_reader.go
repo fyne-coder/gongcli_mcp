@@ -24,7 +24,7 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 		signatures = scopedReaderFunctionSignatures(signatures)
 		options.RequiredFunctionSignatures = signatures
 		options.AllowedFunctionSignatures = signatures
-		columns := ScopedReaderColumnSelectGrants()
+		columns := ScopedReaderColumnSelectGrantsForAllowlist(allowlist)
 		options.RequiredColumnSelectGrants = columns
 		options.AllowedColumnSelectGrants = columns
 		options.EnforceAllowedColumnBoundary = true
@@ -35,7 +35,7 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error) {
 	options := ReadOnlyOptionsForToolAllowlist(params.Allowlist)
 	if !options.EnforceAllowedColumnBoundary || !isReviewedScopedReaderSurface(params.Allowlist) {
-		return "", fmt.Errorf("scoped reader grant SQL currently supports only reviewed business-pilot and analyst scoped reader surfaces")
+		return "", fmt.Errorf("scoped reader grant SQL currently supports only reviewed business-pilot, analyst, and redacted-all-readonly scoped reader surfaces")
 	}
 	roleIdent, err := quotePostgresIdentifier(params.RoleName)
 	if err != nil {
@@ -60,7 +60,7 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("-- Use a standalone LOGIN NOINHERIT role with no role memberships; the apply command rejects roles that inherit from or are granted to other roles.\n")
 	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.\n")
 	b.WriteString("-- Direct SQL callers can invoke capped sanitized profile-cache rows, sanitized profile summaries, and sanitized analyst business-analysis wrappers; MCP limits are still enforced above SQL helpers.\n")
-	b.WriteString("-- This grant block supports reviewed business-pilot and analyst scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.\n")
+	b.WriteString("-- This grant block supports reviewed business-pilot, analyst, and redacted-all-readonly scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.\n")
 	b.WriteString("-- Role expected before running this block: ")
 	b.WriteString(roleIdent)
 	b.WriteString("\n")
@@ -341,7 +341,7 @@ func scopedReaderFunctionSignatures(signatures []string) []string {
 }
 
 func isReviewedScopedReaderSurface(allowlist []string) bool {
-	return BusinessPilotScopedColumns(allowlist) || AnalystScopedColumns(allowlist)
+	return BusinessPilotScopedColumns(allowlist) || AnalystScopedColumns(allowlist) || RedactedAllReadonlyScopedColumns(allowlist)
 }
 
 func BusinessPilotScopedColumns(allowlist []string) bool {
@@ -435,6 +435,95 @@ func AnalystScopedColumns(allowlist []string) bool {
 	return true
 }
 
+func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
+	want := map[string]struct{}{
+		"analyze_late_stage_crm_signals":            {},
+		"build_call_cohort":                         {},
+		"build_quote_pack":                          {},
+		"build_theme_brief":                         {},
+		"compare_call_cohorts":                      {},
+		"compare_lifecycle_crm_fields":              {},
+		"compare_theme_outcomes":                    {},
+		"compare_themes_by_segment":                 {},
+		"compare_themes_over_time":                  {},
+		"compare_won_lost_theme_patterns":           {},
+		"crm_field_population_matrix":               {},
+		"diagnose_attribution_coverage":             {},
+		"discover_themes_in_cohort":                 {},
+		"explain_analysis_limitations":              {},
+		"extract_theme_quotes":                      {},
+		"generate_outreach_sequence_inputs":         {},
+		"generate_sales_hooks_from_themes":          {},
+		"get_business_profile":                      {},
+		"get_call":                                  {},
+		"get_scorecard":                             {},
+		"get_sync_status":                           {},
+		"gong_analyze":                              {},
+		"gong_discover_capabilities":                {},
+		"gong_explain_limitations":                  {},
+		"gong_get_evidence":                         {},
+		"gong_query":                                {},
+		"gong_status":                               {},
+		"inspect_call_cohort":                       {},
+		"list_business_concepts":                    {},
+		"list_cached_crm_schema_fields":             {},
+		"list_cached_crm_schema_objects":            {},
+		"list_call_cohorts":                         {},
+		"list_crm_fields":                           {},
+		"list_crm_integrations":                     {},
+		"list_crm_object_types":                     {},
+		"list_gong_settings":                        {},
+		"list_lifecycle_buckets":                    {},
+		"list_scorecards":                           {},
+		"list_unmapped_crm_fields":                  {},
+		"missing_transcripts":                       {},
+		"opportunities_missing_transcripts":         {},
+		"opportunity_call_summary":                  {},
+		"prioritize_transcripts_by_lifecycle":       {},
+		"rank_personas_by_insight_quality":          {},
+		"rank_quotes_for_sales_use":                 {},
+		"rank_transcript_backlog":                   {},
+		"recommend_target_personas_and_industries":  {},
+		"score_cohort_evidence_quality":             {},
+		"search_calls":                              {},
+		"search_calls_by_filters":                   {},
+		"search_calls_by_lifecycle":                 {},
+		"search_crm_field_values":                   {},
+		"search_quotes_in_cohort":                   {},
+		"search_transcript_quotes_with_attribution": {},
+		"search_transcript_segments":                {},
+		"search_transcripts_by_call_facts":          {},
+		"search_transcripts_by_crm_context":         {},
+		"search_transcripts_by_filters":             {},
+		"suggest_filter_refinements":                {},
+		"summarize_call_facts":                      {},
+		"summarize_calls_by_filters":                {},
+		"summarize_calls_by_lifecycle":              {},
+		"summarize_loss_reasons_by_theme":           {},
+		"summarize_pipeline_progression_by_theme":   {},
+		"summarize_scorecard_activity":              {},
+		"summarize_themes_by_dimension":             {},
+		"summarize_themes_by_industry":              {},
+		"summarize_themes_by_persona":               {},
+	}
+	if len(allowlist) != len(want) {
+		return false
+	}
+	for _, name := range allowlist {
+		if _, ok := want[name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func ScopedReaderColumnSelectGrantsForAllowlist(allowlist []string) []ColumnSelectGrant {
+	if RedactedAllReadonlyScopedColumns(allowlist) {
+		return RedactedAllReadonlyColumnSelectGrants()
+	}
+	return ScopedReaderColumnSelectGrants()
+}
+
 func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 	grants := []ColumnSelectGrant{
 		{Table: "gongctl_schema_migrations", Column: "version"},
@@ -478,6 +567,33 @@ func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 	}
 	for _, column := range []string{"sync_key", "scope", "cursor", "last_run_id", "last_status", "last_error", "last_success_at", "updated_at"} {
 		grants = append(grants, ColumnSelectGrant{Table: "gongmcp_sync_state", Column: column})
+	}
+	return grants
+}
+
+func RedactedAllReadonlyColumnSelectGrants() []ColumnSelectGrant {
+	grants := ScopedReaderColumnSelectGrants()
+	for _, column := range []string{"call_id", "title", "duration_seconds"} {
+		grants = append(grants, ColumnSelectGrant{Table: "calls", Column: column})
+	}
+	for _, column := range []string{"call_id", "call_date", "scope", "system", "direction"} {
+		grants = append(grants, ColumnSelectGrant{Table: "call_facts", Column: column})
+	}
+	for _, column := range []string{"call_id", "object_key"} {
+		grants = append(grants, ColumnSelectGrant{Table: "gongmcp_call_context_objects", Column: column})
+		grants = append(grants, ColumnSelectGrant{Table: "gongmcp_call_context_fields", Column: column})
+	}
+	for _, column := range []string{"object_id", "name", "active", "updated_at"} {
+		grants = append(grants, ColumnSelectGrant{Table: "gong_settings", Column: column})
+	}
+	for _, column := range []string{"name", "provider", "first_seen_at", "updated_at"} {
+		grants = append(grants, ColumnSelectGrant{Table: "crm_integrations", Column: column})
+	}
+	for _, column := range []string{"integration_id", "display_name", "field_count", "first_seen_at", "updated_at"} {
+		grants = append(grants, ColumnSelectGrant{Table: "crm_schema_objects", Column: column})
+	}
+	for _, column := range []string{"integration_id", "object_type", "field_label", "field_type", "first_seen_at", "updated_at"} {
+		grants = append(grants, ColumnSelectGrant{Table: "crm_schema_fields", Column: column})
 	}
 	return grants
 }

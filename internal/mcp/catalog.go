@@ -160,11 +160,58 @@ func ExpandToolPreset(name string) ([]string, error) {
 		return copyStrings(tools), nil
 	case "governance-search":
 		return copyStrings(governanceCompatibleToolNames), nil
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab":
+		return PostgresRedactedAllReadonlyToolNames(), nil
 	case "all-readonly", "all-tools", "all":
 		return ToolCatalogNames(), nil
 	default:
-		return nil, fmt.Errorf("unknown tool preset %q; available presets: analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, all-readonly", strings.TrimSpace(name))
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, redacted-all-readonly, all-readonly", strings.TrimSpace(name))
 	}
+}
+
+func PostgresRedactedAllReadonlyToolNames() []string {
+	tools := []string{
+		"gong_status",
+		"gong_discover_capabilities",
+		"gong_query",
+		"gong_analyze",
+		"gong_get_evidence",
+		"gong_explain_limitations",
+		"get_sync_status",
+		"search_calls",
+		"get_call",
+		"list_crm_object_types",
+		"list_crm_fields",
+		"list_crm_integrations",
+		"list_cached_crm_schema_objects",
+		"list_cached_crm_schema_fields",
+		"list_gong_settings",
+		"list_scorecards",
+		"get_scorecard",
+		"summarize_scorecard_activity",
+		"get_business_profile",
+		"list_business_concepts",
+		"list_unmapped_crm_fields",
+		"analyze_late_stage_crm_signals",
+		"opportunities_missing_transcripts",
+		"search_transcripts_by_crm_context",
+		"opportunity_call_summary",
+		"crm_field_population_matrix",
+		"list_lifecycle_buckets",
+		"summarize_calls_by_lifecycle",
+		"search_calls_by_lifecycle",
+		"prioritize_transcripts_by_lifecycle",
+		"compare_lifecycle_crm_fields",
+		"summarize_call_facts",
+		"rank_transcript_backlog",
+		"missing_transcripts",
+		"search_crm_field_values",
+		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
+		"search_transcript_quotes_with_attribution",
+	}
+	tools = append(tools, BusinessAnalysisToolNames()...)
+	return copyStrings(tools)
 }
 
 func FacadeToolNames() []string {
@@ -254,6 +301,12 @@ func ToolPresetCatalog() []ToolPresetInfo {
 			name:        "governance-search",
 			purpose:     "Raw-DB AI-governance-compatible search tools only.",
 			recommended: "operator testing with GONGMCP_AI_GOVERNANCE_CONFIG",
+		},
+		{
+			name:        "redacted-all-readonly",
+			aliases:     []string{"redacted-all", "redacted-search-lab"},
+			purpose:     "Broad Postgres read-only lab surface over every reviewed Postgres-readable tool; requires a physically redacted serving DB at runtime.",
+			recommended: "internal manual testing against a redacted Postgres serving database",
 		},
 		{
 			name:        "all-readonly",

@@ -77,7 +77,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolStatus,
 			RoutedTool:     "get_sync_status",
 			ExposureLevel:  "operator-status",
-			AllowedPresets: []string{"business-pilot", "operator-smoke", "analyst-core", "analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"business-pilot", "operator-smoke", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema:    objectSchema(nil, nil),
 			Examples:       []any{map[string]any{}},
 		},
@@ -89,7 +89,7 @@ func FacadeOperations() []FacadeOperation {
 			RoutedTool:     "search_calls_by_filters",
 			RoutedFallback: "search_calls",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-facade", "analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-facade", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":                map[string]any{"type": "object"},
 				"limit":                 map[string]any{"type": "integer"},
@@ -112,7 +112,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolQuery,
 			RoutedTool:     "list_scorecards",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"active_only": map[string]any{"type": "boolean"},
 				"limit":       map[string]any{"type": "integer"},
@@ -128,7 +128,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolQuery,
 			RoutedTool:     "get_scorecard",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"scorecard_id": map[string]any{"type": "string"},
 			}, []string{"scorecard_id"}),
@@ -144,7 +144,7 @@ func FacadeOperations() []FacadeOperation {
 			RoutedTool:     "search_transcript_segments",
 			RoutedFallback: "search_transcripts_by_filters",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"operator-smoke", "analyst-core", "analyst-business-core", "analyst", "governance-search", "all-readonly"},
+			AllowedPresets: []string{"operator-smoke", "analyst-core", "analyst-business-core", "analyst", "governance-search", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"query": map[string]any{"type": "string"},
 				"limit": map[string]any{"type": "integer"},
@@ -160,7 +160,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolAnalyze,
 			RoutedTool:     "build_call_cohort",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter": map[string]any{"type": "object"},
 				"limit":  map[string]any{"type": "integer"},
@@ -184,7 +184,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolAnalyze,
 			RoutedTool:     "inspect_call_cohort",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter": map[string]any{"type": "object"},
 				"limit":  map[string]any{"type": "integer"},
@@ -197,7 +197,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolAnalyze,
 			RoutedTool:     "discover_themes_in_cohort",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":      map[string]any{"type": "object"},
 				"theme_query": map[string]any{"type": "string"},
@@ -211,7 +211,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolAnalyze,
 			RoutedTool:     "explain_analysis_limitations",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter": map[string]any{"type": "object"},
 			}, nil),
@@ -224,7 +224,7 @@ func FacadeOperations() []FacadeOperation {
 			RoutedTool:     "search_quotes_in_cohort",
 			RoutedFallback: "search_transcript_quotes_with_attribution",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":      map[string]any{"type": "object"},
 				"theme_query": map[string]any{"type": "string"},
@@ -238,7 +238,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolGetEvidence,
 			RoutedTool:     "build_quote_pack",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":      map[string]any{"type": "object"},
 				"theme_query": map[string]any{"type": "string"},
@@ -252,7 +252,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolGetEvidence,
 			RoutedTool:     internalRoutedToolListAIHighlights,
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"call_ids": map[string]any{
 					"type":        "array",
@@ -533,7 +533,7 @@ func (s *Server) facadeHighLevelLimitations() (toolCallResult, error) {
 			"The MCP facade routes a stable surface to existing internal tools; it does not introduce new data paths.",
 			"Routed tools must be present in the active tool allowlist or preset; otherwise the facade returns a tool error naming the missing routed tool and preset.",
 			"AI governance (when configured) and the redacted Postgres serving DB still apply on every routed call; the facade does not bypass either layer.",
-			"The facade does not extend Postgres `all-readonly`; broad read-only Postgres exposure remains gated by the existing slice rules.",
+			"The facade does not extend the normal Postgres `all-readonly` preset; broad read-only Postgres exposure requires the explicit redacted-all-readonly lab preset and a physically redacted serving DB.",
 			"Top-level individual tools (search_calls, build_call_cohort, search_transcript_segments, build_quote_pack, etc.) remain available for operator and analyst testing.",
 		},
 		"available_operations":   available,

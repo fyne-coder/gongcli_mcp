@@ -192,7 +192,7 @@ func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
 		`-- It reconciles current public objects only; gongmcp startup rejects default privileges that would grant future public objects to this service role.`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
-		`reviewed business-pilot and analyst scoped readers`,
+		`reviewed business-pilot, analyst, and redacted-all-readonly scoped readers`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
 		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,
@@ -353,7 +353,7 @@ func TestPrintPostgresReaderGrantsRejectsUnsupportedPreset(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout not empty: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "reviewed business-pilot and analyst scoped reader surfaces") {
+	if !strings.Contains(stderr.String(), "reviewed business-pilot, analyst, and redacted-all-readonly scoped reader surfaces") {
 		t.Fatalf("stderr=%q missing unsupported preset message", stderr.String())
 	}
 }
@@ -608,6 +608,81 @@ func TestPostgresToolAllowlistAcceptsAnalystPreset(t *testing.T) {
 		if !reflect.DeepEqual(allowlist, expanded) {
 			t.Fatalf("postgresToolAllowlist(%q)=%v want expanded preset %v", preset, allowlist, expanded)
 		}
+	}
+}
+
+func TestPostgresToolAllowlistAcceptsRedactedAllReadonlyPreset(t *testing.T) {
+	for _, preset := range []string{"redacted-all-readonly", "redacted-all", "redacted-search-lab"} {
+		expanded, err := mcp.ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		allowlist, err := postgresToolAllowlist(expanded, true, preset)
+		if err != nil {
+			t.Fatalf("postgresToolAllowlist(%q) returned error: %v", preset, err)
+		}
+		if !reflect.DeepEqual(allowlist, mcp.PostgresRedactedAllReadonlyToolNames()) {
+			t.Fatalf("postgresToolAllowlist(%q)=%v want redacted all readonly tools", preset, allowlist)
+		}
+		for _, want := range []string{"search_calls", "get_call", "search_crm_field_values", "summarize_scorecard_activity", "gong_query"} {
+			if !containsString(allowlist, want) {
+				t.Fatalf("postgres redacted all allowlist missing %q in %v", want, allowlist)
+			}
+		}
+	}
+}
+
+func TestPostgresToolAllowlistRejectsUnreviewedRedactedAllExpansion(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("redacted-all-readonly")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	expanded = append(expanded, "not_a_tool")
+	_, err = postgresToolAllowlist(expanded, true, "redacted-all-readonly")
+	if err == nil || !strings.Contains(err.Error(), "not been reviewed for the postgres redacted all-readonly preset") {
+		t.Fatalf("postgresToolAllowlist accepted unreviewed redacted all expansion: %v", err)
+	}
+}
+
+func TestRunRedactedAllReadonlyRequiresRedactedServingDBGates(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://reader:pw@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("GONGMCP_TOOL_PRESET", "redacted-all-readonly")
+	t.Setenv("GONGMCP_HTTP_ADDR", "127.0.0.1:0")
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "missing redacted serving marker",
+			env:  map[string]string{"GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS": "1"},
+			want: "requires GONGMCP_POSTGRES_REDACTED_SERVING_DB=1",
+		},
+		{
+			name: "missing scoped grants enforcement",
+			env:  map[string]string{"GONGMCP_POSTGRES_REDACTED_SERVING_DB": "1"},
+			want: "requires GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB", "")
+			t.Setenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS", "")
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := run(nil, bytes.NewReader(nil), &stdout, &stderr)
+			if code != 2 {
+				t.Fatalf("exit code=%d want 2 stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Fatalf("stderr=%q missing %q", stderr.String(), tt.want)
+			}
+		})
 	}
 }
 
@@ -1094,6 +1169,11 @@ func TestResolveToolAllowlistPresets(t *testing.T) {
 			name: "governance search preset",
 			in:   toolSelection{PresetEnv: "governance-search"},
 			want: []string{"search_calls", "get_call", "search_transcripts_by_crm_context", "search_calls_by_lifecycle", "prioritize_transcripts_by_lifecycle", "rank_transcript_backlog", "search_transcript_segments", "search_transcripts_by_call_facts", "search_transcript_quotes_with_attribution", "missing_transcripts"},
+		},
+		{
+			name: "redacted all readonly preset",
+			in:   toolSelection{PresetEnv: "redacted-all-readonly"},
+			want: mcp.PostgresRedactedAllReadonlyToolNames(),
 		},
 		{
 			name: "flag preset overrides env allowlist",

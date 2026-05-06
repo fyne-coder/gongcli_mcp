@@ -3,6 +3,8 @@ package postgres
 import (
 	"strings"
 	"testing"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 )
 
 func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
@@ -24,7 +26,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
 		`-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.`,
 		`-- Direct SQL callers can invoke capped sanitized profile-cache rows, sanitized profile summaries, and sanitized analyst business-analysis wrappers; MCP limits are still enforced above SQL helpers.`,
-		`-- This grant block supports reviewed business-pilot and analyst scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.`,
+		`-- This grant block supports reviewed business-pilot, analyst, and redacted-all-readonly scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
 		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,
@@ -264,6 +266,47 @@ func TestBuildScopedReaderGrantSQLAnalystExpansionGrantsScorecardInventory(t *te
 	} {
 		if strings.Contains(sql, forbidden) {
 			t.Fatalf("generated SQL included forbidden activity helper %q\n%s", forbidden, sql)
+		}
+	}
+}
+
+func TestBuildScopedReaderGrantSQLRedactedAllReadonlyGrantsBroadSearchSurface(t *testing.T) {
+	allowlist := mcp.PostgresRedactedAllReadonlyToolNames()
+	sql, err := BuildScopedReaderGrantSQL(ScopedReaderGrantSQLParams{
+		Allowlist:    allowlist,
+		RoleName:     "gongmcp_redacted_reader",
+		DatabaseName: "gongctl",
+	})
+	if err != nil {
+		t.Fatalf("BuildScopedReaderGrantSQL returned error: %v", err)
+	}
+	for _, want := range []string{
+		`GRANT SELECT ("call_id", "context_present", "duration_seconds", "parties_count", "started_at", "title") ON TABLE public."calls" TO "gongmcp_redacted_reader";`,
+		`GRANT SELECT ("account_count", "call_date", "call_id", "direction", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "scope", "started_at", "system", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_redacted_reader";`,
+		`GRANT SELECT ("call_id", "id", "object_key", "object_type") ON TABLE public."gongmcp_call_context_objects" TO "gongmcp_redacted_reader";`,
+		`GRANT SELECT ("call_id", "field_label", "field_name", "field_populated", "field_type", "id", "object_key") ON TABLE public."gongmcp_call_context_fields" TO "gongmcp_redacted_reader";`,
+		`GRANT SELECT ("active", "kind", "name", "object_id", "updated_at") ON TABLE public."gong_settings" TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_scorecard_activity_summary(text, integer) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("generated SQL missing %q\n%s", want, sql)
+		}
+	}
+	for _, forbidden := range []string{
+		`ON TABLE public."transcript_segments"`,
+		`ON TABLE public."call_context_fields"`,
+		`ON TABLE public."scorecard_activity"`,
+		`"raw_json"`,
+		`"raw_sha256"`,
+		`"field_value_text"`,
+		`"highlight_text"`,
+		`CREATE ROLE`,
+		`PASSWORD`,
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("generated SQL included forbidden %q\n%s", forbidden, sql)
 		}
 	}
 }

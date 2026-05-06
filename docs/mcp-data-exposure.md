@@ -116,8 +116,9 @@ The facade does not introduce new data paths or weaken governance:
 - A facade dispatch fails closed if the routed tool is not in the active
   preset/allowlist. The error response names the missing routed tool, the
   fallback (when defined), and the presets that expose it.
-- The facade does not extend Postgres `all-readonly`; broad read-only
-  exposure remains gated by the existing slice rules.
+- The facade does not extend the normal Postgres `all-readonly` preset. Internal
+  broad-search testing over a physically redacted serving DB uses the explicit
+  `redacted-all-readonly` preset plus scoped reader grants.
 
 Use `--tool-preset analyst-facade` / `GONGMCP_TOOL_PRESET=analyst-facade`
 when a client MCP host should see only the stable facade tool names. The
@@ -278,13 +279,14 @@ How to open up the surface intentionally:
   `--tool-preset all-readonly` only for trusted SQLite admin/analyst sessions
   or fully reviewed SQLite filtered-DB deployments. For Postgres, use
   `business-pilot`, `operator-smoke`, `analyst-core`, `analyst-business-core`,
-  `governance-search`, or explicit allowlists such as
+  `governance-search`, `redacted-all-readonly` for internal broad-search tests
+  against a physically redacted serving DB, or explicit allowlists such as
   `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`,
   `opportunity_call_summary`, `crm_field_population_matrix`,
   `compare_lifecycle_crm_fields`, `missing_transcripts`, or
   `search_transcripts_by_crm_context`; use Postgres `analyst` for approved
   analyst sessions over the reviewed catalog. Postgres `all-readonly` is not
-  yet supported.
+  yet supported and remains separate from `redacted-all-readonly`.
 - Enable per-tool opt-ins when the question requires them:
   - `search_transcript_segments` with `include_call_ids=true` and
     `include_speaker_ids=true` returns exact identifiers alongside snippets.

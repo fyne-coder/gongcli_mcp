@@ -122,6 +122,47 @@ func TestAnalystPresetExposesScorecardInventoryTools(t *testing.T) {
 	}
 }
 
+func TestRedactedAllReadonlyPresetExposesReviewedPostgresSearchSurface(t *testing.T) {
+	t.Parallel()
+
+	tools, err := ExpandToolPreset("redacted-all-readonly")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(redacted-all-readonly) returned error: %v", err)
+	}
+	for _, want := range []string{
+		"gong_query",
+		"gong_analyze",
+		"search_calls",
+		"get_call",
+		"search_calls_by_lifecycle",
+		"search_crm_field_values",
+		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
+		"search_transcripts_by_crm_context",
+		"search_transcript_quotes_with_attribution",
+		"list_crm_integrations",
+		"list_cached_crm_schema_objects",
+		"list_cached_crm_schema_fields",
+		"list_gong_settings",
+		"list_scorecards",
+		"get_scorecard",
+		"summarize_scorecard_activity",
+		"missing_transcripts",
+	} {
+		if !containsString(tools, want) {
+			t.Fatalf("redacted-all-readonly missing reviewed Postgres tool %q in %v", want, tools)
+		}
+	}
+	for _, name := range BusinessAnalysisToolNames() {
+		if !containsString(tools, name) {
+			t.Fatalf("redacted-all-readonly missing business-analysis tool %q", name)
+		}
+	}
+	if len(tools) == 0 {
+		t.Fatal("redacted-all-readonly returned no tools")
+	}
+}
+
 func registerPresetName(t *testing.T, seen map[string]string, name, preset string) {
 	t.Helper()
 

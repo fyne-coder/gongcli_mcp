@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly, all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -128,6 +128,18 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	enforceScopedDBGrants := *enforceToolScopedDBGrants || truthy(os.Getenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"))
+	redactedServingDB := truthy(os.Getenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB"))
+	if postgresMode && postgresRedactedAllReadonlyPreset(selectedPreset) {
+		if !redactedServingDB {
+			fmt.Fprintln(stderr, "invalid postgres tool selection: redacted-all-readonly requires GONGMCP_POSTGRES_REDACTED_SERVING_DB=1")
+			return 2
+		}
+		if !enforceScopedDBGrants {
+			fmt.Fprintln(stderr, "invalid postgres tool selection: redacted-all-readonly requires GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1")
+			return 2
+		}
+	}
 	limitPolicy, err := resolveLimitPolicy(limitSelection{
 		SearchResults:              *maxSearchResults,
 		SearchResultsSet:           flagSet["max-search-results"],
@@ -163,7 +175,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
-	enforceScopedDBGrants := *enforceToolScopedDBGrants || truthy(os.Getenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"))
 
 	ctx := context.Background()
 	var store mcp.Store
@@ -178,8 +189,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 				readOnlyOptions.AllowedFunctionSignatures = append(readOnlyOptions.AllowedFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 			}
-			readOnlyOptions.AllowAccountQuery = truthy(os.Getenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB"))
 		}
+		readOnlyOptions.AllowAccountQuery = redactedServingDB
 		pgStore, err := postgres.OpenReadOnlyWithOptions(ctx, postgresURL, readOnlyOptions)
 		if err != nil {
 			fmt.Fprintf(stderr, "open postgres db: %v\n", err)
@@ -358,6 +369,12 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres analyst preset", presetName)
 		}
 		return reviewed, nil
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab":
+		reviewed := mcp.PostgresRedactedAllReadonlyToolNames()
+		if !sameStringSet(allowlist, reviewed) {
+			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres redacted all-readonly preset", presetName)
+		}
+		return reviewed, nil
 	case "governance-search":
 		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
 	}
@@ -446,6 +463,15 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 		}
 	}
 	return allowlist, nil
+}
+
+func postgresRedactedAllReadonlyPreset(presetName string) bool {
+	switch strings.ToLower(strings.TrimSpace(presetName)) {
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab":
+		return true
+	default:
+		return false
+	}
 }
 
 func postgresReviewedAnalystTools() []string {

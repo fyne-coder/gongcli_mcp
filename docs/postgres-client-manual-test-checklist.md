@@ -3,7 +3,9 @@
 Use this checklist after the operator has deployed the controlled Postgres pilot
 and before a client-facing walkthrough. It is written for a reviewed
 customer-hosted deployment using the redacted serving database and scoped
-`analyst-expansion` reader role.
+`analyst-expansion` reader role. Internal broad-search lab testing can use
+`redacted-all-readonly` after the same redacted serving DB and scoped-grant
+checks pass.
 Deployment steps live in the
 [Postgres client deployment runbook](runbooks/postgres-client-deployment.md).
 Use the
@@ -20,7 +22,11 @@ counts, tool names, and reviewed evidence paths only.
 - MCP URL is HTTPS and ends in `/mcp`.
 - Authentication is enabled through the approved gateway.
 - `gongmcp` receives only the redacted serving DB reader URL.
-- `GONGMCP_TOOL_PRESET=analyst-expansion`.
+- `GONGMCP_TOOL_PRESET=analyst-expansion` for client analyst testing, or
+  `redacted-all-readonly` for internal broad-search testing only.
+- `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted` for client analyst testing,
+  or `raw` for internal redacted-DB broad-search testing when exact call IDs are
+  needed.
 - `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`.
 - `GONGMCP_POSTGRES_REDACTED_SERVING_DB=1`.
 - `all-readonly`, `all-tools`, and `all` remain rejected for Postgres.
@@ -32,6 +38,13 @@ counts, tool names, and reviewed evidence paths only.
 
 For the current governed Postgres manual-test lane, the expected public preset
 is `analyst-expansion`, an alias for `analyst`.
+
+For internal redacted-DB broad testing, `redacted-all-readonly` exposes every
+reviewed Postgres-readable MCP tool, including `search_calls`, `get_call`,
+`search_crm_field_values`, CRM/settings inventory, scorecard activity
+aggregates, facade tools, and the business-analysis catalog. This preset is not
+the normal Postgres `all-readonly` preset and should not be used against a raw
+unredacted database.
 
 Expected core tools:
 
