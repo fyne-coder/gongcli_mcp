@@ -1193,6 +1193,22 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_active_business_profile_sanitized() FROM PUBLIC;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 DO $$
+DECLARE
+	target_function regprocedure;
+BEGIN
+	FOR target_function IN
+		SELECT p.oid::regprocedure
+		  FROM pg_proc p
+		  JOIN pg_namespace n
+		    ON n.oid = p.pronamespace
+		 WHERE n.nspname = 'public'
+		   AND p.proname LIKE 'gongmcp_%'
+	LOOP
+		EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', target_function::text);
+	END LOOP;
+END;
+$$;
+DO $$
 BEGIN
 	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
 		REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM gongmcp_reader;

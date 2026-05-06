@@ -2,11 +2,13 @@
 
 ## Unreleased
 
-- Added development-branch Postgres client pilot release packet and onboarding
+## 0.3.4 - 2026-05-05
+
+- Added Postgres client pilot release packet and onboarding
   checklist for controlled shared deployments, including scoped-role,
   synthetic-evidence, customer-platform dry-run, digest-pinning, and rollback
   requirements.
-- Added development-branch scoped Postgres analyst reader support for reviewed
+- Added scoped Postgres analyst reader support for reviewed
   `analyst` and `analyst-expansion` sessions under
   `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`, while keeping Postgres
   `all-readonly`, `all-tools`, and `all` rejected.
@@ -14,24 +16,24 @@
   dimension outputs, omitting buckets below 3 calls with explicit
   `small_cell_suppression_applied` metadata while leaving SQLite defaults
   unchanged.
-- Added development-branch Postgres explicit allowlist support for filtered
+- Added Postgres explicit allowlist support for filtered
   `missing_transcripts`, matching SQLite date, lifecycle, scope, system,
   direction, and CRM object filters for admin transcript-backfill workflows.
-- Added development-branch Postgres explicit allowlist support for
+- Added Postgres explicit allowlist support for
   `compare_lifecycle_crm_fields`, returning aggregate lifecycle-vs-CRM field
   population comparisons for the reviewed `Opportunity` object type without
   exposing call IDs, CRM object identifiers, raw CRM values, raw JSON, raw
   hashes, or transcript content.
-- Added development-branch Postgres explicit allowlist support for
+- Added Postgres explicit allowlist support for
   `search_transcripts_by_crm_context`, returning CRM-constrained transcript
   snippets through a reader-executable function while redacting CRM object
   IDs/names, call titles, raw CRM values, raw JSON, raw hashes, and full
   transcript text from the SQL result shape.
-- Added development-branch Postgres explicit allowlist support for
+- Added Postgres explicit allowlist support for
   `opportunity_call_summary`, returning redacted Opportunity call coverage
   aggregates through a reader-executable function without exposing Opportunity
   IDs/names, owner IDs, amount, close date, latest call IDs, or raw CRM values.
-- Added development-branch Postgres explicit allowlist support for
+- Added Postgres explicit allowlist support for
   `crm_field_population_matrix`, returning aggregate field-population cells by
   approved categorical group fields without exposing object IDs/names, call IDs,
   raw CRM values, raw JSON, or raw hashes.
