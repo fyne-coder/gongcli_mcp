@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Made the persona business-analysis dimension role-aware (Phase 13f). The
+  `summarize_themes_by_persona`, `rank_personas_by_insight_quality`,
+  `summarize_themes_by_dimension(dimension="persona")` and
+  `analyze.themes.discover` paths now group calls into deterministic
+  coarse role buckets: `procurement`, `supplier_enablement`,
+  `it_security_integration`, `finance`, `operations`, `sales_revenue`,
+  `executive`, and `other_title_present`, derived from cached party
+  metadata (`parties` / `metaData.parties` `title`/`jobTitle`/`job_title`)
+  and CRM Contact/Lead Title fields (`Title`, `JobTitle`, `Job_Title__c`,
+  `JobTitle__c`). Raw participant titles are never returned as dimension
+  values; calls with participants but no resolvable title fall back to
+  `<blank>` (or `participant_title_present` when only the materialized
+  `call_facts` flag survives), and the existing
+  `participant_title_missing_or_unmapped` cohort warning continues to
+  fire when no titles are present. SQLite and Postgres agree on the
+  bucket assignment for synthetic representative fixtures. No new
+  top-level MCP tool was added; small-cell suppression and existing
+  redaction/governance gates remain in force. The Postgres
+  `gongmcp_business_analysis_dimension` function now delegates persona
+  classification to a SECURITY DEFINER helper
+  `gongmcp_business_analysis_persona_bucket(text, boolean)` that is
+  REVOKED from PUBLIC and only callable through the existing dimension
+  function.
 - Made broad cohort theme discovery less seed-fragile (Phase 13e). The
   `discover_themes_in_cohort` business-analysis tool and the
   `analyze.themes.discover` facade operation routed through `gong_analyze`

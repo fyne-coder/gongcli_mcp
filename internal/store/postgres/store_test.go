@@ -1551,7 +1551,10 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if err != nil {
 		t.Fatalf("postgres persona SummarizeBusinessAnalysisDimension: %v", err)
 	}
-	if len(pgPersonaDimension) != 1 || pgPersonaDimension[0].Value != "participant_title_present" || pgPersonaDimension[0].CallCount != 1 {
+	// Phase 13f: "VP Operations" must map to the coarse `operations` bucket
+	// rather than the legacy `participant_title_present` collapse value or
+	// the raw title string.
+	if len(pgPersonaDimension) != 1 || pgPersonaDimension[0].Value != "operations" || pgPersonaDimension[0].CallCount != 1 {
 		t.Fatalf("unexpected postgres persona dimension summary: %+v", pgPersonaDimension)
 	}
 	if strings.Contains(pgPersonaDimension[0].Value, "VP Operations") {
@@ -1586,6 +1589,142 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	}
 	if len(pgLossReasonDimension) != 1 || pgLossReasonDimension[0].Value != "loss_reason_present" || pgLossReasonDimension[0].CallCount != 1 {
 		t.Fatalf("postgres loss_reason dimension did not use materialized call_facts flag after raw blanking: %+v", pgLossReasonDimension)
+	}
+}
+
+func TestPostgresBusinessAnalysisPersonaBucketsMatchSQLiteRepresentativeSlice(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+
+	sqlitePath := filepath.Join(t.TempDir(), "gongctl.sqlite")
+	sqliteStore, err := sqlite.Open(ctx, sqlitePath)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	// Phase 13f synthetic persona fixtures shared across both stores. Title
+	// strings are intentionally varied (parties metadata vs. CRM Contact
+	// title field) to prove the bucket SQL coalesces both sources.
+	type personaCase struct {
+		callID    string
+		title     string
+		partyText string
+		crmTitle  string
+		bucket    string
+	}
+	cases := []personaCase{
+		{callID: "pg-persona-procurement", title: "Phase 13f procurement workflow", partyText: "VP Procurement", bucket: "procurement"},
+		{callID: "pg-persona-supplier", title: "Phase 13f procurement supplier", partyText: "Supplier Enablement Lead", bucket: "supplier_enablement"},
+		{callID: "pg-persona-it", title: "Phase 13f procurement IT", partyText: "IT Director", bucket: "it_security_integration"},
+		{callID: "pg-persona-operations", title: "Phase 13f procurement operations", partyText: "Operations Manager", bucket: "operations"},
+		{callID: "pg-persona-finance", title: "Phase 13f procurement finance", crmTitle: "CFO", bucket: "finance"},
+		{callID: "pg-persona-executive", title: "Phase 13f procurement CEO", partyText: "CEO", bucket: "executive"},
+		{callID: "pg-persona-sales", title: "Phase 13f procurement sales", partyText: "VP Sales", bucket: "sales_revenue"},
+		{callID: "pg-persona-other", title: "Phase 13f procurement other", partyText: "Engineering Manager", bucket: "other_title_present"},
+		{callID: "pg-persona-no-title", title: "Phase 13f procurement no title", bucket: ""},
+	}
+	for _, c := range cases {
+		party := map[string]any{"id": "party-" + c.callID}
+		if c.partyText != "" {
+			party["title"] = c.partyText
+		}
+		raw := map[string]any{
+			"id":       c.callID,
+			"title":    c.title,
+			"started":  "2026-02-12T15:00:00Z",
+			"duration": 1500,
+			"metaData": map[string]any{
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+				"parties":   []any{party},
+			},
+		}
+		if c.crmTitle != "" {
+			raw["context"] = []any{
+				map[string]any{
+					"objectType": "Contact",
+					"id":         "contact-" + c.callID,
+					"fields": []any{
+						map[string]any{"name": "Title", "value": c.crmTitle},
+					},
+				},
+			}
+		}
+		jsonRaw := postgresTestRaw(t, raw)
+		if _, err := pgStore.UpsertCall(ctx, jsonRaw); err != nil {
+			t.Fatalf("postgres upsert persona fixture %s: %v", c.callID, err)
+		}
+		if _, err := sqliteStore.UpsertCall(ctx, jsonRaw); err != nil {
+			t.Fatalf("sqlite upsert persona fixture %s: %v", c.callID, err)
+		}
+	}
+
+	filter := sqlite.BusinessAnalysisFilter{TitleQuery: "phase 13f procurement"}
+	pgPersona, err := pgStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "persona", Limit: 50})
+	if err != nil {
+		t.Fatalf("postgres persona dimension: %v", err)
+	}
+	sqlitePersona, err := sqliteStore.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{Filter: filter, Dimension: "persona", Limit: 50})
+	if err != nil {
+		t.Fatalf("sqlite persona dimension: %v", err)
+	}
+
+	bucketCount := func(rows []sqlite.BusinessAnalysisDimensionRow) map[string]int64 {
+		out := map[string]int64{}
+		for _, r := range rows {
+			out[r.Value] = r.CallCount
+		}
+		return out
+	}
+	pgCounts := bucketCount(pgPersona)
+	sqliteCounts := bucketCount(sqlitePersona)
+
+	for _, bucket := range []string{
+		"procurement",
+		"supplier_enablement",
+		"it_security_integration",
+		"operations",
+		"finance",
+		"executive",
+		"sales_revenue",
+		"other_title_present",
+	} {
+		if pgCounts[bucket] == 0 {
+			t.Fatalf("postgres persona dimension missing bucket %q in %+v", bucket, pgPersona)
+		}
+		if pgCounts[bucket] != sqliteCounts[bucket] {
+			t.Fatalf("persona bucket %q parity drift: postgres=%d sqlite=%d", bucket, pgCounts[bucket], sqliteCounts[bucket])
+		}
+	}
+	for _, leak := range []string{"VP Procurement", "Supplier Enablement Lead", "IT Director", "Operations Manager", "CFO", "CEO", "VP Sales", "Engineering Manager"} {
+		for _, row := range pgPersona {
+			if strings.Contains(row.Value, leak) {
+				t.Fatalf("postgres persona dimension exposed raw title %q in %+v", leak, row)
+			}
+		}
+		for _, row := range sqlitePersona {
+			if strings.Contains(row.Value, leak) {
+				t.Fatalf("sqlite persona dimension exposed raw title %q in %+v", leak, row)
+			}
+		}
+	}
+	if _, ok := pgCounts["<blank>"]; !ok {
+		t.Fatalf("postgres persona dimension missing <blank> coverage row for the no-title fixture: %+v", pgPersona)
+	}
+	if _, ok := sqliteCounts["<blank>"]; !ok {
+		t.Fatalf("sqlite persona dimension missing <blank> coverage row for the no-title fixture: %+v", sqlitePersona)
 	}
 }
 

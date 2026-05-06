@@ -543,6 +543,51 @@ SELECT s.call_id,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_persona_bucket(call_id_arg text, fact_title_present boolean)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH titles AS (
+	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' ' AS t
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS p
+	 WHERE c.call_id = call_id_arg
+	   AND COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '') <> ''
+	UNION ALL
+	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' '
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS p
+	 WHERE c.call_id = call_id_arg
+	   AND COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '') <> ''
+	UNION ALL
+	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(f.field_value_text)), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' '
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE f.call_id = call_id_arg
+	   AND o.object_type IN ('Contact', 'Lead')
+	   AND f.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')
+	   AND TRIM(f.field_value_text) <> ''
+)
+SELECT CASE
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%procurement%' OR t LIKE '%purchasing%' OR t LIKE '%sourcing%' OR t LIKE '%buyer%' OR t LIKE '%category manager%') THEN 'procurement'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%supplier%' OR t LIKE '%vendor manager%' OR t LIKE '%vendor management%' OR t LIKE '%vendor enablement%' OR t LIKE '%channel manager%' OR t LIKE '%partner manager%' OR t LIKE '%alliances%') THEN 'supplier_enablement'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% ciso %' OR t LIKE '% cio %' OR t LIKE '% cto %' OR t LIKE '%chief information%' OR t LIKE '%chief technology%' OR t LIKE '%vp it%' OR t LIKE '%vp of it%' OR t LIKE '%head of it%' OR t LIKE '%it director%' OR t LIKE '%it manager%' OR t LIKE '%infrastructure%' OR t LIKE '%security%' OR t LIKE '%infosec%' OR t LIKE '%integration%' OR t LIKE '%architect%' OR t LIKE '%devops%' OR t LIKE '%platform engineer%' OR t LIKE '%site reliability%') THEN 'it_security_integration'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% cfo %' OR t LIKE '%chief financial%' OR t LIKE '%finance%' OR t LIKE '%controller%' OR t LIKE '%treasur%' OR t LIKE '%accounting%') THEN 'finance'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% coo %' OR t LIKE '%chief operating%' OR t LIKE '%operations%' OR t LIKE '%supply chain%' OR t LIKE '%logistics%' OR t LIKE '%manufacturing%' OR t LIKE '%production%' OR t LIKE '%fulfillment%') THEN 'operations'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%sales%' OR t LIKE '%revenue%' OR t LIKE '%account exec%' OR t LIKE '%account manager%' OR t LIKE '% sdr %' OR t LIKE '% bdr %' OR t LIKE '% ae %' OR t LIKE '% csm %' OR t LIKE '%customer success%' OR t LIKE '%go-to-market%' OR t LIKE '%gtm%') THEN 'sales_revenue'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% ceo %' OR t LIKE '%chief executive%' OR t LIKE '%founder%' OR t LIKE '%president%' OR t LIKE '%chair%' OR t LIKE '%general manager%') THEN 'executive'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE TRIM(t) <> '') THEN 'other_title_present'
+	WHEN COALESCE(fact_title_present, false) THEN 'participant_title_present'
+	ELSE ''
+END
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_persona_bucket(text, boolean) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension(dimension_arg text, theme_query_arg text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
 RETURNS TABLE(dimension text, value text, call_count bigint, transcript_count bigint, missing_transcript_count bigint, opportunity_call_count bigint, account_call_count bigint, external_call_count bigint, latest_call_at text)
 LANGUAGE sql
@@ -558,9 +603,9 @@ WITH rows AS (
 		       WHEN 'lifecycle_bucket' THEN cf.lifecycle_bucket
 		       WHEN 'industry' THEN cf.account_industry
 		       WHEN 'account_industry' THEN cf.account_industry
-		       WHEN 'persona' THEN CASE WHEN cf.participant_title_present THEN 'participant_title_present' ELSE '' END
-		       WHEN 'participant_title' THEN CASE WHEN cf.participant_title_present THEN 'participant_title_present' ELSE '' END
-		       WHEN 'title' THEN CASE WHEN cf.participant_title_present THEN 'participant_title_present' ELSE '' END
+		       WHEN 'persona' THEN gongmcp_business_analysis_persona_bucket(cf.call_id, cf.participant_title_present)
+		       WHEN 'participant_title' THEN gongmcp_business_analysis_persona_bucket(cf.call_id, cf.participant_title_present)
+		       WHEN 'title' THEN gongmcp_business_analysis_persona_bucket(cf.call_id, cf.participant_title_present)
 		       WHEN 'opportunity_stage' THEN cf.opportunity_stage
 		       WHEN 'stage' THEN cf.opportunity_stage
 		       WHEN 'opportunity_type' THEN cf.opportunity_type

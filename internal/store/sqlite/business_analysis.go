@@ -790,7 +790,7 @@ func businessAnalysisDimensionExpr(dimension string) (string, string, error) {
 	case "industry", "account_industry":
 		return "industry", "cf.account_industry", nil
 	case "persona", "participant_title", "title":
-		return "persona", businessAnalysisParticipantTitleLabelSQL("c"), nil
+		return "persona", businessAnalysisPersonaBucketSQL("c", "cf"), nil
 	case "opportunity_stage", "stage":
 		return "opportunity_stage", "cf.opportunity_stage", nil
 	case "opportunity_type":
@@ -873,6 +873,101 @@ func businessAnalysisPersonTitleSourceSQL(callAlias string) string {
 		WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = ` + callAlias + `.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_object'
 		ELSE ''
 	END`
+}
+
+// personaBucketRules is the deterministic, priority-ordered keyword mapping
+// from raw participant/Contact/Lead title text to the coarse persona buckets
+// surfaced by the persona dimension. The mapping intentionally returns
+// coarse roles (`procurement`, `it_security_integration`, ...) rather than
+// the original title text so business-analysis output cannot be used to
+// enumerate raw titles. Patterns are matched as case-insensitive substrings
+// against a normalized title string that has had punctuation collapsed to
+// spaces and one leading/trailing space added so short acronyms can be
+// matched as whole tokens.
+type personaBucketRule struct {
+	Bucket   string
+	Patterns []string
+}
+
+func personaBucketRules() []personaBucketRule {
+	return []personaBucketRule{
+		{Bucket: "procurement", Patterns: []string{"procurement", "purchasing", "sourcing", "buyer", "category manager"}},
+		{Bucket: "supplier_enablement", Patterns: []string{"supplier", "vendor manager", "vendor management", "vendor enablement", "channel manager", "partner manager", "alliances"}},
+		{Bucket: "it_security_integration", Patterns: []string{" ciso ", " cio ", " cto ", "chief information", "chief technology", "vp it", "vp of it", "head of it", "it director", "it manager", "infrastructure", "security", "infosec", "integration", "architect", "devops", "platform engineer", "site reliability"}},
+		{Bucket: "finance", Patterns: []string{" cfo ", "chief financial", "finance", "controller", "treasur", "accounting"}},
+		{Bucket: "operations", Patterns: []string{" coo ", "chief operating", "operations", "supply chain", "logistics", "manufacturing", "production", "fulfillment"}},
+		{Bucket: "sales_revenue", Patterns: []string{"sales", "revenue", "account exec", "account manager", " sdr ", " bdr ", " ae ", " csm ", "customer success", "go-to-market", "gtm"}},
+		{Bucket: "executive", Patterns: []string{" ceo ", "chief executive", "founder", "president", "chair", "general manager"}},
+	}
+}
+
+// businessAnalysisPersonaBucketSQL returns a SQLite expression that resolves
+// to one of the coarse persona buckets for the call referenced by callAlias
+// (joined `calls` row) and callFactsAlias (joined `call_facts` row). Inputs
+// are participant titles from `calls.raw_json` (parties / metaData.parties)
+// and CRM Contact/Lead Title fields from cached call_context_*. When no
+// title matches a bucket pattern but a non-empty title exists the call is
+// classified as `other_title_present`; otherwise the expression evaluates
+// to an empty string so the dimension summary's existing `<blank>` coverage row is
+// emitted.
+func businessAnalysisPersonaBucketSQL(callAlias, callFactsAlias string) string {
+	// Normalize titles: collapse common punctuation to spaces and pad with
+	// leading/trailing spaces so short acronyms can be matched as whole
+	// tokens via patterns like ' ceo '.
+	normalize := func(expr string) string {
+		return "' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(" + expr + ")), ',', ' '), '/', ' '), '-', ' '), '.', ' '), '\\t', ' '), '\\n', ' ') || ' '"
+	}
+	titlesCTE := `
+		SELECT ` + normalize("COALESCE(json_extract(p.value, '$.title'), json_extract(p.value, '$.jobTitle'), json_extract(p.value, '$.job_title'), '')") + ` AS t
+		  FROM json_each(` + callAlias + `.raw_json, '$.parties') p
+		 WHERE json_extract(p.value, '$.title') IS NOT NULL
+		    OR json_extract(p.value, '$.jobTitle') IS NOT NULL
+		    OR json_extract(p.value, '$.job_title') IS NOT NULL
+		UNION ALL
+		SELECT ` + normalize("COALESCE(json_extract(p.value, '$.title'), json_extract(p.value, '$.jobTitle'), json_extract(p.value, '$.job_title'), '')") + `
+		  FROM json_each(` + callAlias + `.raw_json, '$.metaData.parties') p
+		 WHERE json_extract(p.value, '$.title') IS NOT NULL
+		    OR json_extract(p.value, '$.jobTitle') IS NOT NULL
+		    OR json_extract(p.value, '$.job_title') IS NOT NULL
+		UNION ALL
+		SELECT ` + normalize("f.field_value_text") + `
+		  FROM call_context_fields f
+		  JOIN call_context_objects o
+		    ON o.call_id = f.call_id
+		   AND o.object_key = f.object_key
+		 WHERE f.call_id = ` + callFactsAlias + `.call_id
+		   AND o.object_type IN ('Contact', 'Lead')
+		   AND f.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')
+	`
+	bucketCases := strings.Builder{}
+	for _, rule := range personaBucketRules() {
+		predicates := make([]string, 0, len(rule.Patterns))
+		for _, pattern := range rule.Patterns {
+			predicates = append(predicates, "titles.t LIKE '%"+escapeBucketLike(pattern)+"%'")
+		}
+		bucketCases.WriteString("\n\t\tWHEN EXISTS (SELECT 1 FROM (")
+		bucketCases.WriteString(titlesCTE)
+		bucketCases.WriteString(") titles WHERE TRIM(titles.t) <> '' AND (")
+		bucketCases.WriteString(strings.Join(predicates, " OR "))
+		bucketCases.WriteString(")) THEN '")
+		bucketCases.WriteString(rule.Bucket)
+		bucketCases.WriteString("'")
+	}
+	return `CASE` + bucketCases.String() + `
+		WHEN EXISTS (SELECT 1 FROM (` + titlesCTE + `) titles WHERE TRIM(titles.t) <> '') THEN 'other_title_present'
+		ELSE ''
+	END`
+}
+
+// escapeBucketLike escapes characters that would be misinterpreted by
+// SQLite/Postgres LIKE matching. The rules use only ASCII letters, digits,
+// and spaces today, so this is defensive.
+func escapeBucketLike(pattern string) string {
+	pattern = strings.ReplaceAll(pattern, "\\", "\\\\")
+	pattern = strings.ReplaceAll(pattern, "%", "\\%")
+	pattern = strings.ReplaceAll(pattern, "_", "\\_")
+	pattern = strings.ReplaceAll(pattern, "'", "''")
+	return pattern
 }
 
 func businessAnalysisParticipantTitleLabelSQL(callAlias string) string {

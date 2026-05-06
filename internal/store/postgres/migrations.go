@@ -1720,4 +1720,6 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 `,
 	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

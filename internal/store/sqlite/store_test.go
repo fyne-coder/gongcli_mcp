@@ -361,6 +361,167 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 	}
 }
 
+// personaBucketFixture exposes the synthetic call layout used by the persona
+// bucket tests so SQLite and Postgres can be seeded from the same source.
+type personaBucketFixture struct {
+	CallID    string
+	Title     string
+	PartyText string         // raw party title (parties[].title); empty means no party title
+	CRMTitle  string         // Contact/Lead Title field; empty means none
+	Bucket    string         // expected coarse persona bucket
+	StartedAt string         // YYYY-MM-DDTHH:MM:SSZ; defaults to 2026-02-12T15:00:00Z
+	NoParties bool           // when true, omit the parties array entirely (no participants)
+	Extra     map[string]any // optional extra raw_json keys (rarely needed)
+}
+
+func phase13fPersonaBucketFixtures() []personaBucketFixture {
+	return []personaBucketFixture{
+		{CallID: "call-persona-procurement", Title: "Procurement workflow", PartyText: "VP Procurement", Bucket: "procurement"},
+		{CallID: "call-persona-procurement-purchasing", Title: "Procurement workflow alt", PartyText: "Director of Purchasing", Bucket: "procurement"},
+		{CallID: "call-persona-supplier", Title: "Procurement workflow supplier", PartyText: "Supplier Enablement Lead", Bucket: "supplier_enablement"},
+		{CallID: "call-persona-it", Title: "Procurement workflow IT", PartyText: "IT Director", Bucket: "it_security_integration"},
+		{CallID: "call-persona-it-security", Title: "Procurement workflow security", PartyText: "Information Security Manager", Bucket: "it_security_integration"},
+		{CallID: "call-persona-operations", Title: "Procurement workflow ops", PartyText: "Operations Manager", Bucket: "operations"},
+		{CallID: "call-persona-operations-coo", Title: "Procurement workflow exec ops", PartyText: "COO", Bucket: "operations"},
+		{CallID: "call-persona-finance", Title: "Procurement workflow finance", PartyText: "", CRMTitle: "CFO", Bucket: "finance"},
+		{CallID: "call-persona-executive", Title: "Procurement workflow CEO", PartyText: "CEO", Bucket: "executive"},
+		{CallID: "call-persona-sales", Title: "Procurement workflow sales", PartyText: "VP Sales", Bucket: "sales_revenue"},
+		{CallID: "call-persona-other", Title: "Procurement workflow eng", PartyText: "Engineering Manager", Bucket: "other_title_present"},
+		{CallID: "call-persona-no-title", Title: "Procurement workflow no title", PartyText: "", Bucket: ""},
+	}
+}
+
+func mustNormalizePersonaCall(t *testing.T, f personaBucketFixture) json.RawMessage {
+	t.Helper()
+	started := f.StartedAt
+	if started == "" {
+		started = "2026-02-12T15:00:00Z"
+	}
+	parties := []any{}
+	if !f.NoParties {
+		party := map[string]any{"id": "party-" + f.CallID}
+		if f.PartyText != "" {
+			party["title"] = f.PartyText
+		}
+		parties = append(parties, party)
+	}
+	context := []any{}
+	if f.CRMTitle != "" {
+		context = append(context, map[string]any{
+			"objectType": "Contact",
+			"id":         "contact-" + f.CallID,
+			"fields": []any{
+				map[string]any{"name": "Title", "value": f.CRMTitle},
+			},
+		})
+	}
+	raw := map[string]any{
+		"id":        f.CallID,
+		"title":     f.Title,
+		"started":   started,
+		"duration":  1500,
+		"system":    "Zoom",
+		"direction": "Conference",
+		"scope":     "External",
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"parties":   parties,
+		},
+	}
+	if len(context) > 0 {
+		raw["context"] = context
+	}
+	for k, v := range f.Extra {
+		raw[k] = v
+	}
+	return mustNormalizeValue(t, raw)
+}
+
+func TestSummarizeBusinessAnalysisDimensionPersonaBucketsCoarseMapping(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	for _, f := range phase13fPersonaBucketFixtures() {
+		if _, err := store.UpsertCall(ctx, mustNormalizePersonaCall(t, f)); err != nil {
+			t.Fatalf("upsert persona fixture %s: %v", f.CallID, err)
+		}
+	}
+
+	filter := BusinessAnalysisFilter{TitleQuery: "procurement workflow"}
+	summary, err := store.SummarizeBusinessAnalysisDimension(ctx, BusinessAnalysisDimensionSummaryParams{
+		Filter:    filter,
+		Dimension: "persona",
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("SummarizeBusinessAnalysisDimension persona: %v", err)
+	}
+
+	got := map[string]int64{}
+	for _, row := range summary {
+		got[row.Value] = row.CallCount
+	}
+	expectedBuckets := []string{
+		"procurement",
+		"supplier_enablement",
+		"it_security_integration",
+		"operations",
+		"finance",
+		"executive",
+		"sales_revenue",
+		"other_title_present",
+	}
+	for _, bucket := range expectedBuckets {
+		if got[bucket] == 0 {
+			t.Fatalf("persona bucket %q missing or zero in dimension summary: %+v", bucket, summary)
+		}
+	}
+	if got["procurement"] < 2 {
+		t.Fatalf("expected procurement bucket to count both VP Procurement and Director of Purchasing, got %d in %+v", got["procurement"], summary)
+	}
+	if got["it_security_integration"] < 2 {
+		t.Fatalf("expected it_security_integration bucket to count IT Director and Information Security Manager, got %d in %+v", got["it_security_integration"], summary)
+	}
+	if got["operations"] < 2 {
+		t.Fatalf("expected operations bucket to count Operations Manager and COO, got %d in %+v", got["operations"], summary)
+	}
+
+	// Privacy boundary: raw participant title strings must never appear as
+	// dimension values, even though they are present in the call fixtures.
+	leakages := []string{
+		"VP Procurement",
+		"Director of Purchasing",
+		"Supplier Enablement Lead",
+		"IT Director",
+		"Information Security Manager",
+		"Operations Manager",
+		"COO",
+		"CFO",
+		"CEO",
+		"VP Sales",
+		"Engineering Manager",
+	}
+	for _, row := range summary {
+		for _, leak := range leakages {
+			if strings.EqualFold(row.Value, leak) || strings.Contains(row.Value, leak) {
+				t.Fatalf("persona dimension exposed raw title %q in row %+v", leak, row)
+			}
+		}
+	}
+
+	// Calls with participants but no title text must not be collapsed into a
+	// title bucket; existing behavior groups them under <blank> via the
+	// TRIM(...) coalescing in the dimension summary.
+	if _, ok := got["<blank>"]; !ok {
+		t.Fatalf("expected a <blank> coverage row for the no-title fixture, got %+v", summary)
+	}
+}
+
 func TestInventoryUpsertsAndLists(t *testing.T) {
 	t.Parallel()
 
