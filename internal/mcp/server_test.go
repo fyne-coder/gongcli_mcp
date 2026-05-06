@@ -522,11 +522,16 @@ func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
 	seedBusinessAnalysisMCPFixtures(t, store)
 
 	server := NewServer(store, "gongmcp", "test")
+	// Phase 13e: discover_themes_in_cohort intentionally accepts a selective
+	// cohort filter without theme_query/query and returns broad-discovery
+	// candidate seed terms. The other transcript-evidence and quote tools
+	// must still require a query/theme_query to avoid raw-transcript dumps.
 	for _, toolName := range []string{
 		"search_transcripts_by_filters",
-		"discover_themes_in_cohort",
 		"extract_theme_quotes",
 		"build_theme_brief",
+		"search_quotes_in_cohort",
+		"build_quote_pack",
 	} {
 		responses := runServer(t, server, requestFrame(Request{
 			JSONRPC: "2.0",
@@ -556,6 +561,118 @@ func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
 		if !strings.Contains(envelope.Result.Content[0].Text, "requires") {
 			t.Fatalf("%s error did not explain missing query: %+v", toolName, envelope.Result)
 		}
+	}
+}
+
+func TestBusinessAnalysisDiscoverThemesInCohortSupportsSeedlessBroadDiscovery(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "discover-themes-seedless",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "discover_themes_in_cohort",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query": "business discovery",
+					"from_date":   "2026-01-01",
+					"to_date":     "2026-04-01",
+				},
+				"limit": 10,
+			},
+		}),
+	}))
+
+	result := decodeBusinessAnalysisResult(t, responses[0])
+	themes := arrayField(t, result, "themes")
+	if len(themes) == 0 {
+		t.Fatalf("seedless discover_themes_in_cohort returned no themes in %+v", result)
+	}
+	first := themes[0].(map[string]any)
+	if term := stringField(first, "theme"); term == "" {
+		t.Fatalf("first theme missing term: %+v", first)
+	}
+	warnings := strings.ToLower(mustJSONText(t, result["warnings"]))
+	if !strings.Contains(warnings, "broad_discovery") || !strings.Contains(warnings, "seedless") {
+		t.Fatalf("expected broad-discovery seedless warning, got warnings=%+v", result["warnings"])
+	}
+	if !strings.Contains(warnings, "seed") {
+		t.Fatalf("expected suggested-seed warning text, got warnings=%+v", result["warnings"])
+	}
+	limitations := strings.ToLower(mustJSONText(t, result["limitations"]))
+	if !strings.Contains(limitations, "broad_discovery") {
+		t.Fatalf("expected broad_discovery limitation, got limitations=%+v", result["limitations"])
+	}
+
+	rows := namedOrResultsArrayField(t, result, "results")
+	if len(rows) > 10 {
+		t.Fatalf("seedless discovery returned %d rows; bounded limit was 10", len(rows))
+	}
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if account := stringField(row, "account_name"); account != "" {
+			t.Fatalf("seedless discovery surfaced account_name without explicit opt-in: %+v", row)
+		}
+	}
+}
+
+func TestFacadeAnalyzeThemesDiscoverSupportsSeedlessBroadDiscovery(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{
+		FacadeToolAnalyze,
+		"discover_themes_in_cohort",
+	}))
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpAnalyzeThemesDiscover,
+		"arguments": map[string]any{
+			"filter": map[string]any{
+				"title_query": "business discovery",
+				"from_date":   "2026-01-01",
+				"to_date":     "2026-04-01",
+			},
+			"limit": 8,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch analyze.themes.discover seedless: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("facade dispatch returned tool error: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	if wrapper["operation"] != OpAnalyzeThemesDiscover {
+		t.Fatalf("operation=%v want %s", wrapper["operation"], OpAnalyzeThemesDiscover)
+	}
+	if wrapper["routed_tool"] != "discover_themes_in_cohort" {
+		t.Fatalf("routed_tool=%v want discover_themes_in_cohort", wrapper["routed_tool"])
+	}
+	inner, _ := wrapper["result"].(map[string]any)
+	if inner == nil {
+		t.Fatalf("missing inner result: %+v", wrapper)
+	}
+	themesAny, ok := inner["themes"].([]any)
+	if !ok || len(themesAny) == 0 {
+		t.Fatalf("expected nonempty themes from seedless facade discovery: %+v", inner)
+	}
+	warnings := strings.ToLower(mustJSONText(t, inner["warnings"]))
+	if !strings.Contains(warnings, "broad_discovery_seedless") {
+		t.Fatalf("expected broad_discovery_seedless warning in facade response: %+v", inner["warnings"])
 	}
 }
 

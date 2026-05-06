@@ -416,12 +416,18 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Results = items
 		response.Quotes = quotes
 	case "discover_themes_in_cohort":
-		items, _, err := s.businessAnalysisEvidence(ctx, normalized, query, limit, args)
+		seedless := strings.TrimSpace(query) == "" && strings.TrimSpace(themeQuery) == ""
+		items, _, err := s.businessAnalysisEvidenceBroadDiscovery(ctx, normalized, query, limit, args, seedless)
 		if err != nil {
 			return toolCallResult{}, err
 		}
 		response.Results = items
 		response.Themes = discoverBusinessAnalysisThemes(items, limit)
+		if seedless {
+			response.Warnings = append(response.Warnings,
+				"broad_discovery_seedless: returned candidate theme terms from a bounded transcript sample because no theme_query/query was provided. These are suggested seed terms, not synthesized claims; rerun discover_themes_in_cohort or downstream theme tools with a chosen theme_query for stronger evidence.")
+			response.Limitations = append(response.Limitations, "broad_discovery_seedless_sample_only_cache_derived_keywords")
+		}
 	case "summarize_themes_by_dimension":
 		dimension := firstNonBlank(args.Dimension, "industry")
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, dimension, themeQuery, limit)
@@ -592,10 +598,15 @@ func (s *Server) applyBusinessAnalysisSmallCellSuppression(response *businessAna
 }
 
 func (s *Server) businessAnalysisEvidence(ctx context.Context, filter callFilter, query string, limit int, args businessAnalysisArgs) ([]businessAnalysisItem, []businessAnalysisQuote, error) {
+	return s.businessAnalysisEvidenceBroadDiscovery(ctx, filter, query, limit, args, false)
+}
+
+func (s *Server) businessAnalysisEvidenceBroadDiscovery(ctx context.Context, filter callFilter, query string, limit int, args businessAnalysisArgs, broadDiscovery bool) ([]businessAnalysisItem, []businessAnalysisQuote, error) {
 	rows, err := s.store.SearchBusinessAnalysisEvidence(ctx, sqlite.BusinessAnalysisEvidenceSearchParams{
-		Filter: sqliteBusinessAnalysisFilter(filter),
-		Query:  query,
-		Limit:  limit,
+		Filter:         sqliteBusinessAnalysisFilter(filter),
+		Query:          query,
+		Limit:          limit,
+		BroadDiscovery: broadDiscovery,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -780,7 +791,11 @@ func toolNeedsThemeQuery(toolName string) bool {
 
 func toolNeedsEvidenceQuery(toolName string) bool {
 	switch toolName {
-	case "search_transcripts_by_filters", "discover_themes_in_cohort",
+	// Phase 13e: discover_themes_in_cohort intentionally accepts a selective
+	// cohort filter without theme_query/query and returns a bounded
+	// candidate-seed sample. Other transcript-evidence and quote tools must
+	// still require a query to avoid raw-transcript dumps.
+	case "search_transcripts_by_filters",
 		"extract_theme_quotes", "search_quotes_in_cohort", "rank_quotes_for_sales_use", "build_quote_pack",
 		"generate_sales_hooks_from_themes", "generate_outreach_sequence_inputs",
 		"recommend_target_personas_and_industries", "build_theme_brief":

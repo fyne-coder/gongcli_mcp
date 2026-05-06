@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Made broad cohort theme discovery less seed-fragile (Phase 13e). The
+  `discover_themes_in_cohort` business-analysis tool and the
+  `analyze.themes.discover` facade operation routed through `gong_analyze`
+  now accept a selective cohort filter without `theme_query`/`query`. In
+  that seedless mode they return deterministic candidate theme terms from
+  a bounded transcript sample within the cohort, plus a
+  `broad_discovery_seedless` warning, a
+  `broad_discovery_seedless_sample_only_cache_derived_keywords`
+  limitation, and the existing limit-policy / runtime-suppression
+  filters. Evidence and quote tools (`search_quotes_in_cohort`,
+  `build_quote_pack`, `extract_theme_quotes`, `build_theme_brief`,
+  `search_transcripts_by_filters`, etc.) keep their query-required gates
+  so seedless mode does not escalate into raw transcript dumps.
 - Added a reviewed `evidence.highlights.list` facade operation routed through
   `gong_get_evidence` that exposes bounded, redacted Gong AI highlight rows
   from the Postgres `call_ai_highlights` read model. The operation is an

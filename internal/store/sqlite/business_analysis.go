@@ -96,6 +96,13 @@ type BusinessAnalysisEvidenceSearchParams struct {
 	Filter BusinessAnalysisFilter
 	Query  string
 	Limit  int
+	// BroadDiscovery enables a seedless evidence sample for broad theme
+	// discovery: when true and Query/Filter.Query are blank, the store
+	// returns a deterministic, bounded transcript-segment sample within
+	// the cohort filter instead of requiring a full-text query. Only
+	// discover_themes_in_cohort should set this; all other evidence and
+	// quote searches must keep query-required semantics.
+	BroadDiscovery bool
 }
 
 type BusinessAnalysisEvidenceRow struct {
@@ -274,7 +281,8 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params Busin
 	if err != nil {
 		return nil, err
 	}
-	if queryMatch == "" {
+	seedless := queryMatch == "" && params.BroadDiscovery
+	if queryMatch == "" && !seedless {
 		return nil, errors.New("query is required for business-analysis evidence searches")
 	}
 
@@ -282,9 +290,18 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params Busin
 	if err != nil {
 		return nil, err
 	}
-	selectSnippet := `substr(ts.text, 1, 400) AS snippet`
-	orderBy := `cf.started_at DESC, ts.call_id, ts.segment_index`
-	from := `
+	var selectSnippet, orderBy, from string
+	if seedless {
+		selectSnippet = `substr(ts.text, 1, 400) AS snippet`
+		orderBy = `cf.started_at DESC, ts.call_id, ts.segment_index`
+		from = `
+  FROM transcript_segments ts
+  JOIN call_facts cf
+    ON cf.call_id = ts.call_id
+  JOIN calls c
+    ON c.call_id = cf.call_id`
+	} else {
+		from = `
   FROM transcript_segments_fts
   JOIN transcript_segments ts
     ON ts.id = transcript_segments_fts.rowid
@@ -292,10 +309,11 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params Busin
     ON cf.call_id = ts.call_id
   JOIN calls c
     ON c.call_id = cf.call_id`
-	where = append([]string{`transcript_segments_fts MATCH ?`}, where...)
-	args = append([]any{queryMatch}, args...)
-	selectSnippet = `snippet(transcript_segments_fts, 0, '', '', '...', 18) AS snippet`
-	orderBy = `bm25(transcript_segments_fts), cf.started_at DESC, ts.call_id, ts.segment_index`
+		where = append([]string{`transcript_segments_fts MATCH ?`}, where...)
+		args = append([]any{queryMatch}, args...)
+		selectSnippet = `snippet(transcript_segments_fts, 0, '', '', '...', 18) AS snippet`
+		orderBy = `bm25(transcript_segments_fts), cf.started_at DESC, ts.call_id, ts.segment_index`
+	}
 
 	sql := `
 SELECT cf.call_id,

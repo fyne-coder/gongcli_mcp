@@ -156,6 +156,7 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 	for _, want := range []string{
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_sanitized(text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
@@ -170,6 +171,7 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 	for _, forbidden := range []string{
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments(text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)`,

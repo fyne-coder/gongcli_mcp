@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -241,29 +242,52 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	if err := validatePostgresBusinessAnalysisSearchText(queryText, "query"); err != nil {
 		return nil, err
 	}
-	if queryText == "" {
+	if queryText == "" && !params.BroadDiscovery {
 		return nil, errors.New("query is required for business-analysis evidence searches")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
+	var rows *sql.Rows
+	if params.BroadDiscovery {
+		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
+  FROM `+s.postgresBusinessAnalysisThemeSeedFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+			filter.TitleQuery,
+			filter.Query,
+			filter.FromDate,
+			filter.ToDate,
+			filter.LifecycleBucket,
+			filter.Scope,
+			filter.System,
+			filter.Direction,
+			filter.TranscriptStatus,
+			filter.Industry,
+			filter.AccountQuery,
+			filter.OpportunityStage,
+			filter.CRMObjectType,
+			filter.CRMObjectID,
+			filter.ParticipantTitleQuery,
+			limit,
+		)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
   FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-		queryText,
-		filter.TitleQuery,
-		filter.Query,
-		filter.FromDate,
-		filter.ToDate,
-		filter.LifecycleBucket,
-		filter.Scope,
-		filter.System,
-		filter.Direction,
-		filter.TranscriptStatus,
-		filter.Industry,
-		filter.AccountQuery,
-		filter.OpportunityStage,
-		filter.CRMObjectType,
-		filter.CRMObjectID,
-		filter.ParticipantTitleQuery,
-		limit,
-	)
+			queryText,
+			filter.TitleQuery,
+			filter.Query,
+			filter.FromDate,
+			filter.ToDate,
+			filter.LifecycleBucket,
+			filter.Scope,
+			filter.System,
+			filter.Direction,
+			filter.TranscriptStatus,
+			filter.Industry,
+			filter.AccountQuery,
+			filter.OpportunityStage,
+			filter.CRMObjectType,
+			filter.CRMObjectID,
+			filter.ParticipantTitleQuery,
+			limit,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -377,6 +401,13 @@ func (s *Store) postgresBusinessAnalysisEvidenceFunction() string {
 		return "gongmcp_business_analysis_evidence_sanitized"
 	}
 	return "gongmcp_business_analysis_evidence"
+}
+
+func (s *Store) postgresBusinessAnalysisThemeSeedFunction() string {
+	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		return "gongmcp_business_analysis_theme_seed_sample_sanitized"
+	}
+	return "gongmcp_business_analysis_theme_seed_sample"
 }
 
 func (s *Store) postgresTranscriptQuoteAttributionFunction() string {

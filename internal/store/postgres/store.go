@@ -118,6 +118,7 @@ func DefaultReadOnlyFunctionSignatures() []string {
 		"public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_cache_purge_plan(text)",
 		"public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)",
 		"public.gongmcp_crm_field_population_matrix(text, text, integer)",

@@ -448,6 +448,101 @@ SELECT m.call_id,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH sampled AS (
+	SELECT cf.call_id,
+	       cf.title,
+	       cf.started_at,
+	       cf.call_date,
+	       cf.call_month,
+	       cf.lifecycle_bucket,
+	       cf.account_industry,
+	       cf.opportunity_stage,
+	       cf.opportunity_type,
+	       c.parties_count,
+	       ts.segment_index,
+	       ts.start_ms,
+	       ts.end_ms,
+	       left(ts.text, 400) AS snippet,
+	       COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) +
+	       COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) AS party_title_count
+	  FROM transcript_segments ts
+	  JOIN call_facts cf
+	    ON cf.call_id = ts.call_id
+	  JOIN calls c
+	    ON c.call_id = ts.call_id
+	 WHERE (title_query_arg = '' OR LOWER(cf.title) LIKE '%' || LOWER(left(title_query_arg, 160)) || '%')
+	   AND (transcript_query_arg = '' OR EXISTS (SELECT 1 FROM transcript_segments qts WHERE qts.call_id = cf.call_id AND qts.search_vector @@ websearch_to_tsquery('simple', left(transcript_query_arg, 160))))
+	   AND (from_date_arg = '' OR cf.call_date >= from_date_arg)
+	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
+	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
+	   AND (scope_arg = '' OR cf.scope = scope_arg)
+	   AND (system_arg = '' OR cf.system = system_arg)
+	   AND (direction_arg = '' OR cf.direction = direction_arg)
+	   AND (transcript_status_arg = '' OR cf.transcript_status = transcript_status_arg)
+	   AND (industry_arg = '' OR LOWER(cf.account_industry) LIKE '%' || LOWER(left(industry_arg, 160)) || '%')
+	   AND (account_query_arg = '' OR EXISTS (
+		   SELECT 1
+		     FROM call_context_objects filter_o
+		     LEFT JOIN call_context_fields filter_f
+		       ON filter_f.call_id = filter_o.call_id
+		      AND filter_f.object_key = filter_o.object_key
+		      AND filter_f.field_name = 'Name'
+		    WHERE filter_o.call_id = cf.call_id
+		      AND filter_o.object_type = 'Account'
+		      AND (
+		          LOWER(TRIM(filter_o.object_name)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		       OR LOWER(TRIM(filter_f.field_value_text)) LIKE '%' || LOWER(left(account_query_arg, 160)) || '%'
+		      )
+	   ))
+	   AND (opportunity_stage_arg = '' OR LOWER(cf.opportunity_stage) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%')
+	   AND ((crm_object_type_arg = '' AND crm_object_id_arg = '') OR EXISTS (SELECT 1 FROM call_context_objects filter_o WHERE filter_o.call_id = cf.call_id AND (crm_object_type_arg = '' OR filter_o.object_type = crm_object_type_arg) AND (crm_object_id_arg = '' OR filter_o.object_id = crm_object_id_arg)))
+	   AND (participant_title_query_arg = '' OR
+		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
+		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
+		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
+)
+SELECT s.call_id,
+       s.title,
+       s.started_at,
+       s.call_date,
+       s.call_month,
+       s.lifecycle_bucket,
+       s.account_industry,
+       ''::text AS account_name,
+       ''::text AS opportunity_name,
+       s.opportunity_stage,
+       s.opportunity_type,
+       ''::text AS opportunity_probability,
+       ''::text AS opportunity_close_date,
+       CASE WHEN s.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END AS participant_status,
+       CASE
+	       WHEN s.party_title_count > 0 THEN 'available'
+	       WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = s.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_present_title_unverified'
+	       WHEN s.parties_count > 0 THEN 'participants_present_check_party_titles'
+	       ELSE 'missing_from_cache'
+       END AS person_title_status,
+       CASE
+	       WHEN s.party_title_count > 0 THEN 'call_parties'
+	       WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = s.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_object'
+	       ELSE ''
+       END AS person_title_source,
+       s.segment_index,
+       s.start_ms,
+       s.end_ms,
+       s.snippet,
+       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = s.call_id AND ctx.segment_index BETWEEN s.segment_index - 1 AND s.segment_index + 1), ''), 800) AS context_excerpt
+  FROM sampled s
+ ORDER BY s.started_at DESC, s.call_id, s.segment_index
+ LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
+$function$;
+
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension(dimension_arg text, theme_query_arg text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
 RETURNS TABLE(dimension text, value text, call_count bigint, transcript_count bigint, missing_transcript_count bigint, opportunity_call_count bigint, account_call_count bigint, external_call_count bigint, latest_call_at text)
 LANGUAGE sql
@@ -631,6 +726,37 @@ SELECT md5(raw.call_id) AS call_id,
   FROM gongmcp_business_analysis_evidence(search_text, title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
 $function$;
 
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT md5(raw.call_id) AS call_id,
+       ''::text AS title,
+       raw.started_at,
+       raw.call_date,
+       raw.call_month,
+       raw.lifecycle_bucket,
+       raw.account_industry,
+       ''::text AS account_name,
+       ''::text AS opportunity_name,
+       raw.opportunity_stage,
+       raw.opportunity_type,
+       ''::text AS opportunity_probability,
+       ''::text AS opportunity_close_date,
+       raw.participant_status,
+       raw.person_title_status,
+       raw.person_title_source,
+       raw.segment_index,
+       raw.start_ms,
+       raw.end_ms,
+       raw.snippet,
+       raw.context_excerpt
+  FROM gongmcp_business_analysis_theme_seed_sample(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
+$function$;
+
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_sanitized(search_text text, row_limit integer)
 RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
 LANGUAGE sql
@@ -678,10 +804,12 @@ REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution(text, t
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_sanitized(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer) FROM PUBLIC;
 `
@@ -692,6 +820,7 @@ const postgresBusinessAnalysisReaderGrantStatementsSQL = `
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
 `
 
