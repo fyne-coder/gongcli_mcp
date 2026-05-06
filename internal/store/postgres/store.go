@@ -141,6 +141,7 @@ func DefaultReadOnlyFunctionSignatures() []string {
 		"public.gongmcp_scorecard_activity_totals()",
 		"public.gongmcp_scorecard_detail(text)",
 		"public.gongmcp_scorecards(boolean, integer)",
+		"public.gongmcp_list_call_ai_highlights(text, integer)",
 		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_search_transcript_segments(text, integer)",
 		"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
@@ -505,6 +506,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_compare_lifecycle_crm_fields(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_list_call_ai_highlights(text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
@@ -517,6 +519,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	`+postgresTranscriptCRMContextSearchFunctionSQL+`
 	`+postgresMissingTranscriptsFunctionSQL+`
 	`+postgresMissingTranscriptCountFunctionSQL+`
+	`+postgresAIHighlightsFunctionSQL+`
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments(search_text text, row_limit integer)
 RETURNS TABLE(call_id text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, text text, snippet text)
 LANGUAGE sql
@@ -1229,6 +1232,7 @@ BEGIN
 		GRANT SELECT (user_id, title, active, first_seen_at, updated_at) ON users TO gongmcp_reader;
 		GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_list_call_ai_highlights(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader;
 		GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongmcp_call_context_objects TO gongmcp_reader;

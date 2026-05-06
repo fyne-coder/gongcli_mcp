@@ -2,11 +2,23 @@
 
 ## Unreleased
 
+- Added a reviewed `evidence.highlights.list` facade operation routed through
+  `gong_get_evidence` that exposes bounded, redacted Gong AI highlight rows
+  from the Postgres `call_ai_highlights` read model. The operation is an
+  internal facade-routed handler (not a new top-level MCP tool); it requires
+  explicit `call_ids`, caps inputs and rows, never returns raw highlight
+  JSON, performs no raw account or customer enumeration, and filters
+  runtime-suppressed call IDs before rows leave the server. Restricted calls
+  remain absent because the redacted serving DB has no rows for them. The
+  result envelope includes caveats stating that highlights are Gong
+  AI-generated accelerators and that transcript quotes remain primary
+  evidence.
 - Added a Postgres `call_ai_highlights` read model for opt-in Gong AI
   Highlights captured under `content.highlights`. The table is rebuilt from
   raw call payloads, excluded from generic read-only grants, purged with
   call-scoped cache cleanup, and rebuilt on the redacted serving database only
-  for allowed calls. No MCP operation exposes highlight text yet.
+  for allowed calls. The reviewed `evidence.highlights.list` facade operation
+  is the only path that exposes typed highlight rows from this table.
 - Added environment defaults for
   `gongctl governance refresh-serving-db`: source URL from
   `GONGCTL_SOURCE_DATABASE_URL`, target URL from `GONGCTL_MCP_DATABASE_URL`,

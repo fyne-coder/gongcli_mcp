@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,7 +17,93 @@ const (
 	maxBusinessAnalysisFTSQueryLength  = 160
 	maxBusinessAnalysisFTSQueryTerms   = 12
 	maxBusinessAnalysisFTSQueryTermLen = 48
+	defaultAIHighlightsLimit           = 25
+	maxAIHighlightsLimit               = 100
 )
+
+const postgresAIHighlightsFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_list_call_ai_highlights(call_ids_json text, row_limit integer)
+RETURNS TABLE(call_id text, highlight_index integer, highlight_type text, highlight_text text, source_path text, updated_at text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH requested AS (
+	SELECT DISTINCT TRIM(value) AS call_id
+	  FROM jsonb_array_elements_text(COALESCE(NULLIF(call_ids_json, ''), '[]')::jsonb) AS item(value)
+	 WHERE TRIM(value) <> ''
+	 LIMIT 25
+),
+bounded AS (
+	SELECT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 100) AS limit_value
+)
+SELECT h.call_id,
+       h.highlight_index,
+       h.highlight_type,
+       h.highlight_text,
+       h.source_path,
+       h.updated_at
+  FROM call_ai_highlights h
+  JOIN requested r
+    ON r.call_id = h.call_id
+ ORDER BY h.call_id, h.highlight_index
+ LIMIT (SELECT limit_value FROM bounded)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_list_call_ai_highlights(text, integer) FROM PUBLIC;
+`
+
+// ListAIHighlights returns bounded, typed Gong AI highlight rows from the
+// Postgres call_ai_highlights read model. The serving DB never contains rows
+// for governance-restricted calls, so they remain absent without any
+// additional filtering here. Raw highlight JSON is intentionally not
+// exposed; only the typed text/type/index columns are returned.
+func (s *Store) ListAIHighlights(ctx context.Context, params sqlite.AIHighlightListParams) ([]sqlite.AIHighlightRow, error) {
+	ids := dedupeNonEmptyStrings(params.CallIDs)
+	if len(ids) == 0 {
+		return nil, errors.New("call_ids is required for evidence.highlights.list")
+	}
+	limit := boundedLimit(params.Limit, defaultAIHighlightsLimit, maxAIHighlightsLimit)
+	idsJSON, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, highlight_index, highlight_type, highlight_text, source_path, updated_at
+  FROM gongmcp_list_call_ai_highlights($1, $2)`, string(idsJSON), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []sqlite.AIHighlightRow{}
+	for rows.Next() {
+		var row sqlite.AIHighlightRow
+		if err := rows.Scan(&row.CallID, &row.HighlightIndex, &row.HighlightType, &row.HighlightText, &row.SourcePath, &row.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func dedupeNonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
 
 func (s *Store) SearchTranscriptSegmentsByCallFacts(ctx context.Context, params sqlite.TranscriptCallFactsSearchParams) ([]sqlite.TranscriptCallFactsSearchResult, error) {
 	queryText := strings.TrimSpace(params.Query)

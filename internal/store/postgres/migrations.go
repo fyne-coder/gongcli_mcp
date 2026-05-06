@@ -1716,4 +1716,6 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_type
 CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 	ON call_ai_highlights USING GIN(search_vector);
 `,
+	postgresAIHighlightsFunctionSQL + `
+`,
 }

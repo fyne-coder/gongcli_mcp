@@ -142,6 +142,34 @@ type BusinessAnalysisDimensionRow struct {
 	LatestCallAt           string  `json:"latest_call_at,omitempty"`
 }
 
+// AIHighlightListParams is the bounded input contract for listing typed Gong
+// AI highlights. CallIDs is required and capped by the caller; Limit is
+// honored as an upper bound on returned rows.
+type AIHighlightListParams struct {
+	CallIDs []string
+	Limit   int
+}
+
+// AIHighlightRow is one redacted, typed Gong AI highlight row. The Postgres
+// call_ai_highlights read model writes only these typed columns; raw
+// highlight JSON is intentionally not exposed.
+type AIHighlightRow struct {
+	CallID         string `json:"call_id"`
+	HighlightIndex int    `json:"highlight_index"`
+	HighlightType  string `json:"highlight_type"`
+	HighlightText  string `json:"highlight_text"`
+	SourcePath     string `json:"source_path,omitempty"`
+	UpdatedAt      string `json:"updated_at,omitempty"`
+}
+
+// ListAIHighlights returns no rows for the SQLite cache: the typed
+// call_ai_highlights read model only exists in the Postgres serving DB. This
+// stub keeps the Store interface uniform without changing SQLite schema or
+// behavior.
+func (s *Store) ListAIHighlights(_ context.Context, _ AIHighlightListParams) ([]AIHighlightRow, error) {
+	return nil, nil
+}
+
 func (s *Store) SearchBusinessAnalysisCalls(ctx context.Context, params BusinessAnalysisCallSearchParams) (*BusinessAnalysisCallSearchResult, error) {
 	filter, err := normalizeBusinessAnalysisFilter(params.Filter)
 	if err != nil {

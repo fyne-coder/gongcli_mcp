@@ -1220,7 +1220,7 @@ func TestPostgresMigrationCreatesNormalizedReadModelTables(t *testing.T) {
 			t.Fatalf("call_facts.%s type/nullability=%s/%s, want boolean/NO", column, dataType, nullable)
 		}
 	}
-	for _, function := range []string{"gongmcp_active_business_profile_sanitized", "gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_sanitized_limited", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_cache_meta_sanitized", "gongmcp_profile_call_fact_summary", "gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_lifecycle_summary_sanitized", "gongmcp_profile_transcript_backlog_sanitized", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_summary_sanitized", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_missing_transcript_count", "gongmcp_search_transcript_segments_sanitized", "gongmcp_search_transcript_segments_by_call_facts_sanitized", "gongmcp_search_transcript_quotes_with_attribution_sanitized", "gongmcp_business_analysis_calls_sanitized", "gongmcp_business_analysis_evidence_sanitized", "gongmcp_cache_purge_plan"} {
+	for _, function := range []string{"gongmcp_active_business_profile_sanitized", "gongmcp_profile_call_fact_cache", "gongmcp_profile_call_fact_cache_sanitized", "gongmcp_profile_call_fact_cache_sanitized_limited", "gongmcp_profile_call_fact_cache_meta", "gongmcp_profile_call_fact_cache_meta_sanitized", "gongmcp_profile_call_fact_summary", "gongmcp_profile_call_fact_summary_sanitized", "gongmcp_profile_lifecycle_summary_sanitized", "gongmcp_profile_transcript_backlog_sanitized", "gongmcp_profile_data_fingerprint", "gongmcp_governance_data_fingerprint", "gongmcp_governance_policy_state", "gongmcp_governance_suppressed_call_ids", "gongmcp_scorecard_activity_summary", "gongmcp_scorecard_activity_totals", "gongmcp_crm_object_type_summary", "gongmcp_crm_field_summary_sanitized", "gongmcp_search_transcript_segments_by_crm_context", "gongmcp_crm_field_value_search", "gongmcp_unmapped_crm_field_inventory", "gongmcp_late_stage_call_counts", "gongmcp_late_stage_stage_counts", "gongmcp_late_stage_signal_inventory", "gongmcp_opportunities_missing_transcripts", "gongmcp_opportunity_call_summary", "gongmcp_crm_field_population_matrix", "gongmcp_compare_lifecycle_crm_fields", "gongmcp_missing_transcripts", "gongmcp_missing_transcript_count", "gongmcp_list_call_ai_highlights", "gongmcp_search_transcript_segments_sanitized", "gongmcp_search_transcript_segments_by_call_facts_sanitized", "gongmcp_search_transcript_quotes_with_attribution_sanitized", "gongmcp_business_analysis_calls_sanitized", "gongmcp_business_analysis_evidence_sanitized", "gongmcp_cache_purge_plan"} {
 		var exists bool
 		if err := store.DB().QueryRowContext(ctx, `SELECT EXISTS (
 	SELECT 1
@@ -2071,6 +2071,16 @@ func TestPostgresUpsertRefreshesCallAIHighlightsReadModel(t *testing.T) {
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("call_ai_highlights rows = %#v want %#v", got, want)
+	}
+	listed, err := store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: []string{"pg-highlights-001"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListAIHighlights returned error: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("ListAIHighlights returned %d rows, want 2: %#v", len(listed), listed)
+	}
+	if listed[0].CallID != "pg-highlights-001" || listed[0].HighlightType != "summary" || listed[0].HighlightText != "Synthetic executive summary." {
+		t.Fatalf("ListAIHighlights first row = %#v", listed[0])
 	}
 
 	if _, err := store.UpsertCall(ctx, json.RawMessage(`{

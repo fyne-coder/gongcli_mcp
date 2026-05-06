@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
 // FacadeOperation describes one logical MCP operation routed by the stable
@@ -53,7 +55,14 @@ const (
 	OpAnalyzeLimitationsExplain = "analyze.limitations.explain"
 	OpEvidenceQuotesSearch      = "evidence.quotes.search"
 	OpEvidenceQuotePackBuild    = "evidence.quote_pack.build"
+	OpEvidenceHighlightsList    = "evidence.highlights.list"
 )
+
+// internalRoutedToolListAIHighlights is the internal routed-tool name used by
+// evidence.highlights.list. It is intentionally not exposed as a top-level
+// MCP tool — the facade is the only supported entry point — and the Postgres
+// store is the only backend that can return rows.
+const internalRoutedToolListAIHighlights = "list_call_ai_highlights"
 
 // FacadeOperations returns the registry of all known facade operations. The
 // list is sorted by operation name for stable output.
@@ -78,7 +87,7 @@ func FacadeOperations() []FacadeOperation {
 			RoutedTool:     "search_calls_by_filters",
 			RoutedFallback: "search_calls",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			AllowedPresets: []string{"analyst-facade", "analyst-business-core", "analyst", "all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":                map[string]any{"type": "object"},
 				"limit":                 map[string]any{"type": "integer"},
@@ -203,6 +212,35 @@ func FacadeOperations() []FacadeOperation {
 				"limit":       map[string]any{"type": "integer"},
 			}, nil),
 		},
+		{
+			Name:           OpEvidenceHighlightsList,
+			Version:        "v1",
+			Description:    "List bounded, redacted Gong AI highlight rows from the Postgres call_ai_highlights read model. Highlights are Gong AI accelerators; transcript quotes remain primary evidence. Raw highlight JSON and account/customer enumeration are not exposed.",
+			FacadeTool:     FacadeToolGetEvidence,
+			RoutedTool:     internalRoutedToolListAIHighlights,
+			ExposureLevel:  "scoped-analyst",
+			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly"},
+			InputSchema: objectSchema(map[string]any{
+				"call_ids": map[string]any{
+					"type":        "array",
+					"description": "Bounded list of cached call_ids to look up highlights for.",
+					"items":       map[string]any{"type": "string"},
+					"minItems":    1,
+					"maxItems":    maxAIHighlightCallIDs,
+				},
+				"limit": map[string]any{
+					"type":    "integer",
+					"minimum": 1,
+					"maximum": maxAIHighlightLimit,
+				},
+			}, []string{"call_ids"}),
+			Examples: []any{
+				map[string]any{
+					"call_ids": []string{"call-allow-1", "call-allow-2"},
+					"limit":    25,
+				},
+			},
+		},
 	}
 	sort.SliceStable(ops, func(i, j int) bool { return ops[i].Name < ops[j].Name })
 	return ops
@@ -259,8 +297,8 @@ func facadeTools(_ LimitPolicy) []tool {
 		},
 		{
 			Name:        FacadeToolGetEvidence,
-			Description: "Stable facade for bounded evidence operations: quote search inside a cohort and quote-pack assembly.",
-			InputSchema: facadeDispatchSchema([]string{OpEvidenceQuotesSearch, OpEvidenceQuotePackBuild}),
+			Description: "Stable facade for bounded evidence operations: quote search inside a cohort, quote-pack assembly, and typed AI highlights lookup.",
+			InputSchema: facadeDispatchSchema([]string{OpEvidenceQuotesSearch, OpEvidenceQuotePackBuild, OpEvidenceHighlightsList}),
 		},
 		{
 			Name:        FacadeToolExplainLimitations,
@@ -520,10 +558,122 @@ func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json
 	if isFacadeTool(name) {
 		return toolCallResult{}, fmt.Errorf("facade routed tool %q must not be another facade tool", name)
 	}
+	if name == internalRoutedToolListAIHighlights {
+		return s.executeListCallAIHighlights(ctx, args)
+	}
 	if isBusinessAnalysisTool(name) {
 		return s.executeBusinessAnalysisTool(ctx, toolsCallParams{Name: name, Arguments: args})
 	}
 	return s.executeNonFacadeTool(ctx, toolsCallParams{Name: name, Arguments: args})
+}
+
+// AI-highlights operation limits. These are intentionally low: highlights are
+// a narrow accelerator surface, not a primary evidence path.
+const (
+	maxAIHighlightCallIDs   = 25
+	defaultAIHighlightLimit = 25
+	maxAIHighlightLimit     = 100
+	maxAIHighlightCallIDLen = 200
+)
+
+type listCallAIHighlightsArgs struct {
+	CallIDs []string `json:"call_ids"`
+	Limit   int      `json:"limit"`
+}
+
+func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args listCallAIHighlightsArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+	ids := make([]string, 0, len(args.CallIDs))
+	seen := make(map[string]struct{}, len(args.CallIDs))
+	for _, raw := range args.CallIDs {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if len(v) > maxAIHighlightCallIDLen {
+			return toolCallResult{}, fmt.Errorf("call_ids entries must be %d characters or fewer", maxAIHighlightCallIDLen)
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		ids = append(ids, v)
+	}
+	if len(ids) == 0 {
+		return toolCallResult{}, fmt.Errorf("call_ids is required and must contain at least one non-empty id")
+	}
+	if len(ids) > maxAIHighlightCallIDs {
+		return toolCallResult{}, fmt.Errorf("call_ids must include no more than %d ids; got %d", maxAIHighlightCallIDs, len(ids))
+	}
+
+	limit := args.Limit
+	if limit <= 0 {
+		limit = defaultAIHighlightLimit
+	}
+	if limit > maxAIHighlightLimit {
+		limit = maxAIHighlightLimit
+	}
+
+	rows, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: ids, Limit: limit})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+
+	suppressedFiltered := 0
+	cleaned := make([]sqlite.AIHighlightRow, 0, len(rows))
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			suppressedFiltered++
+			continue
+		}
+		cleaned = append(cleaned, row)
+		if len(cleaned) >= limit {
+			break
+		}
+	}
+
+	requestedSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		requestedSet[id] = struct{}{}
+	}
+	withRows := make(map[string]struct{}, len(cleaned))
+	for _, row := range cleaned {
+		withRows[row.CallID] = struct{}{}
+	}
+	missing := make([]string, 0)
+	for _, id := range ids {
+		if _, ok := withRows[id]; ok {
+			continue
+		}
+		if s.isSuppressedCall(id) {
+			continue
+		}
+		missing = append(missing, id)
+	}
+
+	payload := map[string]any{
+		"rows":                      cleaned,
+		"count":                     len(cleaned),
+		"requested_call_ids":        ids,
+		"call_ids_without_rows":     missing,
+		"suppressed_filtered_count": suppressedFiltered,
+		"limits": map[string]any{
+			"limit":        limit,
+			"max_limit":    maxAIHighlightLimit,
+			"max_call_ids": maxAIHighlightCallIDs,
+		},
+		"caveats": []string{
+			"Highlights are Gong AI-generated accelerators; transcript quotes remain primary evidence.",
+			"Rows return only the typed call_id, highlight_index, highlight_type, highlight_text, source_path, and updated_at columns; raw highlight JSON is not exposed.",
+			"Lookups require explicit call_ids; this operation performs no raw account or customer enumeration and does not list the full call set.",
+			"Restricted calls remain absent because the redacted Postgres serving DB has no rows for them; runtime-suppressed calls are filtered before rows leave the server.",
+			"call_ai_highlights only exists in the Postgres serving DB; SQLite-backed deployments will return zero rows.",
+		},
+	}
+	return newToolResult(payload)
 }
 
 // wrapFacadeResult tags the inner tool result with facade metadata so callers

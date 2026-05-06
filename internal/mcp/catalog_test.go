@@ -88,7 +88,8 @@ func TestToolCatalogInvariants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	assertStringSlicesEqual(t, facadeRoutedTools, analystTools, "analyst-facade hidden routed tools")
+	wantFacadeRoutedTools := append(copyStrings(analystTools), internalRoutedToolListAIHighlights)
+	assertStringSlicesEqual(t, facadeRoutedTools, wantFacadeRoutedTools, "analyst-facade hidden routed tools")
 }
 
 func registerPresetName(t *testing.T, seen map[string]string, name, preset string) {

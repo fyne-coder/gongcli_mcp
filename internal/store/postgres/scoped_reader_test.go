@@ -128,6 +128,7 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 		"search_quotes_in_cohort",
 		"rank_quotes_for_sales_use",
 		"build_quote_pack",
+		"list_call_ai_highlights",
 		"compare_theme_outcomes",
 		"summarize_pipeline_progression_by_theme",
 		"summarize_loss_reasons_by_theme",
@@ -158,6 +159,7 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_sanitized(text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_list_call_ai_highlights(text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_crm_field_summary_sanitized(text, integer) TO "gongmcp_analyst_reader";`,
 	} {
@@ -171,6 +173,9 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments(text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)`,
+		`GRANT SELECT ("highlight_text"`,
+		`GRANT SELECT ("search_vector"`,
+		`ON TABLE public."call_ai_highlights"`,
 		`GRANT SELECT ("call_id"`,
 	} {
 		if strings.Contains(sql, forbidden) {

@@ -525,14 +525,15 @@ func TestPostgresToolAllowlistAcceptsAnalystFacadePreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	if !reflect.DeepEqual(routed, analyst) {
-		t.Fatalf("routed=%v want analyst tools", routed)
+	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights")
+	if !reflect.DeepEqual(routed, wantRouted) {
+		t.Fatalf("routed=%v want analyst tools plus internal highlights route %v", routed, wantRouted)
 	}
 	if min := postgresAnalystSmallCellMin(true, "analyst-facade", true); min != 3 {
 		t.Fatalf("postgresAnalystSmallCellMin=%d want 3", min)
 	}
-	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, analyst) {
-		t.Fatalf("readerGrantAllowlist=%v want analyst tools", got)
+	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, wantRouted) {
+		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights route %v", got, wantRouted)
 	}
 }
 

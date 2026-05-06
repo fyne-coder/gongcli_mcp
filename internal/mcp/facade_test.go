@@ -1,10 +1,32 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
+
+// fakeHighlightsStore wraps a real *sqlite.Store and overrides ListAIHighlights
+// so facade tests can exercise the Postgres-only AI-highlights read model
+// without standing up a Postgres instance.
+type fakeHighlightsStore struct {
+	*sqlite.Store
+	rows []sqlite.AIHighlightRow
+	err  error
+}
+
+func (f *fakeHighlightsStore) ListAIHighlights(_ context.Context, _ sqlite.AIHighlightListParams) ([]sqlite.AIHighlightRow, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]sqlite.AIHighlightRow, len(f.rows))
+	copy(out, f.rows)
+	return out, nil
+}
 
 func TestFacadeToolsExposedInToolCatalog(t *testing.T) {
 	t.Parallel()
@@ -40,6 +62,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpAnalyzeCohortInspect,
 		OpAnalyzeLimitationsExplain,
 		OpAnalyzeThemesDiscover,
+		OpEvidenceHighlightsList,
 		OpEvidenceQuotePackBuild,
 		OpEvidenceQuotesSearch,
 		OpQueryCalls,
@@ -360,4 +383,174 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestFacadeEvidenceHighlightsListReturnsBoundedRedactedRows(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	store := &fakeHighlightsStore{
+		Store: base,
+		rows: []sqlite.AIHighlightRow{
+			{CallID: "call-allow-1", HighlightIndex: 0, HighlightType: "key_point", HighlightText: "Discussed shared Postgres deployment.", SourcePath: "content.highlights", UpdatedAt: "2026-04-12T00:00:00Z"},
+			{CallID: "call-allow-1", HighlightIndex: 1, HighlightType: "next_step", HighlightText: "Schedule architecture review next quarter.", SourcePath: "content.highlights", UpdatedAt: "2026-04-12T00:00:00Z"},
+			{CallID: "call-allow-2", HighlightIndex: 0, HighlightType: "key_point", HighlightText: "Procurement gating Q2 SOW.", SourcePath: "content.highlights", UpdatedAt: "2026-04-12T00:00:00Z"},
+			{CallID: "call-suppressed-1", HighlightIndex: 0, HighlightType: "key_point", HighlightText: "Should be filtered out.", SourcePath: "content.highlights", UpdatedAt: "2026-04-12T00:00:00Z"},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"list_call_ai_highlights"}),
+		WithSuppressedCallIDs([]string{"call-suppressed-1"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceHighlightsList,
+		"arguments": map[string]any{
+			"call_ids": []string{"call-allow-1", "call-allow-2", "call-suppressed-1"},
+			"limit":    50,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	if wrapper["operation"] != OpEvidenceHighlightsList {
+		t.Fatalf("operation=%v want %s", wrapper["operation"], OpEvidenceHighlightsList)
+	}
+	if wrapper["routed_tool"] != "list_call_ai_highlights" {
+		t.Fatalf("routed_tool=%v want list_call_ai_highlights", wrapper["routed_tool"])
+	}
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result type=%T", wrapper["result"])
+	}
+	rows, _ := inner["rows"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("rows count=%d want 3 (suppressed must be filtered): %+v", len(rows), inner)
+	}
+	for _, r := range rows {
+		row, _ := r.(map[string]any)
+		callID, _ := row["call_id"].(string)
+		if callID == "call-suppressed-1" {
+			t.Fatalf("suppressed call surfaced: %+v", row)
+		}
+		if _, hasRaw := row["raw_json"]; hasRaw {
+			t.Fatalf("row exposes raw_json: %+v", row)
+		}
+		if _, hasRaw := row["raw_highlight"]; hasRaw {
+			t.Fatalf("row exposes raw_highlight: %+v", row)
+		}
+		if _, hasType := row["highlight_type"]; !hasType {
+			t.Fatalf("row missing highlight_type: %+v", row)
+		}
+		if _, hasText := row["highlight_text"]; !hasText {
+			t.Fatalf("row missing highlight_text: %+v", row)
+		}
+	}
+	filtered, _ := inner["suppressed_filtered_count"].(float64)
+	if int(filtered) != 1 {
+		t.Fatalf("suppressed_filtered_count=%v want 1 (one suppressed row dropped)", inner["suppressed_filtered_count"])
+	}
+
+	caveats, _ := inner["caveats"].([]any)
+	if len(caveats) == 0 {
+		t.Fatalf("expected caveats, got none in %+v", inner)
+	}
+	joined := ""
+	for _, c := range caveats {
+		joined += " " + strings.ToLower(fmt.Sprintf("%v", c))
+	}
+	if !strings.Contains(joined, "ai") || !strings.Contains(joined, "accelerator") {
+		t.Fatalf("caveats missing Gong AI accelerator note: %v", caveats)
+	}
+	if !strings.Contains(joined, "transcript quotes") {
+		t.Fatalf("caveats missing transcript quotes primary-evidence note: %v", caveats)
+	}
+	if !strings.Contains(joined, "account") || !strings.Contains(joined, "no raw") {
+		t.Fatalf("caveats missing no-raw-account-enumeration note: %v", caveats)
+	}
+
+	limits, _ := inner["limits"].(map[string]any)
+	if limits == nil {
+		t.Fatalf("expected limits object, got %v", inner["limits"])
+	}
+	if _, ok := limits["limit"]; !ok {
+		t.Fatalf("limits missing limit field: %+v", limits)
+	}
+	if _, ok := limits["max_limit"]; !ok {
+		t.Fatalf("limits missing max_limit field: %+v", limits)
+	}
+	if _, ok := limits["max_call_ids"]; !ok {
+		t.Fatalf("limits missing max_call_ids field: %+v", limits)
+	}
+}
+
+func TestFacadeEvidenceHighlightsListEnforcesInputLimits(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	store := &fakeHighlightsStore{Store: base}
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"list_call_ai_highlights"}),
+	)
+
+	// Missing call_ids must be rejected so the operation never enumerates the
+	// full Postgres serving DB.
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceHighlightsList,
+		"arguments": map[string]any{"limit": 5},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err == nil || !strings.Contains(err.Error(), "call_ids") {
+		t.Fatalf("expected error about missing call_ids, got %v", err)
+	}
+
+	// Too many call_ids must be rejected so the operation stays bounded.
+	tooMany := make([]string, 0, 32)
+	for i := 0; i < 32; i++ {
+		tooMany = append(tooMany, fmt.Sprintf("call-%d", i))
+	}
+	args, err = json.Marshal(map[string]any{
+		"operation": OpEvidenceHighlightsList,
+		"arguments": map[string]any{"call_ids": tooMany},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err == nil || !strings.Contains(err.Error(), "call_ids") {
+		t.Fatalf("expected error about call_ids cap, got %v", err)
+	}
+}
+
+func TestFacadeEvidenceHighlightsListAvailableThroughGetEvidenceFacade(t *testing.T) {
+	t.Parallel()
+
+	op, ok := FacadeOperationByName(OpEvidenceHighlightsList)
+	if !ok {
+		t.Fatalf("FacadeOperationByName(%q) not registered", OpEvidenceHighlightsList)
+	}
+	if op.FacadeTool != FacadeToolGetEvidence {
+		t.Fatalf("evidence.highlights.list facade_tool=%q want %s", op.FacadeTool, FacadeToolGetEvidence)
+	}
+	if op.RoutedTool != "list_call_ai_highlights" {
+		t.Fatalf("evidence.highlights.list routed_tool=%q want list_call_ai_highlights", op.RoutedTool)
+	}
 }

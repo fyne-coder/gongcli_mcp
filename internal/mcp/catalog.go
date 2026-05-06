@@ -179,7 +179,11 @@ func FacadeToolNames() []string {
 func ExpandToolPresetFacadeRoutedTools(name string) ([]string, error) {
 	switch normalizedToolPresetName(name) {
 	case "analyst-facade", "facade-analyst":
-		return ExpandToolPreset("analyst")
+		tools, err := ExpandToolPreset("analyst")
+		if err != nil {
+			return nil, err
+		}
+		return append(tools, internalRoutedToolListAIHighlights), nil
 	default:
 		if strings.TrimSpace(name) == "" {
 			return nil, nil

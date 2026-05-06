@@ -77,6 +77,7 @@ type Store interface {
 	SummarizeBusinessAnalysisDimension(ctx context.Context, params sqlite.BusinessAnalysisDimensionSummaryParams) ([]sqlite.BusinessAnalysisDimensionRow, error)
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
 	FindCallsMissingTranscriptsByFilters(ctx context.Context, params sqlite.MissingTranscriptSearchParams) ([]sqlite.MissingTranscriptCall, error)
+	ListAIHighlights(ctx context.Context, params sqlite.AIHighlightListParams) ([]sqlite.AIHighlightRow, error)
 }
 
 type Server struct {

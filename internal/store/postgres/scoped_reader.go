@@ -224,6 +224,9 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 		"list_crm_object_types": {
 			"public.gongmcp_crm_object_type_summary()",
 		},
+		"list_call_ai_highlights": {
+			"public.gongmcp_list_call_ai_highlights(text, integer)",
+		},
 		"list_crm_fields": {
 			"public.gongmcp_crm_field_summary_sanitized(text, integer)",
 		},
@@ -376,6 +379,7 @@ func AnalystScopedColumns(allowlist []string) bool {
 		"get_sync_status":                           {},
 		"inspect_call_cohort":                       {},
 		"list_business_concepts":                    {},
+		"list_call_ai_highlights":                   {},
 		"list_call_cohorts":                         {},
 		"list_crm_fields":                           {},
 		"list_crm_object_types":                     {},
