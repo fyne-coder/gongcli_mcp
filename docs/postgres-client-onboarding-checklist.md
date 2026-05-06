@@ -3,6 +3,10 @@
 Use this one-page checklist for a controlled customer-hosted Postgres pilot.
 It assumes the operator has already reviewed the
 [Postgres client pilot release packet](postgres-client-pilot-release-packet.md).
+Use the
+[Postgres client manual-test checklist](postgres-client-manual-test-checklist.md)
+for first-session prompts, pass/fail notes, expected tool sequences, and
+restricted-customer negative probes.
 
 ## 1. Choose The Pilot Surface
 

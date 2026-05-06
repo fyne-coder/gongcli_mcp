@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added a Postgres client manual-test checklist with first-session prompts,
+  expected tool sequences, pass/fail criteria, restricted-customer negative
+  probes, transcript-summary caveats, scorecard preset checks, and rollback
+  guidance for controlled client pilots.
+
 ## 0.3.4 - 2026-05-05
 
 - Added Postgres client pilot release packet and onboarding

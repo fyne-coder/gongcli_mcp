@@ -8,7 +8,9 @@ checklist, not a GA claim.
 
 For the short operator sequence, use the
 [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md)
-after this packet is reviewed.
+after this packet is reviewed. For business-user acceptance prompts and
+pass/fail recording, use the
+[Postgres client manual-test checklist](postgres-client-manual-test-checklist.md).
 
 SQLite remains the complete/default local workflow. Postgres is the shared
 deployment path for multi-container pilots that cannot rely on a shared
