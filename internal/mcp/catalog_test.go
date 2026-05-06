@@ -92,6 +92,36 @@ func TestToolCatalogInvariants(t *testing.T) {
 	assertStringSlicesEqual(t, facadeRoutedTools, wantFacadeRoutedTools, "analyst-facade hidden routed tools")
 }
 
+func TestAnalystPresetExposesScorecardInventoryTools(t *testing.T) {
+	t.Parallel()
+
+	for _, preset := range []string{"analyst", "analyst-expansion"} {
+		tools, err := ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		for _, want := range []string{"list_scorecards", "get_scorecard"} {
+			found := false
+			for _, name := range tools {
+				if name == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("preset %q missing scorecard inventory tool %q in %v", preset, want, tools)
+			}
+		}
+		for _, blocked := range []string{"summarize_scorecard_activity"} {
+			for _, name := range tools {
+				if name == blocked {
+					t.Fatalf("preset %q must not expose %q (Phase 13g keeps activity aggregates in analyst-core/analyst-business-core)", preset, blocked)
+				}
+			}
+		}
+	}
+}
+
 func registerPresetName(t *testing.T, seen map[string]string, name, preset string) {
 	t.Helper()
 

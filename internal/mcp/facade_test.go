@@ -66,6 +66,8 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpEvidenceQuotePackBuild,
 		OpEvidenceQuotesSearch,
 		OpQueryCalls,
+		OpQueryScorecardDetail,
+		OpQueryScorecards,
 		OpQueryTranscriptSegments,
 		OpStatusSync,
 	}
@@ -537,6 +539,86 @@ func TestFacadeEvidenceHighlightsListEnforcesInputLimits(t *testing.T) {
 	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
 	if err == nil || !strings.Contains(err.Error(), "call_ids") {
 		t.Fatalf("expected error about call_ids cap, got %v", err)
+	}
+}
+
+func TestFacadeQueryScorecardInventoryOperationsRegisteredAndRouted(t *testing.T) {
+	t.Parallel()
+
+	listOp, ok := FacadeOperationByName(OpQueryScorecards)
+	if !ok {
+		t.Fatalf("FacadeOperationByName(%q) not registered", OpQueryScorecards)
+	}
+	if listOp.FacadeTool != FacadeToolQuery {
+		t.Fatalf("query.scorecards facade_tool=%q want %s", listOp.FacadeTool, FacadeToolQuery)
+	}
+	if listOp.RoutedTool != "list_scorecards" {
+		t.Fatalf("query.scorecards routed_tool=%q want list_scorecards", listOp.RoutedTool)
+	}
+
+	detailOp, ok := FacadeOperationByName(OpQueryScorecardDetail)
+	if !ok {
+		t.Fatalf("FacadeOperationByName(%q) not registered", OpQueryScorecardDetail)
+	}
+	if detailOp.FacadeTool != FacadeToolQuery {
+		t.Fatalf("query.scorecard_detail facade_tool=%q want %s", detailOp.FacadeTool, FacadeToolQuery)
+	}
+	if detailOp.RoutedTool != "get_scorecard" {
+		t.Fatalf("query.scorecard_detail routed_tool=%q want get_scorecard", detailOp.RoutedTool)
+	}
+
+	// gong_query schema must advertise the new operations so analyst-facade
+	// clients can discover scorecard inventory without switching presets.
+	tools := facadeTools(LimitPolicy{})
+	var query tool
+	for _, tl := range tools {
+		if tl.Name == FacadeToolQuery {
+			query = tl
+			break
+		}
+	}
+	if query.Name == "" {
+		t.Fatalf("facade tools missing %s", FacadeToolQuery)
+	}
+	props, _ := query.InputSchema["properties"].(map[string]any)
+	op, _ := props["operation"].(map[string]any)
+	enum, _ := op["enum"].([]string)
+	have := map[string]struct{}{}
+	for _, name := range enum {
+		have[name] = struct{}{}
+	}
+	for _, want := range []string{OpQueryScorecards, OpQueryScorecardDetail} {
+		if _, ok := have[want]; !ok {
+			t.Fatalf("gong_query operation enum missing %q: %v", want, enum)
+		}
+	}
+
+	// Dispatch must route to the existing top-level tools without exposing
+	// raw scorecard activity rows or unrestricted scorecard activity.
+	store := openSeededStore(t)
+	defer store.Close()
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{
+		FacadeToolQuery,
+		"list_scorecards",
+		"get_scorecard",
+	}))
+	args, err := json.Marshal(map[string]any{
+		"operation": OpQueryScorecards,
+		"arguments": map[string]any{"limit": 5},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolQuery, args)
+	if err != nil {
+		t.Fatalf("facade dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	if wrapper["routed_tool"] != "list_scorecards" {
+		t.Fatalf("routed_tool=%v want list_scorecards", wrapper["routed_tool"])
 	}
 }
 

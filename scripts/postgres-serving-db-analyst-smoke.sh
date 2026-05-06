@@ -395,6 +395,11 @@ assert_mcp_success "$ANALYST_MCP_OUT" 3 4 5
 grep -q '"build_call_cohort"' "$ANALYST_MCP_OUT"
 grep -q '"search_transcript_segments"' "$ANALYST_MCP_OUT"
 grep -q '"summarize_themes_by_dimension"' "$ANALYST_MCP_OUT"
+# Phase 13g: scorecard inventory tools must be visible under analyst-expansion.
+# The grep targets the tools/list response only; no scorecard activity, answer
+# text, user IDs, or call IDs are exercised by the broad analyst smoke.
+grep -q '"list_scorecards"' "$ANALYST_MCP_OUT"
+grep -q '"get_scorecard"' "$ANALYST_MCP_OUT"
 # Small-cell suppression must be active for the analyst preset under scoped
 # grant enforcement. The scoped Postgres analyst posture sets a min cohort
 # size of 3 (see cmd/gongmcp/main.go::postgresAnalystSmallCellMin and

@@ -470,6 +470,8 @@ func postgresReviewedAnalystTools() []string {
 		"search_transcript_segments",
 		"search_transcripts_by_call_facts",
 		"search_transcript_quotes_with_attribution",
+		"list_scorecards",
+		"get_scorecard",
 		"build_call_cohort",
 		"inspect_call_cohort",
 		"list_call_cohorts",

@@ -611,6 +611,35 @@ func TestPostgresToolAllowlistAcceptsAnalystPreset(t *testing.T) {
 	}
 }
 
+func TestPostgresAnalystPresetIncludesScorecardInventoryTools(t *testing.T) {
+	for _, preset := range []string{"analyst", "analyst-expansion"} {
+		expanded, err := mcp.ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		for _, want := range []string{"list_scorecards", "get_scorecard"} {
+			if !containsString(expanded, want) {
+				t.Fatalf("preset %q missing scorecard inventory tool %q in %v", preset, want, expanded)
+			}
+		}
+		allowlist, err := postgresToolAllowlist(expanded, true, preset)
+		if err != nil {
+			t.Fatalf("postgresToolAllowlist(%q) returned error: %v", preset, err)
+		}
+		for _, want := range []string{"list_scorecards", "get_scorecard"} {
+			if !containsString(allowlist, want) {
+				t.Fatalf("postgres allowlist for preset %q missing scorecard inventory tool %q in %v", preset, want, allowlist)
+			}
+		}
+		// summarize_scorecard_activity intentionally remains in
+		// analyst-core/analyst-business-core; Phase 13g exposes only
+		// inventory through analyst/analyst-expansion.
+		if containsString(expanded, "summarize_scorecard_activity") {
+			t.Fatalf("preset %q must not expose summarize_scorecard_activity through analyst/expansion: %v", preset, expanded)
+		}
+	}
+}
+
 func TestPostgresAnalystSmallCellMinOnlyForEnforcedScopedAnalyst(t *testing.T) {
 	tests := []struct {
 		name                  string

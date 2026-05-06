@@ -48,6 +48,8 @@ const (
 const (
 	OpStatusSync                = "status.sync"
 	OpQueryCalls                = "query.calls"
+	OpQueryScorecards           = "query.scorecards"
+	OpQueryScorecardDetail      = "query.scorecard_detail"
 	OpQueryTranscriptSegments   = "query.transcript_segments"
 	OpAnalyzeCohortBuild        = "analyze.cohort.build"
 	OpAnalyzeCohortInspect      = "analyze.cohort.inspect"
@@ -101,6 +103,37 @@ func FacadeOperations() []FacadeOperation {
 						"limit":     10,
 					},
 				},
+			},
+		},
+		{
+			Name:           OpQueryScorecards,
+			Version:        "v1",
+			Description:    "List scorecard inventory rows from the cached gong_settings model. Routed to list_scorecards. Exposes only stable scorecard, workspace, and review-method metadata; no raw settings payloads, scorecard activity, answer text, user IDs, or call IDs.",
+			FacadeTool:     FacadeToolQuery,
+			RoutedTool:     "list_scorecards",
+			ExposureLevel:  "scoped-analyst",
+			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly"},
+			InputSchema: objectSchema(map[string]any{
+				"active_only": map[string]any{"type": "boolean"},
+				"limit":       map[string]any{"type": "integer"},
+			}, nil),
+			Examples: []any{
+				map[string]any{"active_only": true, "limit": 25},
+			},
+		},
+		{
+			Name:           OpQueryScorecardDetail,
+			Version:        "v1",
+			Description:    "Fetch one cached scorecard's question inventory by scorecard_id. Routed to get_scorecard. Returns scorecard metadata and question text without scorecard activity, answer text, reviewer IDs, or call IDs.",
+			FacadeTool:     FacadeToolQuery,
+			RoutedTool:     "get_scorecard",
+			ExposureLevel:  "scoped-analyst",
+			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly"},
+			InputSchema: objectSchema(map[string]any{
+				"scorecard_id": map[string]any{"type": "string"},
+			}, []string{"scorecard_id"}),
+			Examples: []any{
+				map[string]any{"scorecard_id": "scorecard-001"},
 			},
 		},
 		{
@@ -287,8 +320,8 @@ func facadeTools(_ LimitPolicy) []tool {
 		},
 		{
 			Name:        FacadeToolQuery,
-			Description: "Stable facade for bounded query operations. Pass {\"operation\": \"query.calls\" | \"query.transcript_segments\", \"arguments\": {...}}.",
-			InputSchema: facadeDispatchSchema([]string{OpQueryCalls, OpQueryTranscriptSegments}),
+			Description: "Stable facade for bounded query operations. Pass {\"operation\": \"query.calls\" | \"query.transcript_segments\" | \"query.scorecards\" | \"query.scorecard_detail\", \"arguments\": {...}}.",
+			InputSchema: facadeDispatchSchema([]string{OpQueryCalls, OpQueryTranscriptSegments, OpQueryScorecards, OpQueryScorecardDetail}),
 		},
 		{
 			Name:        FacadeToolAnalyze,

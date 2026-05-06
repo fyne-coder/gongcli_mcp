@@ -89,10 +89,12 @@ Expected analyst tools:
 - `explain_analysis_limitations`
 - `suggest_filter_refinements`
 
-Scorecard inventory tools such as `list_scorecards` and `get_scorecard` are
-approved in narrower Postgres analyst-core surfaces, but they are not part of
-the current `analyst-expansion` manual-test checklist unless the operator
-explicitly switches to a preset that includes them.
+Scorecard inventory tools `list_scorecards` and `get_scorecard` are part of the
+`analyst-expansion` manual-test checklist as of Phase 13g. The activity
+aggregate `summarize_scorecard_activity` is intentionally NOT exposed by
+`analyst-expansion`; activity-aggregate testing remains in `analyst-core` and
+`analyst-business-core`. Raw scorecard activity payloads, answer text, user
+IDs, and call IDs continue to be off-limits for any preset.
 
 ## 3. Smoke Prompt
 

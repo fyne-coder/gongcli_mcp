@@ -153,6 +153,8 @@ func ExpandToolPreset(name string) ([]string, error) {
 			"search_transcript_segments",
 			"search_transcripts_by_call_facts",
 			"search_transcript_quotes_with_attribution",
+			"list_scorecards",
+			"get_scorecard",
 		}
 		tools = append(tools, BusinessAnalysisToolNames()...)
 		return copyStrings(tools), nil
