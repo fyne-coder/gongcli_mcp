@@ -24,14 +24,15 @@ const (
 )
 
 type CallsParams struct {
-	From          string
-	To            string
-	Cursor        string
-	Context       string
-	Preset        string
-	MaxPages      int
-	ExposeParties bool
-	Governance    *governance.Config
+	From             string
+	To               string
+	Cursor           string
+	Context          string
+	Preset           string
+	MaxPages         int
+	ExposeParties    bool
+	ExposeHighlights bool
+	Governance       *governance.Config
 }
 
 type UsersParams struct {
@@ -324,7 +325,7 @@ func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncSt
 		governanceFingerprint = params.Governance.Fingerprint()
 		baseRequestContext = appendRequestContextPart(baseRequestContext, "governance_config_sha256="+governanceFingerprint)
 	}
-	requestContext := buildCallRequestContext(baseRequestContext, params.ExposeParties, false)
+	requestContext := buildCallRequestContext(baseRequestContext, params.ExposeParties, false, params.ExposeHighlights)
 	if params.ExposeParties {
 		result.ParticipantCaptureStatus = "requested"
 	}
@@ -367,11 +368,12 @@ func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncSt
 	}()
 
 	request := gong.CallListParams{
-		From:          strings.TrimSpace(params.From),
-		To:            strings.TrimSpace(params.To),
-		Cursor:        strings.TrimSpace(params.Cursor),
-		Context:       strings.TrimSpace(params.Context),
-		ExposeParties: params.ExposeParties,
+		From:             strings.TrimSpace(params.From),
+		To:               strings.TrimSpace(params.To),
+		Cursor:           strings.TrimSpace(params.Cursor),
+		Context:          strings.TrimSpace(params.Context),
+		ExposeParties:    params.ExposeParties,
+		ExposeHighlights: params.ExposeHighlights,
 	}
 
 	seenCursors := map[string]struct{}{}
@@ -384,7 +386,7 @@ func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncSt
 		if err != nil && request.ExposeParties && result.Pages == 0 && result.RecordsSeen == 0 && canRetryWithoutParties(err) {
 			request.ExposeParties = false
 			result.ParticipantCaptureStatus = "omitted_fallback"
-			requestContext = buildCallRequestContext(baseRequestContext, params.ExposeParties, true)
+			requestContext = buildCallRequestContext(baseRequestContext, params.ExposeParties, true, params.ExposeHighlights)
 			resp, err = client.ListCalls(ctx, request)
 		}
 		if err != nil {
@@ -764,19 +766,22 @@ func appendRequestContextPart(base string, part string) string {
 	return base + "," + part
 }
 
-func buildCallRequestContext(base string, includeParties bool, fallbackWithoutParties bool) string {
-	parts := make([]string, 0, 3)
+func buildCallRequestContext(base string, includeParties bool, fallbackWithoutParties bool, includeHighlights bool) string {
+	parts := make([]string, 0, 5)
 	if value := strings.TrimSpace(base); value != "" {
 		parts = append(parts, value)
 	}
-	if !includeParties {
-		return strings.Join(parts, ",")
+	if includeParties {
+		parts = append(parts, "include_parties_requested=true")
+		if fallbackWithoutParties {
+			parts = append(parts, "include_parties_result=omitted_fallback")
+		} else {
+			parts = append(parts, "include_parties_result=request_sent")
+		}
 	}
-	parts = append(parts, "include_parties_requested=true")
-	if fallbackWithoutParties {
-		parts = append(parts, "include_parties_result=omitted_fallback")
-	} else {
-		parts = append(parts, "include_parties_result=request_sent")
+	if includeHighlights {
+		parts = append(parts, "include_highlights_requested=true")
+		parts = append(parts, "include_highlights_result=request_sent")
 	}
 	return strings.Join(parts, ",")
 }

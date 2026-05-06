@@ -176,6 +176,7 @@ Notes:
   transcript-backed search or analysis is in scope.
 - In restricted mode, `sync transcripts`, `sync calls --preset business`,
   `sync calls --preset all`, `sync calls --include-parties`,
+  `sync calls --include-highlights`,
   `calls list --context extended`, transcript export commands, raw API
   passthrough, and raw call JSON require `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`. Treat that override as an approval gate,

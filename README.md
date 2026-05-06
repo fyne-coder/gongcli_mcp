@@ -316,6 +316,7 @@ When restricted mode is enabled, these commands are blocked unless you add
 - `gongctl sync calls --preset business`
 - `gongctl sync calls --preset all`
 - `gongctl sync calls --include-parties`
+- `gongctl sync calls --include-highlights`
 
 Approved override example:
 
@@ -323,6 +324,7 @@ Approved override example:
 GONGCTL_RESTRICTED=1 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --allow-sensitive-export --out calls-with-crm-context.json
 GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business --allow-sensitive-export
 GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset minimal --include-parties --allow-sensitive-export
+GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset minimal --include-highlights --allow-sensitive-export
 ```
 
 ## Public Quickstart Shape
@@ -468,6 +470,10 @@ Rules:
 - `sync calls --preset minimal` does not request Gong context.
 - `sync calls --preset all` currently maps to `Extended` context as well; it is documented separately so it can diverge later without changing the CLI shape.
 - `sync calls --include-parties` requests Gong call participant fields such as names, emails, speaker IDs, and titles. Use it only for approved operator refreshes because returned participant payloads are cached in raw call JSON.
+- `sync calls --include-highlights` requests Gong AI Highlights / brief /
+  next-step fields. Use it only for approved operator refreshes because
+  returned summary/next-step text is cached in raw call JSON. No MCP tool reads
+  these fields until a typed redacted read model is added.
 - `sync crm-integrations` caches Gong CRM integration IDs needed by
   `sync crm-schema`. With `GONG_DATABASE_URL` set and `--db` omitted, this
   inventory can be written to Postgres for shared deployments.

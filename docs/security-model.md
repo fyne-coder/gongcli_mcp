@@ -107,8 +107,9 @@ Implementation controls on the CLI side:
 - In restricted mode, `api raw`, SQLite `calls show --db PATH --json`,
   `calls export`, `calls list --context extended`, `calls transcript`,
   `calls transcript-batch`, `sync transcripts`, `sync calls --preset
-  business|all`, and `sync calls --include-parties` are blocked unless the
-  operator adds `--allow-sensitive-export` or sets
+  business|all`, `sync calls --include-parties`, and
+  `sync calls --include-highlights` are blocked unless the operator adds
+  `--allow-sensitive-export` or sets
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`.
 - Postgres `calls show --json` through `GONG_DATABASE_URL` returns minimized
   read-model detail and does not bypass into raw cached JSON.
@@ -175,6 +176,11 @@ Implementation controls on the CLI side:
 - Approved `--include-parties` syncs record the requested participant mode in
   sync history. If Gong rejects that selector and the job retries without
   parties, the run records `include_parties_result=omitted_fallback`.
+- Approved `--include-highlights` syncs record
+  `include_highlights_requested=true` and
+  `include_highlights_result=request_sent` in sync history. There is no
+  fallback path; if Gong rejects the selector, rerun without
+  `--include-highlights`.
 - `gongctl cache inventory --db ...` is read-only and returns cache metadata,
   sync history, profile status, and a sensitive-data warning. With Postgres,
   omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL`; the command adds

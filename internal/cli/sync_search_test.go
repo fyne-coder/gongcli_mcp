@@ -438,6 +438,110 @@ func TestReadOnlyCommandsExistingDBDoNotMutateDatabase(t *testing.T) {
 	}
 }
 
+func TestSyncCallsIncludeHighlightsRequestsExposedFieldsAndStoresContent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/extensive" {
+			t.Fatalf("path=%q want /v2/calls/extensive", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		selector, ok := body["contentSelector"].(map[string]any)
+		if !ok {
+			t.Fatalf("contentSelector missing: %#v", body)
+		}
+		exposed, ok := selector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", selector)
+		}
+		if exposed["highlights"] != true {
+			t.Fatalf("exposedFields.highlights=%v want true", exposed["highlights"])
+		}
+		if _, hasParties := exposed["parties"]; hasParties {
+			t.Fatalf("exposedFields.parties unexpectedly present: %#v", exposed)
+		}
+
+		writeCLIJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"calls": []map[string]any{
+				{
+					"id":       "call-highlights-cli-001",
+					"title":    "Synthetic highlights call",
+					"started":  "2026-04-22T15:00:00Z",
+					"duration": 600,
+					"content": map[string]any{
+						"highlights": []map[string]any{
+							{"type": "summary", "text": "Synthetic Phase 13k summary."},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+
+	err := a.sync(context.Background(), []string{
+		"calls",
+		"--db", dbPath,
+		"--from", "2026-04-22",
+		"--to", "2026-04-22",
+		"--preset", "minimal",
+		"--include-highlights",
+		"--allow-sensitive-export",
+		"--max-pages", "1",
+	})
+	if err != nil {
+		t.Fatalf("sync calls returned error: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "synced calls:") {
+		t.Fatalf("stderr=%q missing sync summary", got)
+	}
+
+	store := openCLITestStore(t, dbPath)
+	defer store.Close()
+
+	raw, err := store.GetCallRaw(context.Background(), "call-highlights-cli-001")
+	if err != nil {
+		t.Fatalf("GetCallRaw returned error: %v", err)
+	}
+	if !strings.Contains(string(raw), "Synthetic Phase 13k summary") {
+		t.Fatalf("stored call missing highlight content: %s", raw)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		context.Background(),
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	for _, want := range []string{
+		"include_highlights_requested=true",
+		"include_highlights_result=request_sent",
+	} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+	if strings.Contains(requestContext, "include_parties_requested=true") {
+		t.Fatalf("requestContext=%q must not advertise include_parties when only highlights opted in", requestContext)
+	}
+}
+
 func TestSyncRestrictedModeBlocksSensitiveSubcommands(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "gong.db")
@@ -462,6 +566,11 @@ func TestSyncRestrictedModeBlocksSensitiveSubcommands(t *testing.T) {
 			name: "sync-calls-include-parties",
 			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "minimal", "--include-parties"},
 			want: "sync calls --include-parties is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-calls-include-highlights",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "minimal", "--include-highlights"},
+			want: "sync calls --include-highlights is blocked because restricted mode is enabled",
 		},
 		{
 			name: "sync-transcripts",

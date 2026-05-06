@@ -226,6 +226,7 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 	maxPages := fs.Int("max-pages", 0, "maximum pages to sync; 0 means all pages")
 	allowSensitiveExport := fs.Bool("allow-sensitive-export", false, "allow extended CRM-context sync in restricted mode")
 	includeParties := fs.Bool("include-parties", false, "request Gong call participant fields such as names, emails, and titles")
+	includeHighlights := fs.Bool("include-highlights", false, "request Gong AI Highlights/brief/next-step fields and store them in raw call payloads when Gong returns them; replaces the deprecated pointsOfInterest/actionItems contract")
 	governanceConfig := fs.String("governance-config", "", "private AI governance YAML config for ingest-time call exclusion")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -259,6 +260,15 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	if *includeHighlights {
+		if err := a.requireSensitiveExport(
+			"sync calls --include-highlights",
+			*allowSensitiveExport,
+			"Gong AI Highlights/brief/next-step fields can include customer-facing summaries and are stored in raw call payloads",
+		); err != nil {
+			return err
+		}
+	}
 	var ingestGovernance *governance.Config
 	if strings.TrimSpace(*governanceConfig) != "" {
 		var err error
@@ -280,13 +290,14 @@ func (a *app) syncCalls(ctx context.Context, args []string) error {
 	}
 
 	result, err := syncsvc.SyncCalls(ctx, client, store, syncsvc.CallsParams{
-		From:          *from,
-		To:            *to,
-		Context:       requestContext,
-		Preset:        presetName,
-		MaxPages:      *maxPages,
-		ExposeParties: *includeParties,
-		Governance:    ingestGovernance,
+		From:             *from,
+		To:               *to,
+		Context:          requestContext,
+		Preset:           presetName,
+		MaxPages:         *maxPages,
+		ExposeParties:    *includeParties,
+		ExposeHighlights: *includeHighlights,
+		Governance:       ingestGovernance,
 	})
 	fmt.Fprintf(
 		a.err,
@@ -1185,6 +1196,7 @@ func newSyncRunResponse(config *syncRunConfig, dryRun bool) syncRunResponse {
 			Preset:                  step.Preset,
 			MaxPages:                step.MaxPages,
 			IncludeParties:          step.IncludeParties,
+			IncludeHighlights:       step.IncludeHighlights,
 			GovernanceConfig:        step.GovernanceConfig,
 			SettingsKind:            step.SettingsKind,
 			WorkspaceID:             step.WorkspaceID,
@@ -1208,7 +1220,7 @@ func syncRunStepRequiresSensitiveExport(step syncRunStepConfig) bool {
 	case "transcripts":
 		return true
 	case "calls":
-		return step.Preset == "business" || step.Preset == "all" || step.IncludeParties
+		return step.Preset == "business" || step.Preset == "all" || step.IncludeParties || step.IncludeHighlights
 	default:
 		return false
 	}
@@ -1233,6 +1245,13 @@ func (a *app) authorizeSyncRunStep(step *syncRunStepConfig) error {
 				"participant fields can include names, emails, speaker IDs, and titles and are stored in raw call payloads",
 			)
 		}
+		if step.IncludeHighlights {
+			return a.requireSensitiveExport(
+				"sync run calls step include_highlights",
+				false,
+				"Gong AI Highlights/brief/next-step fields can include customer-facing summaries and are stored in raw call payloads",
+			)
+		}
 	}
 	return nil
 }
@@ -1251,13 +1270,14 @@ func (a *app) executeSyncRunStep(ctx context.Context, store *sqlite.Store, clien
 			return err
 		}
 		syncResult, err := syncsvc.SyncCalls(ctx, client, store, syncsvc.CallsParams{
-			From:          step.From,
-			To:            step.To,
-			Context:       requestContext,
-			Preset:        presetName,
-			MaxPages:      step.MaxPages,
-			ExposeParties: step.IncludeParties,
-			Governance:    ingestGovernance,
+			From:             step.From,
+			To:               step.To,
+			Context:          requestContext,
+			Preset:           presetName,
+			MaxPages:         step.MaxPages,
+			ExposeParties:    step.IncludeParties,
+			ExposeHighlights: step.IncludeHighlights,
+			Governance:       ingestGovernance,
 		})
 		if err != nil {
 			return err
@@ -1417,26 +1437,27 @@ type syncRunConfig struct {
 }
 
 type syncRunStepConfig struct {
-	Name             string   `yaml:"name,omitempty" json:"name,omitempty"`
-	Action           string   `yaml:"action" json:"action"`
-	From             string   `yaml:"from,omitempty" json:"from,omitempty"`
-	To               string   `yaml:"to,omitempty" json:"to,omitempty"`
-	Preset           string   `yaml:"preset,omitempty" json:"preset,omitempty"`
-	MaxPages         int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
-	CallFrom         string   `yaml:"call_from,omitempty" json:"call_from,omitempty"`
-	CallTo           string   `yaml:"call_to,omitempty" json:"call_to,omitempty"`
-	ReviewFrom       string   `yaml:"review_from,omitempty" json:"review_from,omitempty"`
-	ReviewTo         string   `yaml:"review_to,omitempty" json:"review_to,omitempty"`
-	ReviewMethod     string   `yaml:"review_method,omitempty" json:"review_method,omitempty"`
-	OutDir           string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
-	Limit            int      `yaml:"limit,omitempty" json:"limit,omitempty"`
-	BatchSize        int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
-	IncludeParties   bool     `yaml:"include_parties,omitempty" json:"include_parties,omitempty"`
-	IntegrationID    string   `yaml:"integration_id,omitempty" json:"integration_id,omitempty"`
-	ObjectTypes      []string `yaml:"object_types,omitempty" json:"object_types,omitempty"`
-	SettingsKind     string   `yaml:"settings_kind,omitempty" json:"settings_kind,omitempty"`
-	WorkspaceID      string   `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
-	GovernanceConfig string   `yaml:"governance_config,omitempty" json:"governance_config,omitempty"`
+	Name              string   `yaml:"name,omitempty" json:"name,omitempty"`
+	Action            string   `yaml:"action" json:"action"`
+	From              string   `yaml:"from,omitempty" json:"from,omitempty"`
+	To                string   `yaml:"to,omitempty" json:"to,omitempty"`
+	Preset            string   `yaml:"preset,omitempty" json:"preset,omitempty"`
+	MaxPages          int      `yaml:"max_pages,omitempty" json:"max_pages,omitempty"`
+	CallFrom          string   `yaml:"call_from,omitempty" json:"call_from,omitempty"`
+	CallTo            string   `yaml:"call_to,omitempty" json:"call_to,omitempty"`
+	ReviewFrom        string   `yaml:"review_from,omitempty" json:"review_from,omitempty"`
+	ReviewTo          string   `yaml:"review_to,omitempty" json:"review_to,omitempty"`
+	ReviewMethod      string   `yaml:"review_method,omitempty" json:"review_method,omitempty"`
+	OutDir            string   `yaml:"out_dir,omitempty" json:"out_dir,omitempty"`
+	Limit             int      `yaml:"limit,omitempty" json:"limit,omitempty"`
+	BatchSize         int      `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
+	IncludeParties    bool     `yaml:"include_parties,omitempty" json:"include_parties,omitempty"`
+	IncludeHighlights bool     `yaml:"include_highlights,omitempty" json:"include_highlights,omitempty"`
+	IntegrationID     string   `yaml:"integration_id,omitempty" json:"integration_id,omitempty"`
+	ObjectTypes       []string `yaml:"object_types,omitempty" json:"object_types,omitempty"`
+	SettingsKind      string   `yaml:"settings_kind,omitempty" json:"settings_kind,omitempty"`
+	WorkspaceID       string   `yaml:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+	GovernanceConfig  string   `yaml:"governance_config,omitempty" json:"governance_config,omitempty"`
 }
 
 type syncRunResponse struct {
@@ -1472,6 +1493,7 @@ type syncRunStepResult struct {
 	Limit                   int                     `json:"limit,omitempty"`
 	BatchSize               int                     `json:"batch_size,omitempty"`
 	IncludeParties          bool                    `json:"include_parties,omitempty"`
+	IncludeHighlights       bool                    `json:"include_highlights,omitempty"`
 	GovernanceConfig        string                  `json:"governance_config,omitempty"`
 	Scope                   string                  `json:"scope,omitempty"`
 	SyncKey                 string                  `json:"sync_key,omitempty"`

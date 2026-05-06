@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added Phase 13k opt-in capture of Gong AI Highlights / brief /
+  next-step content via `gongctl sync calls --include-highlights`. The
+  flag mirrors `--include-parties`: it requires `--allow-sensitive-export`
+  in restricted mode, sends `contentSelector.exposedFields.highlights=true`
+  on `POST /v2/calls/extensive`, and adds
+  `include_highlights_requested=true` /
+  `include_highlights_result=request_sent` markers to the sync-run
+  request context. Highlights land in raw call payloads only; no new MCP
+  tool, schema, or aggregate. Endpoint review and follow-up plan live in
+  `docs/gong-native-enrichment-review.md`.
 - Added a stable MCP facade vertical slice with `analyst-facade`,
   `gong_discover_capabilities`, and routed `gong_query` /
   `gong_analyze` / `gong_get_evidence` operations so approved clients can use

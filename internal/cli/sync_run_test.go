@@ -354,6 +354,68 @@ steps:
 	}
 }
 
+func TestSyncRunRestrictedModeBlocksIncludeHighlightsStep(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "sync-run.yaml")
+	dbPath := filepath.Join(dir, "cache", "gong.db")
+	body := []byte(`version: 1
+db: ./cache/gong.db
+steps:
+  - name: highlights_capture
+    action: calls
+    from: 2026-04-22
+    to: 2026-04-22
+    preset: minimal
+    include_highlights: true
+`)
+	if err := os.WriteFile(configPath, body, 0o600); err != nil {
+		t.Fatalf("os.WriteFile returned error: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"--restricted", "sync", "run", "--config", configPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("Run(sync run restricted highlights) code=%d stderr=%q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "sync run calls step include_highlights is blocked because restricted mode is enabled") {
+		t.Fatalf("stderr=%q missing include_highlights restricted-mode guidance", got)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("db path exists after preflight block: err=%v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(context.Background(), []string{"sync", "run", "--config", configPath, "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(sync run dry-run) code=%d stderr=%q", code, stderr.String())
+	}
+	var resp struct {
+		Steps []struct {
+			Name                    string `json:"name"`
+			Action                  string `json:"action"`
+			IncludeHighlights       bool   `json:"include_highlights"`
+			RequiresSensitiveExport bool   `json:"requires_sensitive_export"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode dry-run JSON: %v", err)
+	}
+	if len(resp.Steps) != 1 {
+		t.Fatalf("step count=%d want 1", len(resp.Steps))
+	}
+	if !resp.Steps[0].IncludeHighlights {
+		t.Fatalf("step include_highlights=%v want true", resp.Steps[0].IncludeHighlights)
+	}
+	if !resp.Steps[0].RequiresSensitiveExport {
+		t.Fatalf("step requires_sensitive_export=%v want true for include_highlights", resp.Steps[0].RequiresSensitiveExport)
+	}
+}
+
 func TestSyncRunConfigRejectsSensitiveExportField(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "sync-run.yaml")

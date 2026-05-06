@@ -421,6 +421,149 @@ func TestSyncCallsFallsBackWhenExposedPartiesRejected(t *testing.T) {
 	}
 }
 
+func TestSyncCallsExposeHighlightsRequestsExposedFieldAndContextMarkers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/extensive" {
+			t.Fatalf("path=%q want /v2/calls/extensive", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		contentSelector, ok := body["contentSelector"].(map[string]any)
+		if !ok {
+			t.Fatalf("contentSelector missing: %#v", body)
+		}
+		exposed, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", contentSelector)
+		}
+		if exposed["highlights"] != true {
+			t.Fatalf("exposedFields.highlights=%v want true", exposed["highlights"])
+		}
+		if exposed["parties"] != true {
+			t.Fatalf("exposedFields.parties=%v want true", exposed["parties"])
+		}
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 1, "currentPageNumber": 0},
+			"calls": []map[string]any{
+				{
+					"id":       "call-highlights-001",
+					"title":    "Synthetic highlights call",
+					"started":  "2026-04-22T15:00:00Z",
+					"duration": 600,
+					"content": map[string]any{
+						"highlights": []map[string]any{
+							{"type": "summary", "text": "Synthetic next-step summary."},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncCalls(ctx, client, store, CallsParams{
+		From:             "2026-04-22",
+		To:               "2026-04-22",
+		Context:          "Extended",
+		Preset:           "daily",
+		ExposeParties:    true,
+		ExposeHighlights: true,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.RecordsWritten != 1 {
+		t.Fatalf("records written=%d want 1", result.RecordsWritten)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	for _, want := range []string{
+		"include_parties_requested=true",
+		"include_parties_result=request_sent",
+		"include_highlights_requested=true",
+		"include_highlights_result=request_sent",
+	} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+}
+
+func TestSyncCallsHighlightsOnlyOmitsPartiesContextMarkers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		contentSelector, _ := body["contentSelector"].(map[string]any)
+		exposed, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", contentSelector)
+		}
+		if exposed["highlights"] != true {
+			t.Fatalf("exposedFields.highlights=%v want true", exposed["highlights"])
+		}
+		if _, hasParties := exposed["parties"]; hasParties {
+			t.Fatalf("exposedFields.parties unexpectedly present: %#v", exposed)
+		}
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 0, "currentPageNumber": 0},
+			"calls":   []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	if _, err := SyncCalls(ctx, client, store, CallsParams{
+		From:             "2026-04-22",
+		To:               "2026-04-22",
+		Preset:           "minimal",
+		ExposeHighlights: true,
+	}); err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	if strings.Contains(requestContext, "include_parties_requested=true") {
+		t.Fatalf("requestContext=%q must not advertise include_parties_requested when only highlights opted in", requestContext)
+	}
+	for _, want := range []string{
+		"include_highlights_requested=true",
+		"include_highlights_result=request_sent",
+	} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+}
+
 func TestSyncCallsRejectsRepeatedCursorAndFinishesRun(t *testing.T) {
 	t.Parallel()
 
