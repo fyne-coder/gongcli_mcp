@@ -64,13 +64,28 @@ func callIDFromRaw(raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return "", err
 	}
-	for _, key := range []string{"id", "callId", "call_id"} {
-		if value, ok := payload[key]; ok {
-			var id string
-			if err := json.Unmarshal(value, &id); err == nil && strings.TrimSpace(id) != "" {
-				return strings.TrimSpace(id), nil
+	if id := firstRawString(payload, "id", "callId", "call_id"); id != "" {
+		return id, nil
+	}
+	var metaData map[string]json.RawMessage
+	if value, ok := payload["metaData"]; ok {
+		if err := json.Unmarshal(value, &metaData); err == nil {
+			if id := firstRawString(metaData, "id", "callId", "call_id"); id != "" {
+				return id, nil
 			}
 		}
 	}
 	return "", fmt.Errorf("call payload missing id")
+}
+
+func firstRawString(payload map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			var id string
+			if err := json.Unmarshal(value, &id); err == nil && strings.TrimSpace(id) != "" {
+				return strings.TrimSpace(id)
+			}
+		}
+	}
+	return ""
 }
