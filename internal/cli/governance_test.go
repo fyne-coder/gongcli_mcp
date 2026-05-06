@@ -71,6 +71,163 @@ lists:
 	}
 }
 
+func TestGovernanceRefreshServingDBRejectsIdenticalURLs(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	url := "postgres://operator:secret@localhost:5432/gongctl_source"
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--source", url,
+		"--target", url,
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when source and target match; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "different databases") {
+		t.Fatalf("expected message about different databases; got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	for _, leak := range []string{"operator", "secret"} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("error output leaked credentials %q: %s", leak, combined)
+		}
+	}
+}
+
+func TestGovernanceRefreshServingDBRequiresFlags(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing source",
+			args: []string{"governance", "refresh-serving-db", "--target", "postgres://h/db", "--config", configPath},
+			want: "--source",
+		},
+		{
+			name: "missing target",
+			args: []string{"governance", "refresh-serving-db", "--source", "postgres://h/db", "--config", configPath},
+			want: "--target",
+		},
+		{
+			name: "missing config",
+			args: []string{"governance", "refresh-serving-db", "--source", "postgres://h/a", "--target", "postgres://h/b"},
+			want: "--config",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run(context.Background(), tc.args, &stdout, &stderr)
+			if code == 0 {
+				t.Fatalf("expected non-zero exit for %s; stdout=%q stderr=%q", tc.name, stdout.String(), stderr.String())
+			}
+			combined := stdout.String() + stderr.String()
+			if !strings.Contains(combined, tc.want) {
+				t.Fatalf("missing flag message for %s did not include %q: %s", tc.name, tc.want, combined)
+			}
+		})
+	}
+}
+
+func TestGovernanceRefreshServingDBSanitizesConnectionErrors(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	sourceURL := "postgres://operator:synthetic-secret@127.0.0.1:1/gongctl_source"
+	targetURL := "postgres://operator:synthetic-secret@127.0.0.1:1/gongctl_mcp"
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--source", sourceURL,
+		"--target", targetURL,
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit for unavailable source; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "source database is unavailable or invalid") {
+		t.Fatalf("expected sanitized source database error; got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	for _, leak := range []string{"operator", "synthetic-secret", "gongctl_source", "gongctl_mcp", sourceURL, targetURL} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("error output leaked %q: %s", leak, combined)
+		}
+	}
+}
+
+func TestGovernanceRefreshServingDBSanitizesMalformedURLs(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	sourceURL := "postgres://operator:synthetic-secret@%zz/gongctl_source"
+	targetURL := "postgres://operator:synthetic-secret@localhost/gongctl_mcp"
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--source", sourceURL,
+		"--target", targetURL,
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit for malformed source; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "source database is unavailable or invalid") {
+		t.Fatalf("expected sanitized source database error; got stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	for _, leak := range []string{"operator", "synthetic-secret", "gongctl_source", "gongctl_mcp", sourceURL, targetURL} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("error output leaked %q: %s", leak, combined)
+		}
+	}
+}
+
 func TestGovernanceExportFilteredDBWritesPhysicalMCPDB(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "gong.db")

@@ -15,7 +15,7 @@ import (
 
 func (a *app) governance(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl governance [audit|export-filtered-db]")
+		fmt.Fprintln(a.err, "usage: gongctl governance [audit|export-filtered-db|refresh-serving-db]")
 		return errUsage
 	}
 	switch args[0] {
@@ -23,6 +23,8 @@ func (a *app) governance(ctx context.Context, args []string) error {
 		return a.governanceAudit(ctx, args[1:])
 	case "export-filtered-db":
 		return a.governanceExportFilteredDB(ctx, args[1:])
+	case "refresh-serving-db":
+		return a.governanceRefreshServingDB(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown governance command %q\n", args[0])
 		return errUsage
@@ -212,6 +214,77 @@ func (a *app) governanceExportFilteredDB(ctx context.Context, args []string) err
 		SensitiveDataWarning:          cacheSensitiveDataWarning,
 	}
 	return writeJSONValue(a.out, response)
+}
+
+// governanceRefreshServingDB rebuilds a redacted Postgres MCP serving database
+// (target) from the operator cache (source) using the private governance YAML.
+//
+// Required flags:
+//   - --source: Postgres operator-cache database URL (gongctl_source).
+//   - --target: Postgres redacted MCP serving database URL (gongctl_mcp).
+//   - --config: Private AI governance YAML path.
+//
+// Source and target must be present and refer to different databases. Output
+// is sanitized JSON with row counts and policy/data fingerprints; it never
+// includes URLs, customer names, blocklist values, call IDs, or call titles.
+func (a *app) governanceRefreshServingDB(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("governance refresh-serving-db", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	sourceURL := fs.String("source", "", "Postgres source (operator) database URL, e.g. $GONGCTL_SOURCE_DATABASE_URL")
+	targetURL := fs.String("target", "", "Postgres redacted MCP serving database URL, e.g. $GONGCTL_MCP_DATABASE_URL")
+	configPath := fs.String("config", "", "AI governance YAML config path")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if strings.TrimSpace(*sourceURL) == "" {
+		return fmt.Errorf("--source database URL is required")
+	}
+	if strings.TrimSpace(*targetURL) == "" {
+		return fmt.Errorf("--target database URL is required")
+	}
+	if strings.TrimSpace(*configPath) == "" {
+		return fmt.Errorf("--config is required")
+	}
+
+	cfg, err := governance.LoadFile(*configPath)
+	if err != nil {
+		return err
+	}
+
+	result, err := postgres.RefreshServingDB(ctx, postgres.RefreshServingDBOptions{
+		SourceURL: *sourceURL,
+		TargetURL: *targetURL,
+		Config:    cfg,
+	})
+	if err != nil {
+		return sanitizeRefreshServingDBError(err)
+	}
+	return writeJSONValue(a.out, governanceRefreshServingDBResponse{
+		Result:               result,
+		SensitiveDataWarning: cacheSensitiveDataWarning,
+	})
+}
+
+func sanitizeRefreshServingDBError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "parse source database URL") || strings.Contains(msg, "open source database"):
+		return fmt.Errorf("refresh serving database failed: source database is unavailable or invalid")
+	case strings.Contains(msg, "parse target database URL") || strings.Contains(msg, "open target database"):
+		return fmt.Errorf("refresh serving database failed: target database is unavailable or invalid")
+	case strings.Contains(msg, "source") || strings.Contains(msg, "target"):
+		return fmt.Errorf("refresh serving database failed: %s", msg)
+	default:
+		return fmt.Errorf("refresh serving database failed; inspect operator logs for details")
+	}
+}
+
+type governanceRefreshServingDBResponse struct {
+	Result               *postgres.ServingDBRefreshResult `json:"result"`
+	SensitiveDataWarning string                           `json:"sensitive_data_warning"`
 }
 
 type governanceExportFilteredDBResponse struct {

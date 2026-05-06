@@ -162,6 +162,42 @@ metadata, or internal user rows unless they are tied to a suppressed call. If
 the policy is "no occurrence anywhere in any configuration metadata," add a
 separate settings/schema/profile metadata scan before MCP use.
 
+## Redacted Postgres Serving Database (Phase 13e4 vertical slice)
+
+For Postgres deployments where the strongest requirement is that the MCP/LLM
+path cannot see blocklisted companies, the recommended layout is one Postgres
+server with two databases: `gongctl_source` for the full operator cache, and
+`gongctl_mcp` for a physically redacted MCP serving cache. `gongctl` sync/write
+jobs connect only to `gongctl_source`. A governance refresh command rebuilds
+`gongctl_mcp` from `gongctl_source`, copying only non-restricted calls and the
+allowed support tables. `gongmcp` connects only to `gongctl_mcp` with a
+read-only role and never receives credentials for the source database.
+
+```bash
+gongctl governance refresh-serving-db \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --config /run/secrets/ai-governance.yaml
+```
+
+The first slice rebuilds the target database in place: it determines suppressed
+call IDs from the source via the existing governance audit logic, truncates the
+target call-scoped tables, copies allowed `calls`, `users`, `transcripts`,
+`transcript_segments`, `call_context_objects`, and `call_context_fields` rows,
+rebuilds the Postgres read model on the target, and re-applies the governance
+policy on the target. Output is sanitized JSON with row counts, removed-call
+counts, and policy/data fingerprints; it does not include database URLs,
+customer names, blocklist values, call IDs, or call titles.
+
+The first slice intentionally skips several global metadata tables on the
+target. The skipped list is included in the sanitized refresh output so a
+reviewer can confirm the boundary; it currently covers `sync_runs`,
+`sync_state`, `gong_settings`, the `crm_*` schema metadata tables, profile
+tables, `scorecard_activity`, `governance_ingest_skipped_calls`, and
+`purged_call_ids`. Broader copy and a documented blue/green
+`gongctl_mcp_next` option for near-zero-downtime refresh in larger deployments
+remain follow-ups.
+
 ## Raw-DB MCP Enforcement
 
 Raw-DB governance is a fallback when a filtered DB has not been generated. Start
