@@ -2,9 +2,28 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+)
+
+// Phase B-1 read-time speaker attribution status/source/confidence values.
+// These constants are part of the documented MCP contract for
+// evidence.call_drilldown; downstream callers compare on the literal
+// strings, so do not rename without updating the facade contract.
+const (
+	AttributionStatusAvailable               = "available"
+	AttributionStatusParticipantTitleMissing = "participant_matched_title_missing"
+	AttributionStatusSpeakerUnmatched        = "speaker_unmatched"
+	AttributionStatusSpeakerAmbiguous        = "speaker_ambiguous"
+	AttributionSourceCallParties             = "call_parties"
+	AttributionSourceGongParty               = "gong_party"
+	AttributionSourceUnmatched               = "unmatched"
+	AttributionConfidenceExactSpeakerID      = "exact_speaker_id"
+	AttributionConfidenceAmbiguous           = "ambiguous"
+	AttributionConfidenceUnmatched           = "unmatched"
 )
 
 const (
@@ -193,14 +212,26 @@ type CallDrilldownEvidenceParams struct {
 // specific call. The shape stays minimal: the call-drilldown facade joins
 // account/opportunity coverage from the call detail rather than denormalizing
 // it onto every excerpt.
+//
+// The attribution-related fields (PersonTitleStatus, PersonTitleSource,
+// AttributionSource, AttributionConfidence, PersonTitle) describe how the
+// row's speaker_id was matched against Gong-party metadata in the cache.
+// Phase B-1 supports exact Gong-party-id matching only; CRM Contact/Lead
+// attribution is explicitly future work and the row never carries inferred
+// titles or persona buckets.
 type CallDrilldownEvidenceRow struct {
-	CallID         string `json:"-"`
-	SegmentIndex   int    `json:"segment_index"`
-	SpeakerID      string `json:"speaker_id,omitempty"`
-	StartMS        int64  `json:"start_ms"`
-	EndMS          int64  `json:"end_ms"`
-	Snippet        string `json:"snippet,omitempty"`
-	ContextExcerpt string `json:"context_excerpt,omitempty"`
+	CallID                string `json:"-"`
+	SegmentIndex          int    `json:"segment_index"`
+	SpeakerID             string `json:"speaker_id,omitempty"`
+	StartMS               int64  `json:"start_ms"`
+	EndMS                 int64  `json:"end_ms"`
+	Snippet               string `json:"snippet,omitempty"`
+	ContextExcerpt        string `json:"context_excerpt,omitempty"`
+	PersonTitleStatus     string `json:"-"`
+	PersonTitleSource     string `json:"-"`
+	AttributionSource     string `json:"-"`
+	AttributionConfidence string `json:"-"`
+	PersonTitle           string `json:"-"`
 }
 
 const (
@@ -264,7 +295,149 @@ SELECT ts.call_id,
 		}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	parties, err := s.loadCallPartyAttribution(ctx, callID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		applyCallPartyAttribution(&out[i], parties)
+	}
+	return out, nil
+}
+
+// callPartyAttribution describes one Gong party loaded from the cached call's
+// raw_json. Only the attribution-relevant fields (speaker keys + raw title)
+// are retained; downstream callers must not re-derive persona/title from
+// transcript text.
+type callPartyAttribution struct {
+	SpeakerKeys map[string]struct{}
+	Title       string
+}
+
+// loadCallPartyAttribution returns the parsed party records for one call.
+// Both `$.parties` and `$.metaData.parties` are scanned and the union is
+// returned. Callers use the returned slice once per drilldown query and
+// resolve transcript speaker_id values against the slice in Go.
+func (s *Store) loadCallPartyAttribution(ctx context.Context, callID string) ([]callPartyAttribution, error) {
+	if strings.TrimSpace(callID) == "" {
+		return nil, nil
+	}
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT raw_json FROM calls WHERE call_id = ? LIMIT 1`, callID).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var doc struct {
+		Parties  []json.RawMessage `json:"parties"`
+		MetaData *struct {
+			Parties []json.RawMessage `json:"parties"`
+		} `json:"metaData"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, nil
+	}
+	parties := append([]json.RawMessage(nil), doc.Parties...)
+	if doc.MetaData != nil {
+		parties = append(parties, doc.MetaData.Parties...)
+	}
+	out := make([]callPartyAttribution, 0, len(parties))
+	for _, p := range parties {
+		entry, ok := decodeCallPartyAttribution(p)
+		if !ok {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func decodeCallPartyAttribution(raw json.RawMessage) (callPartyAttribution, bool) {
+	if len(raw) == 0 {
+		return callPartyAttribution{}, false
+	}
+	var party map[string]any
+	if err := json.Unmarshal(raw, &party); err != nil {
+		return callPartyAttribution{}, false
+	}
+	keys := make(map[string]struct{}, 3)
+	for _, candidate := range []string{"speakerId", "speaker_id", "id"} {
+		if v, ok := party[candidate].(string); ok {
+			trimmed := strings.TrimSpace(v)
+			if trimmed != "" {
+				keys[trimmed] = struct{}{}
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return callPartyAttribution{}, false
+	}
+	title := ""
+	for _, candidate := range []string{"title", "jobTitle", "job_title"} {
+		if v, ok := party[candidate].(string); ok {
+			trimmed := strings.TrimSpace(v)
+			if trimmed != "" {
+				title = trimmed
+				break
+			}
+		}
+	}
+	return callPartyAttribution{SpeakerKeys: keys, Title: title}, true
+}
+
+// applyCallPartyAttribution sets PersonTitleStatus / PersonTitleSource /
+// AttributionSource / AttributionConfidence / PersonTitle on the row based
+// on exact Gong-party speaker_id matching only. Phase B-1 deliberately does
+// not consult CRM Contact/Lead records, transcript text, or any heuristic
+// title extraction; callers must surface explicit limitation copy.
+func applyCallPartyAttribution(row *CallDrilldownEvidenceRow, parties []callPartyAttribution) {
+	speakerID := strings.TrimSpace(row.SpeakerID)
+	if speakerID == "" {
+		row.PersonTitleStatus = AttributionStatusSpeakerUnmatched
+		row.PersonTitleSource = ""
+		row.AttributionSource = AttributionSourceUnmatched
+		row.AttributionConfidence = AttributionConfidenceUnmatched
+		return
+	}
+	matches := make([]callPartyAttribution, 0, 2)
+	for _, p := range parties {
+		if _, ok := p.SpeakerKeys[speakerID]; ok {
+			matches = append(matches, p)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		row.PersonTitleStatus = AttributionStatusSpeakerUnmatched
+		row.PersonTitleSource = ""
+		row.AttributionSource = AttributionSourceUnmatched
+		row.AttributionConfidence = AttributionConfidenceUnmatched
+	case 1:
+		row.AttributionSource = AttributionSourceGongParty
+		row.AttributionConfidence = AttributionConfidenceExactSpeakerID
+		row.PersonTitleSource = AttributionSourceCallParties
+		if matches[0].Title != "" {
+			row.PersonTitleStatus = AttributionStatusAvailable
+			row.PersonTitle = matches[0].Title
+		} else {
+			row.PersonTitleStatus = AttributionStatusParticipantTitleMissing
+		}
+	default:
+		row.PersonTitleStatus = AttributionStatusSpeakerAmbiguous
+		row.PersonTitleSource = AttributionSourceCallParties
+		row.AttributionSource = AttributionSourceGongParty
+		row.AttributionConfidence = AttributionConfidenceAmbiguous
+	}
 }
 
 func (s *Store) SearchBusinessAnalysisCalls(ctx context.Context, params BusinessAnalysisCallSearchParams) (*BusinessAnalysisCallSearchResult, error) {

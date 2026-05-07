@@ -65,7 +65,20 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_call_ai_highlights_count() FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION gongmcp_call_drilldown_transcript_evidence(call_id_arg text, theme_query_arg text, row_limit integer)
-RETURNS TABLE(call_id text, segment_index integer, speaker_id text, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(
+        call_id text,
+        segment_index integer,
+        speaker_id text,
+        start_ms bigint,
+        end_ms bigint,
+        snippet text,
+        context_excerpt text,
+        person_title_status text,
+        person_title_source text,
+        attribution_source text,
+        attribution_confidence text,
+        person_title text
+)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -89,6 +102,28 @@ matched AS (
            AND ts.search_vector @@ q.query
          ORDER BY rank DESC, ts.segment_index
          LIMIT LEAST(GREATEST(COALESCE(row_limit, 10), 1), 25)
+),
+parties AS (
+        SELECT DISTINCT
+                NULLIF(TRIM(BOTH '"' FROM COALESCE(p.value->>'speakerId', p.value->>'speaker_id', p.value->>'id', '')), '') AS speaker_key,
+                NULLIF(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')), '') AS title
+          FROM calls c,
+               LATERAL (
+                        SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS value
+                        UNION ALL
+                        SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS value
+               ) AS p
+         WHERE c.call_id = call_id_arg
+),
+attribution AS (
+        SELECT m.segment_index,
+               m.speaker_id,
+               COUNT(p.speaker_key) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id) AS match_count,
+               MAX(p.title) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.title IS NOT NULL) AS title_when_present,
+               COUNT(p.title) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.title IS NOT NULL) AS title_count
+          FROM matched m
+          LEFT JOIN parties p ON TRUE
+         GROUP BY m.segment_index, m.speaker_id
 )
 SELECT m.call_id,
        m.segment_index,
@@ -101,8 +136,36 @@ SELECT m.call_id,
                  FROM transcript_segments ctx
                 WHERE ctx.call_id = m.call_id
                   AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1
-       ), ''), 800) AS context_excerpt
+       ), ''), 800) AS context_excerpt,
+       CASE
+               WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'speaker_unmatched'
+               WHEN a.match_count IS NULL OR a.match_count = 0 THEN 'speaker_unmatched'
+               WHEN a.match_count > 1 THEN 'speaker_ambiguous'
+               WHEN a.title_count > 0 THEN 'available'
+               ELSE 'participant_matched_title_missing'
+       END AS person_title_status,
+       CASE
+               WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN ''
+               WHEN a.match_count IS NULL OR a.match_count = 0 THEN ''
+               ELSE 'call_parties'
+       END AS person_title_source,
+       CASE
+               WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'unmatched'
+               WHEN a.match_count IS NULL OR a.match_count = 0 THEN 'unmatched'
+               ELSE 'gong_party'
+       END AS attribution_source,
+       CASE
+               WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'unmatched'
+               WHEN a.match_count IS NULL OR a.match_count = 0 THEN 'unmatched'
+               WHEN a.match_count > 1 THEN 'ambiguous'
+               ELSE 'exact_speaker_id'
+       END AS attribution_confidence,
+       CASE
+               WHEN a.match_count = 1 AND a.title_count > 0 THEN a.title_when_present
+               ELSE ''
+       END AS person_title
   FROM matched m
+  LEFT JOIN attribution a ON a.segment_index = m.segment_index AND a.speaker_id = m.speaker_id
  ORDER BY m.rank DESC, m.segment_index
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_call_drilldown_transcript_evidence(text, text, integer) FROM PUBLIC;
@@ -163,7 +226,18 @@ func (s *Store) CallDrilldownEvidence(ctx context.Context, params sqlite.CallDri
 	if limit > 25 {
 		limit = 25
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT call_id, segment_index, speaker_id, start_ms, end_ms, snippet, context_excerpt
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id,
+       segment_index,
+       speaker_id,
+       start_ms,
+       end_ms,
+       snippet,
+       context_excerpt,
+       person_title_status,
+       person_title_source,
+       attribution_source,
+       attribution_confidence,
+       person_title
   FROM gongmcp_call_drilldown_transcript_evidence($1, $2, $3)`,
 		callID,
 		queryText,
@@ -176,7 +250,20 @@ func (s *Store) CallDrilldownEvidence(ctx context.Context, params sqlite.CallDri
 	out := []sqlite.CallDrilldownEvidenceRow{}
 	for rows.Next() {
 		var row sqlite.CallDrilldownEvidenceRow
-		if err := rows.Scan(&row.CallID, &row.SegmentIndex, &row.SpeakerID, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt); err != nil {
+		if err := rows.Scan(
+			&row.CallID,
+			&row.SegmentIndex,
+			&row.SpeakerID,
+			&row.StartMS,
+			&row.EndMS,
+			&row.Snippet,
+			&row.ContextExcerpt,
+			&row.PersonTitleStatus,
+			&row.PersonTitleSource,
+			&row.AttributionSource,
+			&row.AttributionConfidence,
+			&row.PersonTitle,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

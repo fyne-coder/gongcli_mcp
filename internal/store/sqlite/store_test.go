@@ -3797,6 +3797,110 @@ func assertCount(t *testing.T, db *sql.DB, table string, want int) {
 	}
 }
 
+func TestCallDrilldownEvidenceSpeakerAttribution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	const callID = "call_attr_001"
+	callRaw := mustNormalizeValue(t, map[string]any{
+		"id":       callID,
+		"title":    "Synthetic attribution call",
+		"started":  "2026-04-30T10:00:00Z",
+		"duration": 1200,
+		"parties": []map[string]any{
+			{"speakerId": "spk_titled", "name": "Titled Speaker", "title": "VP Procurement"},
+			{"speakerId": "spk_untitled", "name": "Untitled Speaker"},
+		},
+		"metaData": map[string]any{
+			"parties": []map[string]any{
+				{"id": "spk_dup", "title": "Director Sourcing"},
+				{"speaker_id": "spk_dup", "title": "Head of Operations"},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, callRaw); err != nil {
+		t.Fatalf("upsert call: %v", err)
+	}
+	transcriptRaw := mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []map[string]any{{
+			"callId": callID,
+			"transcript": []map[string]any{
+				{"speakerId": "spk_titled", "sentences": []map[string]any{{"start": 1000, "end": 2000, "text": "Synthetic procurement quote alpha."}}},
+				{"speakerId": "spk_untitled", "sentences": []map[string]any{{"start": 2000, "end": 3000, "text": "Synthetic procurement quote bravo."}}},
+				{"speakerId": "spk_dup", "sentences": []map[string]any{{"start": 3000, "end": 4000, "text": "Synthetic procurement quote charlie."}}},
+				{"speakerId": "spk_unknown", "sentences": []map[string]any{{"start": 4000, "end": 5000, "text": "Synthetic procurement quote delta."}}},
+			},
+		}},
+	})
+	if _, err := store.UpsertTranscript(ctx, transcriptRaw); err != nil {
+		t.Fatalf("upsert transcript: %v", err)
+	}
+
+	rows, err := store.CallDrilldownEvidence(ctx, CallDrilldownEvidenceParams{
+		CallID: callID,
+		Query:  "Synthetic procurement quote",
+		Limit:  20,
+	})
+	if err != nil {
+		t.Fatalf("CallDrilldownEvidence: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("rows=%d want 4: %+v", len(rows), rows)
+	}
+
+	bySpeaker := map[string]CallDrilldownEvidenceRow{}
+	for _, r := range rows {
+		bySpeaker[r.SpeakerID] = r
+	}
+
+	titled := bySpeaker["spk_titled"]
+	if titled.PersonTitleStatus != AttributionStatusAvailable {
+		t.Fatalf("spk_titled status=%q want %q", titled.PersonTitleStatus, AttributionStatusAvailable)
+	}
+	if titled.AttributionConfidence != AttributionConfidenceExactSpeakerID {
+		t.Fatalf("spk_titled confidence=%q want %q", titled.AttributionConfidence, AttributionConfidenceExactSpeakerID)
+	}
+	if titled.PersonTitle != "VP Procurement" {
+		t.Fatalf("spk_titled title=%q want VP Procurement", titled.PersonTitle)
+	}
+	if titled.PersonTitleSource != AttributionSourceCallParties {
+		t.Fatalf("spk_titled source=%q want %q", titled.PersonTitleSource, AttributionSourceCallParties)
+	}
+
+	untitled := bySpeaker["spk_untitled"]
+	if untitled.PersonTitleStatus != AttributionStatusParticipantTitleMissing {
+		t.Fatalf("spk_untitled status=%q want %q", untitled.PersonTitleStatus, AttributionStatusParticipantTitleMissing)
+	}
+	if untitled.PersonTitle != "" {
+		t.Fatalf("spk_untitled title=%q want empty", untitled.PersonTitle)
+	}
+	if untitled.AttributionSource != AttributionSourceGongParty {
+		t.Fatalf("spk_untitled attribution_source=%q want gong_party", untitled.AttributionSource)
+	}
+
+	dup := bySpeaker["spk_dup"]
+	if dup.PersonTitleStatus != AttributionStatusSpeakerAmbiguous {
+		t.Fatalf("spk_dup status=%q want %q", dup.PersonTitleStatus, AttributionStatusSpeakerAmbiguous)
+	}
+	if dup.AttributionConfidence != AttributionConfidenceAmbiguous {
+		t.Fatalf("spk_dup confidence=%q want ambiguous", dup.AttributionConfidence)
+	}
+	if dup.PersonTitle != "" {
+		t.Fatalf("spk_dup title=%q want empty (ambiguous)", dup.PersonTitle)
+	}
+
+	unknown := bySpeaker["spk_unknown"]
+	if unknown.PersonTitleStatus != AttributionStatusSpeakerUnmatched {
+		t.Fatalf("spk_unknown status=%q want %q", unknown.PersonTitleStatus, AttributionStatusSpeakerUnmatched)
+	}
+	if unknown.AttributionSource != AttributionSourceUnmatched {
+		t.Fatalf("spk_unknown source=%q want unmatched", unknown.AttributionSource)
+	}
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 

@@ -307,6 +307,7 @@ func FacadeOperations() []FacadeOperation {
 				"include_account_names":     map[string]any{"type": "boolean"},
 				"include_opportunity_names": map[string]any{"type": "boolean"},
 				"include_raw_ids":           map[string]any{"type": "boolean", "description": "Operator/internal opt-in. Ignored when hide_raw_call_ids policy switch is enabled."},
+				"include_person_titles":     map[string]any{"type": "boolean", "description": "Opt-in: emit raw participant person_title text for matched Gong parties. Suppressed by hide_contact_names policy. Default off; status/source/confidence still surface without raw titles."},
 			}, nil),
 			Examples: []any{
 				map[string]any{
@@ -1066,6 +1067,7 @@ type callDrilldownArgs struct {
 	IncludeAccountNames     bool   `json:"include_account_names"`
 	IncludeOpportunityNames bool   `json:"include_opportunity_names"`
 	IncludeRawIDs           bool   `json:"include_raw_ids"`
+	IncludePersonTitles     bool   `json:"include_person_titles"`
 }
 
 type callDrilldownAIRow struct {
@@ -1079,14 +1081,20 @@ type callDrilldownAIRow struct {
 }
 
 type callDrilldownTranscriptRow struct {
-	CallRef        string `json:"call_ref,omitempty"`
-	CallID         string `json:"call_id,omitempty"`
-	SegmentIndex   int    `json:"segment_index"`
-	SpeakerID      string `json:"speaker_id,omitempty"`
-	StartMS        int64  `json:"start_ms"`
-	EndMS          int64  `json:"end_ms"`
-	Snippet        string `json:"snippet,omitempty"`
-	ContextExcerpt string `json:"context_excerpt,omitempty"`
+	CallRef               string `json:"call_ref,omitempty"`
+	CallID                string `json:"call_id,omitempty"`
+	SegmentIndex          int    `json:"segment_index"`
+	SpeakerID             string `json:"speaker_id,omitempty"`
+	SpeakerRef            string `json:"speaker_ref,omitempty"`
+	StartMS               int64  `json:"start_ms"`
+	EndMS                 int64  `json:"end_ms"`
+	Snippet               string `json:"snippet,omitempty"`
+	ContextExcerpt        string `json:"context_excerpt,omitempty"`
+	PersonTitleStatus     string `json:"person_title_status"`
+	PersonTitleSource     string `json:"person_title_source"`
+	AttributionSource     string `json:"attribution_source"`
+	AttributionConfidence string `json:"attribution_confidence"`
+	PersonTitle           string `json:"person_title,omitempty"`
 }
 
 type callDrilldownCall struct {
@@ -1179,6 +1187,13 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	includeTitles := args.IncludeCallTitles && !s.policySwitches.HideCallTitles
 	includeAccounts := args.IncludeAccountNames && !s.policySwitches.HideAccountNames
 	includeOpportunities := args.IncludeOpportunityNames && !s.policySwitches.HideOpportunityNames
+	// Phase B-1: raw participant titles never leak by default. The opt-in
+	// `include_person_titles` arg only takes effect when the active policy
+	// also permits contact-name exposure (HideContactNames=false). gongmcp
+	// has no dedicated `hide_person_titles` switch yet — gating on
+	// HideContactNames is the safest existing posture because participant
+	// titles are equivalent to disclosing role+name pairs.
+	includePersonTitles := args.IncludePersonTitles && !s.policySwitches.HideContactNames
 
 	call := callDrilldownCall{
 		CallRef:         resolvedCallRef,
@@ -1242,16 +1257,35 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 			break
 		}
 		out := callDrilldownTranscriptRow{
-			CallRef:        resolvedCallRef,
-			SegmentIndex:   row.SegmentIndex,
-			SpeakerID:      row.SpeakerID,
-			StartMS:        row.StartMS,
-			EndMS:          row.EndMS,
-			Snippet:        row.Snippet,
-			ContextExcerpt: row.ContextExcerpt,
+			CallRef:               resolvedCallRef,
+			SegmentIndex:          row.SegmentIndex,
+			SpeakerID:             row.SpeakerID,
+			StartMS:               row.StartMS,
+			EndMS:                 row.EndMS,
+			Snippet:               row.Snippet,
+			ContextExcerpt:        row.ContextExcerpt,
+			PersonTitleStatus:     row.PersonTitleStatus,
+			PersonTitleSource:     row.PersonTitleSource,
+			AttributionSource:     row.AttributionSource,
+			AttributionConfidence: row.AttributionConfidence,
+		}
+		if out.PersonTitleStatus == "" {
+			out.PersonTitleStatus = sqlite.AttributionStatusSpeakerUnmatched
+		}
+		if out.AttributionSource == "" {
+			out.AttributionSource = sqlite.AttributionSourceUnmatched
+		}
+		if out.AttributionConfidence == "" {
+			out.AttributionConfidence = sqlite.AttributionConfidenceUnmatched
+		}
+		if strings.TrimSpace(row.SpeakerID) != "" {
+			out.SpeakerRef = stableEvidenceRef("speaker", resolvedCallID+"\x00"+row.SpeakerID)
 		}
 		if s.policySwitches.HideSpeakerIDs {
 			out.SpeakerID = ""
+		}
+		if includePersonTitles {
+			out.PersonTitle = row.PersonTitle
 		}
 		if includeRaw {
 			out.CallID = resolvedCallID
@@ -1289,6 +1323,9 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"transcript_excerpts_are_bounded_snippets_not_full_transcripts",
 		"raw_account_and_customer_enumeration_is_not_supported_through_drilldown",
 		"call_drilldown_does_not_re-derive_lifecycle_industry_or_opportunity_stage_in_this_spine",
+		"speaker_attribution_uses_exact_gong_party_speaker_id_only_no_crm_contact_or_lead_matching_in_this_phase",
+		"person_title_is_never_inferred_from_transcript_text_or_persona_buckets",
+		"buyer_versus_rep_role_is_not_proven_by_this_evidence_pack_callers_must_treat_attribution_confidence_as_authoritative",
 	}
 
 	limitsBlock := map[string]any{

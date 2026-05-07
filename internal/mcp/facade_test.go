@@ -1285,3 +1285,301 @@ func TestFacadeEvidenceCallDrilldownPolicySwitchesHideRawIDsAndTitles(t *testing
 		t.Fatalf("call.call_title=%q want suppressed by HideCallTitles", got)
 	}
 }
+
+// TestFacadeEvidenceCallDrilldownEmitsSpeakerAttribution asserts the Phase
+// B-1 read-time speaker/title attribution contract: every drilldown
+// transcript excerpt must carry a stable speaker_ref alias (even when raw
+// speaker IDs are hidden by policy), an explicit person_title_status,
+// person_title_source, attribution_source and attribution_confidence string,
+// and the limitations block must mention that attribution is exact
+// Gong-party only. Raw person_title text must NOT leak by default.
+func TestFacadeEvidenceCallDrilldownEmitsSpeakerAttribution(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	const callID = "call_sanitized_001"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeDrilldownStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		highlights: map[string][]sqlite.AIHighlightRow{
+			callID: {
+				{CallID: callID, HighlightIndex: 0, HighlightType: "brief", HighlightText: "Brief.", SourcePath: "content.brief", UpdatedAt: "2026-04-25T00:00:00Z"},
+			},
+		},
+		transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
+			callID: {
+				{
+					CallID:                callID,
+					SegmentIndex:          0,
+					SpeakerID:             "speaker_internal_001",
+					StartMS:               1000,
+					EndMS:                 3500,
+					Snippet:               "Synthetic internal speaker sentence.",
+					ContextExcerpt:        "Synthetic internal speaker sentence.",
+					PersonTitleStatus:     "available",
+					PersonTitleSource:     "call_parties",
+					AttributionSource:     "gong_party",
+					AttributionConfidence: "exact_speaker_id",
+					PersonTitle:           "VP Procurement",
+				},
+				{
+					CallID:                callID,
+					SegmentIndex:          1,
+					SpeakerID:             "speaker_unknown_999",
+					StartMS:               4000,
+					EndMS:                 5500,
+					Snippet:               "Synthetic unknown speaker sentence.",
+					ContextExcerpt:        "Synthetic unknown speaker sentence.",
+					PersonTitleStatus:     "speaker_unmatched",
+					PersonTitleSource:     "",
+					AttributionSource:     "unmatched",
+					AttributionConfidence: "unmatched",
+				},
+			},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"call_drilldown"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceCallDrilldown,
+		"arguments": map[string]any{
+			"call_ref":    callRef,
+			"theme_query": "Synthetic",
+			"limit":       5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
+	if len(verbatim) != 2 {
+		t.Fatalf("verbatim_transcript_excerpts len=%d want 2: %v", len(verbatim), inner)
+	}
+
+	matched, _ := verbatim[0].(map[string]any)
+	for _, want := range []string{"speaker_ref", "person_title_status", "person_title_source", "attribution_source", "attribution_confidence"} {
+		if _, ok := matched[want]; !ok {
+			t.Fatalf("transcript row missing attribution field %q: %v", want, matched)
+		}
+	}
+	if got, _ := matched["person_title_status"].(string); got != "available" {
+		t.Fatalf("matched person_title_status=%q want available", got)
+	}
+	if got, _ := matched["person_title_source"].(string); got != "call_parties" {
+		t.Fatalf("matched person_title_source=%q want call_parties", got)
+	}
+	if got, _ := matched["attribution_source"].(string); got != "gong_party" {
+		t.Fatalf("matched attribution_source=%q want gong_party", got)
+	}
+	if got, _ := matched["attribution_confidence"].(string); got != "exact_speaker_id" {
+		t.Fatalf("matched attribution_confidence=%q want exact_speaker_id", got)
+	}
+	if got, _ := matched["speaker_ref"].(string); !strings.HasPrefix(got, "speaker_") || len(got) < len("speaker_")+8 {
+		t.Fatalf("matched speaker_ref=%q expected stable speaker_<hex> alias", got)
+	}
+	if got, ok := matched["person_title"].(string); ok && got != "" {
+		t.Fatalf("matched row leaked raw person_title=%q with default include flag off", got)
+	}
+
+	unmatched, _ := verbatim[1].(map[string]any)
+	if got, _ := unmatched["person_title_status"].(string); got != "speaker_unmatched" {
+		t.Fatalf("unmatched person_title_status=%q want speaker_unmatched", got)
+	}
+	if got, _ := unmatched["attribution_source"].(string); got != "unmatched" {
+		t.Fatalf("unmatched attribution_source=%q want unmatched", got)
+	}
+	if got, _ := unmatched["attribution_confidence"].(string); got != "unmatched" {
+		t.Fatalf("unmatched attribution_confidence=%q want unmatched", got)
+	}
+
+	limitations, _ := inner["limitations"].([]any)
+	hasGongPartyOnly := false
+	for _, l := range limitations {
+		text := strings.ToLower(fmt.Sprintf("%v", l))
+		if strings.Contains(text, "gong_party") || strings.Contains(text, "exact_gong_party") || strings.Contains(text, "exact_speaker_id") {
+			hasGongPartyOnly = true
+			break
+		}
+	}
+	if !hasGongPartyOnly {
+		t.Fatalf("limitations missing exact-Gong-party caveat: %v", limitations)
+	}
+}
+
+// TestFacadeEvidenceCallDrilldownAttributionRespectsHideSpeakerIDs verifies
+// that when HideSpeakerIDs is enabled the raw speaker_id is suppressed but
+// the stable speaker_ref alias and attribution status fields still surface.
+func TestFacadeEvidenceCallDrilldownAttributionRespectsHideSpeakerIDs(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	const callID = "call_sanitized_001"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeDrilldownStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
+			callID: {
+				{
+					CallID:                callID,
+					SegmentIndex:          0,
+					SpeakerID:             "speaker_internal_001",
+					StartMS:               1000,
+					EndMS:                 3500,
+					Snippet:               "Synthetic internal speaker sentence.",
+					ContextExcerpt:        "Synthetic internal speaker sentence.",
+					PersonTitleStatus:     "participant_matched_title_missing",
+					PersonTitleSource:     "call_parties",
+					AttributionSource:     "gong_party",
+					AttributionConfidence: "exact_speaker_id",
+				},
+			},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"call_drilldown"}),
+		WithPolicySwitches(PolicySwitches{HideSpeakerIDs: true}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceCallDrilldown,
+		"arguments": map[string]any{
+			"call_ref":    callRef,
+			"theme_query": "Synthetic",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+
+	rendered := result.Content[0].Text
+	if strings.Contains(rendered, "speaker_internal_001") {
+		t.Fatalf("HideSpeakerIDs failed to suppress raw speaker_id: %s", rendered)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
+	if len(verbatim) != 1 {
+		t.Fatalf("verbatim len=%d want 1: %v", len(verbatim), inner)
+	}
+	row, _ := verbatim[0].(map[string]any)
+	if got, _ := row["speaker_id"].(string); got != "" {
+		t.Fatalf("row leaked raw speaker_id=%q under HideSpeakerIDs", got)
+	}
+	speakerRef, _ := row["speaker_ref"].(string)
+	if !strings.HasPrefix(speakerRef, "speaker_") || len(speakerRef) < len("speaker_")+8 {
+		t.Fatalf("row missing stable speaker_ref under HideSpeakerIDs: %v", row)
+	}
+	if got, _ := row["person_title_status"].(string); got != "participant_matched_title_missing" {
+		t.Fatalf("person_title_status=%q want participant_matched_title_missing", got)
+	}
+}
+
+func TestFacadeEvidenceCallDrilldownPersonTitleRequiresExplicitOptInAndPolicy(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	const callID = "call_sanitized_001"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeDrilldownStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
+			callID: {
+				{
+					CallID:                callID,
+					SegmentIndex:          0,
+					SpeakerID:             "speaker_internal_001",
+					StartMS:               1000,
+					EndMS:                 3500,
+					Snippet:               "Synthetic internal speaker sentence.",
+					ContextExcerpt:        "Synthetic internal speaker sentence.",
+					PersonTitleStatus:     "available",
+					PersonTitleSource:     "call_parties",
+					AttributionSource:     "gong_party",
+					AttributionConfidence: "exact_speaker_id",
+					PersonTitle:           "VP Procurement",
+				},
+			},
+		},
+	}
+
+	call := func(t *testing.T, switches PolicySwitches) map[string]any {
+		t.Helper()
+		server := NewServerWithOptions(store, "gongmcp", "test",
+			WithToolAllowlist(FacadeToolNames()),
+			WithFacadeRoutedToolAllowlist([]string{"call_drilldown"}),
+			WithPolicySwitches(switches),
+		)
+		args, err := json.Marshal(map[string]any{
+			"operation": OpEvidenceCallDrilldown,
+			"arguments": map[string]any{
+				"call_ref":              callRef,
+				"theme_query":           "Synthetic",
+				"include_person_titles": true,
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("unexpected isError: %+v", result)
+		}
+		wrapper := decodeFacadeWrapper(t, result)
+		inner, _ := wrapper["result"].(map[string]any)
+		verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
+		if len(verbatim) != 1 {
+			t.Fatalf("verbatim len=%d want 1: %v", len(verbatim), inner)
+		}
+		row, _ := verbatim[0].(map[string]any)
+		return row
+	}
+
+	allowed := call(t, PolicySwitches{})
+	if got, _ := allowed["person_title"].(string); got != "VP Procurement" {
+		t.Fatalf("person_title=%q want VP Procurement when explicitly included and policy allows it; row=%v", got, allowed)
+	}
+
+	blocked := call(t, PolicySwitches{HideContactNames: true})
+	if got, ok := blocked["person_title"].(string); ok && got != "" {
+		t.Fatalf("person_title leaked under HideContactNames policy: %q row=%v", got, blocked)
+	}
+	if got, _ := blocked["person_title_status"].(string); got != "available" {
+		t.Fatalf("person_title_status=%q want available even when raw title is hidden", got)
+	}
+}

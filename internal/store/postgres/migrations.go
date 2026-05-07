@@ -1722,4 +1722,16 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 `,
 	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	// Phase B-1 read-time speaker/title attribution: extend
+	// gongmcp_call_drilldown_transcript_evidence to expose
+	// person_title_status / person_title_source / attribution_source /
+	// attribution_confidence / person_title columns. The input signature
+	// is preserved (text, text, integer) so scoped-reader grants do not
+	// need to be regenerated. We DROP first because the return-type set
+	// changes; CREATE OR REPLACE FUNCTION cannot alter RETURNS TABLE.
+	// reconcileReaderGrants re-applies the gongmcp_reader EXECUTE grant
+	// on every connect, so this migration intentionally does not GRANT.
+	`DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer);
+` + postgresAIHighlightsFunctionSQL + `
+`,
 }
