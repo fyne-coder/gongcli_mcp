@@ -413,8 +413,8 @@ assert_no_leak "analyst MCP evidence" "$ANALYST_MCP_OUT"
 # Phase 13b: broad analyst / company-search behavior over the redacted serving
 # DB. Every probe runs as the scoped analyst-expansion reader against
 # gongctl_mcp. Allowed-company probes must succeed with non-zero results;
-# restricted-company probes must return zero results without leaking the
-# restricted name through any field.
+	# restricted-company probes must be denied generically before query execution
+	# so row counts cannot become a membership-inference signal.
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -429,8 +429,8 @@ assert_no_leak "analyst MCP evidence" "$ANALYST_MCP_OUT"
   printf '%s\n' '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"build_quote_pack","arguments":{"filter":{"account_query":"Blocked Synthetic Corp","from_date":"2026-04-10","to_date":"2026-04-30","limit":25},"include_account_names":true,"theme_query":"Blocked Synthetic Corp","limit":5}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"diagnose_attribution_coverage","arguments":{"filter":{"from_date":"2026-04-10","to_date":"2026-04-30","limit":25}}}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"explain_analysis_limitations","arguments":{"filter":{"from_date":"2026-04-10","to_date":"2026-04-30","limit":25}}}}'
-} | GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=analyst-expansion GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 go run ./cmd/gongmcp >"$BROAD_MCP_OUT"
-assert_mcp_success "$BROAD_MCP_OUT" 3 4 5 6 7 8 9 10 11 12 13
+} | GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=analyst-expansion GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 GONGMCP_AI_GOVERNANCE_CONFIG="$GOVERNANCE_CONFIG" go run ./cmd/gongmcp >"$BROAD_MCP_OUT"
+assert_mcp_success "$BROAD_MCP_OUT" 3 5 7 8 9 10 12 13
 
 python3 - "$BROAD_MCP_OUT" <<'PY'
 import json
@@ -438,7 +438,7 @@ import sys
 
 path = sys.argv[1]
 required_present = {3, 5, 7, 8, 9, 10, 12, 13}
-required_zero = {4, 6, 11}
+required_denied = {4, 6, 11}
 seen = {}
 with open(path, "r", encoding="utf-8") as handle:
     for line in handle:
@@ -454,7 +454,7 @@ with open(path, "r", encoding="utf-8") as handle:
             continue
         seen[rid] = message
 
-missing = (required_present | required_zero) - set(seen)
+missing = (required_present | required_denied) - set(seen)
 if missing:
     raise SystemExit(f"missing MCP result ids: {sorted(missing)}")
 
@@ -472,6 +472,9 @@ def tool_payload(message):
 
 for rid in sorted(required_present):
     message = seen[rid]
+    result = message.get("result") or {}
+    if isinstance(result, dict) and result.get("isError") is True:
+        raise SystemExit(f"id {rid} expected success but returned tool error: {result}")
     payload = tool_payload(message)
     if rid == 7:
         if not isinstance(payload, list) or len(payload) == 0:
@@ -490,18 +493,18 @@ for rid in sorted(required_present):
         if not isinstance(count, int) or count <= 0:
             raise SystemExit(f"id {rid} ({tool}) expected non-zero count over the allowed cohort, got {count}")
 
-# Restricted-company probes must produce zero results.
-for rid in sorted(required_zero):
+# Restricted-company probes must be denied before query execution so row counts
+# cannot become a membership-inference signal.
+for rid in sorted(required_denied):
     message = seen[rid]
-    payload = tool_payload(message)
-    count = payload.get("count")
-    if count not in (0, None):
-        raise SystemExit(f"id {rid} restricted-company probe leaked {count} results: {payload}")
-    results = payload.get("results") or []
-    quotes = payload.get("quotes") or []
-    summaries = payload.get("summaries") or []
-    if results or quotes or summaries:
-        raise SystemExit(f"id {rid} restricted-company probe returned non-empty results/quotes/summaries")
+    result = message.get("result") or {}
+    if not isinstance(result, dict) or result.get("isError") is not True:
+        raise SystemExit(f"id {rid} restricted-company probe should have been denied generically: {message}")
+    text = json.dumps(result)
+    if "account_query is unavailable" not in text:
+        raise SystemExit(f"id {rid} restricted-company probe missing generic denial: {result}")
+    if "Blocked Synthetic Corp" in text:
+        raise SystemExit(f"id {rid} restricted-company denial leaked restricted query: {result}")
 PY
 
 # Redact analyst-supplied restricted query strings before retaining the JSON-RPC

@@ -81,12 +81,12 @@ Current fixed boundaries:
 | `opportunity_call_summary` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, owner IDs, amount, close date, and latest call IDs; Postgres reader function never returns those fields or raw values | Still reveals stage, coverage, duration totals, and latest-call timing at an opportunity-summary level |
 | `crm_field_population_matrix` | Restricted | Aggregate + Config | Only approved categorical object/field pairs are accepted; approved group values are intentionally exposed as aggregate labels; function output excludes object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, and raw hashes | Group labels can still reveal tenant-specific CRM structure and small-cell population patterns |
 | `search_transcripts_by_call_facts` | Restricted | Snippet | No call IDs, titles, or speaker IDs in the result shape | Still returns bounded transcript/context excerpts plus lifecycle/scope/system/direction metadata |
-| `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
+| `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled, and configured restricted governance names/aliases are denied before query execution; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
 | `search_transcripts_by_crm_context` | Restricted | Snippet | Server blanks call ID, title, object ID, object name, and speaker ID; the Postgres reader function filters governance-suppressed calls in SQL and does not return call IDs, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, or full transcript text | Still returns transcript-derived snippets tied to an object type and call time |
 | `compare_lifecycle_crm_fields` | Restricted | Aggregate | Postgres reader function is limited to reviewed `Opportunity` comparisons, excludes governance-suppressed calls in SQL, and returns object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta only | Field names and lifecycle bucket rates can reveal tenant-specific CRM structure |
 | `search_calls`, `search_calls_by_lifecycle`, `missing_transcripts` | Admin-only | Record reference | Return minimized call metadata rather than raw JSON. Postgres `missing_transcripts` supports explicit date, lifecycle, scope, system, direction, and CRM object filters for admin backfill workflows only; CRM object ID requires object type | Exposes call IDs, titles, timestamps, and durations |
-| `get_call` | Admin-only | Record reference | Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; Postgres read-only also redacts CRM object IDs | Still exposes call ID/title plus CRM object/field shape for one call; SQLite/full-catalog mode can include CRM object IDs |
+| `get_call` | Admin-only | Record reference | Accepts either `call_id` or stable `call_ref`; when called with `call_ref`, response echoes `call_ref` and blanks raw `call_id`. Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; Postgres read-only also redacts CRM object IDs | Raw `call_id` mode still exposes call ID/title plus CRM object/field shape for one call; SQLite/full-catalog mode can include CRM object IDs |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
 
 ## Stable MCP Facade Tools (Phase 13e2 vertical slice)
@@ -297,7 +297,12 @@ How to open up the surface intentionally:
     `include_value_snippets=true` returns bounded value excerpts and call IDs
     for a specific object/field/value query.
 - Use the record-reference tools (`search_calls`, `get_call`,
-  `missing_transcripts`) when the workflow actually needs exact calls.
+  `missing_transcripts`) when the workflow actually needs exact calls. Prefer
+  `get_call` with `call_ref` in redacted manual tests so the model can follow up
+  on a specific call without seeing the raw call ID.
+- Redacted Postgres serving mode requires the same private governance config at
+  `gongmcp` startup so model-facing `account_query` probes can deny configured
+  restricted names/aliases before returning counts or cohort metadata.
 - Run `gongctl` without restricted mode, or with the `--allow-sensitive-export`
   override, for ad-hoc operator exploration that needs raw call JSON or
   transcript exports.

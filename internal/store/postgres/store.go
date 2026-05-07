@@ -2612,6 +2612,34 @@ SELECT o.object_type,
 	return &detail, nil
 }
 
+func (s *Store) ResolveCallIDByRef(ctx context.Context, ref string) (string, error) {
+	if err := s.validateReadModelReady(ctx); err != nil {
+		return "", err
+	}
+	normalized, err := sqlite.NormalizeStableCallRef(ref)
+	if err != nil {
+		return "", err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id FROM calls`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var callID string
+		if err := rows.Scan(&callID); err != nil {
+			return "", err
+		}
+		if sqlite.StableCallRefMatchesCallID(normalized, callID) {
+			return callID, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("call_ref not found")
+}
+
 func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummary, error) {
 	summary := &sqlite.SyncStatusSummary{}
 	missingTranscriptsQuery := `SELECT COUNT(*) FROM calls c LEFT JOIN transcripts t ON t.call_id = c.call_id LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id WHERE t.call_id IS NULL AND gisc.call_id IS NULL`

@@ -175,6 +175,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
+	if redactedServingDB && governanceConfigPath == "" {
+		fmt.Fprintln(stderr, "redacted Postgres serving DB mode requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so account-name probes can be gated by the same restricted-name policy used to build the serving DB")
+		return 2
+	}
 
 	ctx := context.Background()
 	var store mcp.Store
@@ -185,7 +189,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		readOnlyOptions := postgres.ReadOnlyOptions{}
 		if enforceScopedDBGrants {
 			readOnlyOptions = postgresReadOnlyOptionsForAllowlist(readerGrantAllowlist(allowlist, facadeRoutedAllowlist))
-			if governanceConfigPath != "" {
+			if governanceConfigPath != "" && !redactedServingDB {
 				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 				readOnlyOptions.AllowedFunctionSignatures = append(readOnlyOptions.AllowedFunctionSignatures, postgresGovernanceFunctionSignatures()...)
 			}
@@ -230,16 +234,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if governanceConfigPath != "" {
 		configPath := governanceConfigPath
-		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
-			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
-			return 2
+		if !redactedServingDB {
+			if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
+				fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
+				return 2
+			}
 		}
 		cfg, err := governance.LoadFile(configPath)
 		if err != nil {
 			fmt.Fprintln(stderr, "load AI governance config: failed")
 			return 2
 		}
-		if postgresMode {
+		serverOptions = append(serverOptions, mcp.WithRestrictedAccountQueryTerms(governanceRestrictedAccountTerms(cfg)))
+		if postgresMode && redactedServingDB {
+			fmt.Fprintf(stderr, "AI governance active: backend=postgres_redacted_serving restricted_account_terms=%d; source governance state is not read in redacted serving mode\n", len(governanceRestrictedAccountTerms(cfg)))
+		} else if postgresMode {
 			if postgresStore == nil {
 				fmt.Fprintln(stderr, "open postgres governance state: failed")
 				return 1
@@ -262,7 +271,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", state.UnmatchedEntries)
 				return 2
 			}
-			serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(state.SuppressedCallIDs))
+			if !redactedServingDB {
+				serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(state.SuppressedCallIDs))
+			}
 			serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
 				current, err := postgresStore.GovernanceDataFingerprint(checkCtx)
 				if err != nil {
@@ -1149,6 +1160,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func governanceRestrictedAccountTerms(cfg *governance.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	targets := cfg.Targets()
+	terms := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if strings.TrimSpace(target.Normalized) != "" {
+			terms = append(terms, target.Normalized)
+		}
+	}
+	return terms
 }
 
 func envDefault(name, fallback string) string {

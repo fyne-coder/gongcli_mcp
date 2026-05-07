@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -39,6 +40,7 @@ type Store interface {
 	SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummary, error)
 	SearchCallsRaw(ctx context.Context, params sqlite.CallSearchParams) ([]json.RawMessage, error)
 	GetCallDetail(ctx context.Context, callID string) (*sqlite.CallDetail, error)
+	ResolveCallIDByRef(ctx context.Context, ref string) (string, error)
 	ListCRMObjectTypes(ctx context.Context) ([]sqlite.CRMObjectTypeSummary, error)
 	ListCRMFields(ctx context.Context, objectType string, limit int) ([]sqlite.CRMFieldSummary, error)
 	SearchCRMFieldValues(ctx context.Context, params sqlite.CRMFieldValueSearchParams) ([]sqlite.CRMFieldValueMatch, error)
@@ -91,6 +93,7 @@ type Server struct {
 	allowedToolNames             map[string]struct{}
 	facadeRoutedToolNames        map[string]struct{}
 	suppressedCallIDs            map[string]struct{}
+	restrictedAccountQueries     map[string]struct{}
 	governanceCheck              func(context.Context) error
 }
 
@@ -229,7 +232,8 @@ type searchCallsArgs struct {
 }
 
 type getCallArgs struct {
-	CallID string `json:"call_id"`
+	CallID  string `json:"call_id"`
+	CallRef string `json:"call_ref"`
 }
 
 type listCRMFieldsArgs struct {
@@ -577,6 +581,20 @@ func WithSuppressedCallIDs(callIDs []string) ServerOption {
 	}
 }
 
+func WithRestrictedAccountQueryTerms(terms []string) ServerOption {
+	return func(s *Server) {
+		if len(terms) == 0 {
+			return
+		}
+		s.restrictedAccountQueries = make(map[string]struct{}, len(terms))
+		for _, term := range terms {
+			if normalized := governance.NormalizeName(term); normalized != "" {
+				s.restrictedAccountQueries[normalized] = struct{}{}
+			}
+		}
+	}
+}
+
 func WithGovernanceCheck(check func(context.Context) error) ServerOption {
 	return func(s *Server) {
 		s.governanceCheck = check
@@ -612,12 +630,13 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "get_call",
-			Description: "Return minimized cached call detail for one call_id without raw participant, CRM field value, or transcript payloads.",
+			Description: "Return minimized cached call detail for one call_id or redacted call_ref without raw participant, CRM field value, or transcript payloads.",
 			InputSchema: objectSchema(
 				map[string]any{
-					"call_id": map[string]any{"type": "string"},
+					"call_id":  map[string]any{"type": "string"},
+					"call_ref": map[string]any{"type": "string"},
 				},
-				[]string{"call_id"},
+				nil,
 			),
 		},
 		{
@@ -1331,15 +1350,33 @@ func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResu
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
-	if s.isSuppressedCall(args.CallID) {
+	callID := strings.TrimSpace(args.CallID)
+	callRef := strings.TrimSpace(args.CallRef)
+	if callID != "" && callRef != "" {
+		return toolCallResult{}, fmt.Errorf("provide either call_id or call_ref, not both")
+	}
+	resolvedFromRef := false
+	if callRef != "" {
+		resolved, err := s.store.ResolveCallIDByRef(ctx, callRef)
+		if err != nil {
+			return toolCallResult{}, fmt.Errorf("call not found")
+		}
+		callID = resolved
+		resolvedFromRef = true
+	}
+	if s.isSuppressedCall(callID) {
 		return toolCallResult{}, fmt.Errorf("call not found")
 	}
 
-	detail, err := s.store.GetCallDetail(ctx, args.CallID)
+	detail, err := s.store.GetCallDetail(ctx, callID)
 	if err != nil {
 		return toolCallResult{}, err
 	}
 	minimizeCallDetail(detail)
+	if resolvedFromRef {
+		detail.CallRef, _ = sqlite.NormalizeStableCallRef(callRef)
+		detail.CallID = ""
+	}
 	return newToolResult(detail)
 }
 
@@ -2135,6 +2172,9 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	if strings.TrimSpace(args.AccountQuery) != "" && !args.IncludeAccountNames {
 		return toolCallResult{}, errors.New("account_query requires include_account_names=true because it can probe customer names")
 	}
+	if s.restrictedAccountQuery(args.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
 	if strings.EqualFold(strings.TrimSpace(args.TranscriptStatus), "missing") {
 		return toolCallResult{}, errors.New("transcript_status=missing is not valid for quote search because quote tools require cached transcript segments")
 	}
@@ -2567,6 +2607,27 @@ func (s *Server) isSuppressedCall(callID string) bool {
 
 func (s *Server) governanceActive() bool {
 	return len(s.suppressedCallIDs) > 0
+}
+
+func (s *Server) restrictedAccountQuery(query string) bool {
+	if len(s.restrictedAccountQueries) == 0 {
+		return false
+	}
+	_, ok := s.restrictedAccountQueries[governance.NormalizeName(query)]
+	return ok
+}
+
+func (s *Server) restrictedAccountQueryAny(queries []string) bool {
+	for _, query := range queries {
+		if s.restrictedAccountQuery(query) {
+			return true
+		}
+	}
+	return false
+}
+
+func restrictedAccountQueryError() error {
+	return errors.New("account_query is unavailable for this governed term")
 }
 
 func governanceFilteredAggregateError(toolName string) error {

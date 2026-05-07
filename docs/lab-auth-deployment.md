@@ -154,6 +154,23 @@ LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
   deploy/lab-auth/scripts/lab-smoke.sh
 ```
 
+For a redacted Postgres serving DB, also pass the remote VM path to the private
+governance policy. `lab-up.sh` copies it into `$REMOTE_ROOT/secrets` with
+container-readable permissions, mounts that copy read-only into `gongmcp`, and
+sets `GONGMCP_AI_GOVERNANCE_CONFIG=/run/secrets/ai-governance.yaml` so
+restricted account-name probes are denied before query execution:
+
+```bash
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+LAB_GONG_DATABASE_URL='postgres://...' \
+LAB_TOOL_PRESET=redacted-all-readonly \
+LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
+LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
+LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/srv/gongctl-governed/private/ai-governance.yaml \
+  deploy/lab-auth/scripts/lab-up.sh
+```
+
 ## Stable Cloudflare Tunnel
 
 For a stable lab route, create a named Cloudflare Tunnel and route a hostname to
@@ -275,6 +292,7 @@ Common lab failures:
 | `token audience/client mismatch` | dynamic-client access token lacks the MCP resource audience | verify Keycloak's `basic` client scope has the `gong-lab-proxy` audience mapper |
 | `required group` missing or user denied | token lacks `/gong-mcp-users` or email is not allowed | verify group mapper and `ALLOWED_EMAILS` |
 | `unknown field "_meta"` | MCP server rejected client extension metadata | deploy a build that strips/ignores MCP `_meta` before strict argument decoding |
+| `redacted Postgres serving DB mode requires --ai-governance-config` | redacted-serving mode is enabled but the private governance YAML is not mounted into `gongmcp` | rerun `lab-up.sh` with `LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/absolute/remote/path/to/ai-governance.yaml` |
 
 The same categories apply beyond Keycloak. Other IdPs and brokers use different
 admin controls, but remote MCP clients still need successful registration or a

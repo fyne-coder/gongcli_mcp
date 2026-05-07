@@ -208,6 +208,13 @@ updates are applied by editing the private YAML and rerunning
 serving database. Restart or redeploy `gongmcp` when those deployment knobs
 change, or when cutting over to a different serving database URL.
 
+When `gongmcp` serves a redacted Postgres database with account-name search
+enabled, pass the same private governance config with
+`--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`. The serving
+database should already be physically redacted, but the runtime config lets MCP
+deny configured restricted names and aliases before query execution so row
+counts or broad cohort metadata cannot become a membership-inference signal.
+
 The first slice intentionally skips several global metadata tables on the
 target. The skipped list is included in the sanitized refresh output so a
 reviewer can confirm the boundary; it currently covers `sync_runs`,
@@ -222,7 +229,9 @@ remain follow-ups.
 Once the redacted serving DB exists, the recommended customer-facing posture
 is a preset-scoped analyst reader against `gongctl_mcp` with `gongmcp` running
 under `GONGMCP_TOOL_PRESET=analyst-expansion` and
-`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. The scoped analyst reader role is
+`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`, plus
+`GONGMCP_AI_GOVERNANCE_CONFIG` pointing at the same private policy used to
+build the serving DB. The scoped analyst reader role is
 created on the Postgres server and granted only the column SELECTs and
 function EXECUTEs that the analyst preset needs; raw call payloads, sync
 state, and profile metadata stay denied at the database layer.

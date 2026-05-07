@@ -3,6 +3,7 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -121,6 +122,7 @@ type CallRecord struct {
 
 type CallDetail struct {
 	CallID              string                `json:"call_id"`
+	CallRef             string                `json:"call_ref,omitempty"`
 	Title               string                `json:"title"`
 	StartedAt           string                `json:"started_at"`
 	DurationSeconds     int64                 `json:"duration_seconds"`
@@ -1946,6 +1948,31 @@ SELECT o.object_type,
 		return nil, err
 	}
 	return detail, nil
+}
+
+func (s *Store) ResolveCallIDByRef(ctx context.Context, ref string) (string, error) {
+	normalized, err := NormalizeStableCallRef(ref)
+	if err != nil {
+		return "", err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id FROM calls`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var callID string
+		if err := rows.Scan(&callID); err != nil {
+			return "", err
+		}
+		if StableCallRefMatchesCallID(normalized, callID) {
+			return callID, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("call_ref not found")
 }
 
 func (s *Store) SearchCallsRaw(ctx context.Context, params CallSearchParams) ([]json.RawMessage, error) {
@@ -5866,6 +5893,44 @@ func normalizeJSONValue(value any) ([]byte, error) {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func StableCallRef(callID string) string {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(callID))
+	return "call_ref_" + hex.EncodeToString(sum[:])[:12]
+}
+
+func StableCallRefMatchesCallID(normalizedRef, callID string) bool {
+	normalizedRef = strings.TrimSpace(normalizedRef)
+	callID = strings.TrimSpace(callID)
+	if normalizedRef == "" || callID == "" {
+		return false
+	}
+	if StableCallRef(callID) == normalizedRef {
+		return true
+	}
+	md5Sum := md5.Sum([]byte(callID))
+	sanitizedToken := hex.EncodeToString(md5Sum[:])
+	return StableCallRef(sanitizedToken) == normalizedRef
+}
+
+func NormalizeStableCallRef(ref string) (string, error) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if !strings.HasPrefix(ref, "call_ref_") {
+		return "", errors.New("call_ref must start with call_ref_")
+	}
+	suffix := strings.TrimPrefix(ref, "call_ref_")
+	if len(suffix) != 12 {
+		return "", errors.New("call_ref must include a 12-character hash suffix")
+	}
+	if _, err := hex.DecodeString(suffix); err != nil {
+		return "", errors.New("call_ref suffix must be hexadecimal")
+	}
+	return ref, nil
 }
 
 func nowUTC() string {

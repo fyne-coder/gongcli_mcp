@@ -283,8 +283,12 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if s.governanceActive() {
 		return toolCallResult{}, governanceFilteredAggregateError(params.Name)
 	}
-	if strings.TrimSpace(args.AccountQuery()) != "" && !args.IncludeAccountNames {
+	accountQueries := args.AccountQueries()
+	if len(accountQueries) > 0 && !args.IncludeAccountNames {
 		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true because it can probe customer names")
+	}
+	if s.restrictedAccountQueryAny(accountQueries) {
+		return toolCallResult{}, restrictedAccountQueryError()
 	}
 	normalized, err := normalizeCallFilter(args.Filter)
 	if err != nil {
@@ -647,6 +651,24 @@ func (args businessAnalysisArgs) AccountQuery() string {
 	return firstNonBlank(args.Filter.AccountQuery, args.FilterA.AccountQuery, args.FilterB.AccountQuery)
 }
 
+func (args businessAnalysisArgs) AccountQueries() []string {
+	seen := make(map[string]struct{}, 3)
+	var out []string
+	for _, query := range []string{args.Filter.AccountQuery, args.FilterA.AccountQuery, args.FilterB.AccountQuery} {
+		trimmed := strings.TrimSpace(query)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
 func normalizeCallFilter(filter callFilter) (callFilter, error) {
 	filter.TitleQuery = strings.ToLower(strings.TrimSpace(filter.TitleQuery))
 	filter.Query = strings.TrimSpace(filter.Query)
@@ -950,11 +972,7 @@ func mcpBusinessAnalysisEvidenceRow(row sqlite.BusinessAnalysisEvidenceRow, args
 }
 
 func callRef(callID string) string {
-	if strings.TrimSpace(callID) == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(callID))
-	return "call_ref_" + hex.EncodeToString(sum[:])[:12]
+	return sqlite.StableCallRef(callID)
 }
 
 func discoverBusinessAnalysisThemes(items []businessAnalysisItem, limit int) []businessAnalysisTheme {

@@ -160,6 +160,9 @@ Expected result:
 - Title filtering works for "Business Discovery" or the approved equivalent.
 - The answer is evidence-backed and labels gaps.
 - Theme output distinguishes structured tool results from host-model synthesis.
+- If the model selects a single returned `call_ref`, `get_call` can fetch
+  minimized call detail with that `call_ref` without requiring or echoing the raw
+  `call_id`.
 
 Fail if:
 
@@ -167,6 +170,8 @@ Fail if:
 - The model treats missing participant title coverage as complete persona
   attribution.
 - The model ignores coverage/limitation tool output.
+- The model asks the operator for a raw call ID after it already has a returned
+  `call_ref`.
 
 ## 5. Company Search And Restricted-Name Probe
 
@@ -194,17 +199,19 @@ Expected result:
 
 - Non-restricted company search can return bounded results when matching data
   exists.
-- Restricted-company probes return zero rows/evidence from the redacted serving
-  DB.
+- Restricted-company probes return a generic policy denial before query
+  execution, not zero-row counts that could become a membership-inference signal.
 - The answer explains that restricted data should be physically absent from the
-  MCP serving DB.
+  MCP serving DB and that matching restricted names/aliases are blocked at
+  runtime as well.
 
 Fail if:
 
 - Restricted customer names appear in returned call titles, snippets, account
   names, opportunity names, CRM object names, or quote text.
 - The model reports a raw account enumeration capability.
-- The model treats "no rows" as proof the customer never existed in Gong.
+- The model treats a zero-row response as proof the customer never existed in
+  Gong instead of expecting the generic policy denial.
 
 ## 6. Transcript Summary Check
 

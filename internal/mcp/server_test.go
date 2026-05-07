@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1975,6 +1977,129 @@ func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *t
 	}
 }
 
+func TestSearchTranscriptQuotesWithAttributionRestrictedAccountQueryDenied(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithRestrictedAccountQueryTerms([]string{"NoAI Synthetic Corp"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "attribution-restricted-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":                 "implementation",
+				"account_query":         "NoAI Synthetic Corp",
+				"include_account_names": true,
+				"limit":                 5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected restricted account_query tool error, got %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if !strings.Contains(text, "account_query is unavailable") {
+		t.Fatalf("tool error missing restricted account guidance: %s", text)
+	}
+	if strings.Contains(text, "NoAI") || strings.Contains(text, "Synthetic Corp") {
+		t.Fatalf("restricted account_query error leaked configured term: %s", text)
+	}
+}
+
+func TestBusinessAnalysisRestrictedAccountQueryDenied(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithRestrictedAccountQueryTerms([]string{"NoAI Synthetic Corp"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "business-restricted-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "build_call_cohort",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"account_query": "NoAI Synthetic Corp",
+				},
+				"include_account_names": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected restricted business account_query error, got %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if !strings.Contains(text, "account_query is unavailable") {
+		t.Fatalf("tool error missing restricted account guidance: %s", text)
+	}
+	if strings.Contains(text, "NoAI") || strings.Contains(text, "Synthetic Corp") {
+		t.Fatalf("restricted business account_query error leaked configured term: %s", text)
+	}
+}
+
+func TestBusinessAnalysisRestrictedAccountQueryDeniedInSecondaryFilter(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithRestrictedAccountQueryTerms([]string{"NoAI Synthetic Corp"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "business-restricted-secondary-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "compare_call_cohorts",
+			"arguments": map[string]any{
+				"filter_a": map[string]any{
+					"title_query": "discovery",
+				},
+				"filter_b": map[string]any{
+					"account_query": "NoAI Synthetic Corp",
+				},
+				"include_account_names": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected restricted secondary account_query error, got %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if !strings.Contains(text, "account_query is unavailable") {
+		t.Fatalf("tool error missing restricted account guidance: %s", text)
+	}
+	if strings.Contains(text, "NoAI") || strings.Contains(text, "Synthetic Corp") {
+		t.Fatalf("restricted secondary account_query error leaked configured term: %s", text)
+	}
+}
+
 func TestMissingTranscriptsOmittedLimitHonorsConfiguredCap(t *testing.T) {
 	t.Parallel()
 
@@ -2147,6 +2272,102 @@ func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 		if object.FieldCount == 0 || len(object.FieldNames) == 0 {
 			t.Fatalf("object missing field metadata: %+v", object)
 		}
+	}
+}
+
+func TestGetCallAcceptsRedactedCallRef(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	callRef := callRef("call_extended_001")
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "call-detail-ref",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_call",
+			"arguments": map[string]any{
+				"call_ref": callRef,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_extended_001") {
+		t.Fatalf("call_ref lookup echoed raw call_id: %s", text)
+	}
+
+	var detail struct {
+		CallID          string `json:"call_id"`
+		CallRef         string `json:"call_ref"`
+		StartedAt       string `json:"started_at"`
+		DurationSeconds int64  `json:"duration_seconds"`
+	}
+	if err := json.Unmarshal([]byte(text), &detail); err != nil {
+		t.Fatalf("unmarshal call-ref detail: %v", err)
+	}
+	if detail.CallID != "" || detail.CallRef != callRef || detail.DurationSeconds != 2400 || detail.StartedAt == "" {
+		t.Fatalf("unexpected call-ref detail: %+v", detail)
+	}
+}
+
+func TestGetCallAcceptsSanitizedBusinessCallRef(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	sum := md5.Sum([]byte("call_extended_001"))
+	sanitizedToken := hex.EncodeToString(sum[:])
+	callRef := callRef(sanitizedToken)
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "call-detail-sanitized-ref",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_call",
+			"arguments": map[string]any{
+				"call_ref": callRef,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_extended_001") {
+		t.Fatalf("sanitized call_ref lookup echoed raw call_id: %s", text)
+	}
+	var detail struct {
+		CallID          string `json:"call_id"`
+		CallRef         string `json:"call_ref"`
+		DurationSeconds int64  `json:"duration_seconds"`
+	}
+	if err := json.Unmarshal([]byte(text), &detail); err != nil {
+		t.Fatalf("unmarshal sanitized call-ref detail: %v", err)
+	}
+	if detail.CallID != "" || detail.CallRef != callRef || detail.DurationSeconds != 2400 {
+		t.Fatalf("unexpected sanitized call-ref detail: %+v", detail)
 	}
 }
 

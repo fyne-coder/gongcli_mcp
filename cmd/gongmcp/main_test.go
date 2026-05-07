@@ -664,6 +664,14 @@ func TestRunRedactedAllReadonlyRequiresRedactedServingDBGates(t *testing.T) {
 			env:  map[string]string{"GONGMCP_POSTGRES_REDACTED_SERVING_DB": "1"},
 			want: "requires GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1",
 		},
+		{
+			name: "missing governance config",
+			env: map[string]string{
+				"GONGMCP_POSTGRES_REDACTED_SERVING_DB":  "1",
+				"GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS": "1",
+			},
+			want: "requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
