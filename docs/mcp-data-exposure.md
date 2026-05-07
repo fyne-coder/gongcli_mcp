@@ -154,14 +154,54 @@ reviewed raw business-analysis helper functions so `include_call_titles=true`
 can return remaining call titles from the redacted DB for manual testing.
 
 The broader 68-tool surfaces (`analyst`, `analyst-business-core`,
-`redacted-all-readonly`, `all-readonly`) remain available for operator,
-analyst, and internal-testing use, but they are not the recommended default
-for client MCP hosts. Prefer `business-workbench` so the client sees a small,
-stable list of names while internal operations evolve underneath.
+`redacted-all-readonly`, `broad-public-redacted`, `all-readonly`) remain
+available for operator, analyst, and internal-testing use. For client pilots
+that intentionally want the full reviewed surface over a physically redacted
+DB, use `broad-public-redacted`. For narrower business-user deployments,
+prefer `business-workbench` so the client sees a small, stable list of names
+while internal operations evolve underneath.
+
 `redacted-all-readonly` is internal manual-testing only and requires the
 physically redacted Postgres serving DB plus scoped reader grants. In this
 internal mode, explicit include flags can expose raw call IDs and call titles
 that remain in the physically redacted serving DB.
+
+`broad-public-redacted` is the customer-test alias of the redacted broad lab
+surface. It exposes the same reviewed Postgres tool set as
+`redacted-all-readonly` but hardens the startup contract for client pilots:
+
+- `GONGMCP_POSTGRES_REDACTED_SERVING_DB=1` is required (startup fails closed
+  otherwise).
+- `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` is required.
+- `--ai-governance-config` / `GONGMCP_AI_GOVERNANCE_CONFIG` is required so the
+  blocklist is enforced at MCP query gates and at emit-time.
+- `hide_raw_call_ids` is enabled by default (raw call IDs are off; stable
+  refs are preferred for client-visible output).
+
+Customer-deployment policy switches further suppress fields end-to-end. The
+contract reload semantics are `restart_required`: switches take effect when
+gongmcp starts and do not hot-reload. Set them via
+`--policy-switches=<csv>` or `GONGMCP_POLICY_SWITCHES=<csv>` using any subset
+of:
+
+- `hide_account_names`
+- `hide_call_titles`
+- `hide_raw_call_ids`
+- `hide_speaker_ids`
+- `hide_contact_names`
+- `hide_contact_emails`
+- `hide_opportunity_names`
+- `hide_loss_reasons`
+- `hide_crm_value_snippets`
+
+In this foundation slice the wired enforcement points are `search_calls`
+(call_id, title) and `get_call` (call_id, title, account names). The other
+switches parse, validate, and surface in `RuntimeInfo.policy_switches` /
+`policy_switches_enabled` so downstream slices can attach behavior without
+breaking the contract. An emit-time defense-in-depth blocklist guard sits in
+front of `search_calls` and `get_call` and suppresses rows whose title or CRM
+account name matches a blocklisted entity, even when source-to-serving
+redaction missed a row.
 
 ## Analyst Cohort Tool Exposure
 

@@ -186,6 +186,43 @@ func TestAnalystPresetExposesScorecardInventoryTools(t *testing.T) {
 	}
 }
 
+func TestBroadPublicRedactedPresetExposesSameSurfaceAsRedactedAllReadonly(t *testing.T) {
+	t.Parallel()
+
+	// broad-public-redacted is the customer-test alias of the redacted-all-readonly
+	// internal lab posture. They expose the same reviewed Postgres tool surface
+	// so existing manual lab use does not break, but the new name signals the
+	// client-deployment posture and is enforced by stricter startup gates.
+	got, err := ExpandToolPreset("broad-public-redacted")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(broad-public-redacted) returned error: %v", err)
+	}
+	want := PostgresRedactedAllReadonlyToolNames()
+	assertStringSlicesEqual(t, got, want, "broad-public-redacted vs redacted-all-readonly")
+
+	if !IsBroadPublicRedactedPreset(BroadPublicRedactedPresetName()) {
+		t.Fatalf("IsBroadPublicRedactedPreset must accept canonical name %q", BroadPublicRedactedPresetName())
+	}
+	if IsBroadPublicRedactedPreset("redacted-all-readonly") {
+		t.Fatal("IsBroadPublicRedactedPreset must distinguish broad-public-redacted from redacted-all-readonly")
+	}
+
+	presets := ToolPresetCatalog()
+	var entry ToolPresetInfo
+	for _, p := range presets {
+		if p.Name == "broad-public-redacted" {
+			entry = p
+			break
+		}
+	}
+	if entry.Name == "" {
+		t.Fatalf("ToolPresetCatalog missing broad-public-redacted entry; presets=%v", presets)
+	}
+	if entry.ToolCount != len(want) {
+		t.Fatalf("broad-public-redacted ToolCount=%d want %d", entry.ToolCount, len(want))
+	}
+}
+
 func TestRedactedAllReadonlyPresetExposesReviewedPostgresSearchSurface(t *testing.T) {
 	t.Parallel()
 

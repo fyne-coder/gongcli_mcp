@@ -401,9 +401,9 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 
 	switch params.Name {
 	case "build_call_cohort", "inspect_call_cohort":
-		response.Results = mcpBusinessAnalysisCallRows(cohort.Rows, args)
+		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
 	case "search_calls_by_filters":
-		response.Results = mcpBusinessAnalysisCallRows(cohort.Rows, args)
+		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
 	case "summarize_calls_by_filters":
 		dimension := firstNonBlank(args.Dimension, "lifecycle")
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, dimension, "", limit)
@@ -622,7 +622,11 @@ func (s *Server) businessAnalysisEvidenceBroadDiscovery(ctx context.Context, fil
 		if s.isSuppressedCall(row.CallID) {
 			continue
 		}
+		if s.blocklistMatchesBusinessAnalysisEvidence(row) {
+			continue
+		}
 		item := mcpBusinessAnalysisEvidenceRow(row, args)
+		s.applyPolicySwitchesToBusinessAnalysisItem(&item)
 		items = append(items, item)
 		quotes = append(quotes, businessAnalysisQuote{
 			CallRef:           item.CallRef,
@@ -913,9 +917,12 @@ func sqliteBusinessAnalysisFilter(filter callFilter) sqlite.BusinessAnalysisFilt
 	}
 }
 
-func mcpBusinessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args businessAnalysisArgs) []businessAnalysisItem {
+func (s *Server) businessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args businessAnalysisArgs) []businessAnalysisItem {
 	out := make([]businessAnalysisItem, 0, len(rows))
 	for _, row := range rows {
+		if s.blocklistMatchesBusinessAnalysisCall(row) {
+			continue
+		}
 		item := businessAnalysisItem{
 			CallRef:           callRef(row.CallID),
 			StartedAt:         row.StartedAt,
@@ -935,6 +942,7 @@ func mcpBusinessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args bus
 		if args.IncludeCallTitles {
 			item.CallTitle = row.Title
 		}
+		s.applyPolicySwitchesToBusinessAnalysisItem(&item)
 		out = append(out, item)
 	}
 	return out

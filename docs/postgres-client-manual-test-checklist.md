@@ -29,8 +29,11 @@ counts, tool names, and reviewed evidence paths only.
 - `gongmcp` receives only the redacted serving DB reader URL.
 - `GONGMCP_TOOL_PRESET=business-workbench` for the recommended client
   business-user surface (six facade tools), `analyst-expansion` for trained
-  analyst manual testing over the broader reviewed surface, or
-  `redacted-all-readonly` for internal broad-search testing only.
+  analyst manual testing over the broader reviewed surface,
+  `redacted-all-readonly` for internal broad-search testing only, or
+  `broad-public-redacted` for customer pilots over a physically redacted
+  serving DB with the blocklist enforced and the customer-policy switch
+  contract.
 - `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted` for client analyst testing,
   or `raw` for internal redacted-DB broad-search testing when exact call IDs are
   needed.
@@ -78,6 +81,28 @@ only, business-analysis calls may return remaining redacted-DB call titles and
 raw call IDs when the caller sets the explicit include flags. This preset is
 internal manual-testing only — not a client-facing default — and should not be
 used against a raw unredacted database.
+
+For customer-pilot deployments, prefer `broad-public-redacted`. It exposes the
+same reviewed Postgres tool surface as `redacted-all-readonly` but enforces
+stricter startup gates (governance/blocklist config required) and the
+customer-policy switch contract. The reload contract is restart-required: set
+`--policy-switches=<csv>` or `GONGMCP_POLICY_SWITCHES=<csv>` and restart
+`gongmcp`. Available switches:
+
+- `hide_account_names`
+- `hide_call_titles`
+- `hide_raw_call_ids` (on by default in `broad-public-redacted`)
+- `hide_speaker_ids`
+- `hide_contact_names`
+- `hide_contact_emails`
+- `hide_opportunity_names`
+- `hide_loss_reasons`
+- `hide_crm_value_snippets`
+
+`gong_status`, `get_sync_status`, and `/healthz` echo the active switches in
+`mcp_server.policy_switches_enabled` and the reload contract in
+`mcp_server.policy_switch_reload_contract` so a manual tester can confirm
+which posture a deployment is running.
 
 Expected core tools:
 

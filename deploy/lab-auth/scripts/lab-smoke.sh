@@ -352,7 +352,7 @@ case "$GONGMCP_TOOL_PRESET" in
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_scorecards")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_scorecard")' >/dev/null
     ;;
-  redacted-all-readonly|redacted-all|redacted-search-lab)
+  redacted-all-readonly|redacted-all|redacted-search-lab|broad-public-redacted)
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_call")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_crm_field_values")' >/dev/null

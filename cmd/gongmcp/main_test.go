@@ -729,6 +729,75 @@ func TestRunRedactedAllReadonlyRequiresRedactedServingDBGates(t *testing.T) {
 	}
 }
 
+func TestRunBroadPublicRedactedRequiresFailClosedGates(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://reader:pw@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("GONGMCP_TOOL_PRESET", "broad-public-redacted")
+	t.Setenv("GONGMCP_HTTP_ADDR", "127.0.0.1:0")
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "missing redacted serving marker",
+			env:  map[string]string{"GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS": "1"},
+			want: "requires GONGMCP_POSTGRES_REDACTED_SERVING_DB=1",
+		},
+		{
+			name: "missing scoped grants enforcement",
+			env:  map[string]string{"GONGMCP_POSTGRES_REDACTED_SERVING_DB": "1"},
+			want: "requires GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1",
+		},
+		{
+			name: "missing governance config",
+			env: map[string]string{
+				"GONGMCP_POSTGRES_REDACTED_SERVING_DB":  "1",
+				"GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS": "1",
+			},
+			want: "broad-public-redacted requires --ai-governance-config",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB", "")
+			t.Setenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS", "")
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := run(nil, bytes.NewReader(nil), &stdout, &stderr)
+			if code != 2 {
+				t.Fatalf("exit code=%d want 2 stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.want) {
+				t.Fatalf("stderr=%q missing %q", stderr.String(), tt.want)
+			}
+		})
+	}
+}
+
+func TestRunBroadPublicRedactedRejectsUnknownPolicySwitch(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://reader:pw@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("GONGMCP_TOOL_PRESET", "broad-public-redacted")
+	t.Setenv("GONGMCP_HTTP_ADDR", "127.0.0.1:0")
+	t.Setenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB", "1")
+	t.Setenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS", "1")
+	t.Setenv("GONGMCP_POLICY_SWITCHES", "hide_account_names,not_a_real_switch")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(nil, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code=%d want 2 stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid policy switches") {
+		t.Fatalf("stderr=%q missing invalid policy switches message", stderr.String())
+	}
+}
+
 func TestPostgresAnalystPresetIncludesScorecardInventoryTools(t *testing.T) {
 	for _, preset := range []string{"analyst", "analyst-expansion"} {
 		expanded, err := mcp.ExpandToolPreset(preset)

@@ -758,7 +758,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		"limit":            limit,
 		"coverage_summary": businessAnalysisCoverageFromSummary(cohort.Summary),
 		"cohort_summary":   cohort.Summary,
-		"reviewed_calls":   mcpBusinessAnalysisCallRows(cohort.Rows, baArgs),
+		"reviewed_calls":   s.businessAnalysisCallRows(cohort.Rows, baArgs),
 		"evidence":         items,
 		"quotes":           quotes,
 		"evidence_count":   len(items),

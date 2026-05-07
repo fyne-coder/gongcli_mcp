@@ -96,7 +96,13 @@ type Server struct {
 	suppressedCallIDs            map[string]struct{}
 	restrictedAccountQueries     map[string]struct{}
 	governanceCheck              func(context.Context) error
+	policySwitches               PolicySwitches
+	blocklistGuard               *governance.BlocklistGuard
 }
+
+// BlocklistGuard is re-exported from the governance package so MCP
+// server-option callers do not need to import internal/governance directly.
+type BlocklistGuard = governance.BlocklistGuard
 
 type ServerOption func(*Server)
 
@@ -111,16 +117,19 @@ type RuntimeInfo struct {
 }
 
 type PublicRuntimeInfo struct {
-	Name                         string `json:"name"`
-	Version                      string `json:"version"`
-	Commit                       string `json:"commit,omitempty"`
-	BuildDate                    string `json:"build_date,omitempty"`
-	ToolPreset                   string `json:"tool_preset,omitempty"`
-	DeploymentID                 string `json:"deployment_id,omitempty"`
-	StartedAtUTC                 string `json:"started_at_utc,omitempty"`
-	ToolCount                    int    `json:"tool_count"`
-	FacadeRoutedToolCount        int    `json:"facade_routed_tool_count"`
-	TranscriptEvidenceProvenance string `json:"transcript_evidence_provenance"`
+	Name                         string         `json:"name"`
+	Version                      string         `json:"version"`
+	Commit                       string         `json:"commit,omitempty"`
+	BuildDate                    string         `json:"build_date,omitempty"`
+	ToolPreset                   string         `json:"tool_preset,omitempty"`
+	DeploymentID                 string         `json:"deployment_id,omitempty"`
+	StartedAtUTC                 string         `json:"started_at_utc,omitempty"`
+	ToolCount                    int            `json:"tool_count"`
+	FacadeRoutedToolCount        int            `json:"facade_routed_tool_count"`
+	TranscriptEvidenceProvenance string         `json:"transcript_evidence_provenance"`
+	PolicySwitches               PolicySwitches `json:"policy_switches"`
+	PolicySwitchesEnabled        []string       `json:"policy_switches_enabled,omitempty"`
+	PolicySwitchReloadContract   string         `json:"policy_switch_reload_contract"`
 }
 
 type TranscriptEvidenceProvenance string
@@ -561,6 +570,9 @@ func (s *Server) publicRuntimeInfo() PublicRuntimeInfo {
 		ToolCount:                    len(s.tools),
 		FacadeRoutedToolCount:        s.facadeAvailableOperationCount(),
 		TranscriptEvidenceProvenance: string(s.transcriptEvidenceProvenance),
+		PolicySwitches:               s.policySwitches,
+		PolicySwitchesEnabled:        s.policySwitches.EnabledNames(),
+		PolicySwitchReloadContract:   PolicySwitchReloadContract(),
 	}
 }
 
@@ -663,6 +675,29 @@ func WithRestrictedAccountQueryTerms(terms []string) ServerOption {
 func WithGovernanceCheck(check func(context.Context) error) ServerOption {
 	return func(s *Server) {
 		s.governanceCheck = check
+	}
+}
+
+// WithPolicySwitches installs the customer-deployment policy switch contract
+// for this MCP process. Switches take effect at startup and require a restart
+// to change; see PolicySwitchReloadContract.
+func WithPolicySwitches(switches PolicySwitches) ServerOption {
+	return func(s *Server) {
+		s.policySwitches = switches
+	}
+}
+
+// WithBlocklistGuard installs an emit-time defense-in-depth filter that
+// suppresses MCP tool output rows/fields whenever a blocklisted entity is
+// detected. The guard sits in front of MCP serialization on the highest-risk
+// paths (search_calls, get_call) and is intended to catch missed joins or
+// new columns that bypass the source-to-serving redaction.
+func WithBlocklistGuard(guard *BlocklistGuard) ServerOption {
+	return func(s *Server) {
+		if guard == nil || guard.Empty() {
+			return
+		}
+		s.blocklistGuard = guard
 	}
 }
 
@@ -1402,6 +1437,11 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 			filtered++
 			continue
 		}
+		if s.blocklistMatchesCallSummary(summary) {
+			filtered++
+			continue
+		}
+		s.applyPolicySwitchesToSearchSummary(&summary)
 		summaries = append(summaries, summary)
 		if len(summaries) >= limit {
 			break
@@ -1437,11 +1477,19 @@ func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResu
 	if err != nil {
 		return toolCallResult{}, err
 	}
+	// Inspect the un-minimized detail so the blocklist guard sees CRM object
+	// names before they are cleared by the minimizer. This is the
+	// defense-in-depth layer and must run on the richest representation
+	// available.
+	if s.blocklistMatchesCallDetail(detail) {
+		return toolCallResult{}, fmt.Errorf("call not found")
+	}
 	minimizeCallDetail(detail)
 	if resolvedFromRef {
 		detail.CallRef, _ = sqlite.NormalizeStableCallRef(callRef)
 		detail.CallID = ""
 	}
+	s.applyPolicySwitchesToCallDetail(detail)
 	return newToolResult(detail)
 }
 
@@ -2670,6 +2718,101 @@ func (s *Server) isSuppressedCall(callID string) bool {
 	}
 	_, ok := s.suppressedCallIDs[strings.TrimSpace(callID)]
 	return ok
+}
+
+// blocklistMatchesCallSummary applies the emit-time defense-in-depth filter
+// to a search-result row. Title is the highest-risk surface that escapes
+// scoped-reader column grants, so check it explicitly.
+func (s *Server) blocklistMatchesCallSummary(summary searchCallSummary) bool {
+	if s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	return s.blocklistGuard.MatchValue(summary.Title)
+}
+
+// blocklistMatchesCallDetail checks every customer-identifying field that
+// get_call can return: title and CRM object names.
+func (s *Server) blocklistMatchesCallDetail(detail *sqlite.CallDetail) bool {
+	if detail == nil || s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	if s.blocklistGuard.MatchValue(detail.Title) {
+		return true
+	}
+	for _, obj := range detail.CRMObjects {
+		if s.blocklistGuard.MatchValue(obj.ObjectName) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) blocklistMatchesBusinessAnalysisCall(row sqlite.BusinessAnalysisCallRow) bool {
+	if s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	return s.blocklistGuard.MatchValue(row.Title)
+}
+
+func (s *Server) blocklistMatchesBusinessAnalysisEvidence(row sqlite.BusinessAnalysisEvidenceRow) bool {
+	if s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	return s.blocklistGuard.MatchAny([]string{row.Title, row.AccountName, row.OpportunityName})
+}
+
+// applyPolicySwitchesToSearchSummary suppresses customer-identifying fields
+// in a search-result row according to the active policy switches. The switch
+// set is intentionally conservative in this slice: only the switches that map
+// directly to existing search summary fields take effect; every other switch
+// is parsed and visible in runtime status but is a no-op at this layer.
+func (s *Server) applyPolicySwitchesToSearchSummary(summary *searchCallSummary) {
+	if summary == nil {
+		return
+	}
+	if s.policySwitches.HideCallTitles {
+		summary.Title = ""
+	}
+	if s.policySwitches.HideRawCallIDs {
+		summary.CallID = ""
+	}
+}
+
+// applyPolicySwitchesToCallDetail applies policy switches to a get_call detail
+// payload before serialization.
+func (s *Server) applyPolicySwitchesToCallDetail(detail *sqlite.CallDetail) {
+	if detail == nil {
+		return
+	}
+	if s.policySwitches.HideCallTitles {
+		detail.Title = ""
+	}
+	if s.policySwitches.HideRawCallIDs {
+		detail.CallID = ""
+	}
+	if s.policySwitches.HideAccountNames {
+		for idx := range detail.CRMObjects {
+			detail.CRMObjects[idx].ObjectName = ""
+		}
+	}
+}
+
+func (s *Server) applyPolicySwitchesToBusinessAnalysisItem(item *businessAnalysisItem) {
+	if item == nil {
+		return
+	}
+	if s.policySwitches.HideCallTitles {
+		item.CallTitle = ""
+	}
+	if s.policySwitches.HideRawCallIDs {
+		item.CallID = ""
+	}
+	if s.policySwitches.HideAccountNames {
+		item.AccountName = ""
+	}
+	if s.policySwitches.HideOpportunityNames {
+		item.OpportunityName = ""
+	}
 }
 
 func (s *Server) governanceActive() bool {

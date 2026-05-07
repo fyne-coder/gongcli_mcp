@@ -160,12 +160,34 @@ func ExpandToolPreset(name string) ([]string, error) {
 		return copyStrings(tools), nil
 	case "governance-search":
 		return copyStrings(governanceCompatibleToolNames), nil
-	case "redacted-all-readonly", "redacted-all", "redacted-search-lab":
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab",
+		"broad-public-redacted":
 		return PostgresRedactedAllReadonlyToolNames(), nil
 	case "all-readonly", "all-tools", "all":
 		return ToolCatalogNames(), nil
 	default:
-		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-workbench, analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, redacted-all-readonly, all-readonly", strings.TrimSpace(name))
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-workbench, analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, redacted-all-readonly, broad-public-redacted, all-readonly", strings.TrimSpace(name))
+	}
+}
+
+// BroadPublicRedactedPresetName returns the canonical name of the
+// broad-public-redacted preset. It shares the underlying tool list with
+// redacted-all-readonly, but the name signals a customer-test posture rather
+// than an internal lab posture.
+func BroadPublicRedactedPresetName() string {
+	return "broad-public-redacted"
+}
+
+// IsBroadPublicRedactedPreset reports whether name resolves to the
+// broad-public-redacted profile. It intentionally distinguishes this
+// customer-test posture from redacted-all-readonly even though they share the
+// same reviewed tool surface.
+func IsBroadPublicRedactedPreset(name string) bool {
+	switch normalizedToolPresetName(name) {
+	case "broad-public-redacted":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -233,7 +255,7 @@ func ExpandToolPresetFacadeRoutedTools(name string) ([]string, error) {
 			return nil, err
 		}
 		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer), nil
-	case "analyst-business-core", "analyst", "analyst-expansion", "redacted-all-readonly", "redacted-all", "redacted-search-lab", "all-readonly", "all-tools", "all":
+	case "analyst-business-core", "analyst", "analyst-expansion", "redacted-all-readonly", "redacted-all", "redacted-search-lab", "broad-public-redacted", "all-readonly", "all-tools", "all":
 		tools, err := ExpandToolPreset(name)
 		if err != nil {
 			return nil, err
@@ -313,6 +335,11 @@ func ToolPresetCatalog() []ToolPresetInfo {
 			aliases:     []string{"redacted-all", "redacted-search-lab"},
 			purpose:     "Broad Postgres read-only lab surface over every reviewed Postgres-readable tool; requires a physically redacted serving DB at runtime. Not a client-facing default — use business-workbench for client MCP hosts.",
 			recommended: "internal manual testing only against a redacted Postgres serving database; do not expose to client business users",
+		},
+		{
+			name:        "broad-public-redacted",
+			purpose:     "Customer-test broad surface over a physically redacted Postgres serving DB; same tool surface as redacted-all-readonly with a customer-deployment policy switch contract. Requires governance/blocklist config and a redacted serving DB marker; raw call IDs are hidden by default.",
+			recommended: "client/customer pilot deployments over a physically redacted Postgres serving database with the blocklist enforced",
 		},
 		{
 			name:        "all-readonly",

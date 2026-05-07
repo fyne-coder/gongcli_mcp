@@ -35,7 +35,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-workbench (recommended client surface; alias of analyst-facade), analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly (internal manual testing only), all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-workbench (recommended client surface; alias of analyst-facade), analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly (internal manual testing only), broad-public-redacted (customer-test broad surface; same fail-closed gates as redacted-all-readonly), all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	policySwitchesFlag := flags.String("policy-switches", "", "Comma-separated customer-policy switches for the broad-public-redacted profile (hide_account_names, hide_call_titles, hide_raw_call_ids, hide_speaker_ids, hide_contact_names, hide_contact_emails, hide_opportunity_names, hide_loss_reasons, hide_crm_value_snippets); reload contract is restart_required; defaults to GONGMCP_POLICY_SWITCHES")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -174,7 +175,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	policySwitchInput := firstNonEmpty(*policySwitchesFlag, os.Getenv("GONGMCP_POLICY_SWITCHES"))
+	parsedPolicySwitches, err := mcp.ParsePolicySwitches(policySwitchInput)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid policy switches: %v\n", err)
+		return 2
+	}
+	policySwitches := parsedPolicySwitches
+	if postgresBroadPublicRedactedPreset(selectedPreset) {
+		policySwitches = mcp.MergePolicySwitches(mcp.BroadPublicRedactedDefaultPolicySwitches(), parsedPolicySwitches)
+	}
 	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
+	if postgresMode && postgresBroadPublicRedactedPreset(selectedPreset) && governanceConfigPath == "" {
+		fmt.Fprintln(stderr, "invalid postgres tool selection: broad-public-redacted requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so the blocklist is enforced for client deployments")
+		return 2
+	}
 	if redactedServingDB && governanceConfigPath == "" {
 		fmt.Fprintln(stderr, "redacted Postgres serving DB mode requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so account-name probes can be gated by the same restricted-name policy used to build the serving DB")
 		return 2
@@ -241,6 +256,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			DeploymentID: os.Getenv("GONGMCP_DEPLOYMENT_ID"),
 			StartedAtUTC: time.Now().UTC().Format(time.RFC3339),
 		}),
+		mcp.WithPolicySwitches(policySwitches),
 	}
 	if min := postgresAnalystSmallCellMin(postgresMode, selectedPreset, enforceScopedDBGrants); min > 1 {
 		serverOptions = append(serverOptions, mcp.WithBusinessAnalysisSmallCellMin(min))
@@ -259,6 +275,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return 2
 		}
 		serverOptions = append(serverOptions, mcp.WithRestrictedAccountQueryTerms(governanceRestrictedAccountTerms(cfg)))
+		serverOptions = append(serverOptions, mcp.WithBlocklistGuard(governance.NewBlocklistGuardFromConfig(cfg)))
 		if postgresMode && redactedServingDB {
 			fmt.Fprintf(stderr, "AI governance active: backend=postgres_redacted_serving restricted_account_terms=%d; source governance state is not read in redacted serving mode\n", len(governanceRestrictedAccountTerms(cfg)))
 		} else if postgresMode {
@@ -399,6 +416,12 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres redacted all-readonly preset", presetName)
 		}
 		return reviewed, nil
+	case "broad-public-redacted":
+		reviewed := mcp.PostgresRedactedAllReadonlyToolNames()
+		if !sameStringSet(allowlist, reviewed) {
+			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres broad-public-redacted preset", presetName)
+		}
+		return reviewed, nil
 	case "governance-search":
 		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
 	}
@@ -491,11 +514,20 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 
 func postgresRedactedAllReadonlyPreset(presetName string) bool {
 	switch strings.ToLower(strings.TrimSpace(presetName)) {
-	case "redacted-all-readonly", "redacted-all", "redacted-search-lab":
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab",
+		"broad-public-redacted":
 		return true
 	default:
 		return false
 	}
+}
+
+// postgresBroadPublicRedactedPreset reports whether the selected preset is
+// the customer-test broad-public-redacted preset specifically. It shares the
+// fail-closed gates of redacted-all-readonly but additionally locks raw call
+// IDs off by default and accepts customer-policy switches.
+func postgresBroadPublicRedactedPreset(presetName string) bool {
+	return mcp.IsBroadPublicRedactedPreset(presetName)
 }
 
 func postgresReviewedAnalystTools() []string {
