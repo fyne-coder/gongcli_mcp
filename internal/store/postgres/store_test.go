@@ -1536,7 +1536,7 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if pgRedactedAllCalls.Summary.CallCount != 1 ||
 		len(pgRedactedAllCalls.Rows) != 1 ||
 		pgRedactedAllCalls.Rows[0].CallID != "pg-ba-001" ||
-		pgRedactedAllCalls.Rows[0].Title != "Business Analysis Manufacturing Discovery" {
+		pgRedactedAllCalls.Rows[0].Title != "Implementation evidence call" {
 		t.Fatalf("redacted-all Postgres calls did not expose redacted-DB title/id: summary=%+v rows=%+v", pgRedactedAllCalls.Summary, pgRedactedAllCalls.Rows)
 	}
 
