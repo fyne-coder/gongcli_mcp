@@ -108,6 +108,29 @@ structured inputs for ChatGPT, Claude, or another reviewed host to finish the
 business narrative; they should not be treated as hidden model conclusions from
 inside `gongmcp`.
 
+### Business Workbench Workflow
+
+For broad ad-hoc prompts, prefer the facade workflow instead of asking the host
+model to guess which narrow tool to use:
+
+1. Start with `gong_analyze` operation `theme_intelligence_report` for the
+   chosen date range, lifecycle/stage, title query, industry, or persona
+   filter.
+2. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
+   the source of truth for drill-down terms.
+3. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
+   operation `evidence.call_drilldown` exactly as returned. This avoids fuzzy
+   synonym misses and gives both Gong-generated brief/key-point evidence and
+   bounded transcript excerpts for the same call.
+4. Use `gong_analyze` operation `question.answer` for a final governed
+   evidence pack after the report has identified the strongest terms.
+
+Treat `question.answer` as an evidence-pack generator, not a hidden analyst. It
+derives bounded search terms from the free-form question and may fall back to a
+matching high-signal term when the full derived phrase returns no quotes; the
+payload reports the actual `evidence_query` and derivation metadata so the
+host's final answer can disclose what was searched.
+
 For a concise supported/caveated/blocked mapping of the SQLite-era question set
 to the reviewed Postgres pilot surface, see the
 [Postgres question-parity matrix](postgres-question-parity.md).
@@ -255,6 +278,12 @@ progression. Separate closed-won, closed-lost, open, and unknown only when the
 cache has those fields. If opportunity outcome or loss reason is missing, say
 so directly and avoid causal claims.
 ```
+
+Customer configuration note: loss reasons and close reasons are tenant-specific
+CRM fields. The operator must map and validate them in the customer profile
+before the MCP can answer "why did these close lost?" questions reliably. When
+the profile or source data is missing, use the empty/limitation status as a
+readiness finding rather than inferring a loss reason from transcript text.
 
 Expected tool sequence:
 

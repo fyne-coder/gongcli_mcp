@@ -851,6 +851,30 @@ func deriveBoundedThemeQuery(question string) (string, int) {
 	return strings.Join(tokens, " "), dropped
 }
 
+func questionAnswerFallbackQueries(query string) []string {
+	fields := strings.Fields(query)
+	out := make([]string, 0, 3)
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		token := strings.ToLower(strings.TrimSpace(field))
+		if len(token) < 4 {
+			continue
+		}
+		if _, stop := questionAnswerStopWords[token]; stop {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
+}
+
 type questionAnswerArgs struct {
 	Question            string     `json:"question"`
 	Filter              callFilter `json:"filter"`
@@ -921,6 +945,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	if strings.TrimSpace(evidenceQuery) == "" {
 		return toolCallResult{}, fmt.Errorf("%s requires a searchable question or query", OpQuestionAnswer)
 	}
+	initialEvidenceQuery := evidenceQuery
 	derivationMeta := map[string]any{
 		"source":            derivationSource,
 		"term_count":        len(strings.Fields(evidenceQuery)),
@@ -956,7 +981,41 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return toolCallResult{}, err
 	}
+	fallbackUsed := false
+	if len(items) == 0 && derivationSource == "derived_from_question" {
+		derivationMeta["initial_query"] = initialEvidenceQuery
+		derivationMeta["initial_term_count"] = len(strings.Fields(initialEvidenceQuery))
+		derivationMeta["fallback_attempted"] = true
+		derivationMeta["fallback_reason"] = "no_fallback_candidate_returned_evidence"
+		for _, candidate := range questionAnswerFallbackQueries(initialEvidenceQuery) {
+			if candidate == evidenceQuery {
+				continue
+			}
+			candidateArgs := baArgs
+			candidateArgs.Query = candidate
+			candidateItems, candidateQuotes, err := s.businessAnalysisEvidence(ctx, normalized, candidate, limit, candidateArgs)
+			if err != nil {
+				return toolCallResult{}, err
+			}
+			if len(candidateItems) == 0 {
+				continue
+			}
+			evidenceQuery = candidate
+			baArgs.Query = candidate
+			items = candidateItems
+			quotes = candidateQuotes
+			fallbackUsed = true
+			derivationMeta["term_count"] = len(strings.Fields(candidate))
+			derivationMeta["fallback_query"] = candidate
+			derivationMeta["fallback_reason"] = "initial_derived_query_returned_no_evidence"
+			derivationMeta["fallback_source"] = "first_matching_high_signal_term"
+			break
+		}
+	}
 	warnings := businessAnalysisWarnings(OpQuestionAnswer, normalized)
+	if fallbackUsed {
+		warnings = append(warnings, "question_answer_used_evidence_query_fallback")
+	}
 	if cohort.Summary.ParticipantTitleCallCount == 0 {
 		warnings = append(warnings, "participant_title_missing_or_unmapped")
 	}
@@ -1534,7 +1593,9 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"call_drilldown_does_not_re-derive_lifecycle_industry_or_opportunity_stage_in_this_spine",
 		"speaker_attribution_uses_exact_gong_party_speaker_id_only_no_crm_contact_or_lead_matching_in_this_phase",
 		"person_title_is_never_inferred_from_transcript_text_or_persona_buckets",
-		"buyer_versus_rep_role_is_not_proven_by_this_evidence_pack_callers_must_treat_attribution_confidence_as_authoritative",
+	}
+	if !callDrilldownSpeakerRolesAvailable(transcriptOut) {
+		limitations = append(limitations, "buyer_versus_rep_role_is_not_proven_by_this_evidence_pack_callers_must_treat_attribution_confidence_as_authoritative")
 	}
 
 	limitsBlock := map[string]any{
@@ -1559,6 +1620,18 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"theme_query":                  themeQuery,
 	}
 	return newToolResult(payload)
+}
+
+func callDrilldownSpeakerRolesAvailable(rows []callDrilldownTranscriptRow) bool {
+	if len(rows) == 0 {
+		return false
+	}
+	for _, row := range rows {
+		if row.SpeakerRoleStatus != sqlite.SpeakerRoleStatusAvailable {
+			return false
+		}
+	}
+	return true
 }
 
 func callDrilldownNotFoundPayload(status string, limit int) map[string]any {

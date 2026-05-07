@@ -234,6 +234,11 @@ Review checklist:
 - Confirm the CRM object names match the tenant's actual Gong CRM context.
 - Confirm `deal_stage` points to the real pipeline stage field, not a created
   date, owner, type, or unrelated status field.
+- Confirm loss/close reason, competitor, amount, close date, opportunity type,
+  forecast category, account industry, and participant/contact title mappings
+  when the customer expects outcome, targeting, or persona questions. If those
+  fields are absent or sparsely populated in the source CRM, MCP reports that as
+  a readiness limitation instead of deriving the value from transcript text.
 - Confirm `post_sales` rules identify real customers, renewals, support,
   success, or implementation conversations rather than active new-logo deals.
 - Confirm `closed_won` and `closed_lost` values match the tenant's exact CRM

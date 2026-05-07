@@ -1505,6 +1505,85 @@ func TestFacadeEvidenceCallDrilldownAttributionRespectsHideSpeakerIDs(t *testing
 	}
 }
 
+func TestFacadeEvidenceCallDrilldownOmitsUnprovenRoleLimitationWhenSpeakerRoleAvailable(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	const callID = "call_sanitized_001"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeDrilldownStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
+			callID: {
+				{
+					CallID:                callID,
+					SegmentIndex:          0,
+					SpeakerID:             "speaker_external_001",
+					StartMS:               1000,
+					EndMS:                 3500,
+					Snippet:               "Synthetic external speaker sentence.",
+					ContextExcerpt:        "Synthetic external speaker sentence.",
+					PersonTitleStatus:     "available",
+					PersonTitleSource:     "call_parties",
+					AttributionSource:     "gong_party",
+					AttributionConfidence: "exact_speaker_id",
+					SpeakerRole:           sqlite.SpeakerRoleExternal,
+					SpeakerRoleStatus:     sqlite.SpeakerRoleStatusAvailable,
+				},
+			},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"call_drilldown"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceCallDrilldown,
+		"arguments": map[string]any{
+			"call_ref":    callRef,
+			"theme_query": "Synthetic",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
+	if len(verbatim) != 1 {
+		t.Fatalf("verbatim len=%d want 1: %v", len(verbatim), inner)
+	}
+	row, _ := verbatim[0].(map[string]any)
+	if got, _ := row["speaker_role"].(string); got != sqlite.SpeakerRoleExternal {
+		t.Fatalf("speaker_role=%q want external; row=%v", got, row)
+	}
+	if got, _ := row["speaker_role_status"].(string); got != sqlite.SpeakerRoleStatusAvailable {
+		t.Fatalf("speaker_role_status=%q want available; row=%v", got, row)
+	}
+	if got, _ := row["is_internal_speaker"].(bool); got {
+		t.Fatalf("is_internal_speaker=true want false for external row: %v", row)
+	}
+	limitations, _ := inner["limitations"].([]any)
+	for _, l := range limitations {
+		if strings.Contains(fmt.Sprintf("%v", l), "buyer_versus_rep_role_is_not_proven") {
+			t.Fatalf("limitations should not claim buyer-vs-rep role is unproven when speaker_role_status is available: %v", limitations)
+		}
+	}
+}
+
 func TestFacadeEvidenceCallDrilldownPersonTitleRequiresExplicitOptInAndPolicy(t *testing.T) {
 	t.Parallel()
 

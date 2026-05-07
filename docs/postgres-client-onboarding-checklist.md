@@ -58,7 +58,32 @@ Review the dry run, then rerun with `--apply` if approved. Use
 `--preset business-pilot` only for the legacy narrow aggregate/status pilot
 lane. Repeat with `--preset analyst` for approved analyst sessions.
 
-## 4. Run Synthetic Repo Evidence
+## 4. Review The Customer Profile
+
+Treat `gongctl profile discover` as a starter, not a deployable customer
+configuration. Before client-facing persona, industry, lifecycle, won/lost, or
+loss-reason answers are used, RevOps or the process owner should review a YAML
+profile kept outside git and confirm these mappings:
+
+- CRM deal/opportunity object aliases and the exact stage field used for
+  `open`, `closed_won`, and `closed_lost`.
+- Loss reason, close reason, churn reason, competitor, forecast category,
+  amount, close date, and opportunity type fields where the customer expects
+  pipeline-outcome questions.
+- Account/company object aliases plus industry, segment, region, and named
+  account fields where industry or targeting questions matter.
+- Contact/lead/participant title fields used for persona analysis, plus whether
+  Gong speaker affiliation is populated enough to call snippets customer-side.
+- Post-sales/renewal/support lifecycle values, with negative examples proving
+  they do not catch active new-logo sales calls.
+
+Run `gongctl profile validate`, import only the reviewed YAML, rebuild the
+read model, then confirm `gongctl sync status` reports an active profile and a
+fresh profile cache. If a source CRM field is not mapped or not populated,
+`gongmcp` should report that as a data-readiness limitation rather than filling
+the gap from transcript text.
+
+## 5. Run Synthetic Repo Evidence
 
 Run these before introducing customer data:
 
@@ -77,7 +102,7 @@ Retain only reviewed evidence files: smoke summaries, `all-readonly` rejection,
 scoped reader apply JSON, read-only denial artifacts, and analyst
 small-cell/high-count evidence.
 
-## 5. Run Customer-Platform Dry Run
+## 6. Run Customer-Platform Dry Run
 
 Before real business users connect, run the same operating shape on the target
 Postgres service class with synthetic or approved non-production data:
@@ -93,7 +118,7 @@ Postgres service class with synthetic or approved non-production data:
 
 Stop if the dry run is not reviewed and signed off.
 
-## 6. Connect The First Business User
+## 7. Connect The First Business User
 
 - Start with `business-workbench` unless the sponsor approved trained analyst
   workflows.
@@ -103,7 +128,7 @@ Stop if the dry run is not reviewed and signed off.
 - Escalate stale cache, missing tools, unexpected raw identifiers, or
   suppression warnings the user does not understand back to the operator.
 
-## 7. Record Closeout
+## 8. Record Closeout
 
 For the pilot record, save:
 

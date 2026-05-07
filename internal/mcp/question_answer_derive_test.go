@@ -102,6 +102,70 @@ func TestFacadeQuestionAnswerDerivesBoundedThemeQuery(t *testing.T) {
 	}
 }
 
+func TestFacadeQuestionAnswerFallsBackToMatchedEvidenceTerm(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolQuestionAnswer}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpQuestionAnswer,
+		"arguments": map[string]any{
+			"question":      "Which manual order entry industry deals close won versus closed lost?",
+			"role_context":  "revops",
+			"output_intent": "quotes",
+			"filter": map[string]any{
+				"from_date":         "2026-02-01",
+				"to_date":           "2026-03-31",
+				"transcript_status": "present",
+				"limit":             5,
+			},
+			"limit": 5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result type=%T", wrapper["result"])
+	}
+	if got, _ := inner["evidence_count"].(float64); got == 0 {
+		t.Fatalf("question.answer should retry a derived query with a matched high-signal fallback term; inner=%v", inner)
+	}
+	if got, _ := inner["evidence_query"].(string); got != "manual" {
+		t.Fatalf("evidence_query=%q want matched fallback term manual; inner=%v", got, inner)
+	}
+	derivation, _ := inner["theme_query_derivation"].(map[string]any)
+	if derivation == nil {
+		t.Fatalf("theme_query_derivation missing: %v", inner)
+	}
+	if got, _ := derivation["initial_query"].(string); !strings.Contains(got, "manual") || !strings.Contains(got, "order") {
+		t.Fatalf("theme_query_derivation.initial_query=%q should preserve the original derived query", got)
+	}
+	if got, _ := derivation["fallback_query"].(string); got != "manual" {
+		t.Fatalf("theme_query_derivation.fallback_query=%q want manual; derivation=%v", got, derivation)
+	}
+	if got, _ := derivation["fallback_reason"].(string); got == "" {
+		t.Fatalf("theme_query_derivation.fallback_reason missing: %v", derivation)
+	}
+}
+
 // TestFacadeQuestionAnswerDerivedThemeQueryHonoursExplicitOverride verifies
 // that if the caller provides an explicit theme_query / query, the
 // derivation step does not silently overwrite it.
