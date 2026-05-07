@@ -2242,6 +2242,129 @@ func normalizeProfileGroupBy(groupBy string) string {
 	}
 }
 
+// EvaluateProfileReadinessChecklist applies a deterministic set of mechanical
+// checks against the active profile and returns operator-facing findings.
+// The checks are intentionally conservative: they flag mappings that
+// docs/profiles.md calls out as common bad patterns (CreatedDate-only field
+// concepts), missing required lifecycle buckets, lifecycle buckets without
+// rules, missing methodology concepts, and the absence of any loss-reason
+// field mapping. The checklist is advisory; it never blocks profile import.
+func EvaluateProfileReadinessChecklist(p *profilepkg.Profile) ProfileReadinessChecklist {
+	checklist := ProfileReadinessChecklist{}
+	if p == nil {
+		return checklist
+	}
+	checklist.Computed = true
+
+	// Field concepts whose only mapped CRM field names look like a
+	// CreatedDate alias. docs/profiles.md flags this as a common
+	// misconfiguration: CreatedDate is a useful timestamp but should not
+	// drive lifecycle, persona, or outcome concepts on its own.
+	createdDateAliases := map[string]struct{}{
+		"createddate": {}, "created_date": {}, "created_at": {}, "created": {},
+		"createdon": {}, "created_on": {}, "createdtimestamp": {},
+	}
+	for concept, mapping := range p.Fields {
+		if len(mapping.Names) == 0 {
+			continue
+		}
+		onlyCreated := true
+		for _, name := range mapping.Names {
+			normalized := strings.ToLower(strings.TrimSpace(name))
+			normalized = strings.ReplaceAll(normalized, "__c", "")
+			if _, ok := createdDateAliases[normalized]; !ok {
+				onlyCreated = false
+				break
+			}
+		}
+		if onlyCreated {
+			checklist.CreatedDateOnlyConcepts = append(checklist.CreatedDateOnlyConcepts, concept)
+		}
+	}
+	sort.Strings(checklist.CreatedDateOnlyConcepts)
+
+	// Lifecycle buckets: missing required buckets and rules-empty profile.
+	missingBuckets := []string{}
+	for _, bucket := range profilepkg.RequiredLifecycleBuckets {
+		if _, ok := p.Lifecycle[bucket]; !ok {
+			missingBuckets = append(missingBuckets, bucket)
+		}
+	}
+	sort.Strings(missingBuckets)
+	checklist.MissingLifecycleBuckets = missingBuckets
+	checklist.LifecycleRulesMissing = profileLifecycleRulesAllEmpty(p)
+
+	// Methodology entirely unmapped.
+	checklist.MethodologyUnmapped = len(p.Methodology) == 0
+
+	// Loss-reason mapping: any field concept whose CRM field names match
+	// the canonical LossReasonFieldNames list (case-insensitive).
+	checklist.LossReasonMappingMissing = !profileHasLossReasonMapping(p)
+
+	// Build a stable, human-readable findings list. Operator-facing
+	// surfaces (gong_status, profile-readiness reports) display this list
+	// directly.
+	if len(checklist.CreatedDateOnlyConcepts) > 0 {
+		checklist.SuspectFindings = append(checklist.SuspectFindings,
+			"created_date_only_field_concepts: "+strings.Join(checklist.CreatedDateOnlyConcepts, ","))
+	}
+	if len(checklist.MissingLifecycleBuckets) > 0 {
+		checklist.SuspectFindings = append(checklist.SuspectFindings,
+			"missing_lifecycle_buckets: "+strings.Join(checklist.MissingLifecycleBuckets, ","))
+	}
+	if checklist.LifecycleRulesMissing {
+		checklist.SuspectFindings = append(checklist.SuspectFindings,
+			"lifecycle_rules_missing: every defined lifecycle bucket has zero rules; profile cannot partition cohorts by lifecycle")
+	}
+	if checklist.MethodologyUnmapped {
+		checklist.SuspectFindings = append(checklist.SuspectFindings,
+			"methodology_concepts_unmapped: profile defines no methodology concepts (pain, next steps, MEDDICC, etc.)")
+	}
+	if checklist.LossReasonMappingMissing {
+		checklist.SuspectFindings = append(checklist.SuspectFindings,
+			"loss_reason_mapping_missing: no field concept references a known loss-reason field; loss-reason rollups will fall back to the legacy presence heuristic")
+	}
+	sort.Strings(checklist.SuspectFindings)
+	return checklist
+}
+
+func profileLifecycleRulesAllEmpty(p *profilepkg.Profile) bool {
+	if p == nil || len(p.Lifecycle) == 0 {
+		return true
+	}
+	for _, bucket := range p.Lifecycle {
+		if len(bucket.Rules) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func profileHasLossReasonMapping(p *profilepkg.Profile) bool {
+	if p == nil {
+		return false
+	}
+	allowed := make(map[string]struct{}, len(LossReasonFieldNames))
+	for _, name := range LossReasonFieldNames {
+		allowed[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
+	for _, mapping := range p.Fields {
+		for _, name := range mapping.Names {
+			if _, ok := allowed[strings.ToLower(strings.TrimSpace(name))]; ok {
+				return true
+			}
+		}
+	}
+	for _, concept := range p.Methodology {
+		for _, ref := range concept.Fields {
+			if _, ok := allowed[strings.ToLower(strings.TrimSpace(ref.Name))]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func profileUnavailableConcepts(p *profilepkg.Profile, groupBy string) []string {
 	if p == nil {
 		return nil

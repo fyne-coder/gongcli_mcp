@@ -2046,6 +2046,9 @@ func TestSearchTranscriptQuotesWithAttributionRedactsNamesByDefault(t *testing.T
 	if rows[0]["participant_status"] == "" || rows[0]["person_title_status"] == "" {
 		t.Fatalf("missing person/title status: %+v", rows[0])
 	}
+	if rows[0]["speaker_role"] != sqlite.SpeakerRoleUnknown || rows[0]["speaker_role_status"] != sqlite.SpeakerRoleStatusSpeakerUnmatched {
+		t.Fatalf("missing safe speaker role/status defaults: %+v", rows[0])
+	}
 	if text, ok := rows[0]["context_excerpt"].(string); !ok || !strings.Contains(text, "Implementation timeline") {
 		t.Fatalf("missing bounded context excerpt: %+v", rows[0])
 	}

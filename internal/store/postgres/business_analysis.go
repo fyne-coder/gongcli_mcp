@@ -399,7 +399,7 @@ func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, param
 		return nil, errors.New("account_query is not supported by the Postgres analyst-business-core reader because it can probe customer names")
 	}
 	limit := boundedLimit(params.Limit, defaultTranscriptSearchLimit, maxTranscriptSearchLimit)
-	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, lifecycle_bucket, account_name, account_industry, account_website, opportunity_name, opportunity_stage, opportunity_type, opportunity_close_date, opportunity_probability, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, lifecycle_bucket, account_name, account_industry, account_website, opportunity_name, opportunity_stage, opportunity_type, opportunity_close_date, opportunity_probability, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
   FROM `+s.postgresTranscriptQuoteAttributionFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		queryText,
 		fromDate,
@@ -421,7 +421,7 @@ func (s *Store) SearchTranscriptQuotesWithAttribution(ctx context.Context, param
 	out := []sqlite.TranscriptAttributionSearchResult{}
 	for rows.Next() {
 		var row sqlite.TranscriptAttributionSearchResult
-		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.CallDate, &row.LifecycleBucket, &row.AccountName, &row.AccountIndustry, &row.AccountWebsite, &row.OpportunityName, &row.OpportunityStage, &row.OpportunityType, &row.OpportunityCloseDate, &row.OpportunityProbability, &row.ParticipantStatus, &row.PersonTitleStatus, &row.PersonTitleSource, &row.SegmentIndex, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt); err != nil {
+		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.CallDate, &row.LifecycleBucket, &row.AccountName, &row.AccountIndustry, &row.AccountWebsite, &row.OpportunityName, &row.OpportunityStage, &row.OpportunityType, &row.OpportunityCloseDate, &row.OpportunityProbability, &row.ParticipantStatus, &row.PersonTitleStatus, &row.PersonTitleSource, &row.SegmentIndex, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt, &row.SpeakerRole, &row.SpeakerRoleStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, row)
@@ -462,7 +462,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	}
 	var rows *sql.Rows
 	if params.BroadDiscovery {
-		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
+		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
   FROM `+s.postgresBusinessAnalysisThemeSeedFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 			filter.TitleQuery,
 			filter.Query,
@@ -482,7 +482,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 			limit,
 		)
 	} else {
-		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt
+		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
   FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 			queryText,
 			filter.TitleQuery,
@@ -510,7 +510,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	out := []sqlite.BusinessAnalysisEvidenceRow{}
 	for rows.Next() {
 		var row sqlite.BusinessAnalysisEvidenceRow
-		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.CallDate, &row.CallMonth, &row.LifecycleBucket, &row.AccountIndustry, &row.AccountName, &row.OpportunityName, &row.OpportunityStage, &row.OpportunityType, &row.OpportunityProbability, &row.OpportunityCloseDate, &row.ParticipantStatus, &row.PersonTitleStatus, &row.PersonTitleSource, &row.SegmentIndex, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt); err != nil {
+		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.CallDate, &row.CallMonth, &row.LifecycleBucket, &row.AccountIndustry, &row.AccountName, &row.OpportunityName, &row.OpportunityStage, &row.OpportunityType, &row.OpportunityProbability, &row.OpportunityCloseDate, &row.ParticipantStatus, &row.PersonTitleStatus, &row.PersonTitleSource, &row.SegmentIndex, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt, &row.SpeakerRole, &row.SpeakerRoleStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

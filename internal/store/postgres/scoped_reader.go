@@ -588,6 +588,8 @@ func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 		{Table: "call_facts", Column: "duration_seconds"},
 		{Table: "call_facts", Column: "started_at"},
 		{Table: "call_facts", Column: "lifecycle_confidence"},
+		{Table: "call_facts", Column: "account_industry"},
+		{Table: "call_facts", Column: "opportunity_stage"},
 		{Table: "call_facts", Column: "opportunity_count"},
 		{Table: "call_facts", Column: "account_count"},
 		{Table: "postgres_read_model_state", Column: "model_name"},

@@ -2119,6 +2119,9 @@ func TestSearchTranscriptQuotesWithAttributionJoinsCRMMetadata(t *testing.T) {
 		"title":    "Attribution evidence call",
 		"started":  "2026-02-12T15:00:00Z",
 		"duration": 1800,
+		"parties": []any{
+			map[string]any{"speakerId": "buyer", "affiliation": "External", "title": "Procurement Manager"},
+		},
 		"context": []any{
 			map[string]any{
 				"objectType": "Account",
@@ -2192,8 +2195,11 @@ func TestSearchTranscriptQuotesWithAttributionJoinsCRMMetadata(t *testing.T) {
 	if row.CallID != "call-attribution" || row.Title != "Attribution evidence call" || row.AccountName != "Example Manufacturing" || row.AccountIndustry != "Manufacturing" || row.OpportunityName != "Example Deal" || row.OpportunityStage != "Discovery" {
 		t.Fatalf("unexpected attribution row: %+v", row)
 	}
-	if row.ParticipantStatus != "missing_from_cache" || row.PersonTitleStatus != "missing_from_cache" {
+	if row.ParticipantStatus != "present" || row.PersonTitleStatus != "available" {
 		t.Fatalf("unexpected person/title status: %+v", row)
+	}
+	if row.SpeakerRole != SpeakerRoleExternal || row.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("unexpected speaker role/status: %+v", row)
 	}
 	if !strings.Contains(strings.ToLower(row.ContextExcerpt), "implementation timeline") {
 		t.Fatalf("context excerpt=%q missing evidence", row.ContextExcerpt)

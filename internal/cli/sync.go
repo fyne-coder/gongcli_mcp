@@ -544,6 +544,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		TotalAIHighlights:            summary.TotalAIHighlights,
 		MissingTranscripts:           summary.MissingTranscripts,
 		RunningSyncRuns:              summary.RunningSyncRuns,
+		CallFactsAttribution:         summary.CallFactsAttribution,
 		ProfileReadiness:             summary.ProfileReadiness,
 		PublicReadiness:              summary.PublicReadiness,
 		AttributionCoverage:          summary.AttributionCoverage,
@@ -1377,29 +1378,30 @@ func populateSyncRunServiceResult(target *syncRunStepResult, source syncsvc.Resu
 }
 
 type syncStatusResponse struct {
-	TotalCalls                   int64                      `json:"total_calls"`
-	TotalUsers                   int64                      `json:"total_users"`
-	TotalTranscripts             int64                      `json:"total_transcripts"`
-	TotalTranscriptSegments      int64                      `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64                      `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64                      `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64                      `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64                      `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64                      `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64                      `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64                      `json:"total_gong_settings"`
-	TotalScorecards              int64                      `json:"total_scorecards"`
-	TotalScorecardActivity       int64                      `json:"total_scorecard_activity"`
-	TotalAIHighlights            int64                      `json:"total_ai_highlights"`
-	MissingTranscripts           int64                      `json:"missing_transcripts"`
-	RunningSyncRuns              int64                      `json:"running_sync_runs"`
-	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`
-	PublicReadiness              sqlite.PublicReadiness     `json:"public_readiness"`
-	AttributionCoverage          sqlite.AttributionCoverage `json:"attribution_coverage"`
-	PostgresReadModel            *postgres.ReadModelStatus  `json:"postgres_read_model,omitempty"`
-	LastRun                      *syncRunJSON               `json:"last_run,omitempty"`
-	LastSuccessfulRun            *syncRunJSON               `json:"last_successful_run,omitempty"`
-	States                       []syncStateJSON            `json:"states"`
+	TotalCalls                   int64                              `json:"total_calls"`
+	TotalUsers                   int64                              `json:"total_users"`
+	TotalTranscripts             int64                              `json:"total_transcripts"`
+	TotalTranscriptSegments      int64                              `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64                              `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64                              `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64                              `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64                              `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64                              `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64                              `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64                              `json:"total_gong_settings"`
+	TotalScorecards              int64                              `json:"total_scorecards"`
+	TotalScorecardActivity       int64                              `json:"total_scorecard_activity"`
+	TotalAIHighlights            int64                              `json:"total_ai_highlights"`
+	MissingTranscripts           int64                              `json:"missing_transcripts"`
+	RunningSyncRuns              int64                              `json:"running_sync_runs"`
+	CallFactsAttribution         sqlite.CallFactsAttributionSignals `json:"call_facts_attribution"`
+	ProfileReadiness             sqlite.ProfileReadiness            `json:"profile_readiness"`
+	PublicReadiness              sqlite.PublicReadiness             `json:"public_readiness"`
+	AttributionCoverage          sqlite.AttributionCoverage         `json:"attribution_coverage"`
+	PostgresReadModel            *postgres.ReadModelStatus          `json:"postgres_read_model,omitempty"`
+	LastRun                      *syncRunJSON                       `json:"last_run,omitempty"`
+	LastSuccessfulRun            *syncRunJSON                       `json:"last_successful_run,omitempty"`
+	States                       []syncStateJSON                    `json:"states"`
 }
 
 type syncRunJSON struct {

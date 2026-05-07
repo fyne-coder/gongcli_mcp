@@ -60,6 +60,8 @@ type themeIntelReportQuoteRow struct {
 	PersonTitleStatus     string `json:"person_title_status"`
 	AttributionSource     string `json:"attribution_source"`
 	AttributionConfidence string `json:"attribution_confidence"`
+	SpeakerRole           string `json:"speaker_role"`
+	SpeakerRoleStatus     string `json:"speaker_role_status"`
 	// DrilldownTerm is the exact theme term/phrase that callers should pass
 	// back into evidence.call_drilldown's theme_query so the drill-down hits
 	// the same matched segment. Phase C deliberately defers fuzzy/synonym
@@ -539,6 +541,14 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 		return out
 	}
 	convert := func(quote businessAnalysisQuote, item businessAnalysisItem, themeName string) themeIntelReportQuoteRow {
+		speakerRole := strings.TrimSpace(quote.SpeakerRole)
+		speakerStatus := strings.TrimSpace(quote.SpeakerRoleStatus)
+		if speakerRole == "" {
+			speakerRole = sqlite.SpeakerRoleUnknown
+		}
+		if speakerStatus == "" {
+			speakerStatus = sqlite.SpeakerRoleStatusAffiliationMissing
+		}
 		row := themeIntelReportQuoteRow{
 			CallRef:               quote.CallRef,
 			SegmentIndex:          quote.SegmentIndex,
@@ -554,6 +564,8 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 			PersonTitleStatus:     quote.PersonTitleStatus,
 			AttributionSource:     defaultAttribution(quote.PersonTitleStatus),
 			AttributionConfidence: defaultAttributionConfidence(quote.PersonTitleStatus),
+			SpeakerRole:           speakerRole,
+			SpeakerRoleStatus:     speakerStatus,
 			DrilldownTerm:         themeName,
 		}
 		if includeRaw {

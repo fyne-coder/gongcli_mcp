@@ -154,6 +154,13 @@ func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T)
 			Scope string `json:"scope"`
 		} `json:"states"`
 	}
+	var rawStatus map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &rawStatus); err != nil {
+		t.Fatalf("decode raw status JSON: %v", err)
+	}
+	if _, ok := rawStatus["call_facts_attribution"]; !ok {
+		t.Fatalf("status JSON missing call_facts_attribution: %s", stdout.String())
+	}
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatalf("decode status JSON: %v", err)
 	}

@@ -139,7 +139,7 @@ SELECT m.call_id,
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_quotes_with_attribution(search_text text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, row_limit integer)
-RETURNS TABLE(call_id text, title text, started_at text, call_date text, lifecycle_bucket text, account_name text, account_industry text, account_website text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_close_date text, opportunity_probability text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, lifecycle_bucket text, account_name text, account_industry text, account_website text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_close_date text, opportunity_probability text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -155,6 +155,7 @@ matched_segments AS (
 	       c.parties_count,
 	       COALESCE(cf.call_date, left(c.started_at, 10)) AS call_date,
 	       COALESCE(cf.lifecycle_bucket, '') AS lifecycle_bucket,
+	       ts.speaker_id,
 	       ts.segment_index,
 	       ts.start_ms,
 	       ts.end_ms,
@@ -242,6 +243,36 @@ selected_opportunity AS (
 		   AND (opportunity_stage_arg = '' OR EXISTS (SELECT 1 FROM call_context_fields selected_f WHERE selected_f.call_id = o.call_id AND selected_f.object_key = o.object_key AND selected_f.field_name = 'StageName' AND LOWER(TRIM(selected_f.field_value_text)) LIKE '%' || LOWER(left(opportunity_stage_arg, 160)) || '%'))
 	  ) selected
 	 WHERE rn = 1
+),
+party_roles AS (
+	SELECT DISTINCT c.call_id,
+	       NULLIF(TRIM(BOTH '"' FROM COALESCE(p.value->>'speakerId', p.value->>'speaker_id', p.value->>'id', '')), '') AS speaker_key,
+	       CASE
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'internal' THEN 'internal'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'external' THEN 'external'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'true' THEN 'internal'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'false' THEN 'external'
+		       ELSE NULL
+	       END AS speaker_role
+	  FROM calls c
+	  JOIN (SELECT DISTINCT call_id FROM matched_segments) m ON m.call_id = c.call_id,
+	       LATERAL (
+		       SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS value
+		       UNION ALL
+		       SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS value
+	       ) AS p
+),
+speaker_roles AS (
+	SELECT m.call_id,
+	       m.segment_index,
+	       m.speaker_id,
+	       COUNT(p.speaker_key) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id) AS match_count,
+	       MAX(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_when_present,
+	       COUNT(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_count,
+	       COUNT(DISTINCT p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_distinct_count
+	  FROM matched_segments m
+	  LEFT JOIN party_roles p ON p.call_id = m.call_id
+	 GROUP BY m.call_id, m.segment_index, m.speaker_id
 )
 SELECT m.call_id,
        m.title,
@@ -272,8 +303,23 @@ SELECT m.call_id,
        m.start_ms,
        m.end_ms,
        m.snippet,
-       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = m.call_id AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1), ''), 800) AS context_excerpt
+       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = m.call_id AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1), ''), 800) AS context_excerpt,
+       CASE
+	       WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'unknown'
+	       WHEN sr.match_count IS NULL OR sr.match_count = 0 THEN 'unknown'
+	       WHEN sr.match_count > 1 AND (sr.role_count = 0 OR sr.role_distinct_count <> 1) THEN 'unknown'
+	       WHEN sr.role_count > 0 THEN sr.role_when_present
+	       ELSE 'unknown'
+       END AS speaker_role,
+       CASE
+	       WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'speaker_unmatched'
+	       WHEN sr.match_count IS NULL OR sr.match_count = 0 THEN 'speaker_unmatched'
+	       WHEN sr.match_count > 1 THEN 'speaker_ambiguous'
+	       WHEN sr.role_count > 0 THEN 'available'
+	       ELSE 'affiliation_missing'
+       END AS speaker_role_status
   FROM matched_segments m
+  LEFT JOIN speaker_roles sr ON sr.call_id = m.call_id AND sr.segment_index = m.segment_index AND sr.speaker_id = m.speaker_id
  ORDER BY m.rank DESC, m.started_at DESC, m.call_id, m.segment_index
 $function$;
 
@@ -421,7 +467,7 @@ SELECT COUNT(*) AS call_count,
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
-RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -441,6 +487,7 @@ matched AS (
 	       cf.opportunity_stage,
 	       cf.opportunity_type,
 	       c.parties_count,
+	       ts.speaker_id,
 	       ts.segment_index,
 	       ts.start_ms,
 	       ts.end_ms,
@@ -485,6 +532,36 @@ matched AS (
 		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
 		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
 		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
+),
+party_roles AS (
+	SELECT DISTINCT c.call_id,
+	       NULLIF(TRIM(BOTH '"' FROM COALESCE(p.value->>'speakerId', p.value->>'speaker_id', p.value->>'id', '')), '') AS speaker_key,
+	       CASE
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'internal' THEN 'internal'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'external' THEN 'external'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'true' THEN 'internal'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'false' THEN 'external'
+		       ELSE NULL
+	       END AS speaker_role
+	  FROM calls c
+	  JOIN (SELECT DISTINCT call_id FROM matched) m ON m.call_id = c.call_id,
+	       LATERAL (
+		       SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS value
+		       UNION ALL
+		       SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS value
+	       ) AS p
+),
+speaker_roles AS (
+	SELECT m.call_id,
+	       m.segment_index,
+	       m.speaker_id,
+	       COUNT(p.speaker_key) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id) AS match_count,
+	       MAX(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_when_present,
+	       COUNT(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_count,
+	       COUNT(DISTINCT p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_distinct_count
+	  FROM matched m
+	  LEFT JOIN party_roles p ON p.call_id = m.call_id
+	 GROUP BY m.call_id, m.segment_index, m.speaker_id
 )
 SELECT m.call_id,
        m.title,
@@ -515,14 +592,29 @@ SELECT m.call_id,
        m.start_ms,
        m.end_ms,
        m.snippet,
-       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = m.call_id AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1), ''), 800) AS context_excerpt
+       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = m.call_id AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1), ''), 800) AS context_excerpt,
+       CASE
+	       WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'unknown'
+	       WHEN sr.match_count IS NULL OR sr.match_count = 0 THEN 'unknown'
+	       WHEN sr.match_count > 1 AND (sr.role_count = 0 OR sr.role_distinct_count <> 1) THEN 'unknown'
+	       WHEN sr.role_count > 0 THEN sr.role_when_present
+	       ELSE 'unknown'
+       END AS speaker_role,
+       CASE
+	       WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'speaker_unmatched'
+	       WHEN sr.match_count IS NULL OR sr.match_count = 0 THEN 'speaker_unmatched'
+	       WHEN sr.match_count > 1 THEN 'speaker_ambiguous'
+	       WHEN sr.role_count > 0 THEN 'available'
+	       ELSE 'affiliation_missing'
+       END AS speaker_role_status
   FROM matched m
+  LEFT JOIN speaker_roles sr ON sr.call_id = m.call_id AND sr.segment_index = m.segment_index AND sr.speaker_id = m.speaker_id
  ORDER BY m.rank DESC, m.started_at DESC, m.call_id, m.segment_index
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
-RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -539,6 +631,7 @@ WITH sampled AS (
 	       cf.opportunity_stage,
 	       cf.opportunity_type,
 	       c.parties_count,
+	       ts.speaker_id,
 	       ts.segment_index,
 	       ts.start_ms,
 	       ts.end_ms,
@@ -580,6 +673,36 @@ WITH sampled AS (
 		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
 		       EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%') OR
 		       EXISTS (SELECT 1 FROM call_context_objects po JOIN call_context_fields pf ON pf.call_id = po.call_id AND pf.object_key = po.object_key WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead') AND pf.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND LOWER(TRIM(pf.field_value_text)) LIKE '%' || LOWER(left(participant_title_query_arg, 160)) || '%'))
+),
+party_roles AS (
+	SELECT DISTINCT c.call_id,
+	       NULLIF(TRIM(BOTH '"' FROM COALESCE(p.value->>'speakerId', p.value->>'speaker_id', p.value->>'id', '')), '') AS speaker_key,
+	       CASE
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'internal' THEN 'internal'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'external' THEN 'external'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'true' THEN 'internal'
+		       WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'false' THEN 'external'
+		       ELSE NULL
+	       END AS speaker_role
+	  FROM calls c
+	  JOIN (SELECT DISTINCT call_id FROM sampled) s ON s.call_id = c.call_id,
+	       LATERAL (
+		       SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS value
+		       UNION ALL
+		       SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS value
+	       ) AS p
+),
+speaker_roles AS (
+	SELECT s.call_id,
+	       s.segment_index,
+	       s.speaker_id,
+	       COUNT(p.speaker_key) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = s.speaker_id) AS match_count,
+	       MAX(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = s.speaker_id AND p.speaker_role IS NOT NULL) AS role_when_present,
+	       COUNT(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = s.speaker_id AND p.speaker_role IS NOT NULL) AS role_count,
+	       COUNT(DISTINCT p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = s.speaker_id AND p.speaker_role IS NOT NULL) AS role_distinct_count
+	  FROM sampled s
+	  LEFT JOIN party_roles p ON p.call_id = s.call_id
+	 GROUP BY s.call_id, s.segment_index, s.speaker_id
 )
 SELECT s.call_id,
        s.title,
@@ -610,8 +733,23 @@ SELECT s.call_id,
        s.start_ms,
        s.end_ms,
        s.snippet,
-       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = s.call_id AND ctx.segment_index BETWEEN s.segment_index - 1 AND s.segment_index + 1), ''), 800) AS context_excerpt
+       left(COALESCE((SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index) FROM transcript_segments ctx WHERE ctx.call_id = s.call_id AND ctx.segment_index BETWEEN s.segment_index - 1 AND s.segment_index + 1), ''), 800) AS context_excerpt,
+       CASE
+	       WHEN COALESCE(NULLIF(TRIM(s.speaker_id), ''), '') = '' THEN 'unknown'
+	       WHEN sr.match_count IS NULL OR sr.match_count = 0 THEN 'unknown'
+	       WHEN sr.match_count > 1 AND (sr.role_count = 0 OR sr.role_distinct_count <> 1) THEN 'unknown'
+	       WHEN sr.role_count > 0 THEN sr.role_when_present
+	       ELSE 'unknown'
+       END AS speaker_role,
+       CASE
+	       WHEN COALESCE(NULLIF(TRIM(s.speaker_id), ''), '') = '' THEN 'speaker_unmatched'
+	       WHEN sr.match_count IS NULL OR sr.match_count = 0 THEN 'speaker_unmatched'
+	       WHEN sr.match_count > 1 THEN 'speaker_ambiguous'
+	       WHEN sr.role_count > 0 THEN 'available'
+	       ELSE 'affiliation_missing'
+       END AS speaker_role_status
   FROM sampled s
+  LEFT JOIN speaker_roles sr ON sr.call_id = s.call_id AND sr.segment_index = s.segment_index AND sr.speaker_id = s.speaker_id
  ORDER BY s.started_at DESC, s.call_id, s.segment_index
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
@@ -755,7 +893,7 @@ SELECT CASE lower(trim(dimension_arg))
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_quotes_with_attribution_sanitized(search_text text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, row_limit integer)
-RETURNS TABLE(call_id text, title text, started_at text, call_date text, lifecycle_bucket text, account_name text, account_industry text, account_website text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_close_date text, opportunity_probability text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, lifecycle_bucket text, account_name text, account_industry text, account_website text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_close_date text, opportunity_probability text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -781,7 +919,9 @@ SELECT md5(raw.call_id) AS call_id,
        raw.start_ms,
        raw.end_ms,
        raw.snippet,
-       raw.context_excerpt
+       raw.context_excerpt,
+       raw.speaker_role,
+       raw.speaker_role_status
   FROM gongmcp_search_transcript_quotes_with_attribution(search_text, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, row_limit) raw
 $function$;
 
@@ -816,7 +956,7 @@ SELECT md5(raw.call_id) AS call_id,
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence_sanitized(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
-RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -842,12 +982,14 @@ SELECT md5(raw.call_id) AS call_id,
        raw.start_ms,
        raw.end_ms,
        raw.snippet,
-       raw.context_excerpt
+       raw.context_excerpt,
+       raw.speaker_role,
+       raw.speaker_role_status
   FROM gongmcp_business_analysis_evidence(search_text, title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
-RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
@@ -873,7 +1015,9 @@ SELECT md5(raw.call_id) AS call_id,
        raw.start_ms,
        raw.end_ms,
        raw.snippet,
-       raw.context_excerpt
+       raw.context_excerpt,
+       raw.speaker_role,
+       raw.speaker_role_status
   FROM gongmcp_business_analysis_theme_seed_sample(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, row_limit) raw
 $function$;
 

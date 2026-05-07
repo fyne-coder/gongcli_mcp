@@ -507,6 +507,10 @@ func (s *Store) ActiveBusinessProfile(ctx context.Context) (*sqlite.BusinessProf
 }
 
 func (s *Store) ActiveProfileDocument(ctx context.Context) (*profilepkg.Profile, error) {
+	if s.readOnly {
+		_, p, _, err := s.activeProfileViaMCPFunction(ctx)
+		return p, err
+	}
 	doc, err := s.ProfileDocument(ctx, "active")
 	if err != nil {
 		return nil, err
@@ -889,6 +893,9 @@ func (s *Store) profileReadiness(ctx context.Context) (sqlite.ProfileReadiness, 
 	readiness.MethodologyConceptCount = len(profile.MethodologyConcepts)
 	readiness.WarningCount = len(profile.Warnings)
 	readiness.UnavailableConcepts = profile.UnavailableConcepts
+	if doc, docErr := s.ActiveProfileDocument(ctx); docErr == nil {
+		readiness.Checklist = sqlite.EvaluateProfileReadinessChecklist(doc)
+	}
 	fingerprint, err := s.profileDataFingerprint(ctx)
 	if err != nil {
 		return readiness, err

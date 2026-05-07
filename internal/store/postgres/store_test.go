@@ -138,10 +138,44 @@ func TestPostgresCallDrilldownEvidenceFunctionExposesSpeakerRoleSQL(t *testing.T
 			t.Fatalf("postgres call-drilldown function SQL missing %q", want)
 		}
 	}
+	foundMigration := false
+	for _, migration := range migrations {
+		if strings.Contains(migration, "DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer)") &&
+			strings.Contains(migration, "speaker_role text") {
+			foundMigration = true
+			break
+		}
+	}
+	if !foundMigration {
+		t.Fatalf("migrations do not recreate call drilldown with speaker role columns")
+	}
+}
+
+func TestPostgresBusinessAnalysisFunctionsExposeSpeakerRoleSQL(t *testing.T) {
+	sqlText := postgresBusinessAnalysisFunctionsSQL
+	for _, want := range []string{
+		"RETURNS TABLE(call_id text, title text, started_at text, call_date text, lifecycle_bucket text, account_name text, account_industry text, account_website text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_close_date text, opportunity_probability text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)",
+		"RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)",
+		"raw.speaker_role",
+		"raw.speaker_role_status",
+		"END AS speaker_role",
+		"END AS speaker_role_status",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres business-analysis function SQL missing %q", want)
+		}
+	}
 	lastMigration := migrations[len(migrations)-1]
-	if !strings.Contains(lastMigration, "DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer)") ||
-		!strings.Contains(lastMigration, "speaker_role text") {
-		t.Fatalf("latest migration does not recreate call drilldown with speaker role columns")
+	for _, want := range []string{
+		"DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"speaker_role text",
+		"speaker_role_status text",
+	} {
+		if !strings.Contains(lastMigration, want) {
+			t.Fatalf("latest migration missing %q", want)
+		}
 	}
 }
 

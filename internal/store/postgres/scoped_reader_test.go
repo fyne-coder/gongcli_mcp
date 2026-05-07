@@ -35,7 +35,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
-		`GRANT SELECT ("account_count", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("account_count", "account_industry", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "opportunity_stage", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,
@@ -282,7 +282,7 @@ func TestBuildScopedReaderGrantSQLRedactedAllReadonlyGrantsBroadSearchSurface(t 
 	}
 	for _, want := range []string{
 		`GRANT SELECT ("call_id", "context_present", "duration_seconds", "parties_count", "started_at", "title") ON TABLE public."calls" TO "gongmcp_redacted_reader";`,
-		`GRANT SELECT ("account_count", "call_date", "call_id", "direction", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "scope", "started_at", "system", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_redacted_reader";`,
+		`GRANT SELECT ("account_count", "account_industry", "call_date", "call_id", "direction", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "opportunity_stage", "scope", "started_at", "system", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_redacted_reader";`,
 		`GRANT SELECT ("call_id", "id", "object_key", "object_type") ON TABLE public."gongmcp_call_context_objects" TO "gongmcp_redacted_reader";`,
 		`GRANT SELECT ("call_id", "field_label", "field_name", "field_populated", "field_type", "id", "object_key") ON TABLE public."gongmcp_call_context_fields" TO "gongmcp_redacted_reader";`,
 		`GRANT SELECT ("active", "kind", "name", "object_id", "updated_at") ON TABLE public."gong_settings" TO "gongmcp_redacted_reader";`,

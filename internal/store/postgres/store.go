@@ -2740,9 +2740,28 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		return nil, err
 	}
 	summary.ProfileReadiness = profileReadiness
-	if summary.MissingTranscripts == 0 && summary.TotalCalls > 0 {
-		summary.PublicReadiness.TranscriptCoverage = sqlite.ReadinessFlag{Ready: true, Status: "ready", Detail: "all cached calls have transcripts"}
+
+	signals, err := s.callFactsAttributionSignals(ctx)
+	if err != nil {
+		return nil, err
 	}
+	summary.CallFactsAttribution = signals
+
+	// Reuse the SQLite-derived readiness builder so Postgres reports the
+	// full ConversationVolume / TranscriptCoverage / ScorecardThemes /
+	// CRMSegmentation / AttributionReadiness / LifecycleSeparation set
+	// instead of leaving the unset flags as silent zero values. The builder
+	// already factors in summary.CallFactsAttribution so deployments where
+	// the redacted serving DB has zero CRM integration inventory but
+	// populated call_facts still report ready/partial via the curated
+	// signals rather than blocked.
+	summary.PublicReadiness = sqlite.BuildPublicReadiness(summary)
+
+	// Profile-aware overlay: when a profile is active and its read model
+	// cache is fresh, the Postgres backend can answer profile-specific
+	// lifecycle questions even before the SQLite-shape AttributionReadiness
+	// is "ready". Promote LifecycleSeparation accordingly without
+	// overriding the rest of the readiness shape.
 	if !profileReadiness.Active {
 		summary.PublicReadiness.LifecycleSeparation = sqlite.ReadinessFlag{Ready: false, Status: "needs_profile", Detail: profileReadiness.Detail, Requirements: profileReadiness.Blocking}
 	} else if profileReadiness.CacheFresh {
@@ -2750,7 +2769,42 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 	} else {
 		summary.PublicReadiness.LifecycleSeparation = sqlite.ReadinessFlag{Ready: false, Status: "needs_action", Detail: profileReadiness.Detail, Requirements: profileReadiness.Blocking}
 	}
+	if summary.MissingTranscripts == 0 && summary.TotalCalls > 0 {
+		summary.PublicReadiness.TranscriptCoverage = sqlite.ReadinessFlag{Ready: true, Status: "ready", Detail: "all cached calls have transcripts"}
+	}
 	return summary, nil
+}
+
+// callFactsAttributionSignals reads the curated read-model attribution
+// signals from the Postgres call_facts table. The selected columns
+// (account_industry, opportunity_stage, lifecycle_bucket, opportunity_count,
+// account_count) are all granted to the scoped MCP reader role on
+// gongmcp_reader (see store.go GRANT statements), so this query works in
+// both writer and read-only-with-EnforceAllowedColumnBoundary modes without
+// requiring a new SECURITY DEFINER function.
+func (s *Store) callFactsAttributionSignals(ctx context.Context) (sqlite.CallFactsAttributionSignals, error) {
+	var signals sqlite.CallFactsAttributionSignals
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(SUM(CASE WHEN TRIM(account_industry) <> '' THEN 1 ELSE 0 END), 0) AS account_industry_call_count,
+       COALESCE(SUM(CASE WHEN TRIM(opportunity_stage) <> '' THEN 1 ELSE 0 END), 0) AS opportunity_stage_call_count,
+       COALESCE(SUM(CASE WHEN lifecycle_bucket IS NOT NULL AND lifecycle_bucket NOT IN ('', 'unknown') THEN 1 ELSE 0 END), 0) AS lifecycle_classified_call_count,
+       COALESCE(SUM(CASE WHEN opportunity_count > 0 THEN 1 ELSE 0 END), 0) AS opportunity_call_count,
+       COALESCE(SUM(CASE WHEN account_count > 0 THEN 1 ELSE 0 END), 0) AS account_call_count
+  FROM call_facts`).Scan(
+		&signals.AccountIndustryCallCount,
+		&signals.OpportunityStageCallCount,
+		&signals.LifecycleClassifiedCallCount,
+		&signals.OpportunityCallCount,
+		&signals.AccountCallCount,
+	); err != nil {
+		return sqlite.CallFactsAttributionSignals{}, err
+	}
+	signals.HasAnyAttributionSignal = signals.AccountIndustryCallCount > 0 ||
+		signals.OpportunityStageCallCount > 0 ||
+		signals.LifecycleClassifiedCallCount > 0 ||
+		signals.OpportunityCallCount > 0 ||
+		signals.AccountCallCount > 0
+	return signals, nil
 }
 
 func (s *Store) CacheInventory(ctx context.Context) (*sqlite.CacheInventory, error) {

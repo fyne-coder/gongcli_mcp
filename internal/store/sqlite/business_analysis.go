@@ -159,6 +159,16 @@ type BusinessAnalysisEvidenceRow struct {
 	EndMS                  int64  `json:"end_ms,omitempty"`
 	Snippet                string `json:"snippet,omitempty"`
 	ContextExcerpt         string `json:"context_excerpt,omitempty"`
+	// SpeakerID is the cached transcript-segment speaker key. The SQLite
+	// quote-search path populates it from `transcript_segments.speaker_id`
+	// so the MCP layer can match the segment against cached Gong party
+	// affiliation and emit SpeakerRole/SpeakerRoleStatus on the
+	// quote/business-workbench facade. Postgres SECURITY DEFINER functions
+	// resolve the safe role/status values in SQL and intentionally do not
+	// expose this hidden speaker key through MCP responses.
+	SpeakerID         string `json:"-"`
+	SpeakerRole       string `json:"-"`
+	SpeakerRoleStatus string `json:"-"`
 }
 
 type BusinessAnalysisDimensionSummaryParams struct {
@@ -688,6 +698,7 @@ SELECT cf.call_id,
        CASE WHEN c.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END AS participant_status,
        ` + businessAnalysisPersonTitleStatusSQL("c") + ` AS person_title_status,
        ` + businessAnalysisPersonTitleSourceSQL("c") + ` AS person_title_source,
+       ts.speaker_id,
        ts.segment_index,
        ts.start_ms,
        ts.end_ms,
@@ -738,6 +749,7 @@ SELECT cf.call_id,
 			&row.ParticipantStatus,
 			&row.PersonTitleStatus,
 			&row.PersonTitleSource,
+			&row.SpeakerID,
 			&row.SegmentIndex,
 			&row.StartMS,
 			&row.EndMS,
@@ -748,7 +760,122 @@ SELECT cf.call_id,
 		}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.applyBusinessAnalysisSpeakerRoles(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// applyBusinessAnalysisSpeakerRoles annotates each evidence row with the
+// safe buyer-vs-rep SpeakerRole and SpeakerRoleStatus derived from the
+// cached Gong party `affiliation` field. Resolution mirrors the
+// CallDrilldownEvidence path: speaker_id values are matched against the
+// per-call party records loaded from `calls.raw_json`. Rows without a
+// speaker_id, with no matching party, or with multiple ambiguous matches
+// stay at SpeakerRole=unknown with the corresponding status so callers do
+// not silently collapse uncertainty into a guess.
+func (s *Store) applyBusinessAnalysisSpeakerRoles(ctx context.Context, rows []BusinessAnalysisEvidenceRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	cache := make(map[string][]callPartyAttribution)
+	for i := range rows {
+		callID := strings.TrimSpace(rows[i].CallID)
+		if callID == "" {
+			rows[i].SpeakerRole = SpeakerRoleUnknown
+			rows[i].SpeakerRoleStatus = SpeakerRoleStatusSpeakerUnmatched
+			continue
+		}
+		parties, ok := cache[callID]
+		if !ok {
+			loaded, err := s.loadCallPartyAttribution(ctx, callID)
+			if err != nil {
+				return err
+			}
+			parties = loaded
+			cache[callID] = parties
+		}
+		role, status := resolveSpeakerRole(strings.TrimSpace(rows[i].SpeakerID), parties)
+		rows[i].SpeakerRole = role
+		rows[i].SpeakerRoleStatus = status
+	}
+	return nil
+}
+
+// resolveSpeakerRole resolves a transcript-segment speaker_id against the
+// loaded callPartyAttribution slice and returns the safe SpeakerRole /
+// SpeakerRoleStatus pair for the row. The buyer-vs-rep signal stays at
+// "unknown" when the speaker is unmatched, ambiguous, or matches a party
+// without affiliation data.
+func resolveSpeakerRole(speakerID string, parties []callPartyAttribution) (string, string) {
+	if speakerID == "" {
+		return SpeakerRoleUnknown, SpeakerRoleStatusSpeakerUnmatched
+	}
+	matches := make([]callPartyAttribution, 0, 1)
+	for _, party := range parties {
+		if _, ok := party.SpeakerKeys[speakerID]; ok {
+			matches = append(matches, party)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return SpeakerRoleUnknown, SpeakerRoleStatusSpeakerUnmatched
+	case 1:
+		role := strings.TrimSpace(matches[0].Role)
+		if role == SpeakerRoleInternal || role == SpeakerRoleExternal {
+			return role, SpeakerRoleStatusAvailable
+		}
+		return SpeakerRoleUnknown, SpeakerRoleStatusAffiliationMissing
+	}
+	role := ""
+	for _, party := range matches {
+		candidate := strings.TrimSpace(party.Role)
+		if candidate == "" {
+			continue
+		}
+		if role == "" {
+			role = candidate
+			continue
+		}
+		if role != candidate {
+			return SpeakerRoleUnknown, SpeakerRoleStatusSpeakerAmbiguous
+		}
+	}
+	if role == "" {
+		return SpeakerRoleUnknown, SpeakerRoleStatusSpeakerAmbiguous
+	}
+	return role, SpeakerRoleStatusSpeakerAmbiguous
+}
+
+func (s *Store) applyTranscriptAttributionSpeakerRoles(ctx context.Context, rows []TranscriptAttributionSearchResult) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	cache := make(map[string][]callPartyAttribution)
+	for i := range rows {
+		callID := strings.TrimSpace(rows[i].CallID)
+		if callID == "" {
+			rows[i].SpeakerRole = SpeakerRoleUnknown
+			rows[i].SpeakerRoleStatus = SpeakerRoleStatusSpeakerUnmatched
+			continue
+		}
+		parties, ok := cache[callID]
+		if !ok {
+			loaded, err := s.loadCallPartyAttribution(ctx, callID)
+			if err != nil {
+				return err
+			}
+			parties = loaded
+			cache[callID] = parties
+		}
+		role, status := resolveSpeakerRole(strings.TrimSpace(rows[i].SpeakerID), parties)
+		rows[i].SpeakerRole = role
+		rows[i].SpeakerRoleStatus = status
+	}
+	return nil
 }
 
 func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params BusinessAnalysisDimensionSummaryParams) ([]BusinessAnalysisDimensionRow, error) {

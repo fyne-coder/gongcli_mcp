@@ -176,6 +176,13 @@ type businessAnalysisItem struct {
 	OpportunityType   string `json:"opportunity_type,omitempty"`
 	ParticipantStatus string `json:"participant_status,omitempty"`
 	PersonTitleStatus string `json:"person_title_status,omitempty"`
+	// SpeakerRole and SpeakerRoleStatus expose the safe buyer-vs-rep
+	// signal derived from cached Gong party affiliation. The status names
+	// *why* a role is unknown so quote consumers do not collapse
+	// uncertainty into a guess. Raw IDs/names redaction policy still
+	// applies — these two fields never expose tenant identifiers.
+	SpeakerRole       string `json:"speaker_role"`
+	SpeakerRoleStatus string `json:"speaker_role_status"`
 	SegmentIndex      int    `json:"segment_index,omitempty"`
 	StartMS           int64  `json:"start_ms,omitempty"`
 	EndMS             int64  `json:"end_ms,omitempty"`
@@ -197,6 +204,8 @@ type businessAnalysisQuote struct {
 	OpportunityType   string `json:"opportunity_type,omitempty"`
 	ParticipantStatus string `json:"participant_status,omitempty"`
 	PersonTitleStatus string `json:"person_title_status,omitempty"`
+	SpeakerRole       string `json:"speaker_role"`
+	SpeakerRoleStatus string `json:"speaker_role_status"`
 	SegmentIndex      int    `json:"segment_index,omitempty"`
 	StartMS           int64  `json:"start_ms,omitempty"`
 	EndMS             int64  `json:"end_ms,omitempty"`
@@ -648,6 +657,8 @@ func (s *Server) businessAnalysisEvidenceBroadDiscovery(ctx context.Context, fil
 			OpportunityType:   item.OpportunityType,
 			ParticipantStatus: item.ParticipantStatus,
 			PersonTitleStatus: item.PersonTitleStatus,
+			SpeakerRole:       item.SpeakerRole,
+			SpeakerRoleStatus: item.SpeakerRoleStatus,
 			SegmentIndex:      item.SegmentIndex,
 			StartMS:           item.StartMS,
 			EndMS:             item.EndMS,
@@ -977,6 +988,14 @@ func (s *Server) businessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow,
 }
 
 func mcpBusinessAnalysisEvidenceRow(row sqlite.BusinessAnalysisEvidenceRow, args businessAnalysisArgs) businessAnalysisItem {
+	speakerRole := strings.TrimSpace(row.SpeakerRole)
+	speakerStatus := strings.TrimSpace(row.SpeakerRoleStatus)
+	if speakerRole == "" {
+		speakerRole = sqlite.SpeakerRoleUnknown
+	}
+	if speakerStatus == "" {
+		speakerStatus = sqlite.SpeakerRoleStatusAffiliationMissing
+	}
 	item := businessAnalysisItem{
 		CallRef:           callRef(row.CallID),
 		StartedAt:         row.StartedAt,
@@ -988,6 +1007,8 @@ func mcpBusinessAnalysisEvidenceRow(row sqlite.BusinessAnalysisEvidenceRow, args
 		OpportunityType:   row.OpportunityType,
 		ParticipantStatus: row.ParticipantStatus,
 		PersonTitleStatus: row.PersonTitleStatus,
+		SpeakerRole:       speakerRole,
+		SpeakerRoleStatus: speakerStatus,
 		SegmentIndex:      row.SegmentIndex,
 		StartMS:           row.StartMS,
 		EndMS:             row.EndMS,

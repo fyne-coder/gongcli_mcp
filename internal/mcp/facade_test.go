@@ -261,6 +261,9 @@ func TestFacadeStatusDispatchesToGetSyncStatus(t *testing.T) {
 	if _, ok := inner["total_calls"]; !ok {
 		t.Fatalf("inner result missing total_calls: %v", inner)
 	}
+	if _, ok := inner["call_facts_attribution"]; !ok {
+		t.Fatalf("inner result missing call_facts_attribution: %v", inner)
+	}
 	identity, ok := inner["mcp_server"].(map[string]any)
 	if !ok {
 		t.Fatalf("inner result missing mcp_server: %v", inner)

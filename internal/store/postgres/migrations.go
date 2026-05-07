@@ -1753,4 +1753,17 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 	`DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer);
 ` + postgresAIHighlightsFunctionSQL + `
 `,
+	// Business-analysis speaker-role attribution: extend transcript quote,
+	// evidence, and broad theme sample reader functions to expose safe
+	// internal/external role fields derived from cached Gong party
+	// affiliation. Input signatures are preserved, but RETURNS TABLE changes,
+	// so each affected function must be dropped before redefinition.
+	`DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }
