@@ -239,6 +239,13 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 			"public.gongmcp_list_call_ai_highlights(text, integer)",
 			"public.gongmcp_call_ai_highlights_count()",
 		},
+		"theme_intelligence_report": append(append(copyPostgresFunctionSignatures(businessAnalysisDimensionFunctions),
+			"public.gongmcp_call_drilldown_transcript_evidence(text, text, integer)",
+			"public.gongmcp_list_call_ai_highlights(text, integer)",
+			"public.gongmcp_call_ai_highlights_count()",
+		),
+			businessAnalysisEvidenceFunctions...,
+		),
 		"list_crm_fields": {
 			"public.gongmcp_crm_field_summary_sanitized(text, integer)",
 		},
@@ -536,9 +543,10 @@ func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
 
 func facadeOnlyScopedReaderTools() map[string]struct{} {
 	return map[string]struct{}{
-		"list_call_ai_highlights": {},
-		"question_answer":         {},
-		"call_drilldown":          {},
+		"list_call_ai_highlights":   {},
+		"question_answer":           {},
+		"call_drilldown":            {},
+		"theme_intelligence_report": {},
 	}
 }
 

@@ -97,6 +97,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpQueryTranscriptSegments,
 		OpQuestionAnswer,
 		OpStatusSync,
+		OpThemeIntelReport,
 	}
 	got := make([]string, 0, len(ops))
 	seen := map[string]struct{}{}

@@ -525,7 +525,7 @@ func TestPostgresToolAllowlistAcceptsAnalystFacadePreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights", "question_answer", "call_drilldown")
+	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights", "question_answer", "call_drilldown", "theme_intelligence_report")
 	if !reflect.DeepEqual(routed, wantRouted) {
 		t.Fatalf("routed=%v want analyst tools plus internal highlights and question-answer routes %v", routed, wantRouted)
 	}
@@ -560,7 +560,7 @@ func TestPostgresToolAllowlistAcceptsBusinessWorkbenchPreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights", "question_answer", "call_drilldown")
+	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights", "question_answer", "call_drilldown", "theme_intelligence_report")
 	if !reflect.DeepEqual(routed, wantRouted) {
 		t.Fatalf("routed=%v want analyst tools plus internal highlights and question-answer routes %v", routed, wantRouted)
 	}

@@ -60,6 +60,7 @@ const (
 	OpEvidenceHighlightsList    = "evidence.highlights.list"
 	OpEvidenceCallDrilldown     = "evidence.call_drilldown"
 	OpQuestionAnswer            = "question.answer"
+	OpThemeIntelReport          = "theme_intelligence_report"
 )
 
 // internalRoutedToolListAIHighlights is the internal routed-tool name used by
@@ -69,6 +70,7 @@ const (
 const internalRoutedToolListAIHighlights = "list_call_ai_highlights"
 const internalRoutedToolQuestionAnswer = "question_answer"
 const internalRoutedToolCallDrilldown = "call_drilldown"
+const internalRoutedToolThemeIntelReport = "theme_intelligence_report"
 
 // FacadeOperations returns the registry of all known facade operations. The
 // list is sorted by operation name for stable output.
@@ -318,6 +320,52 @@ func FacadeOperations() []FacadeOperation {
 			},
 		},
 		{
+			Name:          OpThemeIntelReport,
+			Version:       "v1",
+			Description:   "Compose a bounded theme intelligence report (top pain themes by quarter/industry/persona, top quotes per theme, sales-hook and outreach-sequence inputs, pipeline outcome and normalized loss-reason coverage) from existing cohort, theme, evidence, and drill-down primitives. Returns deterministic synthesis inputs only; gongmcp does not invent unsupported claims.",
+			FacadeTool:    FacadeToolAnalyze,
+			RoutedTool:    internalRoutedToolThemeIntelReport,
+			ExposureLevel: "business-workbench",
+			AllowedPresets: []string{
+				"business-workbench",
+				"analyst-facade",
+				"analyst-business-core",
+				"analyst",
+				"all-readonly",
+				"redacted-all-readonly",
+				"broad-public-redacted",
+			},
+			InputSchema: objectSchema(map[string]any{
+				"filter":        map[string]any{"type": "object"},
+				"from_date":     map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.from_date."},
+				"to_date":       map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.to_date."},
+				"quarter":       map[string]any{"type": "string", "description": "Calendar quarter such as 2026-Q1; alias for filter.quarter."},
+				"theme_query":   map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Primary theme query. When omitted, the operation returns bounded candidate theme terms only."},
+				"output_intent": map[string]any{"type": "string", "enum": []string{"", "full_report", "themes_only", "outreach_only"}},
+				"group_by": map[string]any{
+					"type":        "array",
+					"description": "Optional group_by hints. quarter/industry/persona/won_lost dimensions are always emitted regardless of this list; the field is accepted for forward compatibility.",
+					"items":       map[string]any{"type": "string"},
+				},
+				"top_quotes_per_theme":  map[string]any{"type": "integer", "minimum": 1, "maximum": maxThemeIntelReportQuotesPerTheme, "description": "Default 5; hard-capped at 5 in this slice to keep the report bounded."},
+				"include_call_titles":   map[string]any{"type": "boolean"},
+				"include_account_names": map[string]any{"type": "boolean", "description": "Required to use filter.account_query."},
+				"include_speaker_refs":  map[string]any{"type": "boolean"},
+				"include_raw_ids":       map[string]any{"type": "boolean", "description": "Operator/internal opt-in. Ignored when hide_raw_call_ids policy switch is enabled."},
+				"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
+			}, nil),
+			Examples: []any{
+				map[string]any{
+					"from_date":            "2026-01-01",
+					"to_date":              "2026-03-31",
+					"theme_query":          "manual order entry",
+					"group_by":             []string{"quarter", "industry", "persona", "won_lost"},
+					"top_quotes_per_theme": 5,
+					"output_intent":        "full_report",
+				},
+			},
+		},
+		{
 			Name:          OpQuestionAnswer,
 			Version:       "v1",
 			Description:   "Prepare a governed evidence pack for an ad-hoc business question. The host model should synthesize the final prose from returned coverage, evidence, warnings, and limitations; gongmcp does not invent unsupported conclusions.",
@@ -406,7 +454,7 @@ func facadeTools(_ LimitPolicy) []tool {
 		{
 			Name:        FacadeToolAnalyze,
 			Description: "Stable facade for bounded analysis operations: cohort build/inspect, theme discovery, ad-hoc question evidence preparation, and limitations explanation.",
-			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain, OpQuestionAnswer}),
+			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain, OpQuestionAnswer, OpThemeIntelReport}),
 		},
 		{
 			Name:        FacadeToolGetEvidence,
@@ -681,6 +729,9 @@ func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json
 	}
 	if name == internalRoutedToolCallDrilldown {
 		return s.executeCallDrilldown(ctx, args)
+	}
+	if name == internalRoutedToolThemeIntelReport {
+		return s.executeThemeIntelReport(ctx, args)
 	}
 	if isBusinessAnalysisTool(name) {
 		return s.executeBusinessAnalysisTool(ctx, toolsCallParams{Name: name, Arguments: args})
