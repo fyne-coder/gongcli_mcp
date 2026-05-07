@@ -3,9 +3,14 @@
 Use this checklist after the operator has deployed the controlled Postgres pilot
 and before a client-facing walkthrough. It is written for a reviewed
 customer-hosted deployment using the redacted serving database and scoped
-`analyst-expansion` reader role. Internal broad-search lab testing can use
-`redacted-all-readonly` after the same redacted serving DB and scoped-grant
-checks pass.
+reader role. The recommended default for client MCP hosts is the
+`business-workbench` preset (six stable facade tools; routed internally
+through the reviewed analyst operation set). The broader `analyst-expansion`
+preset remains available for trained analyst sessions over the 68-tool
+surface, but should not be the default for new client deployments. Internal
+broad-search lab testing can use `redacted-all-readonly` after the same
+redacted serving DB and scoped-grant checks pass; it is internal-only and is
+not a client-facing surface.
 Deployment steps live in the
 [Postgres client deployment runbook](runbooks/postgres-client-deployment.md).
 Use the
@@ -22,7 +27,9 @@ counts, tool names, and reviewed evidence paths only.
 - MCP URL is HTTPS and ends in `/mcp`.
 - Authentication is enabled through the approved gateway.
 - `gongmcp` receives only the redacted serving DB reader URL.
-- `GONGMCP_TOOL_PRESET=analyst-expansion` for client analyst testing, or
+- `GONGMCP_TOOL_PRESET=business-workbench` for the recommended client
+  business-user surface (six facade tools), `analyst-expansion` for trained
+  analyst manual testing over the broader reviewed surface, or
   `redacted-all-readonly` for internal broad-search testing only.
 - `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted` for client analyst testing,
   or `raw` for internal redacted-DB broad-search testing when exact call IDs are
@@ -40,15 +47,26 @@ counts, tool names, and reviewed evidence paths only.
 
 ## 2. Allowed Manual-Test Surface
 
-For the current governed Postgres manual-test lane, the expected public preset
-is `analyst-expansion`, an alias for `analyst`.
+For the recommended client-facing manual-test lane, the expected public preset
+is `business-workbench`. It exposes only the six stable facade tools
+(`gong_status`, `gong_discover_capabilities`, `gong_query`, `gong_analyze`,
+`gong_get_evidence`, `gong_explain_limitations`) and routes internally through
+the reviewed analyst operation set plus the typed AI-highlights handler.
+`analyst-facade` and `facade-analyst` remain accepted as backwards-compatible
+aliases.
+
+For trained analyst manual testing over the broader 68-tool surface, the
+`analyst-expansion` preset (an alias for `analyst`) remains available. Prefer
+`business-workbench` for client business-user deployments so the host sees a
+small, stable tool list while reviewed operations continue to evolve
+underneath.
 
 For internal redacted-DB broad testing, `redacted-all-readonly` exposes every
 reviewed Postgres-readable MCP tool, including `search_calls`, `get_call`,
 `search_crm_field_values`, CRM/settings inventory, scorecard activity
-aggregates, facade tools, and the business-analysis catalog. This preset is not
-the normal Postgres `all-readonly` preset and should not be used against a raw
-unredacted database.
+aggregates, facade tools, and the business-analysis catalog. This preset is
+internal manual-testing only — not a client-facing default — and should not be
+used against a raw unredacted database.
 
 Expected core tools:
 

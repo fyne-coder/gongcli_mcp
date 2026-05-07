@@ -14,7 +14,10 @@ gateway smoke, backup/restore, and rollback.
 
 ## 1. Choose The Pilot Surface
 
-- Default business-user surface: `business-pilot`.
+- Default client business-user surface: `business-workbench` (six stable
+  facade tools; internal routing keeps reviewed analyst operations available
+  without exposing a broad top-level tool list).
+- Legacy narrow aggregate/status surface: `business-pilot`.
 - Approved analyst surface: `analyst` or `analyst-expansion` only with scoped
   reader grants and `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`.
 - Keep `all-readonly`, `all-tools`, and `all` disabled for Postgres.
@@ -35,20 +38,21 @@ gateway smoke, backup/restore, and rollback.
 
 - Store the writable operator URL in the customer secret manager.
 - Store the read-only MCP URL separately.
-- For scoped `business-pilot` or analyst sessions, create the LOGIN role
+- For scoped `business-workbench`, `business-pilot`, or analyst sessions, create the LOGIN role
   outside `gongctl`, then reconcile grants:
 
 ```bash
 GONG_DATABASE_URL="$WRITER_URL" \
 gongctl mcp postgres-reader-apply \
-  --preset business-pilot \
+  --preset business-workbench \
   --role ROLE \
   --database DB \
   --dry-run
 ```
 
-Review the dry run, then rerun with `--apply` if approved. Repeat with
-`--preset analyst` for approved analyst sessions.
+Review the dry run, then rerun with `--apply` if approved. Use
+`--preset business-pilot` only for the legacy narrow aggregate/status pilot
+lane. Repeat with `--preset analyst` for approved analyst sessions.
 
 ## 4. Run Synthetic Repo Evidence
 
@@ -87,8 +91,9 @@ Stop if the dry run is not reviewed and signed off.
 
 ## 6. Connect The First Business User
 
-- Start with `business-pilot` unless the sponsor approved analyst workflows.
-- Run `get_sync_status` first.
+- Start with `business-workbench` unless the sponsor approved trained analyst
+  workflows.
+- Run `gong_status` first and confirm the `mcp_server` identity.
 - Confirm transcript/profile/readiness caveats are visible.
 - Keep first prompts inside the approved question set.
 - Escalate stale cache, missing tools, unexpected raw identifiers, or

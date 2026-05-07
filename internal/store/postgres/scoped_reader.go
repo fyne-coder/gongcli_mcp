@@ -35,7 +35,7 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error) {
 	options := ReadOnlyOptionsForToolAllowlist(params.Allowlist)
 	if !options.EnforceAllowedColumnBoundary || !isReviewedScopedReaderSurface(params.Allowlist) {
-		return "", fmt.Errorf("scoped reader grant SQL currently supports only reviewed business-pilot, analyst, and redacted-all-readonly scoped reader surfaces")
+		return "", fmt.Errorf("scoped reader grant SQL currently supports only reviewed business-workbench/facade, business-pilot, analyst, and redacted-all-readonly scoped reader surfaces")
 	}
 	roleIdent, err := quotePostgresIdentifier(params.RoleName)
 	if err != nil {
@@ -60,7 +60,7 @@ func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error
 	b.WriteString("-- Use a standalone LOGIN NOINHERIT role with no role memberships; the apply command rejects roles that inherit from or are granted to other roles.\n")
 	b.WriteString("-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.\n")
 	b.WriteString("-- Direct SQL callers can invoke capped sanitized profile-cache rows, sanitized profile summaries, and sanitized analyst business-analysis wrappers; MCP limits are still enforced above SQL helpers.\n")
-	b.WriteString("-- This grant block supports reviewed business-pilot, analyst, and redacted-all-readonly scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.\n")
+	b.WriteString("-- This grant block supports reviewed business-workbench/facade, business-pilot, analyst, and redacted-all-readonly scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.\n")
 	b.WriteString("-- Role expected before running this block: ")
 	b.WriteString(roleIdent)
 	b.WriteString("\n")

@@ -26,7 +26,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
 		`-- This is a gongmcp service credential, not an analyst SQL login; selected functions still expose minimized operational metadata, counts, timings, and tenant terminology.`,
 		`-- Direct SQL callers can invoke capped sanitized profile-cache rows, sanitized profile summaries, and sanitized analyst business-analysis wrappers; MCP limits are still enforced above SQL helpers.`,
-		`-- This grant block supports reviewed business-pilot, analyst, and redacted-all-readonly scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.`,
+		`-- This grant block supports reviewed business-workbench/facade, business-pilot, analyst, and redacted-all-readonly scoped readers for Postgres service credentials; use compatibility roles only for operator-only migration/debug sessions.`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
 		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,

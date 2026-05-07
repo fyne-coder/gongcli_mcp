@@ -89,7 +89,7 @@ func FacadeOperations() []FacadeOperation {
 			RoutedTool:     "search_calls_by_filters",
 			RoutedFallback: "search_calls",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-facade", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
+			AllowedPresets: []string{"business-workbench", "analyst-facade", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":                map[string]any{"type": "object"},
 				"limit":                 map[string]any{"type": "integer"},
@@ -112,7 +112,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolQuery,
 			RoutedTool:     "list_scorecards",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
+			AllowedPresets: []string{"business-workbench", "analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"active_only": map[string]any{"type": "boolean"},
 				"limit":       map[string]any{"type": "integer"},
@@ -128,7 +128,7 @@ func FacadeOperations() []FacadeOperation {
 			FacadeTool:     FacadeToolQuery,
 			RoutedTool:     "get_scorecard",
 			ExposureLevel:  "scoped-analyst",
-			AllowedPresets: []string{"analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
+			AllowedPresets: []string{"business-workbench", "analyst-facade", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"scorecard_id": map[string]any{"type": "string"},
 			}, []string{"scorecard_id"}),
@@ -631,6 +631,11 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 	}
 	rawIDs := make([]string, 0, len(args.CallIDs))
 	seenIDs := make(map[string]struct{}, len(args.CallIDs))
+	// Some hosts/models send stable call_ref_* values under the legacy
+	// call_ids argument because they have only seen the older shape. Detect
+	// those values here and route them through the same call_ref resolution
+	// path so they don't dead-end as raw IDs that never match any row.
+	misroutedRefs := make([]string, 0)
 	for _, raw := range args.CallIDs {
 		v := strings.TrimSpace(raw)
 		if v == "" {
@@ -639,6 +644,10 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 		if len(v) > maxAIHighlightCallIDLen {
 			return toolCallResult{}, fmt.Errorf("call_ids entries must be %d characters or fewer", maxAIHighlightCallIDLen)
 		}
+		if strings.HasPrefix(strings.ToLower(v), "call_ref_") {
+			misroutedRefs = append(misroutedRefs, v)
+			continue
+		}
 		if _, ok := seenIDs[v]; ok {
 			continue
 		}
@@ -646,41 +655,55 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 		rawIDs = append(rawIDs, v)
 	}
 
-	callIDs := make([]string, 0, len(rawIDs)+len(args.CallRefs))
+	callIDs := make([]string, 0, len(rawIDs)+len(args.CallRefs)+len(misroutedRefs))
 	callIDs = append(callIDs, rawIDs...)
-	refByCallID := make(map[string]string, len(args.CallRefs))
-	callRefs := make([]string, 0, len(args.CallRefs))
-	seenRefs := make(map[string]struct{}, len(args.CallRefs))
-	for _, raw := range args.CallRefs {
-		v := strings.TrimSpace(raw)
+	refByCallID := make(map[string]string, len(args.CallRefs)+len(misroutedRefs))
+	callRefs := make([]string, 0, len(args.CallRefs)+len(misroutedRefs))
+	seenRefs := make(map[string]struct{}, len(args.CallRefs)+len(misroutedRefs))
+	processRef := func(value string, fromCallIDs bool) error {
+		v := strings.TrimSpace(value)
 		if v == "" {
-			continue
+			return nil
 		}
 		if len(v) > maxAIHighlightCallIDLen {
-			return toolCallResult{}, fmt.Errorf("call_refs entries must be %d characters or fewer", maxAIHighlightCallIDLen)
+			if fromCallIDs {
+				return fmt.Errorf("call_ids entries must be %d characters or fewer", maxAIHighlightCallIDLen)
+			}
+			return fmt.Errorf("call_refs entries must be %d characters or fewer", maxAIHighlightCallIDLen)
 		}
 		normalized, err := sqlite.NormalizeStableCallRef(v)
 		if err != nil {
-			return toolCallResult{}, fmt.Errorf("invalid call_ref")
+			return fmt.Errorf("invalid call_ref")
 		}
 		if _, ok := seenRefs[normalized]; ok {
-			continue
+			return nil
 		}
 		seenRefs[normalized] = struct{}{}
 		resolved, err := s.store.ResolveCallIDByRef(ctx, normalized)
 		if err != nil {
 			callRefs = append(callRefs, normalized)
-			continue
+			return nil
 		}
 		if _, ok := seenIDs[resolved]; ok {
 			refByCallID[resolved] = normalized
 			callRefs = append(callRefs, normalized)
-			continue
+			return nil
 		}
 		seenIDs[resolved] = struct{}{}
 		refByCallID[resolved] = normalized
 		callRefs = append(callRefs, normalized)
 		callIDs = append(callIDs, resolved)
+		return nil
+	}
+	for _, value := range misroutedRefs {
+		if err := processRef(value, true); err != nil {
+			return toolCallResult{}, err
+		}
+	}
+	for _, value := range args.CallRefs {
+		if err := processRef(value, false); err != nil {
+			return toolCallResult{}, err
+		}
 	}
 	if len(callIDs) == 0 {
 		return toolCallResult{}, fmt.Errorf("call_ids or call_refs is required and must contain at least one non-empty identifier")

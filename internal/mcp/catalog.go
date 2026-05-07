@@ -51,7 +51,7 @@ func ParseToolAllowlist(raw string) ([]string, error) {
 
 func ExpandToolPreset(name string) ([]string, error) {
 	switch normalizedToolPresetName(name) {
-	case "analyst-facade", "facade-analyst":
+	case "business-workbench", "analyst-facade", "facade-analyst":
 		return copyStrings(FacadeToolNames()), nil
 	case "business-pilot", "strict-business-pilot":
 		return copyStrings([]string{
@@ -165,7 +165,7 @@ func ExpandToolPreset(name string) ([]string, error) {
 	case "all-readonly", "all-tools", "all":
 		return ToolCatalogNames(), nil
 	default:
-		return nil, fmt.Errorf("unknown tool preset %q; available presets: analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, redacted-all-readonly, all-readonly", strings.TrimSpace(name))
+		return nil, fmt.Errorf("unknown tool preset %q; available presets: business-workbench, analyst-facade, business-pilot, strict-business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, analyst-expansion, governance-search, redacted-all-readonly, all-readonly", strings.TrimSpace(name))
 	}
 }
 
@@ -227,7 +227,7 @@ func FacadeToolNames() []string {
 
 func ExpandToolPresetFacadeRoutedTools(name string) ([]string, error) {
 	switch normalizedToolPresetName(name) {
-	case "analyst-facade", "facade-analyst":
+	case "business-workbench", "analyst-facade", "facade-analyst":
 		tools, err := ExpandToolPreset("analyst")
 		if err != nil {
 			return nil, err
@@ -269,10 +269,10 @@ func ToolPresetCatalog() []ToolPresetInfo {
 		recommended string
 	}{
 		{
-			name:        "analyst-facade",
-			aliases:     []string{"facade-analyst"},
-			purpose:     "Stable facade-only MCP surface for approved analyst sessions; routes internally through the reviewed analyst operation set.",
-			recommended: "client MCP hosts that should avoid fast-changing top-level tool lists",
+			name:        "business-workbench",
+			aliases:     []string{"analyst-facade", "facade-analyst"},
+			purpose:     "Recommended client-facing MCP surface: only the six stable facade tools (gong_status, gong_discover_capabilities, gong_query, gong_analyze, gong_get_evidence, gong_explain_limitations); routes internally through the reviewed analyst operation set plus the typed AI-highlights handler.",
+			recommended: "default client business-user MCP host; preferred over the broader 68-tool surfaces",
 		},
 		{
 			name:        "business-pilot",
@@ -311,8 +311,8 @@ func ToolPresetCatalog() []ToolPresetInfo {
 		{
 			name:        "redacted-all-readonly",
 			aliases:     []string{"redacted-all", "redacted-search-lab"},
-			purpose:     "Broad Postgres read-only lab surface over every reviewed Postgres-readable tool; requires a physically redacted serving DB at runtime.",
-			recommended: "internal manual testing against a redacted Postgres serving database",
+			purpose:     "Broad Postgres read-only lab surface over every reviewed Postgres-readable tool; requires a physically redacted serving DB at runtime. Not a client-facing default — use business-workbench for client MCP hosts.",
+			recommended: "internal manual testing only against a redacted Postgres serving database; do not expose to client business users",
 		},
 		{
 			name:        "all-readonly",

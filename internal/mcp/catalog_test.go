@@ -105,6 +105,57 @@ func TestToolCatalogInvariants(t *testing.T) {
 	}
 }
 
+func TestBusinessWorkbenchPresetExposesOnlyFacadeTools(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"business-workbench", "analyst-facade", "facade-analyst"} {
+		tools, err := ExpandToolPreset(name)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", name, err)
+		}
+		assertStringSlicesEqual(t, tools, FacadeToolNames(), "business-workbench visible tools via "+name)
+	}
+
+	routed, err := ExpandToolPresetFacadeRoutedTools("business-workbench")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetFacadeRoutedTools(business-workbench) returned error: %v", err)
+	}
+	analyst, err := ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
+	}
+	wantRouted := append(copyStrings(analyst), internalRoutedToolListAIHighlights)
+	assertStringSlicesEqual(t, routed, wantRouted, "business-workbench hidden facade routed tools")
+
+	grants, err := ExpandToolPresetReaderGrantTools("business-workbench")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetReaderGrantTools(business-workbench) returned error: %v", err)
+	}
+	assertStringSlicesEqual(t, grants, wantRouted, "business-workbench reader grant tools")
+
+	presets := ToolPresetCatalog()
+	var entry ToolPresetInfo
+	for _, info := range presets {
+		if info.Name == "business-workbench" {
+			entry = info
+			break
+		}
+	}
+	if entry.Name == "" {
+		t.Fatalf("ToolPresetCatalog missing business-workbench entry; presets=%v", presets)
+	}
+	if entry.ToolCount != 6 || len(entry.Tools) != 6 {
+		t.Fatalf("business-workbench preset tool count=%d want 6 (six facade tools); tools=%v", entry.ToolCount, entry.Tools)
+	}
+	wantAliases := map[string]struct{}{"analyst-facade": {}, "facade-analyst": {}}
+	for _, alias := range entry.Aliases {
+		delete(wantAliases, alias)
+	}
+	if len(wantAliases) != 0 {
+		t.Fatalf("business-workbench preset missing analyst-facade/facade-analyst aliases; got %v", entry.Aliases)
+	}
+}
+
 func TestAnalystPresetExposesScorecardInventoryTools(t *testing.T) {
 	t.Parallel()
 

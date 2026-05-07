@@ -2,11 +2,11 @@
 
 `gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports bounded shared-deployment `business-pilot`, `analyst-core`, `analyst-business-core`, and approved `analyst` surfaces. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports a client-facing `business-workbench` facade plus bounded shared-deployment `business-pilot`, `analyst-core`, `analyst-business-core`, and approved `analyst` surfaces. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
 SQLite remains the default local/single-host cache. For shared multi-container
 deployments, the first Postgres vertical slice supports a shared database for
 sync status, cached calls, users, transcripts, transcript segments, and the
-read-only MCP `business-pilot` preset: `get_sync_status`,
+read-only MCP `business-pilot` foundation preset: `get_sync_status`,
 `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
 `rank_transcript_backlog`. Operator smoke deployments can also explicitly
 allow `get_sync_status`, `search_calls`, `search_transcript_segments`,
@@ -102,8 +102,10 @@ gongmcp --list-tool-presets
 gongctl profile schema
 ```
 
-Use `business-pilot` for first business-user access, `analyst-facade` when a
-client MCP host should see only the stable `gong_*` facade tools,
+Use `business-workbench` for first client business-user access when a client
+MCP host should see only the stable `gong_*` facade tools; `analyst-facade`
+and `facade-analyst` remain aliases for that six-tool surface. Use
+`business-pilot` only for the older narrow aggregate/status pilot lane,
 `analyst-core` for the reviewed Postgres analyst starter surface including
 cached CRM schema/settings
 inventory, scorecard inventory, and scorecard activity aggregates,
@@ -122,7 +124,8 @@ transcript snippets tied to a CRM object type or record, use an explicit
 `search_transcripts_by_crm_context` allowlist and keep snippet exposure
 reviewed. For approved analyst workflows on Postgres, use `analyst`; use
 `analyst-core` or `analyst-business-core` when you need a narrower starter
-surface.
+surface. Use `redacted-all-readonly` only for internal manual testing against a
+physically redacted Postgres serving DB with scoped reader grants.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.

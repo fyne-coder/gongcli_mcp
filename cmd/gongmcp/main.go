@@ -35,7 +35,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-workbench (recommended client surface; alias of analyst-facade), analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly (internal manual testing only), all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -736,7 +736,7 @@ func postgresAnalystSmallCellMin(postgresMode bool, presetName string, enforceSc
 		return 0
 	}
 	switch strings.ToLower(strings.TrimSpace(presetName)) {
-	case "analyst", "analyst-expansion", "analyst-facade", "facade-analyst":
+	case "analyst", "analyst-expansion", "analyst-facade", "facade-analyst", "business-workbench":
 		return 3
 	default:
 		return 0

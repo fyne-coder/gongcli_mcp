@@ -120,16 +120,28 @@ The facade does not introduce new data paths or weaken governance:
   broad-search testing over a physically redacted serving DB uses the explicit
   `redacted-all-readonly` preset plus scoped reader grants.
 
-Use `--tool-preset analyst-facade` / `GONGMCP_TOOL_PRESET=analyst-facade`
-when a client MCP host should see only the stable facade tool names. The
-server keeps the reviewed analyst operation set available only for internal
-facade routing, so `tools/list` stays small while `gong_query`,
-`gong_analyze`, and `gong_get_evidence` can dispatch to reviewed analyst
-operations. In Postgres scoped-reader mode, `analyst-facade` uses the same
-reviewed reader grants as `analyst` while exposing only the facade tools to
-the MCP client. `gong_discover_capabilities` reports
-`routed_tool_available` per operation so callers can detect which operations
-are reachable in the active configuration.
+Use `--tool-preset business-workbench` /
+`GONGMCP_TOOL_PRESET=business-workbench` for client MCP hosts that should see
+only the stable facade tool names. `business-workbench` is the recommended
+default for client business-user deployments; `analyst-facade` and
+`facade-analyst` remain accepted as backwards-compatible aliases of the same
+six-tool surface. The server keeps the reviewed analyst operation set
+available only for internal facade routing, so `tools/list` stays small while
+`gong_query`, `gong_analyze`, and `gong_get_evidence` can dispatch to
+reviewed analyst operations. In Postgres scoped-reader mode,
+`business-workbench` (and its `analyst-facade` alias) uses the same reviewed
+reader grants as `analyst` while exposing only the facade tools to the MCP
+client. `gong_discover_capabilities` reports `routed_tool_available` per
+operation so callers can detect which operations are reachable in the active
+configuration.
+
+The broader 68-tool surfaces (`analyst`, `analyst-business-core`,
+`redacted-all-readonly`, `all-readonly`) remain available for operator,
+analyst, and internal-testing use, but they are not the recommended default
+for client MCP hosts. Prefer `business-workbench` so the client sees a small,
+stable list of names while internal operations evolve underneath.
+`redacted-all-readonly` is internal manual-testing only and requires the
+physically redacted Postgres serving DB plus scoped reader grants.
 
 ## Analyst Cohort Tool Exposure
 

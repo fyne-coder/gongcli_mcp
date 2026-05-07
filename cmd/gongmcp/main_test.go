@@ -192,7 +192,7 @@ func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
 		`-- It reconciles current public objects only; gongmcp startup rejects default privileges that would grant future public objects to this service role.`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" FROM "gongmcp_business_pilot_reader";`,
-		`reviewed business-pilot, analyst, and redacted-all-readonly scoped readers`,
+		`reviewed business-workbench/facade, business-pilot, analyst, and redacted-all-readonly scoped readers`,
 		`GRANT CONNECT ON DATABASE "gongctl" TO "gongmcp_business_pilot_reader";`,
 		`REVOKE CREATE ON SCHEMA "public" FROM PUBLIC;`,
 		`GRANT USAGE ON SCHEMA "public" TO "gongmcp_business_pilot_reader";`,
@@ -353,7 +353,7 @@ func TestPrintPostgresReaderGrantsRejectsUnsupportedPreset(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout not empty: %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "reviewed business-pilot, analyst, and redacted-all-readonly scoped reader surfaces") {
+	if !strings.Contains(stderr.String(), "reviewed business-workbench/facade, business-pilot, analyst, and redacted-all-readonly scoped reader surfaces") {
 		t.Fatalf("stderr=%q missing unsupported preset message", stderr.String())
 	}
 }
@@ -531,6 +531,41 @@ func TestPostgresToolAllowlistAcceptsAnalystFacadePreset(t *testing.T) {
 	}
 	if min := postgresAnalystSmallCellMin(true, "analyst-facade", true); min != 3 {
 		t.Fatalf("postgresAnalystSmallCellMin=%d want 3", min)
+	}
+	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, wantRouted) {
+		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights route %v", got, wantRouted)
+	}
+}
+
+func TestPostgresToolAllowlistAcceptsBusinessWorkbenchPreset(t *testing.T) {
+	expanded, err := mcp.ExpandToolPreset("business-workbench")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset returned error: %v", err)
+	}
+	allowlist, err := postgresToolAllowlist(expanded, true, "business-workbench")
+	if err != nil {
+		t.Fatalf("postgresToolAllowlist returned error: %v", err)
+	}
+	if !reflect.DeepEqual(allowlist, mcp.FacadeToolNames()) {
+		t.Fatalf("allowlist=%v want facade tools", allowlist)
+	}
+	if len(allowlist) != 6 {
+		t.Fatalf("business-workbench visible allowlist len=%d want 6 facade tools", len(allowlist))
+	}
+	routed, err := mcp.ExpandToolPresetFacadeRoutedTools("business-workbench")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetFacadeRoutedTools returned error: %v", err)
+	}
+	analyst, err := mcp.ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
+	}
+	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights")
+	if !reflect.DeepEqual(routed, wantRouted) {
+		t.Fatalf("routed=%v want analyst tools plus internal highlights route %v", routed, wantRouted)
+	}
+	if min := postgresAnalystSmallCellMin(true, "business-workbench", true); min != 3 {
+		t.Fatalf("postgresAnalystSmallCellMin(business-workbench)=%d want 3", min)
 	}
 	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, wantRouted) {
 		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights route %v", got, wantRouted)

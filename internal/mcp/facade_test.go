@@ -616,6 +616,79 @@ func TestFacadeEvidenceHighlightsListAcceptsCallRefsWithoutRawIDLeak(t *testing.
 	}
 }
 
+func TestFacadeEvidenceHighlightsListResolvesCallRefSuppliedUnderCallIDs(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	callID := "call-allow-1"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeHighlightsStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		rows: []sqlite.AIHighlightRow{
+			{CallID: callID, HighlightIndex: 0, HighlightType: "brief", HighlightText: "Brief confirms generated Gong summary exists.", SourcePath: "content.brief", UpdatedAt: "2026-04-12T00:00:00Z"},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"list_call_ai_highlights"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceHighlightsList,
+		"arguments": map[string]any{
+			"call_ids": []string{callRef},
+			"limit":    5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	if got := strings.Join(store.lastParams.CallIDs, ","); got != callID {
+		t.Fatalf("ListAIHighlights CallIDs=%q want resolved raw call ID", got)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result type=%T", wrapper["result"])
+	}
+	rows, _ := inner["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("rows count=%d want 1: %+v", len(rows), inner)
+	}
+	row, _ := rows[0].(map[string]any)
+	if got, _ := row["call_ref"].(string); got != callRef {
+		t.Fatalf("call_ref=%q want %q in row %+v", got, callRef, row)
+	}
+	if got, _ := row["call_id"].(string); got != "" {
+		t.Fatalf("raw call_id leaked when call_ref supplied via call_ids: %+v", row)
+	}
+
+	requestedRefs, _ := inner["requested_call_refs"].([]any)
+	if len(requestedRefs) != 1 || requestedRefs[0] != callRef {
+		t.Fatalf("requested_call_refs=%v want [%s]", requestedRefs, callRef)
+	}
+	requestedIDs, _ := inner["requested_call_ids"].([]any)
+	if len(requestedIDs) != 0 {
+		t.Fatalf("requested_call_ids=%v want empty (call_ref supplied via legacy field should not appear as raw call_id)", requestedIDs)
+	}
+	missingRefs, _ := inner["call_refs_without_rows"].([]any)
+	if len(missingRefs) != 0 {
+		t.Fatalf("call_refs_without_rows=%v want empty", missingRefs)
+	}
+}
+
 func TestFacadeEvidenceHighlightsListEnforcesInputLimits(t *testing.T) {
 	t.Parallel()
 
