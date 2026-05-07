@@ -63,6 +63,49 @@ AS $function$
 SELECT COUNT(*)::bigint FROM call_ai_highlights
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_call_ai_highlights_count() FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_call_drilldown_transcript_evidence(call_id_arg text, theme_query_arg text, row_limit integer)
+RETURNS TABLE(call_id text, segment_index integer, speaker_id text, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH q AS (
+        SELECT websearch_to_tsquery('simple', left(theme_query_arg, 160)) AS query
+),
+matched AS (
+        SELECT ts.call_id,
+               ts.segment_index,
+               ts.speaker_id,
+               ts.start_ms,
+               ts.end_ms,
+               ts_headline('simple', ts.text, q.query, 'StartSel=, StopSel=, MaxWords=18, MinWords=4, ShortWord=2') AS snippet,
+               ts_rank_cd(ts.search_vector, q.query) AS rank
+          FROM transcript_segments ts,
+               q
+         WHERE ts.call_id = call_id_arg
+           AND theme_query_arg <> ''
+           AND ts.search_vector @@ q.query
+         ORDER BY rank DESC, ts.segment_index
+         LIMIT LEAST(GREATEST(COALESCE(row_limit, 10), 1), 25)
+)
+SELECT m.call_id,
+       m.segment_index,
+       m.speaker_id,
+       m.start_ms,
+       m.end_ms,
+       m.snippet,
+       left(COALESCE((
+               SELECT string_agg(ctx.text, ' ' ORDER BY ctx.segment_index)
+                 FROM transcript_segments ctx
+                WHERE ctx.call_id = m.call_id
+                  AND ctx.segment_index BETWEEN m.segment_index - 1 AND m.segment_index + 1
+       ), ''), 800) AS context_excerpt
+  FROM matched m
+ ORDER BY m.rank DESC, m.segment_index
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_call_drilldown_transcript_evidence(text, text, integer) FROM PUBLIC;
 `
 
 // ListAIHighlights returns bounded, typed Gong AI highlight rows from the
@@ -90,6 +133,50 @@ func (s *Store) ListAIHighlights(ctx context.Context, params sqlite.AIHighlightL
 	for rows.Next() {
 		var row sqlite.AIHighlightRow
 		if err := rows.Scan(&row.CallID, &row.HighlightIndex, &row.HighlightType, &row.HighlightText, &row.SourcePath, &row.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// CallDrilldownEvidence returns bounded transcript excerpts scoped to a single
+// call. The Postgres path uses a dedicated SECURITY DEFINER function so
+// scoped MCP roles can drill into one call without being granted broad
+// transcript_segments search rights.
+func (s *Store) CallDrilldownEvidence(ctx context.Context, params sqlite.CallDrilldownEvidenceParams) ([]sqlite.CallDrilldownEvidenceRow, error) {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return nil, errors.New("call_id is required for call_drilldown evidence")
+	}
+	queryText := strings.TrimSpace(params.Query)
+	if queryText == "" {
+		return nil, nil
+	}
+	if err := validatePostgresBusinessAnalysisSearchText(queryText, "theme_query"); err != nil {
+		return nil, err
+	}
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 25 {
+		limit = 25
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, segment_index, speaker_id, start_ms, end_ms, snippet, context_excerpt
+  FROM gongmcp_call_drilldown_transcript_evidence($1, $2, $3)`,
+		callID,
+		queryText,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []sqlite.CallDrilldownEvidenceRow{}
+	for rows.Next() {
+		var row sqlite.CallDrilldownEvidenceRow
+		if err := rows.Scan(&row.CallID, &row.SegmentIndex, &row.SpeakerID, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

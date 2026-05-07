@@ -316,6 +316,76 @@ func TestBuildScopedReaderGrantSQLRedactedAllReadonlyGrantsBroadSearchSurface(t 
 	}
 }
 
+func TestBuildScopedReaderGrantSQLAnalystGrantsCallDrilldownEvidenceFunction(t *testing.T) {
+	allowlist := []string{
+		"get_sync_status",
+		"list_crm_object_types",
+		"list_crm_fields",
+		"get_business_profile",
+		"list_business_concepts",
+		"list_unmapped_crm_fields",
+		"analyze_late_stage_crm_signals",
+		"opportunities_missing_transcripts",
+		"search_transcripts_by_crm_context",
+		"opportunity_call_summary",
+		"crm_field_population_matrix",
+		"list_lifecycle_buckets",
+		"summarize_calls_by_lifecycle",
+		"prioritize_transcripts_by_lifecycle",
+		"compare_lifecycle_crm_fields",
+		"summarize_call_facts",
+		"rank_transcript_backlog",
+		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
+		"search_transcript_quotes_with_attribution",
+		"list_scorecards",
+		"get_scorecard",
+		"build_call_cohort",
+		"inspect_call_cohort",
+		"list_call_cohorts",
+		"compare_call_cohorts",
+		"search_calls_by_filters",
+		"summarize_calls_by_filters",
+		"search_transcripts_by_filters",
+		"discover_themes_in_cohort",
+		"summarize_themes_by_dimension",
+		"compare_themes_over_time",
+		"compare_themes_by_segment",
+		"extract_theme_quotes",
+		"search_quotes_in_cohort",
+		"rank_quotes_for_sales_use",
+		"build_quote_pack",
+		"list_call_ai_highlights",
+		"call_drilldown",
+		"compare_theme_outcomes",
+		"summarize_pipeline_progression_by_theme",
+		"summarize_loss_reasons_by_theme",
+		"compare_won_lost_theme_patterns",
+		"summarize_themes_by_persona",
+		"summarize_themes_by_industry",
+		"rank_personas_by_insight_quality",
+		"diagnose_attribution_coverage",
+		"generate_sales_hooks_from_themes",
+		"generate_outreach_sequence_inputs",
+		"recommend_target_personas_and_industries",
+		"build_theme_brief",
+		"score_cohort_evidence_quality",
+		"explain_analysis_limitations",
+		"suggest_filter_refinements",
+	}
+	sql, err := BuildScopedReaderGrantSQL(ScopedReaderGrantSQLParams{
+		Allowlist:    allowlist,
+		RoleName:     "gongmcp_analyst_reader",
+		DatabaseName: "gongctl",
+	})
+	if err != nil {
+		t.Fatalf("BuildScopedReaderGrantSQL returned error: %v", err)
+	}
+	if !strings.Contains(sql, `GRANT EXECUTE ON FUNCTION public.gongmcp_call_drilldown_transcript_evidence(text, text, integer) TO "gongmcp_analyst_reader";`) {
+		t.Fatalf("generated SQL missing call-drilldown evidence grant:\n%s", sql)
+	}
+}
+
 func TestBuildScopedReaderGrantSQLRejectsUnsafeIdentifiers(t *testing.T) {
 	allowlist := []string{"get_sync_status", "summarize_call_facts", "summarize_calls_by_lifecycle", "rank_transcript_backlog"}
 	for _, tc := range []struct {

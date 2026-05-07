@@ -178,6 +178,95 @@ func (s *Store) ListAIHighlights(_ context.Context, _ AIHighlightListParams) ([]
 	return nil, nil
 }
 
+// CallDrilldownEvidenceParams is the bounded input contract for the exact
+// call-scoped transcript evidence path used by evidence.call_drilldown. Query
+// is optional; when blank, the operation returns no transcript rows so callers
+// receive only AI condensed evidence and can decide whether to ask for a
+// theme.
+type CallDrilldownEvidenceParams struct {
+	CallID string
+	Query  string
+	Limit  int
+}
+
+// CallDrilldownEvidenceRow is one bounded transcript excerpt scoped to a
+// specific call. The shape stays minimal: the call-drilldown facade joins
+// account/opportunity coverage from the call detail rather than denormalizing
+// it onto every excerpt.
+type CallDrilldownEvidenceRow struct {
+	CallID         string `json:"-"`
+	SegmentIndex   int    `json:"segment_index"`
+	SpeakerID      string `json:"speaker_id,omitempty"`
+	StartMS        int64  `json:"start_ms"`
+	EndMS          int64  `json:"end_ms"`
+	Snippet        string `json:"snippet,omitempty"`
+	ContextExcerpt string `json:"context_excerpt,omitempty"`
+}
+
+const (
+	defaultCallDrilldownTranscriptLimit = 10
+	maxCallDrilldownTranscriptLimit     = 25
+)
+
+// CallDrilldownEvidence returns bounded transcript excerpts scoped to a single
+// call. Callers must provide an already-resolved CallID; the facade layer is
+// responsible for translating call_ref values and applying suppression and
+// blocklist filters before serialization.
+func (s *Store) CallDrilldownEvidence(ctx context.Context, params CallDrilldownEvidenceParams) ([]CallDrilldownEvidenceRow, error) {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return nil, errors.New("call_id is required for call_drilldown evidence")
+	}
+	limit := boundedLimit(params.Limit, defaultCallDrilldownTranscriptLimit, maxCallDrilldownTranscriptLimit)
+	queryText := strings.TrimSpace(params.Query)
+	if queryText == "" {
+		return nil, nil
+	}
+	queryMatch, err := businessAnalysisFTSQuery(queryText, "query")
+	if err != nil {
+		return nil, err
+	}
+	if queryMatch == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT ts.call_id,
+       ts.segment_index,
+       ts.speaker_id,
+       ts.start_ms,
+       ts.end_ms,
+       snippet(transcript_segments_fts, 0, '', '', '...', 18) AS snippet,
+       substr(COALESCE((
+               SELECT group_concat(context_text, ' ')
+                 FROM (
+                       SELECT ctx.text AS context_text
+                         FROM transcript_segments ctx
+                        WHERE ctx.call_id = ts.call_id
+                          AND ctx.segment_index BETWEEN ts.segment_index - 1 AND ts.segment_index + 1
+                        ORDER BY ctx.segment_index
+                 )
+       ), ''), 1, 800) AS context_excerpt
+  FROM transcript_segments_fts
+  JOIN transcript_segments ts ON ts.id = transcript_segments_fts.rowid
+ WHERE transcript_segments_fts MATCH ?
+   AND ts.call_id = ?
+ ORDER BY bm25(transcript_segments_fts), ts.segment_index
+ LIMIT ?`, queryMatch, callID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]CallDrilldownEvidenceRow, 0)
+	for rows.Next() {
+		var row CallDrilldownEvidenceRow
+		if err := rows.Scan(&row.CallID, &row.SegmentIndex, &row.SpeakerID, &row.StartMS, &row.EndMS, &row.Snippet, &row.ContextExcerpt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) SearchBusinessAnalysisCalls(ctx context.Context, params BusinessAnalysisCallSearchParams) (*BusinessAnalysisCallSearchResult, error) {
 	filter, err := normalizeBusinessAnalysisFilter(params.Filter)
 	if err != nil {

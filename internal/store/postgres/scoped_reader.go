@@ -234,6 +234,11 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 			"public.gongmcp_list_call_ai_highlights(text, integer)",
 			"public.gongmcp_call_ai_highlights_count()",
 		},
+		"call_drilldown": {
+			"public.gongmcp_call_drilldown_transcript_evidence(text, text, integer)",
+			"public.gongmcp_list_call_ai_highlights(text, integer)",
+			"public.gongmcp_call_ai_highlights_count()",
+		},
 		"list_crm_fields": {
 			"public.gongmcp_crm_field_summary_sanitized(text, integer)",
 		},
@@ -533,6 +538,7 @@ func facadeOnlyScopedReaderTools() map[string]struct{} {
 	return map[string]struct{}{
 		"list_call_ai_highlights": {},
 		"question_answer":         {},
+		"call_drilldown":          {},
 	}
 }
 

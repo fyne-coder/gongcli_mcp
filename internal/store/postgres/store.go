@@ -145,6 +145,7 @@ func DefaultReadOnlyFunctionSignatures() []string {
 		"public.gongmcp_scorecards(boolean, integer)",
 		"public.gongmcp_list_call_ai_highlights(text, integer)",
 		"public.gongmcp_call_ai_highlights_count()",
+		"public.gongmcp_call_drilldown_transcript_evidence(text, text, integer)",
 		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_search_transcript_segments(text, integer)",
 		"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
@@ -511,6 +512,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_list_call_ai_highlights(text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_call_ai_highlights_count();
+	DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer);
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
@@ -1238,6 +1240,7 @@ BEGIN
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_list_call_ai_highlights(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_call_ai_highlights_count() TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_call_drilldown_transcript_evidence(text, text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader;
 		GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongmcp_call_context_objects TO gongmcp_reader;
