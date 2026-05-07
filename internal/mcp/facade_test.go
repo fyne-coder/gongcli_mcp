@@ -15,17 +15,42 @@ import (
 // without standing up a Postgres instance.
 type fakeHighlightsStore struct {
 	*sqlite.Store
-	rows []sqlite.AIHighlightRow
-	err  error
+	rows       []sqlite.AIHighlightRow
+	refs       map[string]string
+	lastParams sqlite.AIHighlightListParams
+	err        error
 }
 
-func (f *fakeHighlightsStore) ListAIHighlights(_ context.Context, _ sqlite.AIHighlightListParams) ([]sqlite.AIHighlightRow, error) {
+func (f *fakeHighlightsStore) ListAIHighlights(_ context.Context, params sqlite.AIHighlightListParams) ([]sqlite.AIHighlightRow, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := make([]sqlite.AIHighlightRow, len(f.rows))
-	copy(out, f.rows)
+	f.lastParams = params
+	allowed := make(map[string]struct{}, len(params.CallIDs))
+	for _, id := range params.CallIDs {
+		allowed[id] = struct{}{}
+	}
+	out := make([]sqlite.AIHighlightRow, 0, len(f.rows))
+	for _, row := range f.rows {
+		if len(allowed) > 0 {
+			if _, ok := allowed[row.CallID]; !ok {
+				continue
+			}
+		}
+		out = append(out, row)
+	}
 	return out, nil
+}
+
+func (f *fakeHighlightsStore) ResolveCallIDByRef(_ context.Context, ref string) (string, error) {
+	normalized, err := sqlite.NormalizeStableCallRef(ref)
+	if err != nil {
+		return "", err
+	}
+	if id, ok := f.refs[normalized]; ok {
+		return id, nil
+	}
+	return "", fmt.Errorf("call_ref not found")
 }
 
 func TestFacadeToolsExposedInToolCatalog(t *testing.T) {
@@ -111,6 +136,12 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 		FacadeToolExplainLimitations,
 		"get_sync_status",
 		"search_transcript_segments",
+	}), WithRuntimeInfo(RuntimeInfo{
+		Commit:       "abc123",
+		BuildDate:    "2026-05-06T00:00:00Z",
+		ToolPreset:   "redacted-all-readonly",
+		DeploymentID: "lab-20260506",
+		StartedAtUTC: "2026-05-06T21:45:00Z",
 	}))
 
 	result, err := server.executeFacadeDiscoverCapabilities(nil)
@@ -124,10 +155,11 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 		t.Fatalf("expected one content entry, got %d", len(result.Content))
 	}
 	var payload struct {
-		FacadeVersion string           `json:"facade_version"`
-		FacadeTools   []string         `json:"facade_tools"`
-		Operations    []map[string]any `json:"operations"`
-		Note          string           `json:"note"`
+		FacadeVersion string            `json:"facade_version"`
+		FacadeTools   []string          `json:"facade_tools"`
+		Operations    []map[string]any  `json:"operations"`
+		MCPServer     PublicRuntimeInfo `json:"mcp_server"`
+		Note          string            `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
 		t.Fatalf("decode capability payload: %v", err)
@@ -137,6 +169,12 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 	}
 	if len(payload.FacadeTools) != 6 {
 		t.Fatalf("facade_tools count=%d want 6", len(payload.FacadeTools))
+	}
+	if payload.MCPServer.ToolPreset != "redacted-all-readonly" || payload.MCPServer.DeploymentID != "lab-20260506" || payload.MCPServer.Commit != "abc123" {
+		t.Fatalf("unexpected mcp_server identity: %+v", payload.MCPServer)
+	}
+	if payload.MCPServer.ToolCount == 0 {
+		t.Fatalf("mcp_server missing tool count: %+v", payload.MCPServer)
 	}
 	if !strings.Contains(payload.Note, "individual tools") {
 		t.Fatalf("note missing top-level-tools statement: %q", payload.Note)
@@ -190,7 +228,11 @@ func TestFacadeStatusDispatchesToGetSyncStatus(t *testing.T) {
 
 	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{
 		FacadeToolStatus,
-	}), WithFacadeRoutedToolAllowlist([]string{"get_sync_status"}))
+	}), WithFacadeRoutedToolAllowlist([]string{"get_sync_status"}), WithRuntimeInfo(RuntimeInfo{
+		ToolPreset:   "business-pilot",
+		DeploymentID: "stdio-test",
+		StartedAtUTC: "2026-05-06T21:46:00Z",
+	}))
 
 	result, err := server.executeFacadeStatus(t.Context(), nil)
 	if err != nil {
@@ -215,6 +257,13 @@ func TestFacadeStatusDispatchesToGetSyncStatus(t *testing.T) {
 	}
 	if _, ok := inner["total_calls"]; !ok {
 		t.Fatalf("inner result missing total_calls: %v", inner)
+	}
+	identity, ok := inner["mcp_server"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result missing mcp_server: %v", inner)
+	}
+	if identity["tool_preset"] != "business-pilot" || identity["deployment_id"] != "stdio-test" {
+		t.Fatalf("unexpected mcp_server identity: %v", identity)
 	}
 }
 
@@ -498,6 +547,75 @@ func TestFacadeEvidenceHighlightsListReturnsBoundedRedactedRows(t *testing.T) {
 	}
 }
 
+func TestFacadeEvidenceHighlightsListAcceptsCallRefsWithoutRawIDLeak(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	callID := "call-allow-1"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeHighlightsStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		rows: []sqlite.AIHighlightRow{
+			{CallID: callID, HighlightIndex: 0, HighlightType: "brief", HighlightText: "Brief confirms generated Gong summary exists.", SourcePath: "content.brief", UpdatedAt: "2026-04-12T00:00:00Z"},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"list_call_ai_highlights"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceHighlightsList,
+		"arguments": map[string]any{
+			"call_refs": []string{callRef},
+			"limit":     5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	if got := strings.Join(store.lastParams.CallIDs, ","); got != callID {
+		t.Fatalf("ListAIHighlights CallIDs=%q want resolved raw call ID", got)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result type=%T", wrapper["result"])
+	}
+	rows, _ := inner["rows"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("rows count=%d want 1: %+v", len(rows), inner)
+	}
+	row, _ := rows[0].(map[string]any)
+	if got, _ := row["call_ref"].(string); got != callRef {
+		t.Fatalf("call_ref=%q want %q in row %+v", got, callRef, row)
+	}
+	if got, _ := row["call_id"].(string); got != "" {
+		t.Fatalf("raw call_id leaked for call_ref lookup: %+v", row)
+	}
+
+	requestedRefs, _ := inner["requested_call_refs"].([]any)
+	if len(requestedRefs) != 1 || requestedRefs[0] != callRef {
+		t.Fatalf("requested_call_refs=%v want [%s]", requestedRefs, callRef)
+	}
+	missingRefs, _ := inner["call_refs_without_rows"].([]any)
+	if len(missingRefs) != 0 {
+		t.Fatalf("call_refs_without_rows=%v want empty", missingRefs)
+	}
+}
+
 func TestFacadeEvidenceHighlightsListEnforcesInputLimits(t *testing.T) {
 	t.Parallel()
 
@@ -510,8 +628,8 @@ func TestFacadeEvidenceHighlightsListEnforcesInputLimits(t *testing.T) {
 		WithFacadeRoutedToolAllowlist([]string{"list_call_ai_highlights"}),
 	)
 
-	// Missing call_ids must be rejected so the operation never enumerates the
-	// full Postgres serving DB.
+	// Missing identifiers must be rejected so the operation never enumerates
+	// the full Postgres serving DB.
 	args, err := json.Marshal(map[string]any{
 		"operation": OpEvidenceHighlightsList,
 		"arguments": map[string]any{"limit": 5},
@@ -520,8 +638,8 @@ func TestFacadeEvidenceHighlightsListEnforcesInputLimits(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
-	if err == nil || !strings.Contains(err.Error(), "call_ids") {
-		t.Fatalf("expected error about missing call_ids, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "call_ids or call_refs") {
+		t.Fatalf("expected error about missing call_ids/call_refs, got %v", err)
 	}
 
 	// Too many call_ids must be rejected so the operation stays bounded.

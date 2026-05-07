@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -35,13 +36,23 @@ type ServingDBRefreshResult struct {
 	SourceTranscriptSegments int64    `json:"source_transcript_segments"`
 	SourceContextObjects     int64    `json:"source_context_objects"`
 	SourceContextFields      int64    `json:"source_context_fields"`
+	SourceGongSettings       int64    `json:"source_gong_settings"`
+	SourceScorecards         int64    `json:"source_scorecards"`
+	SourceScorecardActivity  int64    `json:"source_scorecard_activity"`
+	SourceAIHighlights       int64    `json:"source_ai_highlights"`
 	TargetCalls              int64    `json:"target_calls"`
 	TargetUsers              int64    `json:"target_users"`
 	TargetTranscripts        int64    `json:"target_transcripts"`
 	TargetTranscriptSegments int64    `json:"target_transcript_segments"`
 	TargetContextObjects     int64    `json:"target_context_objects"`
 	TargetContextFields      int64    `json:"target_context_fields"`
+	TargetGongSettings       int64    `json:"target_gong_settings"`
+	TargetScorecards         int64    `json:"target_scorecards"`
+	TargetScorecardActivity  int64    `json:"target_scorecard_activity"`
+	TargetAIHighlights       int64    `json:"target_ai_highlights"`
 	RemovedCalls             int64    `json:"removed_calls"`
+	RemovedScorecardActivity int64    `json:"removed_scorecard_activity"`
+	RemovedAIHighlights      int64    `json:"removed_ai_highlights"`
 	SuppressedCallCount      int      `json:"suppressed_call_count"`
 	PolicyConfigSHA256       string   `json:"policy_config_sha256"`
 	SourceDataFingerprint    string   `json:"source_data_fingerprint"`
@@ -55,18 +66,16 @@ type ServingDBRefreshResult struct {
 // what is intentionally absent from the redacted serving database.
 //
 // Skipped tables either contain operator-only state (sync_runs, sync_state,
-// purged_call_ids), data the MCP smoke does not yet need (profile_*, scorecard
-// activity, CRM schema metadata, gong_settings), or governance ingest
-// bookkeeping (governance_ingest_skipped_calls).
+// purged_call_ids), data the redacted MCP serving DB does not yet need
+// (profile_*, CRM schema metadata), or governance ingest bookkeeping
+// (governance_ingest_skipped_calls).
 func servingSkippedTables() []string {
 	return []string{
 		"sync_runs",
 		"sync_state",
-		"gong_settings",
 		"crm_integrations",
 		"crm_schema_objects",
 		"crm_schema_fields",
-		"scorecard_activity",
 		"profile_meta",
 		"profile_object_alias",
 		"profile_field_concept",
@@ -94,9 +103,9 @@ func servingSkippedTables() []string {
 //   - Re-runs the Postgres read model rebuild and re-applies the governance
 //     policy on the target so MCP can serve sanitized outputs immediately.
 //
-// The first slice intentionally does not copy several global metadata tables;
-// see servingSkippedTables for the full list. Skipped tables are surfaced in
-// the sanitized output so reviewers can confirm the boundary.
+// The first slice intentionally does not copy several operator/global metadata
+// tables; see servingSkippedTables for the full list. Skipped tables are
+// surfaced in the sanitized output so reviewers can confirm the boundary.
 func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*ServingDBRefreshResult, error) {
 	if err := validateRefreshServingDBURLs(opts.SourceURL, opts.TargetURL); err != nil {
 		return nil, err
@@ -142,6 +151,9 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 	if err := readServingTargetCounts(ctx, target.db, &counts); err != nil {
 		return nil, fmt.Errorf("read target serving counts: %w", err)
 	}
+	if err := validateServingCopyCounts(counts); err != nil {
+		return nil, err
+	}
 
 	configSHA := opts.Config.Fingerprint()
 	if _, _, err := target.BuildAndSaveGovernancePolicy(ctx, configSHA, opts.Config); err != nil {
@@ -165,13 +177,23 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		SourceTranscriptSegments: counts.sourceTranscriptSegments,
 		SourceContextObjects:     counts.sourceContextObjects,
 		SourceContextFields:      counts.sourceContextFields,
+		SourceGongSettings:       counts.sourceGongSettings,
+		SourceScorecards:         counts.sourceScorecards,
+		SourceScorecardActivity:  counts.sourceScorecardActivity,
+		SourceAIHighlights:       counts.sourceAIHighlights,
 		TargetCalls:              counts.targetCalls,
 		TargetUsers:              counts.targetUsers,
 		TargetTranscripts:        counts.targetTranscripts,
 		TargetTranscriptSegments: counts.targetTranscriptSegments,
 		TargetContextObjects:     counts.targetContextObjects,
 		TargetContextFields:      counts.targetContextFields,
+		TargetGongSettings:       counts.targetGongSettings,
+		TargetScorecards:         counts.targetScorecards,
+		TargetScorecardActivity:  counts.targetScorecardActivity,
+		TargetAIHighlights:       counts.targetAIHighlights,
 		RemovedCalls:             counts.sourceCalls - counts.targetCalls,
+		RemovedScorecardActivity: counts.redactedScorecardActivity,
+		RemovedAIHighlights:      counts.redactedAIHighlights,
 		SuppressedCallCount:      audit.SuppressedCallCount,
 		PolicyConfigSHA256:       configSHA,
 		SourceDataFingerprint:    sourceFingerprint,
@@ -217,18 +239,33 @@ func normalizeServingDBURL(u *url.URL) string {
 }
 
 type servingCopyCounts struct {
-	sourceCalls              int64
-	sourceUsers              int64
-	sourceTranscripts        int64
-	sourceTranscriptSegments int64
-	sourceContextObjects     int64
-	sourceContextFields      int64
-	targetCalls              int64
-	targetUsers              int64
-	targetTranscripts        int64
-	targetTranscriptSegments int64
-	targetContextObjects     int64
-	targetContextFields      int64
+	sourceCalls               int64
+	sourceUsers               int64
+	sourceTranscripts         int64
+	sourceTranscriptSegments  int64
+	sourceContextObjects      int64
+	sourceContextFields       int64
+	sourceGongSettings        int64
+	sourceScorecards          int64
+	sourceScorecardActivity   int64
+	sourceAIHighlights        int64
+	redactedCalls             int64
+	redactedTranscripts       int64
+	redactedTranscriptSegs    int64
+	redactedContextObjects    int64
+	redactedContextFields     int64
+	redactedScorecardActivity int64
+	redactedAIHighlights      int64
+	targetCalls               int64
+	targetUsers               int64
+	targetTranscripts         int64
+	targetTranscriptSegments  int64
+	targetContextObjects      int64
+	targetContextFields       int64
+	targetGongSettings        int64
+	targetScorecards          int64
+	targetScorecardActivity   int64
+	targetAIHighlights        int64
 }
 
 // refreshServingDBCopy performs the actual table-by-table copy from source to
@@ -247,10 +284,21 @@ func refreshServingDBCopy(ctx context.Context, sourceDB, targetDB *sql.DB, suppr
 		{`SELECT COUNT(*) FROM transcript_segments`, &counts.sourceTranscriptSegments},
 		{`SELECT COUNT(*) FROM call_context_objects`, &counts.sourceContextObjects},
 		{`SELECT COUNT(*) FROM call_context_fields`, &counts.sourceContextFields},
+		{`SELECT COUNT(*) FROM gong_settings`, &counts.sourceGongSettings},
+		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &counts.sourceScorecards},
+		{`SELECT COUNT(*) FROM scorecard_activity`, &counts.sourceScorecardActivity},
 	} {
 		if err := sourceDB.QueryRowContext(ctx, count.query).Scan(count.dest); err != nil {
 			return counts, fmt.Errorf("count source: %w", err)
 		}
+	}
+	var err error
+	counts.sourceAIHighlights, err = countServingSourceAIHighlights(ctx, sourceDB, nil)
+	if err != nil {
+		return counts, fmt.Errorf("count source AI highlights: %w", err)
+	}
+	if err := countServingRedactedRows(ctx, sourceDB, suppressed, &counts); err != nil {
+		return counts, err
 	}
 
 	tx, err := targetDB.BeginTx(ctx, nil)
@@ -268,6 +316,8 @@ call_facts,
 call_ai_highlights,
 call_context_fields,
 call_context_objects,
+scorecard_activity,
+gong_settings,
 transcript_segments,
 transcripts,
 calls,
@@ -280,6 +330,9 @@ RESTART IDENTITY CASCADE`); err != nil {
 	}
 
 	if err := copyServingUsers(ctx, sourceDB, tx, &counts); err != nil {
+		return counts, err
+	}
+	if err := copyServingGongSettings(ctx, sourceDB, tx, &counts); err != nil {
 		return counts, err
 	}
 	if err := copyServingCalls(ctx, sourceDB, tx, suppressed, &counts); err != nil {
@@ -295,6 +348,9 @@ RESTART IDENTITY CASCADE`); err != nil {
 		return counts, err
 	}
 	if err := copyServingCallContextFields(ctx, sourceDB, tx, suppressed, &counts); err != nil {
+		return counts, err
+	}
+	if err := copyServingScorecardActivity(ctx, sourceDB, tx, suppressed, &counts); err != nil {
 		return counts, err
 	}
 
@@ -315,11 +371,205 @@ func readServingTargetCounts(ctx context.Context, targetDB *sql.DB, counts *serv
 		{`SELECT COUNT(*) FROM transcript_segments`, &counts.targetTranscriptSegments},
 		{`SELECT COUNT(*) FROM call_context_objects`, &counts.targetContextObjects},
 		{`SELECT COUNT(*) FROM call_context_fields`, &counts.targetContextFields},
+		{`SELECT COUNT(*) FROM gong_settings`, &counts.targetGongSettings},
+		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &counts.targetScorecards},
+		{`SELECT COUNT(*) FROM scorecard_activity`, &counts.targetScorecardActivity},
+		{`SELECT COUNT(*) FROM call_ai_highlights`, &counts.targetAIHighlights},
 	} {
 		if err := targetDB.QueryRowContext(ctx, count.query).Scan(count.dest); err != nil {
 			return fmt.Errorf("count target: %w", err)
 		}
 	}
+	return nil
+}
+
+func countServingRedactedRows(ctx context.Context, sourceDB *sql.DB, suppressed map[string]struct{}, counts *servingCopyCounts) error {
+	if len(suppressed) == 0 {
+		return nil
+	}
+	for _, count := range []struct {
+		table  string
+		column string
+		dest   *int64
+	}{
+		{"calls", "call_id", &counts.redactedCalls},
+		{"transcripts", "call_id", &counts.redactedTranscripts},
+		{"transcript_segments", "call_id", &counts.redactedTranscriptSegs},
+		{"call_context_objects", "call_id", &counts.redactedContextObjects},
+		{"call_context_fields", "call_id", &counts.redactedContextFields},
+		{"scorecard_activity", "call_id", &counts.redactedScorecardActivity},
+	} {
+		value, err := countServingSuppressedTableRows(ctx, sourceDB, count.table, count.column, suppressed)
+		if err != nil {
+			return fmt.Errorf("count source redacted %s rows: %w", count.table, err)
+		}
+		*count.dest = value
+	}
+	var err error
+	counts.redactedAIHighlights, err = countServingSourceAIHighlights(ctx, sourceDB, suppressed)
+	if err != nil {
+		return fmt.Errorf("count source redacted AI highlights: %w", err)
+	}
+	return nil
+}
+
+func countServingSuppressedTableRows(ctx context.Context, sourceDB *sql.DB, table, column string, suppressed map[string]struct{}) (int64, error) {
+	idsJSON, err := servingSuppressedIDsJSON(suppressed)
+	if err != nil {
+		return 0, err
+	}
+	query := fmt.Sprintf(`
+WITH suppressed(call_id) AS (
+	SELECT TRIM(value) FROM jsonb_array_elements_text($1::jsonb) AS item(value)
+)
+SELECT COUNT(*)
+  FROM %s t
+  JOIN suppressed s
+    ON s.call_id = TRIM(t.%s)`, table, column)
+	var count int64
+	if err := sourceDB.QueryRowContext(ctx, query, string(idsJSON)).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func countServingSourceAIHighlights(ctx context.Context, sourceDB *sql.DB, suppressed map[string]struct{}) (int64, error) {
+	args := []any{}
+	filter := ""
+	if len(suppressed) > 0 {
+		idsJSON, err := servingSuppressedIDsJSON(suppressed)
+		if err != nil {
+			return 0, err
+		}
+		args = append(args, string(idsJSON))
+		filter = `AND EXISTS (
+	SELECT 1
+	  FROM jsonb_array_elements_text($1::jsonb) AS suppressed(call_id)
+	 WHERE TRIM(suppressed.call_id) = TRIM(c.call_id)
+)`
+	}
+	query := `
+WITH raw_items AS (
+	SELECT c.call_id, highlight_item.value AS raw_item
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(
+		CASE WHEN jsonb_typeof(c.raw_json#>'{content,highlights}') = 'array' THEN c.raw_json#>'{content,highlights}' ELSE '[]'::jsonb END
+	  ) AS highlight_item(value)
+	 WHERE 1 = 1 ` + filter + `
+	UNION ALL
+	SELECT c.call_id, c.raw_json#>'{content,brief}' AS raw_item
+	  FROM calls c
+	 WHERE jsonb_typeof(c.raw_json#>'{content,brief}') IN ('string', 'object') ` + filter + `
+	UNION ALL
+	SELECT c.call_id, key_point_item.value AS raw_item
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(
+		CASE WHEN jsonb_typeof(c.raw_json#>'{content,keyPoints}') = 'array' THEN c.raw_json#>'{content,keyPoints}' ELSE '[]'::jsonb END
+	  ) AS key_point_item(value)
+	 WHERE 1 = 1 ` + filter + `
+	UNION ALL
+	SELECT c.call_id, outline_item.value AS raw_item
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(
+		CASE WHEN jsonb_typeof(c.raw_json#>'{content,outline}') = 'array' THEN c.raw_json#>'{content,outline}' ELSE '[]'::jsonb END
+	  ) AS outline_item(value)
+	 WHERE 1 = 1 ` + filter + `
+	UNION ALL
+	SELECT c.call_id, c.raw_json#>'{content,outline}' AS raw_item
+	  FROM calls c
+	 WHERE jsonb_typeof(c.raw_json#>'{content,outline}') = 'string' ` + filter + `
+),
+typed_items AS (
+	SELECT TRIM(CASE
+		       WHEN jsonb_typeof(raw_item) = 'string' THEN raw_item#>>'{}'
+		       WHEN jsonb_typeof(raw_item) = 'object' THEN COALESCE(raw_item->>'text', raw_item->>'summary', raw_item->>'description', raw_item->>'value', raw_item->>'title', '')
+		       ELSE ''
+	       END) AS highlight_text
+	  FROM raw_items
+)
+SELECT COUNT(*) FROM typed_items WHERE highlight_text <> ''`
+	var count int64
+	if err := sourceDB.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func servingSuppressedIDsJSON(suppressed map[string]struct{}) ([]byte, error) {
+	ids := make([]string, 0, len(suppressed))
+	for id := range suppressed {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return json.Marshal(ids)
+}
+
+func validateServingCopyCounts(counts servingCopyCounts) error {
+	expectations := []struct {
+		name string
+		got  int64
+		want int64
+	}{
+		{"calls", counts.targetCalls, counts.sourceCalls - counts.redactedCalls},
+		{"users", counts.targetUsers, counts.sourceUsers},
+		{"transcripts", counts.targetTranscripts, counts.sourceTranscripts - counts.redactedTranscripts},
+		{"transcript_segments", counts.targetTranscriptSegments, counts.sourceTranscriptSegments - counts.redactedTranscriptSegs},
+		{"call_context_objects", counts.targetContextObjects, counts.sourceContextObjects - counts.redactedContextObjects},
+		{"call_context_fields", counts.targetContextFields, counts.sourceContextFields - counts.redactedContextFields},
+		{"gong_settings", counts.targetGongSettings, counts.sourceGongSettings},
+		{"scorecards", counts.targetScorecards, counts.sourceScorecards},
+		{"scorecard_activity", counts.targetScorecardActivity, counts.sourceScorecardActivity - counts.redactedScorecardActivity},
+		{"call_ai_highlights", counts.targetAIHighlights, counts.sourceAIHighlights - counts.redactedAIHighlights},
+	}
+	var mismatches []string
+	for _, expectation := range expectations {
+		if expectation.want < 0 {
+			expectation.want = 0
+		}
+		if expectation.got != expectation.want {
+			mismatches = append(mismatches, fmt.Sprintf("%s target=%d want=%d", expectation.name, expectation.got, expectation.want))
+		}
+	}
+	if len(mismatches) > 0 {
+		return fmt.Errorf("redacted serving database validation failed: %s", strings.Join(mismatches, "; "))
+	}
+	return nil
+}
+
+func copyServingGongSettings(ctx context.Context, sourceDB *sql.DB, tx *sql.Tx, counts *servingCopyCounts) error {
+	rows, err := sourceDB.QueryContext(ctx, `
+SELECT kind, object_id, name, active, raw_json::text, raw_sha256, first_seen_at, updated_at
+  FROM gong_settings
+ ORDER BY kind, object_id`)
+	if err != nil {
+		return fmt.Errorf("read source gong_settings: %w", err)
+	}
+	defer rows.Close()
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gong_settings(
+	kind, object_id, name, active, raw_json, raw_sha256, first_seen_at, updated_at
+) VALUES($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	var written int64
+	for rows.Next() {
+		var kind, objectID, name, rawJSON, rawSHA, firstSeenAt, updatedAt string
+		var active bool
+		if err := rows.Scan(&kind, &objectID, &name, &active, &rawJSON, &rawSHA, &firstSeenAt, &updatedAt); err != nil {
+			return fmt.Errorf("scan source gong_setting: %w", err)
+		}
+		if _, err := stmt.ExecContext(ctx, kind, objectID, name, active, rawJSON, rawSHA, firstSeenAt, updatedAt); err != nil {
+			return fmt.Errorf("insert target gong_setting: %w", err)
+		}
+		written++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	counts.targetGongSettings = written
 	return nil
 }
 
@@ -519,6 +769,66 @@ SELECT call_id, object_key, object_type, object_id, object_name, raw_json::text
 		return err
 	}
 	counts.targetContextObjects = written
+	return nil
+}
+
+func copyServingScorecardActivity(ctx context.Context, sourceDB *sql.DB, tx *sql.Tx, suppressed map[string]struct{}, counts *servingCopyCounts) error {
+	rows, err := sourceDB.QueryContext(ctx, `
+SELECT answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_started_at,
+       reviewed_user_id, reviewer_user_id, editor_user_id, review_method, review_time,
+       visibility_type, overall_score, average_score, answer_count,
+       raw_json::text, raw_sha256, first_seen_at, updated_at
+  FROM scorecard_activity
+ ORDER BY answered_scorecard_id`)
+	if err != nil {
+		return fmt.Errorf("read source scorecard_activity: %w", err)
+	}
+	defer rows.Close()
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO scorecard_activity(
+	answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_started_at,
+	reviewed_user_id, reviewer_user_id, editor_user_id, review_method, review_time,
+	visibility_type, overall_score, average_score, answer_count,
+	raw_json, raw_sha256, first_seen_at, updated_at
+) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	var written int64
+	for rows.Next() {
+		var (
+			answeredScorecardID, scorecardID, scorecardName, callID, callStartedAt string
+			reviewedUserID, reviewerUserID, editorUserID, reviewMethod             string
+			reviewTime, visibilityType, rawJSON, rawSHA, firstSeenAt, updatedAt    string
+			overallScore, averageScore                                             float64
+			answerCount                                                            int64
+		)
+		if err := rows.Scan(
+			&answeredScorecardID, &scorecardID, &scorecardName, &callID, &callStartedAt,
+			&reviewedUserID, &reviewerUserID, &editorUserID, &reviewMethod, &reviewTime,
+			&visibilityType, &overallScore, &averageScore, &answerCount,
+			&rawJSON, &rawSHA, &firstSeenAt, &updatedAt,
+		); err != nil {
+			return fmt.Errorf("scan source scorecard_activity: %w", err)
+		}
+		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
+			continue
+		}
+		if _, err := stmt.ExecContext(
+			ctx,
+			answeredScorecardID, scorecardID, scorecardName, callID, callStartedAt,
+			reviewedUserID, reviewerUserID, editorUserID, reviewMethod, reviewTime,
+			visibilityType, overallScore, averageScore, answerCount,
+			rawJSON, rawSHA, firstSeenAt, updatedAt,
+		); err != nil {
+			return fmt.Errorf("insert target scorecard_activity: %w", err)
+		}
+		written++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	counts.targetScorecardActivity = written
 	return nil
 }
 

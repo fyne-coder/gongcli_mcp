@@ -10,6 +10,7 @@ LAB_DB="${LAB_DB:-}"
 LAB_GONGMCP_IMAGE="${LAB_GONGMCP_IMAGE:-}"
 LAB_GONG_DATABASE_URL="${LAB_GONG_DATABASE_URL:-${GONG_DATABASE_URL:-}}"
 LAB_TOOL_PRESET="${LAB_TOOL_PRESET:-${GONGMCP_TOOL_PRESET:-business-pilot}}"
+LAB_GONGMCP_DEPLOYMENT_ID="${LAB_GONGMCP_DEPLOYMENT_ID:-${GONGMCP_DEPLOYMENT_ID:-lab-$(date -u +%Y%m%dT%H%M%SZ)}}"
 LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS="${LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS:-${GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS:-}}"
 LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB="${LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB:-${GONGMCP_POSTGRES_REDACTED_SERVING_DB:-}}"
 LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST="${LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-${GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-}}"
@@ -58,7 +59,7 @@ set_env_value() {
   local key="$2"
   local value="$3"
   if grep -q "^${key}=" "$file" 2>/dev/null; then
-    awk -F= -v key="$key" -v value="$value" 'BEGIN {OFS = FS} $1 == key {$2 = value} {print}' "$file" >"$file.next"
+    awk -F= -v key="$key" -v value="$value" '$1 == key {print key "=" value; next} {print}' "$file" >"$file.next"
     mv "$file.next" "$file"
   else
     printf '%s=%s\n' "$key" "$value" >>"$file"
@@ -159,6 +160,7 @@ LAB_SECONDARY_PASSWORD=$(rand_b64 18)
 EOF
 fi
 set_env_value "$tmpdir/.env" GONGMCP_TOOL_PRESET "$LAB_TOOL_PRESET"
+set_env_value "$tmpdir/.env" GONGMCP_DEPLOYMENT_ID "$LAB_GONGMCP_DEPLOYMENT_ID"
 set_env_value "$tmpdir/.env" GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS "$LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"
 set_env_value "$tmpdir/.env" GONGMCP_POSTGRES_REDACTED_SERVING_DB "$LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB"
 set_env_value "$tmpdir/.env" LAB_GONGMCP_IMAGE "$LAB_GONGMCP_IMAGE"

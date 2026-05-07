@@ -1672,15 +1672,19 @@ func TestHTTPHandlerExposesUnauthenticatedHealthzOnly(t *testing.T) {
 		t.Fatalf("health body is not valid JSON: %q", health.Body.String())
 	}
 	var healthPayload struct {
-		Status  string `json:"status"`
-		Service string `json:"service"`
-		Version string `json:"version"`
+		Status    string                `json:"status"`
+		Service   string                `json:"service"`
+		Version   string                `json:"version"`
+		MCPServer mcp.PublicRuntimeInfo `json:"mcp_server"`
 	}
 	if err := json.Unmarshal(health.Body.Bytes(), &healthPayload); err != nil {
 		t.Fatalf("unmarshal health JSON: %v", err)
 	}
 	if healthPayload.Status != "ok" || healthPayload.Service != "gongmcp" || healthPayload.Version == "" {
 		t.Fatalf("unexpected health payload: %+v", healthPayload)
+	}
+	if healthPayload.MCPServer.Name != "gongmcp" || healthPayload.MCPServer.Version == "" {
+		t.Fatalf("health payload missing MCP server identity: %+v", healthPayload)
 	}
 
 	mcpRecorder := httptest.NewRecorder()

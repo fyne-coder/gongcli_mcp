@@ -541,6 +541,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		TotalGongSettings:            summary.TotalGongSettings,
 		TotalScorecards:              summary.TotalScorecards,
 		TotalScorecardActivity:       summary.TotalScorecardActivity,
+		TotalAIHighlights:            summary.TotalAIHighlights,
 		MissingTranscripts:           summary.MissingTranscripts,
 		RunningSyncRuns:              summary.RunningSyncRuns,
 		ProfileReadiness:             summary.ProfileReadiness,
@@ -1389,6 +1390,7 @@ type syncStatusResponse struct {
 	TotalGongSettings            int64                      `json:"total_gong_settings"`
 	TotalScorecards              int64                      `json:"total_scorecards"`
 	TotalScorecardActivity       int64                      `json:"total_scorecard_activity"`
+	TotalAIHighlights            int64                      `json:"total_ai_highlights"`
 	MissingTranscripts           int64                      `json:"missing_transcripts"`
 	RunningSyncRuns              int64                      `json:"running_sync_runs"`
 	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`

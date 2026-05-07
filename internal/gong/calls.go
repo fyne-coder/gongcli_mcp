@@ -17,11 +17,11 @@ type CallListParams struct {
 	// ExposeParties requests Gong call participant fields (names, emails,
 	// titles) via contentSelector.exposedFields.parties=true.
 	ExposeParties bool
-	// ExposeHighlights requests Gong AI Highlights / brief / next-step fields
-	// via contentSelector.exposedFields.highlights=true. The fields land
-	// under content.highlights in the response payload (and are stored in
-	// the raw call JSON when Gong returns them). Treated as sensitive
-	// because summaries and next steps can include customer-facing text.
+	// ExposeHighlights requests Gong Spotlight/generated content fields via
+	// contentSelector.exposedFields.content. The fields land under content.brief,
+	// content.highlights, content.keyPoints, content.outline, and sometimes
+	// content.callOutcome in the response payload. Treated as sensitive because
+	// generated summaries and next steps can include customer-facing text.
 	// Replaces the deprecated pointsOfInterest/actionItems contract.
 	ExposeHighlights bool
 }
@@ -63,7 +63,13 @@ func (c *Client) ListCalls(ctx context.Context, params CallListParams) (*Respons
 		exposed["parties"] = true
 	}
 	if params.ExposeHighlights {
-		exposed["highlights"] = true
+		exposed["content"] = map[string]any{
+			"brief":       true,
+			"callOutcome": true,
+			"highlights":  true,
+			"keyPoints":   true,
+			"outline":     true,
+		}
 	}
 	if len(exposed) > 0 {
 		contentSelector["exposedFields"] = exposed

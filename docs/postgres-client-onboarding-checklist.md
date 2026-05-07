@@ -99,6 +99,9 @@ Stop if the dry run is not reviewed and signed off.
 For the pilot record, save:
 
 - binary version, commit, image tag, and digest
+- `mcp_server` identity from `gong_status` or `/healthz`, including
+  `deployment_id`, `tool_preset`, `started_at_utc`, and transcript evidence
+  provenance
 - enabled preset and role name, not passwords or URLs
 - sync scope and date window
 - smoke command names and reviewed evidence paths

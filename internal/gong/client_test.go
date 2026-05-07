@@ -110,9 +110,7 @@ func TestListCallsExposesPartiesAndHighlights(t *testing.T) {
 		if exposed["parties"] != true {
 			t.Fatalf("exposedFields.parties=%v want true", exposed["parties"])
 		}
-		if exposed["highlights"] != true {
-			t.Fatalf("exposedFields.highlights=%v want true", exposed["highlights"])
-		}
+		assertSpotlightContentSelector(t, exposed)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"calls":[],"records":{"currentPageSize":0}}`))
 	}))
@@ -153,9 +151,7 @@ func TestListCallsExposesHighlightsOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("exposedFields missing: %#v", contentSelector)
 		}
-		if exposed["highlights"] != true {
-			t.Fatalf("exposedFields.highlights=%v want true", exposed["highlights"])
-		}
+		assertSpotlightContentSelector(t, exposed)
 		if _, hasParties := exposed["parties"]; hasParties {
 			t.Fatalf("exposedFields.parties unexpectedly present: %#v", exposed)
 		}
@@ -178,6 +174,23 @@ func TestListCallsExposesHighlightsOnly(t *testing.T) {
 
 	if _, err := client.ListCalls(context.Background(), CallListParams{ExposeHighlights: true}); err != nil {
 		t.Fatalf("ListCalls returned error: %v", err)
+	}
+}
+
+func assertSpotlightContentSelector(t *testing.T, exposed map[string]any) {
+	t.Helper()
+
+	if _, hasLegacyHighlights := exposed["highlights"]; hasLegacyHighlights {
+		t.Fatalf("exposedFields must use content selector, got legacy highlights=true: %#v", exposed)
+	}
+	content, ok := exposed["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("exposedFields.content missing: %#v", exposed)
+	}
+	for _, field := range []string{"brief", "callOutcome", "highlights", "keyPoints", "outline"} {
+		if content[field] != true {
+			t.Fatalf("exposedFields.content.%s=%v want true; content=%#v", field, content[field], content)
+		}
 	}
 }
 

@@ -86,6 +86,7 @@ type Server struct {
 	store                        Store
 	name                         string
 	version                      string
+	runtimeInfo                  RuntimeInfo
 	tools                        []tool
 	limitPolicy                  LimitPolicy
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
@@ -98,6 +99,29 @@ type Server struct {
 }
 
 type ServerOption func(*Server)
+
+// RuntimeInfo captures non-secret runtime metadata that helps MCP clients and
+// manual testers prove which server instance they are connected to.
+type RuntimeInfo struct {
+	Commit       string
+	BuildDate    string
+	ToolPreset   string
+	DeploymentID string
+	StartedAtUTC string
+}
+
+type PublicRuntimeInfo struct {
+	Name                         string `json:"name"`
+	Version                      string `json:"version"`
+	Commit                       string `json:"commit,omitempty"`
+	BuildDate                    string `json:"build_date,omitempty"`
+	ToolPreset                   string `json:"tool_preset,omitempty"`
+	DeploymentID                 string `json:"deployment_id,omitempty"`
+	StartedAtUTC                 string `json:"started_at_utc,omitempty"`
+	ToolCount                    int    `json:"tool_count"`
+	FacadeRoutedToolCount        int    `json:"facade_routed_tool_count"`
+	TranscriptEvidenceProvenance string `json:"transcript_evidence_provenance"`
+}
 
 type TranscriptEvidenceProvenance string
 
@@ -183,6 +207,7 @@ type ToolInfo struct {
 }
 
 type publicSyncStatus struct {
+	MCPServer                    PublicRuntimeInfo          `json:"mcp_server"`
 	TotalCalls                   int64                      `json:"total_calls"`
 	TotalUsers                   int64                      `json:"total_users"`
 	TotalTranscripts             int64                      `json:"total_transcripts"`
@@ -196,6 +221,7 @@ type publicSyncStatus struct {
 	TotalGongSettings            int64                      `json:"total_gong_settings"`
 	TotalScorecards              int64                      `json:"total_scorecards"`
 	TotalScorecardActivity       int64                      `json:"total_scorecard_activity"`
+	TotalAIHighlights            int64                      `json:"total_ai_highlights"`
 	MissingTranscripts           int64                      `json:"missing_transcripts"`
 	RunningSyncRuns              int64                      `json:"running_sync_runs"`
 	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`
@@ -490,6 +516,7 @@ func NewServerWithOptions(store Store, name, version string, opts ...ServerOptio
 		store:                        store,
 		name:                         name,
 		version:                      version,
+		runtimeInfo:                  RuntimeInfo{StartedAtUTC: time.Now().UTC().Format(time.RFC3339)},
 		limitPolicy:                  DefaultLimitPolicy(),
 		transcriptEvidenceProvenance: TranscriptEvidenceRedacted,
 	}
@@ -511,6 +538,44 @@ func NewServerWithOptions(store Store, name, version string, opts ...ServerOptio
 		server.tools = filtered
 	}
 	return server
+}
+
+func WithRuntimeInfo(info RuntimeInfo) ServerOption {
+	return func(s *Server) {
+		if strings.TrimSpace(info.StartedAtUTC) == "" {
+			info.StartedAtUTC = s.runtimeInfo.StartedAtUTC
+		}
+		s.runtimeInfo = info
+	}
+}
+
+func (s *Server) publicRuntimeInfo() PublicRuntimeInfo {
+	return PublicRuntimeInfo{
+		Name:                         s.name,
+		Version:                      s.version,
+		Commit:                       strings.TrimSpace(s.runtimeInfo.Commit),
+		BuildDate:                    strings.TrimSpace(s.runtimeInfo.BuildDate),
+		ToolPreset:                   strings.TrimSpace(s.runtimeInfo.ToolPreset),
+		DeploymentID:                 strings.TrimSpace(s.runtimeInfo.DeploymentID),
+		StartedAtUTC:                 strings.TrimSpace(s.runtimeInfo.StartedAtUTC),
+		ToolCount:                    len(s.tools),
+		FacadeRoutedToolCount:        s.facadeAvailableOperationCount(),
+		TranscriptEvidenceProvenance: string(s.transcriptEvidenceProvenance),
+	}
+}
+
+func (s *Server) RuntimeInfo() PublicRuntimeInfo {
+	return s.publicRuntimeInfo()
+}
+
+func (s *Server) facadeAvailableOperationCount() int {
+	count := 0
+	for _, op := range FacadeOperations() {
+		if s.facadeRoutedToolAvailable(op) {
+			count++
+		}
+	}
+	return count
 }
 
 func WithToolAllowlist(names []string) ServerOption {
@@ -1299,7 +1364,7 @@ func (s *Server) getSyncStatus(ctx context.Context, raw json.RawMessage) (toolCa
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(mcpSyncStatus(summary))
+	return newToolResult(s.mcpSyncStatus(summary))
 }
 
 func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1861,11 +1926,12 @@ func mcpTranscriptPriorities(rows []sqlite.LifecycleTranscriptPriority) []sqlite
 	return out
 }
 
-func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
+func (s *Server) mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 	profile := summary.ProfileReadiness
 	profile.Name = ""
 	profile.CanonicalSHA256 = ""
 	return publicSyncStatus{
+		MCPServer:                    s.publicRuntimeInfo(),
 		TotalCalls:                   summary.TotalCalls,
 		TotalUsers:                   summary.TotalUsers,
 		TotalTranscripts:             summary.TotalTranscripts,
@@ -1879,6 +1945,7 @@ func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 		TotalGongSettings:            summary.TotalGongSettings,
 		TotalScorecards:              summary.TotalScorecards,
 		TotalScorecardActivity:       summary.TotalScorecardActivity,
+		TotalAIHighlights:            summary.TotalAIHighlights,
 		MissingTranscripts:           summary.MissingTranscripts,
 		RunningSyncRuns:              summary.RunningSyncRuns,
 		ProfileReadiness:             profile,

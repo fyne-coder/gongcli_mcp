@@ -732,6 +732,7 @@ type SyncStatusSummary struct {
 	TotalGongSettings            int64               `json:"total_gong_settings"`
 	TotalScorecards              int64               `json:"total_scorecards"`
 	TotalScorecardActivity       int64               `json:"total_scorecard_activity"`
+	TotalAIHighlights            int64               `json:"total_ai_highlights"`
 	MissingTranscripts           int64               `json:"missing_transcripts"`
 	RunningSyncRuns              int64               `json:"running_sync_runs"`
 	ProfileReadiness             ProfileReadiness    `json:"profile_readiness"`

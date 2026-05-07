@@ -143,6 +143,7 @@ func DefaultReadOnlyFunctionSignatures() []string {
 		"public.gongmcp_scorecard_detail(text)",
 		"public.gongmcp_scorecards(boolean, integer)",
 		"public.gongmcp_list_call_ai_highlights(text, integer)",
+		"public.gongmcp_call_ai_highlights_count()",
 		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_search_transcript_segments(text, integer)",
 		"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
@@ -508,6 +509,7 @@ CREATE OR REPLACE VIEW gongmcp_sync_runs AS SELECT id, scope, sync_key, ''::text
 	DROP FUNCTION IF EXISTS gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer);
 	DROP FUNCTION IF EXISTS gongmcp_list_call_ai_highlights(text, integer);
+	DROP FUNCTION IF EXISTS gongmcp_call_ai_highlights_count();
 	`+postgresCRMObjectTypeSummaryFunctionSQL+`
 	`+postgresCRMFieldSummaryFunctionSQL+`
 	`+postgresCRMFieldValueSearchFunctionSQL+`
@@ -1234,6 +1236,7 @@ BEGIN
 		GRANT SELECT (call_id, segment_count, first_seen_at, updated_at) ON transcripts TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_list_call_ai_highlights(text, integer) TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_call_ai_highlights_count() TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader;
 		GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader;
 		GRANT SELECT ON TABLE gongmcp_call_context_objects TO gongmcp_reader;
@@ -2702,6 +2705,15 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummar
 		scorecardActivityCountQuery = `SELECT total_answered_scorecards FROM gongmcp_scorecard_activity_totals()`
 	}
 	if err := s.db.QueryRowContext(ctx, scorecardActivityCountQuery).Scan(&summary.TotalScorecardActivity); err != nil {
+		return nil, err
+	}
+	aiHighlightCountQuery := `SELECT COUNT(*) FROM call_ai_highlights`
+	if s.readOnly {
+		aiHighlightCountQuery = `SELECT gongmcp_call_ai_highlights_count()`
+	} else if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		aiHighlightCountQuery = `SELECT COUNT(call_id) FROM call_ai_highlights`
+	}
+	if err := s.db.QueryRowContext(ctx, aiHighlightCountQuery).Scan(&summary.TotalAIHighlights); err != nil {
 		return nil, err
 	}
 	lastRun, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, COALESCE(finished_at, ''), records_seen, records_written, error_text FROM gongmcp_sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`)

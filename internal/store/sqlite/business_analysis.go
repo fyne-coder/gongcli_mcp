@@ -150,8 +150,8 @@ type BusinessAnalysisDimensionRow struct {
 }
 
 // AIHighlightListParams is the bounded input contract for listing typed Gong
-// AI highlights. CallIDs is required and capped by the caller; Limit is
-// honored as an upper bound on returned rows.
+// AI highlights. CallIDs contains already-resolved raw call IDs and is capped
+// by the caller; Limit is honored as an upper bound on returned rows.
 type AIHighlightListParams struct {
 	CallIDs []string
 	Limit   int
@@ -162,6 +162,7 @@ type AIHighlightListParams struct {
 // highlight JSON is intentionally not exposed.
 type AIHighlightRow struct {
 	CallID         string `json:"call_id"`
+	CallRef        string `json:"call_ref,omitempty"`
 	HighlightIndex int    `json:"highlight_index"`
 	HighlightType  string `json:"highlight_type"`
 	HighlightText  string `json:"highlight_text"`

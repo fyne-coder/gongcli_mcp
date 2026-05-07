@@ -103,6 +103,7 @@ LAB_BLOCKED_PASSWORD="$(remote_env LAB_BLOCKED_PASSWORD)"
 LAB_SECONDARY_PASSWORD="$(remote_env LAB_SECONDARY_PASSWORD)"
 GONGMCP_TOOL_PRESET="$(remote_env GONGMCP_TOOL_PRESET)"
 GONGMCP_TOOL_PRESET="${GONGMCP_TOOL_PRESET:-business-pilot}"
+GONGMCP_DEPLOYMENT_ID="$(remote_env GONGMCP_DEPLOYMENT_ID)"
 if [[ -z "$OIDC_CLIENT_SECRET" || -z "$LAB_APPROVED_EMAIL" || -z "$LAB_SECONDARY_EMAIL" || -z "$LAB_BLOCKED_EMAIL" || -z "$LAB_APPROVED_PASSWORD" || -z "$LAB_BLOCKED_PASSWORD" || -z "$LAB_SECONDARY_PASSWORD" ]]; then
   echo "remote lab .env is missing required lab auth values; redeploy with lab-up.sh" >&2
   exit 1
@@ -112,7 +113,13 @@ wait_for_url "$LAB_PUBLIC_BASE_URL/healthz"
 wait_for_url "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration"
 
 echo "== healthz =="
-curl -fsS "$LAB_PUBLIC_BASE_URL/healthz" | jq .
+health_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/healthz")"
+echo "$health_response" | jq .
+echo "$health_response" | jq -e '.mcp_server.name == "gongmcp"' >/dev/null
+echo "$health_response" | jq --arg preset "$GONGMCP_TOOL_PRESET" -e '.mcp_server.tool_preset == $preset' >/dev/null
+if [[ -n "$GONGMCP_DEPLOYMENT_ID" ]]; then
+  echo "$health_response" | jq --arg deployment_id "$GONGMCP_DEPLOYMENT_ID" -e '.mcp_server.deployment_id == $deployment_id' >/dev/null
+fi
 
 echo "== OAuth protected resource metadata =="
 metadata_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource")"

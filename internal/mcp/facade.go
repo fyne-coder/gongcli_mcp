@@ -261,16 +261,23 @@ func FacadeOperations() []FacadeOperation {
 					"minItems":    1,
 					"maxItems":    maxAIHighlightCallIDs,
 				},
+				"call_refs": map[string]any{
+					"type":        "array",
+					"description": "Bounded list of redacted call_ref values to look up highlights for.",
+					"items":       map[string]any{"type": "string"},
+					"minItems":    1,
+					"maxItems":    maxAIHighlightCallIDs,
+				},
 				"limit": map[string]any{
 					"type":    "integer",
 					"minimum": 1,
 					"maximum": maxAIHighlightLimit,
 				},
-			}, []string{"call_ids"}),
+			}, nil),
 			Examples: []any{
 				map[string]any{
-					"call_ids": []string{"call-allow-1", "call-allow-2"},
-					"limit":    25,
+					"call_refs": []string{"call_ref_123456789abc", "call_ref_456789abcdef"},
+					"limit":     25,
 				},
 			},
 		},
@@ -445,6 +452,7 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 	}
 	payload := map[string]any{
 		"facade_version": "v1",
+		"mcp_server":     s.publicRuntimeInfo(),
 		"operations":     enriched,
 		"facade_tools": []string{
 			FacadeToolStatus,
@@ -529,6 +537,7 @@ func (s *Server) facadeHighLevelLimitations() (toolCallResult, error) {
 	payload := map[string]any{
 		"tool":           FacadeToolExplainLimitations,
 		"facade_version": "v1",
+		"mcp_server":     s.publicRuntimeInfo(),
 		"limitations": []string{
 			"The MCP facade routes a stable surface to existing internal tools; it does not introduce new data paths.",
 			"Routed tools must be present in the active tool allowlist or preset; otherwise the facade returns a tool error naming the missing routed tool and preset.",
@@ -610,8 +619,9 @@ const (
 )
 
 type listCallAIHighlightsArgs struct {
-	CallIDs []string `json:"call_ids"`
-	Limit   int      `json:"limit"`
+	CallIDs  []string `json:"call_ids"`
+	CallRefs []string `json:"call_refs"`
+	Limit    int      `json:"limit"`
 }
 
 func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -619,8 +629,8 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
-	ids := make([]string, 0, len(args.CallIDs))
-	seen := make(map[string]struct{}, len(args.CallIDs))
+	rawIDs := make([]string, 0, len(args.CallIDs))
+	seenIDs := make(map[string]struct{}, len(args.CallIDs))
 	for _, raw := range args.CallIDs {
 		v := strings.TrimSpace(raw)
 		if v == "" {
@@ -629,17 +639,54 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 		if len(v) > maxAIHighlightCallIDLen {
 			return toolCallResult{}, fmt.Errorf("call_ids entries must be %d characters or fewer", maxAIHighlightCallIDLen)
 		}
-		if _, ok := seen[v]; ok {
+		if _, ok := seenIDs[v]; ok {
 			continue
 		}
-		seen[v] = struct{}{}
-		ids = append(ids, v)
+		seenIDs[v] = struct{}{}
+		rawIDs = append(rawIDs, v)
 	}
-	if len(ids) == 0 {
-		return toolCallResult{}, fmt.Errorf("call_ids is required and must contain at least one non-empty id")
+
+	callIDs := make([]string, 0, len(rawIDs)+len(args.CallRefs))
+	callIDs = append(callIDs, rawIDs...)
+	refByCallID := make(map[string]string, len(args.CallRefs))
+	callRefs := make([]string, 0, len(args.CallRefs))
+	seenRefs := make(map[string]struct{}, len(args.CallRefs))
+	for _, raw := range args.CallRefs {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if len(v) > maxAIHighlightCallIDLen {
+			return toolCallResult{}, fmt.Errorf("call_refs entries must be %d characters or fewer", maxAIHighlightCallIDLen)
+		}
+		normalized, err := sqlite.NormalizeStableCallRef(v)
+		if err != nil {
+			return toolCallResult{}, fmt.Errorf("invalid call_ref")
+		}
+		if _, ok := seenRefs[normalized]; ok {
+			continue
+		}
+		seenRefs[normalized] = struct{}{}
+		resolved, err := s.store.ResolveCallIDByRef(ctx, normalized)
+		if err != nil {
+			callRefs = append(callRefs, normalized)
+			continue
+		}
+		if _, ok := seenIDs[resolved]; ok {
+			refByCallID[resolved] = normalized
+			callRefs = append(callRefs, normalized)
+			continue
+		}
+		seenIDs[resolved] = struct{}{}
+		refByCallID[resolved] = normalized
+		callRefs = append(callRefs, normalized)
+		callIDs = append(callIDs, resolved)
 	}
-	if len(ids) > maxAIHighlightCallIDs {
-		return toolCallResult{}, fmt.Errorf("call_ids must include no more than %d ids; got %d", maxAIHighlightCallIDs, len(ids))
+	if len(callIDs) == 0 {
+		return toolCallResult{}, fmt.Errorf("call_ids or call_refs is required and must contain at least one non-empty identifier")
+	}
+	if len(callIDs) > maxAIHighlightCallIDs {
+		return toolCallResult{}, fmt.Errorf("call_ids and call_refs must include no more than %d identifiers total; got %d", maxAIHighlightCallIDs, len(callIDs))
 	}
 
 	limit := args.Limit
@@ -650,7 +697,7 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 		limit = maxAIHighlightLimit
 	}
 
-	rows, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: ids, Limit: limit})
+	rows, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: callIDs, Limit: limit})
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -662,36 +709,58 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 			suppressedFiltered++
 			continue
 		}
+		if ref := refByCallID[row.CallID]; ref != "" {
+			row.CallRef = ref
+			row.CallID = ""
+		}
 		cleaned = append(cleaned, row)
 		if len(cleaned) >= limit {
 			break
 		}
 	}
 
-	requestedSet := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
+	requestedSet := make(map[string]struct{}, len(callIDs))
+	for _, id := range callIDs {
 		requestedSet[id] = struct{}{}
 	}
 	withRows := make(map[string]struct{}, len(cleaned))
 	for _, row := range cleaned {
-		withRows[row.CallID] = struct{}{}
+		if row.CallID != "" {
+			withRows[row.CallID] = struct{}{}
+		}
+		if row.CallRef != "" {
+			withRows[row.CallRef] = struct{}{}
+		}
 	}
-	missing := make([]string, 0)
-	for _, id := range ids {
+	missingIDs := make([]string, 0)
+	for _, id := range rawIDs {
 		if _, ok := withRows[id]; ok {
 			continue
 		}
 		if s.isSuppressedCall(id) {
 			continue
 		}
-		missing = append(missing, id)
+		missingIDs = append(missingIDs, id)
+	}
+	missingRefs := make([]string, 0)
+	for _, ref := range callRefs {
+		if _, ok := withRows[ref]; ok {
+			continue
+		}
+		resolved, err := s.store.ResolveCallIDByRef(ctx, ref)
+		if err == nil && s.isSuppressedCall(resolved) {
+			continue
+		}
+		missingRefs = append(missingRefs, ref)
 	}
 
 	payload := map[string]any{
 		"rows":                      cleaned,
 		"count":                     len(cleaned),
-		"requested_call_ids":        ids,
-		"call_ids_without_rows":     missing,
+		"requested_call_ids":        rawIDs,
+		"requested_call_refs":       callRefs,
+		"call_ids_without_rows":     missingIDs,
+		"call_refs_without_rows":    missingRefs,
 		"suppressed_filtered_count": suppressedFiltered,
 		"limits": map[string]any{
 			"limit":        limit,
@@ -700,8 +769,8 @@ func (s *Server) executeListCallAIHighlights(ctx context.Context, raw json.RawMe
 		},
 		"caveats": []string{
 			"Highlights are Gong AI-generated accelerators; transcript quotes remain primary evidence.",
-			"Rows return only the typed call_id, highlight_index, highlight_type, highlight_text, source_path, and updated_at columns; raw highlight JSON is not exposed.",
-			"Lookups require explicit call_ids; this operation performs no raw account or customer enumeration and does not list the full call set.",
+			"Rows return only typed call_ref or call_id, highlight_index, highlight_type, highlight_text, source_path, and updated_at columns; raw highlight JSON is not exposed.",
+			"Lookups require explicit call_refs or call_ids; this operation performs no raw account or customer enumeration and does not list the full call set.",
 			"Restricted calls remain absent because the redacted Postgres serving DB has no rows for them; runtime-suppressed calls are filtered before rows leave the server.",
 			"call_ai_highlights only exists in the Postgres serving DB; SQLite-backed deployments will return zero rows.",
 		},

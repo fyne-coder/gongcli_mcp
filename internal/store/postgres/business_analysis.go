@@ -52,6 +52,17 @@ SELECT h.call_id,
  LIMIT (SELECT limit_value FROM bounded)
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_list_call_ai_highlights(text, integer) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_call_ai_highlights_count()
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT COUNT(*)::bigint FROM call_ai_highlights
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_call_ai_highlights_count() FROM PUBLIC;
 `
 
 // ListAIHighlights returns bounded, typed Gong AI highlight rows from the

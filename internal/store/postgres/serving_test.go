@@ -115,8 +115,12 @@ func TestRefreshServingDBVerticalSliceCopiesAllowedRows(t *testing.T) {
 			"started":  "2026-04-24T12:00:00Z",
 			"duration": 900,
 			"content": map[string]any{
+				"brief": "Allowed synthetic brief.",
 				"highlights": []map[string]any{
 					{"type": "summary", "text": "Allowed synthetic highlight."},
+				},
+				"keyPoints": []map[string]any{
+					{"text": "Allowed synthetic key point."},
 				},
 			},
 			"context": []any{
@@ -183,6 +187,15 @@ func TestRefreshServingDBVerticalSliceCopiesAllowedRows(t *testing.T) {
 	if _, err := source.UpsertUser(ctx, json.RawMessage(`{"id":"pg-user-serving-001","emailAddress":"op@example.invalid","firstName":"Op","lastName":"One","title":"RevOps","active":true}`)); err != nil {
 		t.Fatalf("upsert user: %v", err)
 	}
+	if _, err := source.UpsertGongSetting(ctx, "scorecards", json.RawMessage(`{"scorecardId":"pg-serving-scorecard-001","scorecardName":"Synthetic Scorecard","active":true,"reviewMethod":"MANUAL","questions":[{"questionId":"q1","questionText":"Did discovery happen?"}]}`)); err != nil {
+		t.Fatalf("upsert scorecard setting: %v", err)
+	}
+	if _, err := source.UpsertScorecardActivity(ctx, json.RawMessage(`{"answeredScorecardId":"pg-serving-activity-allowed","scorecardId":"pg-serving-scorecard-001","scorecardName":"Synthetic Scorecard","callId":"pg-serving-allowed-001","callStartTime":"2026-04-24T12:00:00Z","reviewMethod":"MANUAL","reviewTime":"2026-04-24T15:00:00Z","answers":[{"questionId":"q1","score":4}]}`)); err != nil {
+		t.Fatalf("upsert allowed scorecard activity: %v", err)
+	}
+	if _, err := source.UpsertScorecardActivity(ctx, json.RawMessage(`{"answeredScorecardId":"pg-serving-activity-blocked","scorecardId":"pg-serving-scorecard-001","scorecardName":"Synthetic Scorecard","callId":"pg-serving-blocked-001","callStartTime":"2026-04-24T14:00:00Z","reviewMethod":"MANUAL","reviewTime":"2026-04-24T16:00:00Z","answers":[{"questionId":"q1","score":1}]}`)); err != nil {
+		t.Fatalf("upsert blocked scorecard activity: %v", err)
+	}
 
 	configPath := filepath.Join(t.TempDir(), "ai-governance.yaml")
 	if err := os.WriteFile(configPath, []byte(`
@@ -232,6 +245,18 @@ lists:
 	if result.TargetUsers != 1 {
 		t.Fatalf("target_users = %d want 1", result.TargetUsers)
 	}
+	if result.SourceScorecards != 1 || result.TargetScorecards != 1 {
+		t.Fatalf("scorecard counts source=%d target=%d want 1/1", result.SourceScorecards, result.TargetScorecards)
+	}
+	if result.SourceScorecardActivity != 2 || result.TargetScorecardActivity != 1 {
+		t.Fatalf("scorecard activity counts source=%d target=%d want 2/1", result.SourceScorecardActivity, result.TargetScorecardActivity)
+	}
+	if result.SourceAIHighlights != 4 || result.RemovedAIHighlights != 1 {
+		t.Fatalf("AI highlight counts source=%d removed=%d want 4/1", result.SourceAIHighlights, result.RemovedAIHighlights)
+	}
+	if result.TargetAIHighlights != 3 {
+		t.Fatalf("target_ai_highlights = %d want 3", result.TargetAIHighlights)
+	}
 	if result.PolicyConfigSHA256 == "" {
 		t.Fatalf("policy_config_sha256 should be set")
 	}
@@ -268,9 +293,12 @@ lists:
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_context_objects WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_context_fields WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-serving-blocked-001'`, 0)
+	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM scorecard_activity WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM calls`, 2)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM transcripts WHERE call_id = 'pg-serving-allowed-001'`, 1)
-	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-serving-allowed-001'`, 1)
+	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_ai_highlights WHERE call_id = 'pg-serving-allowed-001'`, 3)
+	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, 1)
+	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM scorecard_activity WHERE call_id = 'pg-serving-allowed-001'`, 1)
 	// call_facts should be rebuilt for allowed calls.
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_facts WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM call_facts`, 2)
@@ -282,6 +310,44 @@ lists:
 	}
 	if targetAudit.SuppressedCallCount != 0 {
 		t.Fatalf("target audit still has %d suppressed candidates after redaction; expected 0", targetAudit.SuppressedCallCount)
+	}
+}
+
+func TestValidateServingCopyCountsRejectsMissingNonRedactedRows(t *testing.T) {
+	counts := servingCopyCounts{
+		sourceCalls:               10,
+		sourceUsers:               3,
+		sourceGongSettings:        2,
+		sourceScorecards:          1,
+		sourceScorecardActivity:   5,
+		sourceAIHighlights:        7,
+		redactedCalls:             2,
+		redactedScorecardActivity: 1,
+		redactedAIHighlights:      2,
+		targetCalls:               8,
+		targetUsers:               0,
+		targetGongSettings:        0,
+		targetScorecards:          0,
+		targetScorecardActivity:   4,
+		targetAIHighlights:        0,
+	}
+	err := validateServingCopyCounts(counts)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	got := err.Error()
+	for _, want := range []string{
+		"users target=0 want=3",
+		"gong_settings target=0 want=2",
+		"scorecards target=0 want=1",
+		"call_ai_highlights target=0 want=5",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("validation error %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "Blocked Synthetic Corp") || strings.Contains(got, "pg-serving-blocked") {
+		t.Fatalf("validation error leaked restricted details: %v", err)
 	}
 }
 

@@ -90,6 +90,19 @@ func TestToolCatalogInvariants(t *testing.T) {
 	}
 	wantFacadeRoutedTools := append(copyStrings(analystTools), internalRoutedToolListAIHighlights)
 	assertStringSlicesEqual(t, facadeRoutedTools, wantFacadeRoutedTools, "analyst-facade hidden routed tools")
+
+	for _, preset := range []string{"analyst-business-core", "analyst", "redacted-all-readonly", "all-readonly"} {
+		visibleTools, err := ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		routedTools, err := ExpandToolPresetFacadeRoutedTools(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPresetFacadeRoutedTools(%q) returned error: %v", preset, err)
+		}
+		want := append(copyStrings(visibleTools), internalRoutedToolListAIHighlights)
+		assertStringSlicesEqual(t, routedTools, want, preset+" hidden facade routed tools")
+	}
 }
 
 func TestAnalystPresetExposesScorecardInventoryTools(t *testing.T) {

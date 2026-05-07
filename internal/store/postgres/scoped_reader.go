@@ -212,6 +212,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 			"public.gongmcp_profile_call_fact_cache_meta(bigint, text)",
 			"public.gongmcp_profile_data_fingerprint()",
 			"public.gongmcp_scorecard_activity_totals()",
+			"public.gongmcp_call_ai_highlights_count()",
 		},
 		"get_business_profile": {
 			"public.gongmcp_active_business_profile()",
@@ -229,6 +230,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 		},
 		"list_call_ai_highlights": {
 			"public.gongmcp_list_call_ai_highlights(text, integer)",
+			"public.gongmcp_call_ai_highlights_count()",
 		},
 		"list_crm_fields": {
 			"public.gongmcp_crm_field_summary_sanitized(text, integer)",
@@ -351,10 +353,17 @@ func BusinessPilotScopedColumns(allowlist []string) bool {
 		"summarize_calls_by_lifecycle": {},
 		"rank_transcript_backlog":      {},
 	}
-	if len(allowlist) != len(want) {
+	const facadeOnlyAIHighlightsTool = "list_call_ai_highlights"
+	if len(allowlist) != len(want) && len(allowlist) != len(want)+1 {
 		return false
 	}
 	for _, name := range allowlist {
+		if name == facadeOnlyAIHighlightsTool {
+			if len(allowlist) != len(want)+1 {
+				return false
+			}
+			continue
+		}
 		if _, ok := want[name]; !ok {
 			return false
 		}
@@ -506,10 +515,17 @@ func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
 		"summarize_themes_by_industry":              {},
 		"summarize_themes_by_persona":               {},
 	}
-	if len(allowlist) != len(want) {
+	const facadeOnlyAIHighlightsTool = "list_call_ai_highlights"
+	if len(allowlist) != len(want) && len(allowlist) != len(want)+1 {
 		return false
 	}
 	for _, name := range allowlist {
+		if name == facadeOnlyAIHighlightsTool {
+			if len(allowlist) != len(want)+1 {
+				return false
+			}
+			continue
+		}
 		if _, ok := want[name]; !ok {
 			return false
 		}

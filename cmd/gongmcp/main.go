@@ -228,7 +228,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer closeStore()
 
-	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithFacadeRoutedToolAllowlist(facadeRoutedAllowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
+	buildInfo := version.Current()
+	serverOptions := []mcp.ServerOption{
+		mcp.WithToolAllowlist(allowlist),
+		mcp.WithFacadeRoutedToolAllowlist(facadeRoutedAllowlist),
+		mcp.WithLimitPolicy(limitPolicy),
+		mcp.WithTranscriptEvidenceProvenance(provenance),
+		mcp.WithRuntimeInfo(mcp.RuntimeInfo{
+			Commit:       buildInfo.Commit,
+			BuildDate:    buildInfo.Date,
+			ToolPreset:   selectedPreset,
+			DeploymentID: os.Getenv("GONGMCP_DEPLOYMENT_ID"),
+			StartedAtUTC: time.Now().UTC().Format(time.RFC3339),
+		}),
+	}
 	if min := postgresAnalystSmallCellMin(postgresMode, selectedPreset, enforceScopedDBGrants); min > 1 {
 		serverOptions = append(serverOptions, mcp.WithBusinessAnalysisSmallCellMin(min))
 	}
@@ -942,13 +955,15 @@ func httpHandler(server *mcp.Server, cfg httpConfig, accessLog io.Writer) http.H
 			return
 		}
 		_ = json.NewEncoder(w).Encode(struct {
-			Status  string `json:"status"`
-			Service string `json:"service"`
-			Version string `json:"version"`
+			Status    string                `json:"status"`
+			Service   string                `json:"service"`
+			Version   string                `json:"version"`
+			MCPServer mcp.PublicRuntimeInfo `json:"mcp_server"`
 		}{
-			Status:  "ok",
-			Service: "gongmcp",
-			Version: version.DisplayVersion(),
+			Status:    "ok",
+			Service:   "gongmcp",
+			Version:   version.DisplayVersion(),
+			MCPServer: server.RuntimeInfo(),
 		})
 	})
 	return mux

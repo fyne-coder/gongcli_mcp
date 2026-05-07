@@ -29,6 +29,10 @@ counts, tool names, and reviewed evidence paths only.
   needed.
 - `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`.
 - `GONGMCP_POSTGRES_REDACTED_SERVING_DB=1`.
+- `GONGMCP_DEPLOYMENT_ID` is set to a non-secret rollout label, image digest,
+  or deployment ticket so `gong_status`, `get_sync_status`,
+  `gong_discover_capabilities`, and `/healthz` can prove which MCP server a
+  client is actually using.
 - `all-readonly`, `all-tools`, and `all` remain rejected for Postgres.
 - Operator has run the deployment smoke and stored sanitized evidence.
 - Current cache counts are known. For the internal May 6, 2026 lab baseline:
@@ -123,6 +127,10 @@ unrestricted account enumeration.
 Expected result:
 
 - `get_sync_status` succeeds.
+- The status payload includes `mcp_server` with the expected `version`,
+  `commit`, `tool_preset`, `deployment_id`, `started_at_utc`, tool counts, and
+  transcript evidence provenance. Stop if these do not match the intended
+  deployment, because the client may be connected to a stale MCP server.
 - Counts match the current deployment baseline within the expected refresh
   window.
 - Missing transcript count is acceptable for the pilot, ideally `0`.

@@ -632,10 +632,12 @@ ON CONFLICT(call_id, object_key, field_name) DO UPDATE SET
 	raw_json = EXCLUDED.raw_json`
 
 const postgresInsertCallAIHighlightsSQL = `
-WITH raw_highlights AS (
+WITH raw_items AS (
 	SELECT c.call_id,
-	       highlight_item.value AS raw_highlight,
-	       (highlight_item.ordinality - 1)::integer AS highlight_index
+	       highlight_item.value AS raw_item,
+	       (highlight_item.ordinality - 1)::integer AS highlight_index,
+	       'highlight' AS default_type,
+	       'content.highlights' AS source_path
 	  FROM calls c
 	  CROSS JOIN LATERAL jsonb_array_elements(
 		CASE
@@ -644,24 +646,71 @@ WITH raw_highlights AS (
 		END
 	  ) WITH ORDINALITY AS highlight_item(value, ordinality)
 	 WHERE c.call_id = $1
+	UNION ALL
+	SELECT c.call_id,
+	       c.raw_json#>'{content,brief}' AS raw_item,
+	       10000 AS highlight_index,
+	       'brief' AS default_type,
+	       'content.brief' AS source_path
+	  FROM calls c
+	 WHERE c.call_id = $1
+	   AND jsonb_typeof(c.raw_json#>'{content,brief}') IN ('string', 'object')
+	UNION ALL
+	SELECT c.call_id,
+	       key_point_item.value AS raw_item,
+	       (20000 + key_point_item.ordinality - 1)::integer AS highlight_index,
+	       'key_point' AS default_type,
+	       'content.keyPoints' AS source_path
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(
+		CASE
+			WHEN jsonb_typeof(c.raw_json#>'{content,keyPoints}') = 'array' THEN c.raw_json#>'{content,keyPoints}'
+			ELSE '[]'::jsonb
+		END
+	  ) WITH ORDINALITY AS key_point_item(value, ordinality)
+	 WHERE c.call_id = $1
+	UNION ALL
+	SELECT c.call_id,
+	       outline_item.value AS raw_item,
+	       (30000 + outline_item.ordinality - 1)::integer AS highlight_index,
+	       'outline' AS default_type,
+	       'content.outline' AS source_path
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(
+		CASE
+			WHEN jsonb_typeof(c.raw_json#>'{content,outline}') = 'array' THEN c.raw_json#>'{content,outline}'
+			ELSE '[]'::jsonb
+		END
+	  ) WITH ORDINALITY AS outline_item(value, ordinality)
+	 WHERE c.call_id = $1
+	UNION ALL
+	SELECT c.call_id,
+	       c.raw_json#>'{content,outline}' AS raw_item,
+	       30000 AS highlight_index,
+	       'outline' AS default_type,
+	       'content.outline' AS source_path
+	  FROM calls c
+	 WHERE c.call_id = $1
+	   AND jsonb_typeof(c.raw_json#>'{content,outline}') = 'string'
 ),
-typed_highlights AS (
+typed_items AS (
 	SELECT call_id,
 	       highlight_index,
 	       COALESCE(NULLIF(TRIM(CASE
-		       WHEN jsonb_typeof(raw_highlight) = 'object' THEN COALESCE(raw_highlight->>'type', raw_highlight->>'kind', raw_highlight->>'category', '')
+		       WHEN jsonb_typeof(raw_item) = 'object' THEN COALESCE(raw_item->>'type', raw_item->>'kind', raw_item->>'category', '')
 		       ELSE ''
-	       END), ''), 'highlight') AS highlight_type,
+	       END), ''), default_type, 'highlight') AS highlight_type,
 	       TRIM(CASE
-		       WHEN jsonb_typeof(raw_highlight) = 'string' THEN raw_highlight#>>'{}'
-		       WHEN jsonb_typeof(raw_highlight) = 'object' THEN COALESCE(raw_highlight->>'text', raw_highlight->>'summary', raw_highlight->>'description', raw_highlight->>'value', '')
+		       WHEN jsonb_typeof(raw_item) = 'string' THEN raw_item#>>'{}'
+		       WHEN jsonb_typeof(raw_item) = 'object' THEN COALESCE(raw_item->>'text', raw_item->>'summary', raw_item->>'description', raw_item->>'value', raw_item->>'title', '')
 		       ELSE ''
-	       END) AS highlight_text
-	  FROM raw_highlights
+	       END) AS highlight_text,
+	       source_path
+	  FROM raw_items
 )
 INSERT INTO call_ai_highlights(call_id, highlight_index, highlight_type, highlight_text, source_path, updated_at)
-SELECT call_id, highlight_index, highlight_type, highlight_text, 'content.highlights', $2
-  FROM typed_highlights
+SELECT call_id, highlight_index, highlight_type, highlight_text, source_path, $2
+  FROM typed_items
  WHERE highlight_text <> ''
 ON CONFLICT(call_id, highlight_index) DO UPDATE SET
 	highlight_type = EXCLUDED.highlight_type,

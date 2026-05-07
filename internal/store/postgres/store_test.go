@@ -2196,17 +2196,25 @@ func TestPostgresUpsertRefreshesCallAIHighlightsReadModel(t *testing.T) {
 		"started":"2026-04-22T15:00:00Z",
 		"duration":600,
 		"content":{
+			"brief":"Synthetic Gong call brief.",
 			"highlights":[
 				{"type":"summary","text":"Synthetic executive summary."},
 				{"type":"next_steps","text":"Synthetic follow-up next step."},
 				{"type":"empty","text":"   "}
+			],
+			"keyPoints":[
+				"Synthetic key point one.",
+				{"type":"risk","text":"Synthetic risk key point."}
+			],
+			"outline":[
+				{"title":"Synthetic outline step."}
 			]
 		}
 	}`)); err != nil {
 		t.Fatalf("UpsertCall returned error: %v", err)
 	}
 
-	rows, err := store.DB().QueryContext(ctx, `SELECT highlight_index, highlight_type, highlight_text FROM call_ai_highlights WHERE call_id = $1 ORDER BY highlight_index`, "pg-highlights-001")
+	rows, err := store.DB().QueryContext(ctx, `SELECT highlight_index, highlight_type, highlight_text, source_path FROM call_ai_highlights WHERE call_id = $1 ORDER BY highlight_index`, "pg-highlights-001")
 	if err != nil {
 		t.Fatalf("read call_ai_highlights: %v", err)
 	}
@@ -2214,18 +2222,22 @@ func TestPostgresUpsertRefreshesCallAIHighlightsReadModel(t *testing.T) {
 	var got []string
 	for rows.Next() {
 		var idx int
-		var typ, text string
-		if err := rows.Scan(&idx, &typ, &text); err != nil {
+		var typ, text, sourcePath string
+		if err := rows.Scan(&idx, &typ, &text, &sourcePath); err != nil {
 			t.Fatalf("scan call_ai_highlights: %v", err)
 		}
-		got = append(got, fmt.Sprintf("%d:%s:%s", idx, typ, text))
+		got = append(got, fmt.Sprintf("%d:%s:%s:%s", idx, typ, sourcePath, text))
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate call_ai_highlights: %v", err)
 	}
 	want := []string{
-		"0:summary:Synthetic executive summary.",
-		"1:next_steps:Synthetic follow-up next step.",
+		"0:summary:content.highlights:Synthetic executive summary.",
+		"1:next_steps:content.highlights:Synthetic follow-up next step.",
+		"10000:brief:content.brief:Synthetic Gong call brief.",
+		"20000:key_point:content.keyPoints:Synthetic key point one.",
+		"20001:risk:content.keyPoints:Synthetic risk key point.",
+		"30000:outline:content.outline:Synthetic outline step.",
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("call_ai_highlights rows = %#v want %#v", got, want)
@@ -2234,8 +2246,8 @@ func TestPostgresUpsertRefreshesCallAIHighlightsReadModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListAIHighlights returned error: %v", err)
 	}
-	if len(listed) != 2 {
-		t.Fatalf("ListAIHighlights returned %d rows, want 2: %#v", len(listed), listed)
+	if len(listed) != 6 {
+		t.Fatalf("ListAIHighlights returned %d rows, want 6: %#v", len(listed), listed)
 	}
 	if listed[0].CallID != "pg-highlights-001" || listed[0].HighlightType != "summary" || listed[0].HighlightText != "Synthetic executive summary." {
 		t.Fatalf("ListAIHighlights first row = %#v", listed[0])
