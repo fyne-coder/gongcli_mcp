@@ -131,7 +131,10 @@ transcript snippets tied to a CRM object type or record, use an explicit
 reviewed. For approved analyst workflows on Postgres, use `analyst`; use
 `analyst-core` or `analyst-business-core` when you need a narrower starter
 surface. Use `redacted-all-readonly` only for internal manual testing against a
-physically redacted Postgres serving DB with scoped reader grants.
+physically redacted Postgres serving DB with scoped reader grants. That preset
+is the explicit broad redacted-DB exception where business-analysis tools can
+return remaining call titles/raw call IDs when the caller sets the include
+flags.
 Use `all-readonly` only for
 trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
 cache.

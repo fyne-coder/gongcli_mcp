@@ -1528,6 +1528,17 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 		pgServingAccountCalls.Rows[0].Title != "" {
 		t.Fatalf("redacted serving Postgres account_query calls not sanitized: summary=%+v rows=%+v", pgServingAccountCalls.Summary, pgServingAccountCalls.Rows)
 	}
+	pgRedactedAllView := &Store{db: pgStore.DB(), readOnly: true, readOnlyOptions: ReadOnlyOptions{EnforceAllowedColumnBoundary: true, AllowAccountQuery: true, AllowBusinessAnalysisRawIDs: true}}
+	pgRedactedAllCalls, err := pgRedactedAllView.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: sqlite.BusinessAnalysisFilter{AccountQuery: "Example", Limit: 10}, Limit: 10})
+	if err != nil {
+		t.Fatalf("redacted-all Postgres SearchBusinessAnalysisCalls account_query: %v", err)
+	}
+	if pgRedactedAllCalls.Summary.CallCount != 1 ||
+		len(pgRedactedAllCalls.Rows) != 1 ||
+		pgRedactedAllCalls.Rows[0].CallID != "pg-ba-001" ||
+		pgRedactedAllCalls.Rows[0].Title != "Business Analysis Manufacturing Discovery" {
+		t.Fatalf("redacted-all Postgres calls did not expose redacted-DB title/id: summary=%+v rows=%+v", pgRedactedAllCalls.Summary, pgRedactedAllCalls.Rows)
+	}
 
 	pgEvidence, err := pgStore.SearchBusinessAnalysisEvidence(ctx, sqlite.BusinessAnalysisEvidenceSearchParams{Filter: filter, Query: "implementation", Limit: 10})
 	if err != nil {

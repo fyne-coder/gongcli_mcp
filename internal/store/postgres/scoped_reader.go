@@ -21,13 +21,15 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 		EnforceAllowedFunctionBoundary: true,
 	}
 	if isReviewedScopedReaderSurface(allowlist) {
-		signatures = scopedReaderFunctionSignatures(signatures)
+		redactedAll := RedactedAllReadonlyScopedColumns(allowlist)
+		signatures = scopedReaderFunctionSignatures(signatures, redactedAll)
 		options.RequiredFunctionSignatures = signatures
 		options.AllowedFunctionSignatures = signatures
 		columns := ScopedReaderColumnSelectGrantsForAllowlist(allowlist)
 		options.RequiredColumnSelectGrants = columns
 		options.AllowedColumnSelectGrants = columns
 		options.EnforceAllowedColumnBoundary = true
+		options.AllowBusinessAnalysisRawIDs = redactedAll
 	}
 	return options
 }
@@ -299,7 +301,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 	return signatures
 }
 
-func scopedReaderFunctionSignatures(signatures []string) []string {
+func scopedReaderFunctionSignatures(signatures []string, redactedAll bool) []string {
 	out := make([]string, 0, len(signatures))
 	for _, signature := range signatures {
 		if signature == "public.gongmcp_profile_call_fact_cache(bigint, text)" {
@@ -319,16 +321,16 @@ func scopedReaderFunctionSignatures(signatures []string) []string {
 		if signature == "public.gongmcp_active_business_profile()" {
 			signature = "public.gongmcp_active_business_profile_sanitized()"
 		}
-		if signature == "public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)" {
+		if signature == "public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
 			signature = "public.gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer)"
 		}
-		if signature == "public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" {
+		if signature == "public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
 			signature = "public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
 		}
-		if signature == "public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" {
+		if signature == "public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
 			signature = "public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
 		}
-		if signature == "public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" {
+		if signature == "public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
 			signature = "public.gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
 		}
 		if signature == "public.gongmcp_search_transcript_segments(text, integer)" {

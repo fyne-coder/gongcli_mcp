@@ -142,12 +142,16 @@ per-call duration, bounded evidence/quotes, warnings, limitations, and an
 answer contract for the host model. It does not generate unsupported prose
 inside `gongmcp`; the host model must synthesize from returned evidence.
 
-Call titles remain deliberately constrained. They can contain customer names
-or sensitive account terms, so scoped Postgres business-analysis functions
-blank titles even when `include_call_titles=true`. Use `call_ref`,
+Call titles remain deliberately constrained for client/default scoped surfaces.
+They can contain customer names or sensitive account terms, so
+`business-workbench` and approved analyst scoped Postgres business-analysis
+functions blank titles even when `include_call_titles=true`. Use `call_ref`,
 date/start time, duration, Gong generated brief/highlight rows, and transcript
-quote evidence as the stable client path unless a deployment explicitly
-approves broader title exposure on a physically redacted database.
+quote evidence as the stable client path. The internal
+`redacted-all-readonly` preset is the explicit exception: when it is pointed at
+a physically redacted Postgres serving database, scoped reader grants use the
+reviewed raw business-analysis helper functions so `include_call_titles=true`
+can return remaining call titles from the redacted DB for manual testing.
 
 The broader 68-tool surfaces (`analyst`, `analyst-business-core`,
 `redacted-all-readonly`, `all-readonly`) remain available for operator,
@@ -155,7 +159,9 @@ analyst, and internal-testing use, but they are not the recommended default
 for client MCP hosts. Prefer `business-workbench` so the client sees a small,
 stable list of names while internal operations evolve underneath.
 `redacted-all-readonly` is internal manual-testing only and requires the
-physically redacted Postgres serving DB plus scoped reader grants.
+physically redacted Postgres serving DB plus scoped reader grants. In this
+internal mode, explicit include flags can expose raw call IDs and call titles
+that remain in the physically redacted serving DB.
 
 ## Analyst Cohort Tool Exposure
 

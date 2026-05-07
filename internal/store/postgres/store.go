@@ -104,6 +104,7 @@ type ReadOnlyOptions struct {
 	AllowedColumnSelectGrants      []ColumnSelectGrant
 	EnforceAllowedColumnBoundary   bool
 	AllowAccountQuery              bool
+	AllowBusinessAnalysisRawIDs    bool
 }
 
 type ColumnSelectGrant struct {

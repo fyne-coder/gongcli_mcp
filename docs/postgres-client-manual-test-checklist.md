@@ -73,7 +73,9 @@ underneath.
 For internal redacted-DB broad testing, `redacted-all-readonly` exposes every
 reviewed Postgres-readable MCP tool, including `search_calls`, `get_call`,
 `search_crm_field_values`, CRM/settings inventory, scorecard activity
-aggregates, facade tools, and the business-analysis catalog. This preset is
+aggregates, facade tools, and the business-analysis catalog. With this preset
+only, business-analysis calls may return remaining redacted-DB call titles and
+raw call IDs when the caller sets the explicit include flags. This preset is
 internal manual-testing only — not a client-facing default — and should not be
 used against a raw unredacted database.
 

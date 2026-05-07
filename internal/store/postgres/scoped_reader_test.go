@@ -289,12 +289,17 @@ func TestBuildScopedReaderGrantSQLRedactedAllReadonlyGrantsBroadSearchSurface(t 
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO "gongmcp_redacted_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_scorecard_activity_summary(text, integer) TO "gongmcp_redacted_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
 	} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("generated SQL missing %q\n%s", want, sql)
 		}
 	}
 	for _, forbidden := range []string{
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls_sanitized`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence_sanitized`,
 		`ON TABLE public."transcript_segments"`,
 		`ON TABLE public."call_context_fields"`,
 		`ON TABLE public."scorecard_activity"`,

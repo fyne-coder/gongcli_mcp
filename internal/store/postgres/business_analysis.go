@@ -402,6 +402,9 @@ func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sql
 
 func (s *Store) postgresBusinessAnalysisCallsFunction() string {
 	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		if s.readOnlyOptions.AllowBusinessAnalysisRawIDs {
+			return "gongmcp_business_analysis_calls"
+		}
 		return "gongmcp_business_analysis_calls_sanitized"
 	}
 	return "gongmcp_business_analysis_calls"
@@ -409,6 +412,9 @@ func (s *Store) postgresBusinessAnalysisCallsFunction() string {
 
 func (s *Store) postgresBusinessAnalysisEvidenceFunction() string {
 	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		if s.readOnlyOptions.AllowBusinessAnalysisRawIDs {
+			return "gongmcp_business_analysis_evidence"
+		}
 		return "gongmcp_business_analysis_evidence_sanitized"
 	}
 	return "gongmcp_business_analysis_evidence"
@@ -416,6 +422,9 @@ func (s *Store) postgresBusinessAnalysisEvidenceFunction() string {
 
 func (s *Store) postgresBusinessAnalysisThemeSeedFunction() string {
 	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		if s.readOnlyOptions.AllowBusinessAnalysisRawIDs {
+			return "gongmcp_business_analysis_theme_seed_sample"
+		}
 		return "gongmcp_business_analysis_theme_seed_sample_sanitized"
 	}
 	return "gongmcp_business_analysis_theme_seed_sample"
@@ -423,6 +432,9 @@ func (s *Store) postgresBusinessAnalysisThemeSeedFunction() string {
 
 func (s *Store) postgresTranscriptQuoteAttributionFunction() string {
 	if s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		if s.readOnlyOptions.AllowBusinessAnalysisRawIDs {
+			return "gongmcp_search_transcript_quotes_with_attribution"
+		}
 		return "gongmcp_search_transcript_quotes_with_attribution_sanitized"
 	}
 	return "gongmcp_search_transcript_quotes_with_attribution"
