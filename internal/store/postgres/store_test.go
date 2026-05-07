@@ -36,7 +36,7 @@ func TestStoreSyntheticVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartSyncRun returned error: %v", err)
 	}
-	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-call-001","title":"Postgres shared MCP kickoff","started":"2026-01-15T15:00:00Z","duration":1200,"parties":[{"id":"speaker-1"}]}`)); err != nil {
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-call-001","title":"Postgres shared MCP kickoff","started":"2026-01-15T15:00:00Z","duration":1200,"parties":[{"id":"speaker-1","affiliation":"External"}]}`)); err != nil {
 		t.Fatalf("UpsertCall returned error: %v", err)
 	}
 	enrichedCall, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-call-002","title":"Preserve enriched call","started":"2026-01-15T18:00:00Z","duration":600,"parties":[{"id":"speaker-1"},{"id":"speaker-2"}],"context":{"crmObjects":[{"type":"account","id":"acct-1","fields":{"Name":"Acme"}}]}}`))
@@ -97,8 +97,51 @@ func TestStoreSyntheticVerticalSlice(t *testing.T) {
 		t.Fatalf("unexpected transcript search results: %+v", segments)
 	}
 
+	drilldown, err := store.CallDrilldownEvidence(ctx, sqlite.CallDrilldownEvidenceParams{
+		CallID: "pg-call-001",
+		Query:  "shared database",
+		Limit:  5,
+	})
+	if err != nil {
+		t.Fatalf("CallDrilldownEvidence returned error: %v", err)
+	}
+	if len(drilldown) != 1 {
+		t.Fatalf("CallDrilldownEvidence returned %d rows, want 1: %+v", len(drilldown), drilldown)
+	}
+	if drilldown[0].SpeakerRole != sqlite.SpeakerRoleExternal || drilldown[0].SpeakerRoleStatus != sqlite.SpeakerRoleStatusAvailable {
+		t.Fatalf("CallDrilldownEvidence role=(%q,%q), want (%q,%q): %+v",
+			drilldown[0].SpeakerRole,
+			drilldown[0].SpeakerRoleStatus,
+			sqlite.SpeakerRoleExternal,
+			sqlite.SpeakerRoleStatusAvailable,
+			drilldown[0],
+		)
+	}
+
 	if _, err := OpenReadOnly(ctx, databaseURL); err == nil {
 		t.Fatal("OpenReadOnly accepted writer-privileged URL")
+	}
+}
+
+func TestPostgresCallDrilldownEvidenceFunctionExposesSpeakerRoleSQL(t *testing.T) {
+	sqlText := postgresAIHighlightsFunctionSQL
+	for _, want := range []string{
+		"speaker_role text",
+		"speaker_role_status text",
+		"p.value->>'affiliation'",
+		"p.value->>'isInternal'",
+		"role_distinct_count",
+		"END AS speaker_role",
+		"END AS speaker_role_status",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres call-drilldown function SQL missing %q", want)
+		}
+	}
+	lastMigration := migrations[len(migrations)-1]
+	if !strings.Contains(lastMigration, "DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer)") ||
+		!strings.Contains(lastMigration, "speaker_role text") {
+		t.Fatalf("latest migration does not recreate call drilldown with speaker role columns")
 	}
 }
 

@@ -718,7 +718,14 @@ ON CONFLICT(call_id, highlight_index) DO UPDATE SET
 	source_path = EXCLUDED.source_path,
 	updated_at = EXCLUDED.updated_at`
 
-const postgresInsertCallFactsSQL = `
+var postgresInsertCallFactsSQL = strings.Replace(
+	postgresInsertCallFactsSQLTemplate,
+	"-- __INSERT_LOSS_REASON_FIELD_NAMES_HERE__",
+	postgresLossReasonFieldNamesSQLList(),
+	1,
+)
+
+const postgresInsertCallFactsSQLTemplate = `
 WITH selected_account AS (
 	SELECT DISTINCT ON (call_id) call_id, object_key, object_id
 	  FROM call_context_objects
@@ -759,7 +766,8 @@ crm AS (
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name = 'StageName' AND LOWER(TRIM(f.field_value_text)) IN ('demo & business case', 'business case', 'sow & proposal', 'contract review', 'contract signing', 'crucible/last mile') THEN 1 ELSE 0 END), 0) AS has_late_stage,
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'account' AND f.field_name = 'Account_Type__c' AND LOWER(TRIM(f.field_value_text)) LIKE 'customer%' THEN 1 ELSE 0 END), 0) AS has_customer_account,
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) IN ('contact', 'lead') AND f.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c') AND TRIM(f.field_value_text) <> '' THEN 1 ELSE 0 END), 0) AS has_contact_title,
-	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c') AND TRIM(f.field_value_text) <> '' THEN 1 ELSE 0 END), 0) AS has_loss_reason
+	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name IN (-- __INSERT_LOSS_REASON_FIELD_NAMES_HERE__
+) AND TRIM(f.field_value_text) <> '' THEN 1 ELSE 0 END), 0) AS has_loss_reason
 	  FROM calls c
 	  LEFT JOIN selected_account sa ON sa.call_id = c.call_id
 	  LEFT JOIN selected_opportunity so ON so.call_id = c.call_id

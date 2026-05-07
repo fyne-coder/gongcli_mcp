@@ -60,6 +60,11 @@ type themeIntelReportQuoteRow struct {
 	PersonTitleStatus     string `json:"person_title_status"`
 	AttributionSource     string `json:"attribution_source"`
 	AttributionConfidence string `json:"attribution_confidence"`
+	// DrilldownTerm is the exact theme term/phrase that callers should pass
+	// back into evidence.call_drilldown's theme_query so the drill-down hits
+	// the same matched segment. Phase C deliberately defers fuzzy/synonym
+	// matching; the explicit workflow uses these literal terms instead.
+	DrilldownTerm string `json:"drilldown_term"`
 }
 
 type themeIntelReportAIRow struct {
@@ -83,6 +88,9 @@ type themeIntelReportTranscriptRow struct {
 	PersonTitleStatus     string `json:"person_title_status"`
 	AttributionSource     string `json:"attribution_source"`
 	AttributionConfidence string `json:"attribution_confidence"`
+	SpeakerRole           string `json:"speaker_role"`
+	SpeakerRoleStatus     string `json:"speaker_role_status"`
+	IsInternalSpeaker     bool   `json:"is_internal_speaker"`
 }
 
 type themeIntelReportDrilldown struct {
@@ -341,26 +349,27 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	}
 
 	payload := map[string]any{
-		"operation":                OpThemeIntelReport,
-		"status":                   status,
-		"searched_scope":           normalized,
-		"theme_query":              themeQuery,
-		"primary_theme":            primaryThemeName,
-		"coverage_summary":         businessAnalysisCoverageFromSummary(cohort.Summary),
-		"theme_candidates":         themeCandidates,
-		"themes_by_quarter":        map[string]any{"dimension": "quarter", "rows": themeIntelReportDimensionRowsAsPayload(quarterRows)},
-		"themes_by_industry":       map[string]any{"dimension": "industry", "rows": themeIntelReportDimensionRowsAsPayload(industryRows)},
-		"themes_by_persona":        map[string]any{"dimension": "persona", "rows": themeIntelReportDimensionRowsAsPayload(personaRows)},
-		"top_quotes_by_theme":      themeIntelReportQuoteMapAsPayload(quoteRowsByTheme),
-		"call_drilldowns":          drilldowns,
-		"sales_hooks_inputs":       salesHooks,
-		"outreach_sequence_inputs": outreachInputs,
-		"pipeline_outcome_summary": pipelineSummary,
-		"loss_reason_summary":      lossSummary,
-		"limitations":              limitations,
-		"warnings":                 warnings,
-		"suggested_followups":      themeIntelReportFollowups(args.OutputIntent),
-		"report_truncated":         truncated,
+		"operation":                 OpThemeIntelReport,
+		"status":                    status,
+		"searched_scope":            normalized,
+		"theme_query":               themeQuery,
+		"primary_theme":             primaryThemeName,
+		"coverage_summary":          businessAnalysisCoverageFromSummary(cohort.Summary),
+		"theme_candidates":          themeCandidates,
+		"themes_by_quarter":         themeIntelReportDimensionPayload("quarter", quarterRows),
+		"themes_by_industry":        themeIntelReportDimensionPayload("industry", industryRows),
+		"themes_by_persona":         themeIntelReportDimensionPayload("persona", personaRows),
+		"top_quotes_by_theme":       themeIntelReportQuoteMapAsPayload(quoteRowsByTheme),
+		"drilldown_workflow_inputs": buildThemeIntelDrilldownWorkflow(quoteRowsByTheme, maxThemeIntelReportCallDrilldowns*maxThemeIntelReportQuotesPerTheme),
+		"call_drilldowns":           drilldowns,
+		"sales_hooks_inputs":        salesHooks,
+		"outreach_sequence_inputs":  outreachInputs,
+		"pipeline_outcome_summary":  pipelineSummary,
+		"loss_reason_summary":       lossSummary,
+		"limitations":               limitations,
+		"warnings":                  warnings,
+		"suggested_followups":       themeIntelReportFollowups(args.OutputIntent),
+		"report_truncated":          truncated,
 		"limits": map[string]any{
 			"top_quotes_per_theme":    topQuotes,
 			"max_quotes_per_theme":    maxThemeIntelReportQuotesPerTheme,
@@ -449,6 +458,8 @@ func (s *Server) themeIntelReportBuildDrilldown(ctx context.Context, callID, the
 				PersonTitleStatus:     row.PersonTitleStatus,
 				AttributionSource:     row.AttributionSource,
 				AttributionConfidence: row.AttributionConfidence,
+				SpeakerRole:           row.SpeakerRole,
+				SpeakerRoleStatus:     row.SpeakerRoleStatus,
 			}
 			if tr.PersonTitleStatus == "" {
 				tr.PersonTitleStatus = sqlite.AttributionStatusSpeakerUnmatched
@@ -459,6 +470,13 @@ func (s *Server) themeIntelReportBuildDrilldown(ctx context.Context, callID, the
 			if tr.AttributionConfidence == "" {
 				tr.AttributionConfidence = sqlite.AttributionConfidenceUnmatched
 			}
+			if tr.SpeakerRole == "" {
+				tr.SpeakerRole = sqlite.SpeakerRoleUnknown
+			}
+			if tr.SpeakerRoleStatus == "" {
+				tr.SpeakerRoleStatus = sqlite.SpeakerRoleStatusAffiliationMissing
+			}
+			tr.IsInternalSpeaker = tr.SpeakerRole == sqlite.SpeakerRoleInternal
 			if includeRaw {
 				tr.CallID = callID
 			}
@@ -520,7 +538,7 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 	if topN <= 0 {
 		return out
 	}
-	convert := func(quote businessAnalysisQuote, item businessAnalysisItem) themeIntelReportQuoteRow {
+	convert := func(quote businessAnalysisQuote, item businessAnalysisItem, themeName string) themeIntelReportQuoteRow {
 		row := themeIntelReportQuoteRow{
 			CallRef:               quote.CallRef,
 			SegmentIndex:          quote.SegmentIndex,
@@ -536,6 +554,7 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 			PersonTitleStatus:     quote.PersonTitleStatus,
 			AttributionSource:     defaultAttribution(quote.PersonTitleStatus),
 			AttributionConfidence: defaultAttributionConfidence(quote.PersonTitleStatus),
+			DrilldownTerm:         themeName,
 		}
 		if includeRaw {
 			row.CallID = quote.CallID
@@ -561,7 +580,7 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 			if i < len(items) {
 				item = items[i]
 			}
-			bucket = append(bucket, convert(quote, item))
+			bucket = append(bucket, convert(quote, item, primary))
 		}
 		out[primary] = bucket
 		return out
@@ -588,7 +607,7 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 			if i < len(items) {
 				item = items[i]
 			}
-			bucket = append(bucket, convert(quote, item))
+			bucket = append(bucket, convert(quote, item, theme))
 		}
 		out[theme] = bucket
 	}
@@ -719,6 +738,48 @@ func themeIntelReportQuoteRefs(rows []themeIntelReportQuoteRow) []map[string]any
 	return out
 }
 
+// themeIntelReportDimensionPayload splits a dimension rollup into a
+// public payload that hides `<blank>` rows from the main `rows` array
+// and surfaces blank-coverage counts/percentages in a `coverage`
+// sub-object instead. Marketing/RevOps prompts can then count real
+// industry/persona/quarter buckets in `rows` without misreading
+// `<blank>` as a normal segment.
+func themeIntelReportDimensionPayload(dimension string, rows []sqlite.BusinessAnalysisDimensionRow) map[string]any {
+	publicRows := make([]sqlite.BusinessAnalysisDimensionRow, 0, len(rows))
+	var blankRow *sqlite.BusinessAnalysisDimensionRow
+	var totalCalls int64
+	for i := range rows {
+		row := rows[i]
+		totalCalls += row.CallCount
+		if v := strings.TrimSpace(row.Value); v == "" || v == "<blank>" {
+			blank := row
+			blankRow = &blank
+			continue
+		}
+		publicRows = append(publicRows, row)
+	}
+	coverage := map[string]any{
+		"total_call_count":          totalCalls,
+		"populated_bucket_count":    len(publicRows),
+		"blank_call_count":          int64(0),
+		"blank_call_rate":           0.0,
+		"latest_blank_call_at":      "",
+		"blank_treated_as_unmapped": true,
+	}
+	if blankRow != nil {
+		coverage["blank_call_count"] = blankRow.CallCount
+		coverage["latest_blank_call_at"] = blankRow.LatestCallAt
+		if totalCalls > 0 {
+			coverage["blank_call_rate"] = float64(blankRow.CallCount) / float64(totalCalls)
+		}
+	}
+	return map[string]any{
+		"dimension": dimension,
+		"rows":      themeIntelReportDimensionRowsAsPayload(publicRows),
+		"coverage":  coverage,
+	}
+}
+
 func themeIntelReportDimensionRowsAsPayload(rows []sqlite.BusinessAnalysisDimensionRow) []map[string]any {
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
@@ -731,6 +792,49 @@ func themeIntelReportDimensionRowsAsPayload(rows []sqlite.BusinessAnalysisDimens
 			"transcript_coverage_rate": row.TranscriptCoverageRate,
 			"latest_call_at":           row.LatestCallAt,
 		})
+	}
+	return out
+}
+
+// buildThemeIntelDrilldownWorkflow returns a deterministic, machine-readable
+// workflow plan: each entry pairs a stable call_ref with the exact theme
+// term it matched, plus a step instruction telling the calling model to
+// pass the same term back into evidence.call_drilldown's theme_query. This
+// is the explicit substitute for fuzzy/synonym matching across the
+// report-to-drilldown boundary.
+func buildThemeIntelDrilldownWorkflow(quotes map[string][]themeIntelReportQuoteRow, max int) []map[string]any {
+	if max <= 0 {
+		return []map[string]any{}
+	}
+	keys := make([]string, 0, len(quotes))
+	for k := range quotes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	seen := make(map[string]struct{})
+	out := make([]map[string]any, 0, max)
+	for _, theme := range keys {
+		for _, row := range quotes[theme] {
+			if len(out) >= max {
+				return out
+			}
+			if strings.TrimSpace(row.CallRef) == "" || strings.TrimSpace(row.DrilldownTerm) == "" {
+				continue
+			}
+			key := row.CallRef + "\x00" + row.DrilldownTerm
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, map[string]any{
+				"call_ref":        row.CallRef,
+				"theme_query":     row.DrilldownTerm,
+				"theme":           theme,
+				"step":            "evidence.call_drilldown { call_ref, theme_query: <drilldown_term> }",
+				"evidence_source": "theme_intelligence_report.top_quotes_by_theme",
+				"segment_index":   row.SegmentIndex,
+			})
+		}
 	}
 	return out
 }
@@ -787,6 +891,10 @@ func themeIntelReportQuoteMapAsPayload(quotes map[string][]themeIntelReportQuote
 			if row.CallDate != "" {
 				payload["call_date"] = row.CallDate
 			}
+			// drilldown_term is the exact theme phrase callers should pass
+			// back into evidence.call_drilldown's theme_query so the drill
+			// hits the same matched segment without fuzzy/synonym handling.
+			payload["drilldown_term"] = row.DrilldownTerm
 			conv = append(conv, payload)
 		}
 		out[k] = conv
@@ -839,7 +947,7 @@ func themeIntelReportFollowups(intent string) []string {
 	default:
 		return []string{
 			"Narrow the date range or industry to deepen evidence for the strongest theme.",
-			"Pull evidence.call_drilldown for the highest-signal call_ref to inspect bounded transcript excerpts.",
+			"Walk through drilldown_workflow_inputs and pass each {call_ref, theme_query} pair into evidence.call_drilldown verbatim — the same exact term from this report keeps the drill hitting the matched segment without fuzzy matching.",
 			"Use evidence.quote_pack.build for a sales-ready quote bundle once the strongest theme is selected.",
 		}
 	}

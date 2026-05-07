@@ -574,6 +574,57 @@ func TestFacadeAnalyzeThemeIntelReportRegisteredAndDispatchesReport(t *testing.T
 		t.Fatalf("themes_by_persona expected >=2 persona buckets, got %v", personaRows)
 	}
 
+	// Item E: <blank> rows must not appear in the public dimension `rows`
+	// list; they are surfaced only through the `coverage` sub-object so
+	// callers do not treat blank as a normal industry/persona/quarter.
+	for name, dim := range map[string]map[string]any{
+		"themes_by_quarter":  quarterRows,
+		"themes_by_industry": industryRows,
+		"themes_by_persona":  personaRows,
+	} {
+		if _, ok := dim["coverage"].(map[string]any); !ok {
+			t.Fatalf("%s missing coverage sub-object: %v", name, dim)
+		}
+		rowsList, _ := dim["rows"].([]any)
+		for _, r := range rowsList {
+			row, _ := r.(map[string]any)
+			if v, _ := row["bucket"].(string); v == "<blank>" || v == "" {
+				t.Fatalf("%s rows must exclude <blank> bucket; got %v", name, row)
+			}
+		}
+	}
+
+	// Item B: explicit report-to-drilldown workflow. Each top quote row
+	// must carry a `drilldown_term` safe to feed into call_drilldown's
+	// theme_query, and the report must expose a deterministic
+	// `drilldown_workflow_inputs` array that pairs call_refs with the
+	// matched theme term.
+	for theme, list := range quotesByTheme {
+		rows, _ := list.([]any)
+		for _, r := range rows {
+			row, _ := r.(map[string]any)
+			term, _ := row["drilldown_term"].(string)
+			if strings.TrimSpace(term) == "" {
+				t.Fatalf("quote row missing drilldown_term in theme %q row %v", theme, row)
+			}
+		}
+	}
+	workflow, _ := inner["drilldown_workflow_inputs"].([]any)
+	if len(workflow) == 0 {
+		t.Fatalf("drilldown_workflow_inputs must be non-empty when quotes exist: %v", inner)
+	}
+	for _, w := range workflow {
+		entry, _ := w.(map[string]any)
+		for _, key := range []string{"call_ref", "theme_query", "step", "evidence_source"} {
+			if _, ok := entry[key]; !ok {
+				t.Fatalf("drilldown_workflow_inputs entry missing %q: %v", key, entry)
+			}
+		}
+		if step, _ := entry["step"].(string); !strings.Contains(step, "call_drilldown") {
+			t.Fatalf("drilldown_workflow_inputs.step should reference call_drilldown: %v", entry)
+		}
+	}
+
 	pipeline, _ := inner["pipeline_outcome_summary"].(map[string]any)
 	if pipeline == nil {
 		t.Fatalf("pipeline_outcome_summary must be present")
@@ -591,6 +642,218 @@ func TestFacadeAnalyzeThemeIntelReportRegisteredAndDispatchesReport(t *testing.T
 	}
 	if !hasWon || !hasLost {
 		t.Fatalf("pipeline_outcome_summary missing closed_won/closed_lost coverage: %v", pipeline)
+	}
+}
+
+// TestFacadeAnalyzeThemeIntelReportBlankDimensionMovesIntoCoverage proves
+// that a cohort with no industry / persona data emits empty bucket rows
+// plus a coverage sub-object that names the blank-call count and
+// percentage so Marketing/RevOps prompts cannot misread the <blank>
+// segment as a real industry or persona.
+func TestFacadeAnalyzeThemeIntelReportBlankDimensionMovesIntoCoverage(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	// Seed a single call with no Industry, no participant titles, no
+	// opportunity stage so industry/persona/quarter all collapse to <blank>.
+	if _, err := base.UpsertCall(context.Background(), mustJSON(t, map[string]any{
+		"id":        "call_theme_blank_dim_001",
+		"title":     "Theme intel blank dimension cohort",
+		"started":   "2026-02-15T15:00:00Z",
+		"duration":  900,
+		"system":    "Zoom",
+		"direction": "Conference",
+		"scope":     "External",
+	})); err != nil {
+		t.Fatalf("upsert blank-dim call: %v", err)
+	}
+	if _, err := base.UpsertTranscript(context.Background(), mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_theme_blank_dim_001",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "speaker_blank_dim_buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "Manual order entry pain across the board."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert blank-dim transcript: %v", err)
+	}
+
+	server := NewServerWithOptions(base, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+	)
+	args, err := json.Marshal(map[string]any{
+		"operation": themeIntelReportOpName,
+		"arguments": map[string]any{
+			"from_date":   "2026-02-01",
+			"to_date":     "2026-02-28",
+			"theme_query": "manual order entry",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+
+	for _, name := range []string{"themes_by_industry", "themes_by_persona"} {
+		dim, _ := inner[name].(map[string]any)
+		if dim == nil {
+			t.Fatalf("%s missing", name)
+		}
+		coverage, ok := dim["coverage"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s missing coverage sub-object: %v", name, dim)
+		}
+		blankCount, _ := coverage["blank_call_count"].(float64)
+		if blankCount < 1 {
+			t.Fatalf("%s coverage.blank_call_count=%v want >=1", name, blankCount)
+		}
+		blankRate, _ := coverage["blank_call_rate"].(float64)
+		if blankRate <= 0 || blankRate > 1 {
+			t.Fatalf("%s coverage.blank_call_rate=%v want (0,1]", name, blankRate)
+		}
+		rowsList, _ := dim["rows"].([]any)
+		for _, r := range rowsList {
+			row, _ := r.(map[string]any)
+			if v, _ := row["bucket"].(string); v == "<blank>" || v == "" {
+				t.Fatalf("%s rows must exclude <blank>: %v", name, row)
+			}
+		}
+	}
+}
+
+// TestFacadeAnalyzeThemeIntelReportSurfacesSpeakerRoleAttribution proves
+// that the gap-followup `speaker_role` / `speaker_role_status` /
+// `is_internal_speaker` fields surface on every drilldown transcript
+// row in the report. Internal speakers come back as "internal" with
+// status "available"; speakers with no party data come back as
+// "unknown" with an explicit status so callers cannot misread the
+// silence as a confident answer.
+func TestFacadeAnalyzeThemeIntelReportSurfacesSpeakerRoleAttribution(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	// Override one drilldown row to carry an explicit role + status so we
+	// exercise the available branch; one row stays with empty role to
+	// exercise the affiliation_missing fallback.
+	store.transcriptByCallID["call_theme_q1_won_001"] = []sqlite.CallDrilldownEvidenceRow{
+		{
+			CallID: "call_theme_q1_won_001", SegmentIndex: 0,
+			SpeakerID: "speaker_q1_won_buyer", StartMS: 1000, EndMS: 2500,
+			Snippet:               "Manual order entry pain point",
+			ContextExcerpt:        "Manual order entry is the biggest pain point for our procurement team.",
+			PersonTitleStatus:     sqlite.AttributionStatusAvailable,
+			PersonTitleSource:     sqlite.AttributionSourceCallParties,
+			AttributionSource:     sqlite.AttributionSourceGongParty,
+			AttributionConfidence: sqlite.AttributionConfidenceExactSpeakerID,
+			PersonTitle:           "VP Procurement",
+			SpeakerRole:           sqlite.SpeakerRoleExternal,
+			SpeakerRoleStatus:     sqlite.SpeakerRoleStatusAvailable,
+		},
+	}
+	store.transcriptByCallID["call_theme_q1_lost_002"] = []sqlite.CallDrilldownEvidenceRow{
+		{
+			CallID: "call_theme_q1_lost_002", SegmentIndex: 0,
+			SpeakerID: "speaker_q1_lost_buyer", StartMS: 1000, EndMS: 2500,
+			Snippet:               "Manual order entry pain but pricing too high",
+			PersonTitleStatus:     sqlite.AttributionStatusAvailable,
+			PersonTitleSource:     sqlite.AttributionSourceCallParties,
+			AttributionSource:     sqlite.AttributionSourceGongParty,
+			AttributionConfidence: sqlite.AttributionConfidenceExactSpeakerID,
+			PersonTitle:           "Procurement Director",
+			// SpeakerRole / SpeakerRoleStatus deliberately empty: the
+			// underlying party data did not give us an affiliation; the
+			// facade must fall back to unknown + affiliation_missing.
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+	)
+	// Use a Q1-only date range so the cohort only contains the two
+	// synthetic Manufacturing calls. The default seeded fixture calls
+	// (call_extended_001, call_sanitized_001) are dated 2026-04-24 and
+	// would otherwise crowd the drill cap.
+	args, err := json.Marshal(map[string]any{
+		"operation": themeIntelReportOpName,
+		"arguments": map[string]any{
+			"from_date":   "2026-01-01",
+			"to_date":     "2026-03-31",
+			"theme_query": "manual order entry",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	drills, _ := inner["call_drilldowns"].([]any)
+	if len(drills) == 0 {
+		t.Fatalf("expected drilldowns: %v", inner)
+	}
+
+	roleByCallRef := map[string]map[string]any{}
+	for _, d := range drills {
+		drill, _ := d.(map[string]any)
+		ref, _ := drill["call_ref"].(string)
+		excerpts, _ := drill["verbatim_transcript_excerpts"].([]any)
+		if len(excerpts) == 0 {
+			continue
+		}
+		row, _ := excerpts[0].(map[string]any)
+		roleByCallRef[ref] = row
+	}
+	wonRef := sqlite.StableCallRef("call_theme_q1_won_001")
+	lostRef := sqlite.StableCallRef("call_theme_q1_lost_002")
+
+	wonRow := roleByCallRef[wonRef]
+	if wonRow == nil {
+		t.Fatalf("missing won-call drilldown row for ref %s; got %+v", wonRef, roleByCallRef)
+	}
+	if got, _ := wonRow["speaker_role"].(string); got != sqlite.SpeakerRoleExternal {
+		t.Fatalf("won-call speaker_role=%q want %q", got, sqlite.SpeakerRoleExternal)
+	}
+	if got, _ := wonRow["speaker_role_status"].(string); got != sqlite.SpeakerRoleStatusAvailable {
+		t.Fatalf("won-call speaker_role_status=%q want %q", got, sqlite.SpeakerRoleStatusAvailable)
+	}
+	if got, _ := wonRow["is_internal_speaker"].(bool); got {
+		t.Fatalf("won-call is_internal_speaker=true; external speaker should not be flagged internal: %+v", wonRow)
+	}
+
+	lostRow := roleByCallRef[lostRef]
+	if lostRow == nil {
+		t.Fatalf("missing lost-call drilldown row for ref %s; got %+v", lostRef, roleByCallRef)
+	}
+	if got, _ := lostRow["speaker_role"].(string); got != sqlite.SpeakerRoleUnknown {
+		t.Fatalf("lost-call speaker_role=%q want %q (no affiliation data)", got, sqlite.SpeakerRoleUnknown)
+	}
+	if got, _ := lostRow["speaker_role_status"].(string); got != sqlite.SpeakerRoleStatusAffiliationMissing {
+		t.Fatalf("lost-call speaker_role_status=%q want %q", got, sqlite.SpeakerRoleStatusAffiliationMissing)
 	}
 }
 

@@ -3901,6 +3901,162 @@ func TestCallDrilldownEvidenceSpeakerAttribution(t *testing.T) {
 	}
 }
 
+// TestCallDrilldownEvidenceSpeakerRoleAttribution proves that the
+// gap-followup `speaker_role` / `speaker_role_status` signal is derived
+// from the cached Gong party `affiliation` field where present, and that
+// uncertainty is preserved (`unknown` + an explicit status) when the
+// underlying data does not give us an answer.
+func TestCallDrilldownEvidenceSpeakerRoleAttribution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	const callID = "call_attr_role_001"
+	callRaw := mustNormalizeValue(t, map[string]any{
+		"id":       callID,
+		"title":    "Synthetic role attribution call",
+		"started":  "2026-04-30T10:00:00Z",
+		"duration": 1200,
+		"parties": []map[string]any{
+			{"speakerId": "spk_internal", "name": "Internal Speaker", "affiliation": "Internal"},
+			{"speakerId": "spk_external", "name": "External Speaker", "affiliation": "External"},
+			{"speakerId": "spk_bool_internal", "name": "Bool Internal Speaker", "isInternal": true},
+			{"speakerId": "spk_bool_external", "name": "Bool External Speaker", "is_internal": false},
+			{"speakerId": "spk_no_affiliation", "name": "Uncategorized Speaker"},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, callRaw); err != nil {
+		t.Fatalf("upsert call: %v", err)
+	}
+	transcriptRaw := mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []map[string]any{{
+			"callId": callID,
+			"transcript": []map[string]any{
+				{"speakerId": "spk_internal", "sentences": []map[string]any{{"start": 1000, "end": 2000, "text": "Synthetic role quote alpha."}}},
+				{"speakerId": "spk_external", "sentences": []map[string]any{{"start": 2000, "end": 3000, "text": "Synthetic role quote bravo."}}},
+				{"speakerId": "spk_bool_internal", "sentences": []map[string]any{{"start": 3000, "end": 4000, "text": "Synthetic role quote charlie."}}},
+				{"speakerId": "spk_bool_external", "sentences": []map[string]any{{"start": 4000, "end": 5000, "text": "Synthetic role quote delta."}}},
+				{"speakerId": "spk_no_affiliation", "sentences": []map[string]any{{"start": 5000, "end": 6000, "text": "Synthetic role quote echo."}}},
+				{"speakerId": "spk_role_unknown", "sentences": []map[string]any{{"start": 6000, "end": 7000, "text": "Synthetic role quote foxtrot."}}},
+			},
+		}},
+	})
+	if _, err := store.UpsertTranscript(ctx, transcriptRaw); err != nil {
+		t.Fatalf("upsert transcript: %v", err)
+	}
+
+	rows, err := store.CallDrilldownEvidence(ctx, CallDrilldownEvidenceParams{
+		CallID: callID,
+		Query:  "Synthetic role quote",
+		Limit:  20,
+	})
+	if err != nil {
+		t.Fatalf("CallDrilldownEvidence: %v", err)
+	}
+	bySpeaker := map[string]CallDrilldownEvidenceRow{}
+	for _, r := range rows {
+		bySpeaker[r.SpeakerID] = r
+	}
+
+	internal := bySpeaker["spk_internal"]
+	if internal.SpeakerRole != SpeakerRoleInternal {
+		t.Fatalf("spk_internal role=%q want %q", internal.SpeakerRole, SpeakerRoleInternal)
+	}
+	if internal.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_internal role_status=%q want %q", internal.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	external := bySpeaker["spk_external"]
+	if external.SpeakerRole != SpeakerRoleExternal {
+		t.Fatalf("spk_external role=%q want %q", external.SpeakerRole, SpeakerRoleExternal)
+	}
+	if external.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_external role_status=%q want %q", external.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	boolInternal := bySpeaker["spk_bool_internal"]
+	if boolInternal.SpeakerRole != SpeakerRoleInternal {
+		t.Fatalf("spk_bool_internal role=%q want %q", boolInternal.SpeakerRole, SpeakerRoleInternal)
+	}
+	if boolInternal.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_bool_internal role_status=%q want %q", boolInternal.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	boolExternal := bySpeaker["spk_bool_external"]
+	if boolExternal.SpeakerRole != SpeakerRoleExternal {
+		t.Fatalf("spk_bool_external role=%q want %q", boolExternal.SpeakerRole, SpeakerRoleExternal)
+	}
+	if boolExternal.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_bool_external role_status=%q want %q", boolExternal.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	noAff := bySpeaker["spk_no_affiliation"]
+	if noAff.SpeakerRole != SpeakerRoleUnknown {
+		t.Fatalf("spk_no_affiliation role=%q want %q", noAff.SpeakerRole, SpeakerRoleUnknown)
+	}
+	if noAff.SpeakerRoleStatus != SpeakerRoleStatusAffiliationMissing {
+		t.Fatalf("spk_no_affiliation role_status=%q want %q", noAff.SpeakerRoleStatus, SpeakerRoleStatusAffiliationMissing)
+	}
+
+	unmatched := bySpeaker["spk_role_unknown"]
+	if unmatched.SpeakerRole != SpeakerRoleUnknown {
+		t.Fatalf("spk_role_unknown role=%q want %q", unmatched.SpeakerRole, SpeakerRoleUnknown)
+	}
+	if unmatched.SpeakerRoleStatus != SpeakerRoleStatusSpeakerUnmatched {
+		t.Fatalf("spk_role_unknown role_status=%q want %q", unmatched.SpeakerRoleStatus, SpeakerRoleStatusSpeakerUnmatched)
+	}
+}
+
+// TestStableCallRefDeterministicAndRedactionSafe locks in the
+// gap-followup call_ref stability contract: StableCallRef is a pure
+// function of the raw call_id (no clock, no entropy, no per-process
+// state), so a redacted call_ref produced today resolves to the same
+// value after a process restart and can be shared safely with a
+// customer host without leaking the underlying call_id.
+func TestStableCallRefDeterministicAndRedactionSafe(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		callID string
+		want   string
+	}{
+		// Pinned literals: changing these requires intentional review of
+		// the stability contract because customer hosts may already
+		// reference these refs.
+		{callID: "call_extended_001", want: "call_ref_631d3128fa54"},
+		{callID: "call_sanitized_001", want: "call_ref_0fa3e082b9a9"},
+	}
+	for _, tc := range cases {
+		got := StableCallRef(tc.callID)
+		if got != tc.want {
+			t.Fatalf("StableCallRef(%q) = %q, want %q (stability contract changed?)", tc.callID, got, tc.want)
+		}
+		// Determinism: every invocation must return the same value.
+		for i := 0; i < 16; i++ {
+			if again := StableCallRef(tc.callID); again != got {
+				t.Fatalf("StableCallRef(%q) returned %q on retry %d after %q", tc.callID, again, i, got)
+			}
+		}
+		// Redaction safety: the raw call_id must NOT appear inside the
+		// stable ref. The hash prefix has only 12 hex chars, so a
+		// substring match would be a real leak.
+		if strings.Contains(got, tc.callID) {
+			t.Fatalf("StableCallRef(%q) leaks raw call_id in %q", tc.callID, got)
+		}
+		// Round-trip: NormalizeStableCallRef must accept the produced
+		// value and return it unchanged after lower-casing.
+		if normalized, err := NormalizeStableCallRef(got); err != nil || normalized != got {
+			t.Fatalf("NormalizeStableCallRef(%q) = (%q, %v); want (%q, nil)", got, normalized, err, got)
+		}
+	}
+	// Empty input must not produce a ref.
+	if got := StableCallRef(""); got != "" {
+		t.Fatalf("StableCallRef(\"\") = %q, want empty", got)
+	}
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 

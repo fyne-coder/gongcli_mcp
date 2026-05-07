@@ -24,6 +24,19 @@ const (
 	AttributionConfidenceExactSpeakerID      = "exact_speaker_id"
 	AttributionConfidenceAmbiguous           = "ambiguous"
 	AttributionConfidenceUnmatched           = "unmatched"
+	// SpeakerRole values are the safe, low-cardinality buyer-vs-rep
+	// signal the gap-followup slice surfaces alongside speaker
+	// attribution. Roles are derived from the cached Gong party
+	// `affiliation` field (Internal / External). When the party data
+	// does not give us an answer we emit `unknown` plus a status that
+	// names the reason so callers preserve the uncertainty.
+	SpeakerRoleInternal                 = "internal"
+	SpeakerRoleExternal                 = "external"
+	SpeakerRoleUnknown                  = "unknown"
+	SpeakerRoleStatusAvailable          = "available"
+	SpeakerRoleStatusAffiliationMissing = "affiliation_missing"
+	SpeakerRoleStatusSpeakerUnmatched   = "speaker_unmatched"
+	SpeakerRoleStatusSpeakerAmbiguous   = "speaker_ambiguous"
 )
 
 const (
@@ -232,6 +245,12 @@ type CallDrilldownEvidenceRow struct {
 	AttributionSource     string `json:"-"`
 	AttributionConfidence string `json:"-"`
 	PersonTitle           string `json:"-"`
+	// SpeakerRole is the buyer-vs-rep signal derived from cached Gong
+	// party `affiliation` data: SpeakerRoleInternal / SpeakerRoleExternal /
+	// SpeakerRoleUnknown. SpeakerRoleStatus names *why* a role is unknown
+	// so the facade layer can preserve uncertainty rather than guessing.
+	SpeakerRole       string `json:"-"`
+	SpeakerRoleStatus string `json:"-"`
 }
 
 const (
@@ -318,6 +337,12 @@ SELECT ts.call_id,
 type callPartyAttribution struct {
 	SpeakerKeys map[string]struct{}
 	Title       string
+	// Role normalizes Gong's party `affiliation` field into the safe
+	// internal / external / "" tri-state. Callers that match a speaker
+	// to one of these party records can promote the role onto the
+	// transcript row; an empty Role means the underlying data did not
+	// give us an answer.
+	Role string
 }
 
 // loadCallPartyAttribution returns the parsed party records for one call.
@@ -393,7 +418,39 @@ func decodeCallPartyAttribution(raw json.RawMessage) (callPartyAttribution, bool
 			}
 		}
 	}
-	return callPartyAttribution{SpeakerKeys: keys, Title: title}, true
+	role := ""
+	for _, candidate := range []string{"affiliation", "Affiliation", "partyType", "party_type"} {
+		if v, ok := party[candidate].(string); ok {
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "internal":
+				role = SpeakerRoleInternal
+			case "external":
+				role = SpeakerRoleExternal
+			case "unknown", "":
+				// leave empty so the apply step emits SpeakerRoleStatusAffiliationMissing.
+			}
+			if role != "" {
+				break
+			}
+		}
+	}
+	if role == "" {
+		for _, candidate := range []string{"isInternal", "is_internal"} {
+			v, ok := party[candidate].(bool)
+			if !ok {
+				continue
+			}
+			// Some payloads use boolean isInternal flags. Map true->internal,
+			// false->external; no-op when the field is absent.
+			if v {
+				role = SpeakerRoleInternal
+			} else {
+				role = SpeakerRoleExternal
+			}
+			break
+		}
+	}
+	return callPartyAttribution{SpeakerKeys: keys, Title: title, Role: role}, true
 }
 
 // applyCallPartyAttribution sets PersonTitleStatus / PersonTitleSource /
@@ -408,6 +465,8 @@ func applyCallPartyAttribution(row *CallDrilldownEvidenceRow, parties []callPart
 		row.PersonTitleSource = ""
 		row.AttributionSource = AttributionSourceUnmatched
 		row.AttributionConfidence = AttributionConfidenceUnmatched
+		row.SpeakerRole = SpeakerRoleUnknown
+		row.SpeakerRoleStatus = SpeakerRoleStatusSpeakerUnmatched
 		return
 	}
 	matches := make([]callPartyAttribution, 0, 2)
@@ -422,6 +481,8 @@ func applyCallPartyAttribution(row *CallDrilldownEvidenceRow, parties []callPart
 		row.PersonTitleSource = ""
 		row.AttributionSource = AttributionSourceUnmatched
 		row.AttributionConfidence = AttributionConfidenceUnmatched
+		row.SpeakerRole = SpeakerRoleUnknown
+		row.SpeakerRoleStatus = SpeakerRoleStatusSpeakerUnmatched
 	case 1:
 		row.AttributionSource = AttributionSourceGongParty
 		row.AttributionConfidence = AttributionConfidenceExactSpeakerID
@@ -432,11 +493,43 @@ func applyCallPartyAttribution(row *CallDrilldownEvidenceRow, parties []callPart
 		} else {
 			row.PersonTitleStatus = AttributionStatusParticipantTitleMissing
 		}
+		if matches[0].Role != "" {
+			row.SpeakerRole = matches[0].Role
+			row.SpeakerRoleStatus = SpeakerRoleStatusAvailable
+		} else {
+			row.SpeakerRole = SpeakerRoleUnknown
+			row.SpeakerRoleStatus = SpeakerRoleStatusAffiliationMissing
+		}
 	default:
 		row.PersonTitleStatus = AttributionStatusSpeakerAmbiguous
 		row.PersonTitleSource = AttributionSourceCallParties
 		row.AttributionSource = AttributionSourceGongParty
 		row.AttributionConfidence = AttributionConfidenceAmbiguous
+		// Role is ambiguous in this case: even if all matched parties
+		// share an affiliation we surface the speaker_ambiguous status
+		// so callers do not collapse an ambiguous match into a
+		// confident role.
+		role := ""
+		conflict := false
+		for _, m := range matches {
+			if m.Role == "" {
+				continue
+			}
+			if role == "" {
+				role = m.Role
+				continue
+			}
+			if m.Role != role {
+				conflict = true
+				break
+			}
+		}
+		if conflict || role == "" {
+			row.SpeakerRole = SpeakerRoleUnknown
+		} else {
+			row.SpeakerRole = role
+		}
+		row.SpeakerRoleStatus = SpeakerRoleStatusSpeakerAmbiguous
 	}
 }
 
@@ -1224,8 +1317,22 @@ func businessAnalysisPersonaBucketSQL(callAlias, callFactsAlias string) string {
 
 // LossReasonFieldNames is the deterministic list of Opportunity field names
 // that may carry a free-text loss reason for the call's primary opportunity.
-// The ordering reflects priority when multiple are populated.
-var LossReasonFieldNames = []string{"LossReason", "Loss_Reason__c", "Closed_Lost_Reason__c", "Closed_Lost_Reason_Detail__c"}
+// The ordering reflects priority when multiple are populated. The list is the
+// single source of truth shared by the SQLite dimension SQL, the Postgres
+// gongmcp_business_analysis_loss_reason_bucket function, and the Postgres
+// read-model has_loss_reason flag — extending this slice automatically
+// extends loss-reason source coverage on both backends.
+var LossReasonFieldNames = []string{
+	"LossReason",
+	"Loss_Reason__c",
+	"Closed_Lost_Reason__c",
+	"Closed_Lost_Reason_Detail__c",
+	"Lost_Reason__c",
+	"Reason_Lost__c",
+	"OpportunityLossReason",
+	"lossReason",
+	"loss_reason",
+}
 
 // lossReasonBucketRule binds a normalized loss-reason bucket label to the
 // case-insensitive substring patterns that map raw CRM loss-reason text into

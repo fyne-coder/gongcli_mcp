@@ -137,3 +137,87 @@ func TestSummarizeBusinessAnalysisDimensionLossReasonBuckets(t *testing.T) {
 		}
 	}
 }
+
+// TestSummarizeBusinessAnalysisDimensionLossReasonAliasFields proves the gap-
+// follow-up extension: common Opportunity loss-reason field aliases beyond
+// the original Salesforce-style four (LossReason, Loss_Reason__c,
+// Closed_Lost_Reason__c, Closed_Lost_Reason_Detail__c) also feed the
+// normalized loss_reason bucket dimension. Raw values still never escape.
+func TestSummarizeBusinessAnalysisDimensionLossReasonAliasFields(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	// Each fixture uses a different alias field name and a raw loss-reason
+	// value that resolves to a deterministic normalized bucket.
+	type aliasCase struct {
+		callID    string
+		fieldName string
+		raw       string
+		bucket    string
+	}
+	cases := []aliasCase{
+		{callID: "call-loss-alias-001", fieldName: "Reason_Lost__c", raw: "Pricing too high", bucket: "price"},
+		{callID: "call-loss-alias-002", fieldName: "Lost_Reason__c", raw: "Project Postponed", bucket: "timing"},
+		{callID: "call-loss-alias-003", fieldName: "lossReason", raw: "Feature Gap", bucket: "feature_gap"},
+		{callID: "call-loss-alias-004", fieldName: "OpportunityLossReason", raw: "Competitor displacement", bucket: "competitor"},
+	}
+	for _, c := range cases {
+		raw := map[string]any{
+			"id":       c.callID,
+			"title":    "loss reason aliases " + c.callID,
+			"started":  "2026-02-14T15:00:00Z",
+			"duration": 1200,
+			"metaData": map[string]any{
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+			"context": []any{
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp-" + c.callID,
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Closed Lost"},
+						map[string]any{"name": c.fieldName, "value": c.raw},
+					},
+				},
+			},
+		}
+		body, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("marshal alias fixture %s: %v", c.callID, err)
+		}
+		if _, err := store.UpsertCall(ctx, body); err != nil {
+			t.Fatalf("upsert alias fixture %s: %v", c.callID, err)
+		}
+	}
+
+	rows, err := store.SummarizeBusinessAnalysisDimension(ctx, BusinessAnalysisDimensionSummaryParams{
+		Filter:    BusinessAnalysisFilter{TitleQuery: "loss reason aliases"},
+		Dimension: "loss_reason",
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("SummarizeBusinessAnalysisDimension loss_reason: %v", err)
+	}
+
+	got := map[string]int64{}
+	for _, row := range rows {
+		got[row.Value] = row.CallCount
+	}
+	for _, c := range cases {
+		if got[c.bucket] == 0 {
+			t.Fatalf("expected alias field %q -> bucket %q to populate the dimension; rows=%+v", c.fieldName, c.bucket, rows)
+		}
+	}
+	for _, leak := range []string{"Pricing too high", "Project Postponed", "Feature Gap", "Competitor displacement"} {
+		for _, row := range rows {
+			if strings.Contains(row.Value, leak) {
+				t.Fatalf("loss_reason dimension exposed raw value %q via alias field in row %+v", leak, row)
+			}
+		}
+	}
+}

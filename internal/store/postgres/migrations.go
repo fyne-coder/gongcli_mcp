@@ -1744,4 +1744,13 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 	// SECURITY DEFINER definitions.
 	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	// Gap follow-up speaker-role attribution: extend
+	// gongmcp_call_drilldown_transcript_evidence to expose safe
+	// buyer-vs-rep role fields derived from cached Gong party affiliation.
+	// The input signature is preserved (text, text, integer); we DROP first
+	// because RETURNS TABLE changes. Reader grants are re-applied by
+	// reconcileReaderGrants on connect and by the scoped grant builder.
+	`DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer);
+` + postgresAIHighlightsFunctionSQL + `
+`,
 }

@@ -77,7 +77,9 @@ RETURNS TABLE(
         person_title_source text,
         attribution_source text,
         attribution_confidence text,
-        person_title text
+        person_title text,
+        speaker_role text,
+        speaker_role_status text
 )
 LANGUAGE sql
 STABLE
@@ -106,7 +108,14 @@ matched AS (
 parties AS (
         SELECT DISTINCT
                 NULLIF(TRIM(BOTH '"' FROM COALESCE(p.value->>'speakerId', p.value->>'speaker_id', p.value->>'id', '')), '') AS speaker_key,
-                NULLIF(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')), '') AS title
+                NULLIF(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')), '') AS title,
+                CASE
+                        WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'internal' THEN 'internal'
+                        WHEN LOWER(TRIM(COALESCE(p.value->>'affiliation', p.value->>'Affiliation', p.value->>'partyType', p.value->>'party_type', ''))) = 'external' THEN 'external'
+                        WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'true' THEN 'internal'
+                        WHEN LOWER(TRIM(COALESCE(p.value->>'isInternal', p.value->>'is_internal', ''))) = 'false' THEN 'external'
+                        ELSE NULL
+                END AS speaker_role
           FROM calls c,
                LATERAL (
                         SELECT jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS value
@@ -120,7 +129,10 @@ attribution AS (
                m.speaker_id,
                COUNT(p.speaker_key) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id) AS match_count,
                MAX(p.title) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.title IS NOT NULL) AS title_when_present,
-               COUNT(p.title) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.title IS NOT NULL) AS title_count
+               COUNT(p.title) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.title IS NOT NULL) AS title_count,
+               MAX(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_when_present,
+               COUNT(p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_count,
+               COUNT(DISTINCT p.speaker_role) FILTER (WHERE p.speaker_key IS NOT NULL AND p.speaker_key = m.speaker_id AND p.speaker_role IS NOT NULL) AS role_distinct_count
           FROM matched m
           LEFT JOIN parties p ON TRUE
          GROUP BY m.segment_index, m.speaker_id
@@ -163,7 +175,21 @@ SELECT m.call_id,
        CASE
                WHEN a.match_count = 1 AND a.title_count > 0 THEN a.title_when_present
                ELSE ''
-       END AS person_title
+       END AS person_title,
+       CASE
+               WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'unknown'
+               WHEN a.match_count IS NULL OR a.match_count = 0 THEN 'unknown'
+               WHEN a.match_count > 1 AND (a.role_count = 0 OR a.role_distinct_count <> 1) THEN 'unknown'
+               WHEN a.role_count > 0 THEN a.role_when_present
+               ELSE 'unknown'
+       END AS speaker_role,
+       CASE
+               WHEN COALESCE(NULLIF(TRIM(m.speaker_id), ''), '') = '' THEN 'speaker_unmatched'
+               WHEN a.match_count IS NULL OR a.match_count = 0 THEN 'speaker_unmatched'
+               WHEN a.match_count > 1 THEN 'speaker_ambiguous'
+               WHEN a.role_count > 0 THEN 'available'
+               ELSE 'affiliation_missing'
+       END AS speaker_role_status
   FROM matched m
   LEFT JOIN attribution a ON a.segment_index = m.segment_index AND a.speaker_id = m.speaker_id
  ORDER BY m.rank DESC, m.segment_index
@@ -237,7 +263,9 @@ func (s *Store) CallDrilldownEvidence(ctx context.Context, params sqlite.CallDri
        person_title_source,
        attribution_source,
        attribution_confidence,
-       person_title
+       person_title,
+       speaker_role,
+       speaker_role_status
   FROM gongmcp_call_drilldown_transcript_evidence($1, $2, $3)`,
 		callID,
 		queryText,
@@ -263,6 +291,8 @@ func (s *Store) CallDrilldownEvidence(ctx context.Context, params sqlite.CallDri
 			&row.AttributionSource,
 			&row.AttributionConfidence,
 			&row.PersonTitle,
+			&row.SpeakerRole,
+			&row.SpeakerRoleStatus,
 		); err != nil {
 			return nil, err
 		}

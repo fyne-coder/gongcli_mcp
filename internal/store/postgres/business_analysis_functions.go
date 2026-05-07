@@ -6,6 +6,20 @@ import (
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
+// postgresLossReasonFieldNamesSQLList renders the shared
+// sqlite.LossReasonFieldNames list as a Postgres-quoted CSV that can be
+// dropped directly into an `IN (...)` clause. Going through the shared
+// list keeps the SQLite dimension SQL, the Postgres bucket function, and
+// the read-model has_loss_reason flag in lockstep.
+func postgresLossReasonFieldNamesSQLList() string {
+	names := sqlite.LossReasonFieldNames
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, "'"+strings.ReplaceAll(name, "'", "''")+"'")
+	}
+	return strings.Join(quoted, ", ")
+}
+
 // postgresBusinessAnalysisLossReasonBucketFunctionSQL is rendered from the
 // shared sqlite.LossReasonBucketWhenClauses helper so the deterministic
 // SQLite and Postgres bucket mappings stay in lockstep. Raw loss-reason
@@ -29,7 +43,7 @@ WITH raw AS (
 	   AND o.object_key = f.object_key
 	 WHERE f.call_id = call_id_arg
 	   AND o.object_type = 'Opportunity'
-	   AND f.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c')
+	   AND f.field_name IN (` + postgresLossReasonFieldNamesSQLList() + `)
 	   AND TRIM(f.field_value_text) <> ''
 	 ORDER BY f.id
 	 LIMIT 1
