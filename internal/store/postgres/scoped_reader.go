@@ -353,22 +353,20 @@ func BusinessPilotScopedColumns(allowlist []string) bool {
 		"summarize_calls_by_lifecycle": {},
 		"rank_transcript_backlog":      {},
 	}
-	const facadeOnlyAIHighlightsTool = "list_call_ai_highlights"
-	if len(allowlist) != len(want) && len(allowlist) != len(want)+1 {
+	if len(allowlist) < len(want) || len(allowlist) > len(want)+len(facadeOnlyScopedReaderTools()) {
 		return false
 	}
+	facadeOnlyCount := 0
 	for _, name := range allowlist {
-		if name == facadeOnlyAIHighlightsTool {
-			if len(allowlist) != len(want)+1 {
-				return false
-			}
+		if isFacadeOnlyScopedReaderTool(name) {
+			facadeOnlyCount++
 			continue
 		}
 		if _, ok := want[name]; !ok {
 			return false
 		}
 	}
-	return true
+	return len(allowlist) == len(want)+facadeOnlyCount
 }
 
 func AnalystScopedColumns(allowlist []string) bool {
@@ -426,22 +424,20 @@ func AnalystScopedColumns(allowlist []string) bool {
 		"summarize_themes_by_industry":              {},
 		"summarize_themes_by_persona":               {},
 	}
-	const facadeOnlyAIHighlightsTool = "list_call_ai_highlights"
-	if len(allowlist) != len(want) && len(allowlist) != len(want)+1 {
+	if len(allowlist) < len(want) || len(allowlist) > len(want)+len(facadeOnlyScopedReaderTools()) {
 		return false
 	}
+	facadeOnlyCount := 0
 	for _, name := range allowlist {
-		if name == facadeOnlyAIHighlightsTool {
-			if len(allowlist) != len(want)+1 {
-				return false
-			}
+		if isFacadeOnlyScopedReaderTool(name) {
+			facadeOnlyCount++
 			continue
 		}
 		if _, ok := want[name]; !ok {
 			return false
 		}
 	}
-	return true
+	return len(allowlist) == len(want)+facadeOnlyCount
 }
 
 func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
@@ -515,22 +511,32 @@ func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
 		"summarize_themes_by_industry":              {},
 		"summarize_themes_by_persona":               {},
 	}
-	const facadeOnlyAIHighlightsTool = "list_call_ai_highlights"
-	if len(allowlist) != len(want) && len(allowlist) != len(want)+1 {
+	if len(allowlist) < len(want) || len(allowlist) > len(want)+len(facadeOnlyScopedReaderTools()) {
 		return false
 	}
+	facadeOnlyCount := 0
 	for _, name := range allowlist {
-		if name == facadeOnlyAIHighlightsTool {
-			if len(allowlist) != len(want)+1 {
-				return false
-			}
+		if isFacadeOnlyScopedReaderTool(name) {
+			facadeOnlyCount++
 			continue
 		}
 		if _, ok := want[name]; !ok {
 			return false
 		}
 	}
-	return true
+	return len(allowlist) == len(want)+facadeOnlyCount
+}
+
+func facadeOnlyScopedReaderTools() map[string]struct{} {
+	return map[string]struct{}{
+		"list_call_ai_highlights": {},
+		"question_answer":         {},
+	}
+}
+
+func isFacadeOnlyScopedReaderTool(name string) bool {
+	_, ok := facadeOnlyScopedReaderTools()[name]
+	return ok
 }
 
 func ScopedReaderColumnSelectGrantsForAllowlist(allowlist []string) []ColumnSelectGrant {

@@ -169,6 +169,7 @@ type businessAnalysisItem struct {
 	StartedAt         string `json:"started_at,omitempty"`
 	CallDate          string `json:"call_date,omitempty"`
 	CallMonth         string `json:"call_month,omitempty"`
+	DurationSeconds   int64  `json:"duration_seconds,omitempty"`
 	LifecycleBucket   string `json:"lifecycle_bucket,omitempty"`
 	AccountIndustry   string `json:"account_industry,omitempty"`
 	OpportunityStage  string `json:"opportunity_stage,omitempty"`
@@ -920,6 +921,7 @@ func mcpBusinessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args bus
 			StartedAt:         row.StartedAt,
 			CallDate:          row.CallDate,
 			CallMonth:         row.CallMonth,
+			DurationSeconds:   row.DurationSeconds,
 			LifecycleBucket:   row.LifecycleBucket,
 			AccountIndustry:   row.AccountIndustry,
 			OpportunityStage:  row.OpportunityStage,

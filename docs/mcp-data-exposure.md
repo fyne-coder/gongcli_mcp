@@ -135,6 +135,20 @@ client. `gong_discover_capabilities` reports `routed_tool_available` per
 operation so callers can detect which operations are reachable in the active
 configuration.
 
+For ad-hoc business questions, use `gong_analyze` with operation
+`question.answer`. It returns a governed evidence pack: interpreted question,
+searched scope, coverage, reviewed calls with stable `call_ref` values and
+per-call duration, bounded evidence/quotes, warnings, limitations, and an
+answer contract for the host model. It does not generate unsupported prose
+inside `gongmcp`; the host model must synthesize from returned evidence.
+
+Call titles remain deliberately constrained. They can contain customer names
+or sensitive account terms, so scoped Postgres business-analysis functions
+blank titles even when `include_call_titles=true`. Use `call_ref`,
+date/start time, duration, Gong generated brief/highlight rows, and transcript
+quote evidence as the stable client path unless a deployment explicitly
+approves broader title exposure on a physically redacted database.
+
 The broader 68-tool surfaces (`analyst`, `analyst-business-core`,
 `redacted-all-readonly`, `all-readonly`) remain available for operator,
 analyst, and internal-testing use, but they are not the recommended default

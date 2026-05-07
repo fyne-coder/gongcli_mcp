@@ -55,6 +55,15 @@ the reviewed analyst operation set plus the typed AI-highlights handler.
 `analyst-facade` and `facade-analyst` remain accepted as backwards-compatible
 aliases.
 
+For ad-hoc prompts, start with `gong_analyze` operation `question.answer`
+instead of asking the model to manually compose several lower-level
+operations. The response is an evidence pack for synthesis: searched scope,
+coverage, reviewed calls, per-call duration, bounded quotes/evidence,
+warnings, limitations, and suggested follow-ups. It intentionally does not
+return unrestricted call titles in scoped Postgres mode; titles can contain
+customer names. Use `call_ref` plus Gong brief/highlight rows and transcript
+quotes as the stable identifier path.
+
 For trained analyst manual testing over the broader 68-tool surface, the
 `analyst-expansion` preset (an alias for `analyst`) remains available. Prefer
 `business-workbench` for client business-user deployments so the host sees a

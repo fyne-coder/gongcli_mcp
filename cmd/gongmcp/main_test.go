@@ -525,15 +525,15 @@ func TestPostgresToolAllowlistAcceptsAnalystFacadePreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights")
+	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights", "question_answer")
 	if !reflect.DeepEqual(routed, wantRouted) {
-		t.Fatalf("routed=%v want analyst tools plus internal highlights route %v", routed, wantRouted)
+		t.Fatalf("routed=%v want analyst tools plus internal highlights and question-answer routes %v", routed, wantRouted)
 	}
 	if min := postgresAnalystSmallCellMin(true, "analyst-facade", true); min != 3 {
 		t.Fatalf("postgresAnalystSmallCellMin=%d want 3", min)
 	}
 	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, wantRouted) {
-		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights route %v", got, wantRouted)
+		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights and question-answer routes %v", got, wantRouted)
 	}
 }
 
@@ -560,15 +560,15 @@ func TestPostgresToolAllowlistAcceptsBusinessWorkbenchPreset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights")
+	wantRouted := append(append([]string{}, analyst...), "list_call_ai_highlights", "question_answer")
 	if !reflect.DeepEqual(routed, wantRouted) {
-		t.Fatalf("routed=%v want analyst tools plus internal highlights route %v", routed, wantRouted)
+		t.Fatalf("routed=%v want analyst tools plus internal highlights and question-answer routes %v", routed, wantRouted)
 	}
 	if min := postgresAnalystSmallCellMin(true, "business-workbench", true); min != 3 {
 		t.Fatalf("postgresAnalystSmallCellMin(business-workbench)=%d want 3", min)
 	}
 	if got := readerGrantAllowlist(allowlist, routed); !reflect.DeepEqual(got, wantRouted) {
-		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights route %v", got, wantRouted)
+		t.Fatalf("readerGrantAllowlist=%v want analyst tools plus internal highlights and question-answer routes %v", got, wantRouted)
 	}
 }
 

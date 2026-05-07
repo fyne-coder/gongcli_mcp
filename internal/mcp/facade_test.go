@@ -94,6 +94,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpQueryScorecardDetail,
 		OpQueryScorecards,
 		OpQueryTranscriptSegments,
+		OpQuestionAnswer,
 		OpStatusSync,
 	}
 	got := make([]string, 0, len(ops))
@@ -316,6 +317,63 @@ func TestFacadeQueryRoutesTranscriptSegmentsAndDeniesUnallowedRoutedTool(t *test
 	}
 	if !strings.Contains(err.Error(), "analyst") {
 		t.Fatalf("error did not name a remediation preset: %v", err)
+	}
+}
+
+func TestFacadeQuestionAnswerReturnsEvidencePackAndCallDurations(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolQuestionAnswer}),
+	)
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpQuestionAnswer, map[string]any{
+		"question":      "What did the external speaker say?",
+		"query":         "Synthetic",
+		"role_context":  "sales-enablement",
+		"output_intent": "brief",
+		"filter": map[string]any{
+			"query": "Synthetic",
+			"limit": 5,
+		},
+		"limit": 5,
+	}))
+	if err != nil {
+		t.Fatalf("question.answer dispatch: %v", err)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	if wrapper["operation"] != OpQuestionAnswer || wrapper["routed_tool"] != internalRoutedToolQuestionAnswer {
+		t.Fatalf("unexpected facade wrapper: %v", wrapper)
+	}
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing inner result: %T", wrapper["result"])
+	}
+	if inner["status"] != "evidence_pack_ready" || inner["question"] != "What did the external speaker say?" {
+		t.Fatalf("unexpected question payload: %v", inner)
+	}
+	if count, _ := inner["evidence_count"].(float64); count == 0 {
+		t.Fatalf("expected evidence rows, got %v", inner["evidence_count"])
+	}
+	reviewed, ok := inner["reviewed_calls"].([]any)
+	if !ok || len(reviewed) == 0 {
+		t.Fatalf("expected reviewed calls, got %T %v", inner["reviewed_calls"], inner["reviewed_calls"])
+	}
+	first, ok := reviewed[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first reviewed call wrong type: %T", reviewed[0])
+	}
+	if _, ok := first["duration_seconds"]; !ok {
+		t.Fatalf("reviewed call missing per-call duration: %v", first)
+	}
+	if _, ok := first["call_title"]; ok {
+		t.Fatalf("question.answer exposed call title without include_call_titles: %v", first)
+	}
+	if _, ok := inner["answer_contract"].([]any); !ok {
+		t.Fatalf("missing answer contract: %v", inner["answer_contract"])
 	}
 }
 

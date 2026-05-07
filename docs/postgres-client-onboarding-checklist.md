@@ -17,6 +17,10 @@ gateway smoke, backup/restore, and rollback.
 - Default client business-user surface: `business-workbench` (six stable
   facade tools; internal routing keeps reviewed analyst operations available
   without exposing a broad top-level tool list).
+- Default ad-hoc question path: `gong_analyze` operation `question.answer`.
+  It returns governed evidence packs for host-model synthesis and includes
+  per-call duration, but it keeps call-title exposure constrained because
+  titles can contain customer names.
 - Legacy narrow aggregate/status surface: `business-pilot`.
 - Approved analyst surface: `analyst` or `analyst-expansion` only with scoped
   reader grants and `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`.

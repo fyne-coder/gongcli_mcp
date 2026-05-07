@@ -58,6 +58,7 @@ const (
 	OpEvidenceQuotesSearch      = "evidence.quotes.search"
 	OpEvidenceQuotePackBuild    = "evidence.quote_pack.build"
 	OpEvidenceHighlightsList    = "evidence.highlights.list"
+	OpQuestionAnswer            = "question.answer"
 )
 
 // internalRoutedToolListAIHighlights is the internal routed-tool name used by
@@ -65,6 +66,7 @@ const (
 // MCP tool — the facade is the only supported entry point — and the Postgres
 // store is the only backend that can return rows.
 const internalRoutedToolListAIHighlights = "list_call_ai_highlights"
+const internalRoutedToolQuestionAnswer = "question_answer"
 
 // FacadeOperations returns the registry of all known facade operations. The
 // list is sorted by operation name for stable output.
@@ -91,9 +93,13 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"business-workbench", "analyst-facade", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":                map[string]any{"type": "object"},
-				"limit":                 map[string]any{"type": "integer"},
-				"include_account_names": map[string]any{"type": "boolean"},
+				"filter":              map[string]any{"type": "object"},
+				"limit":               map[string]any{"type": "integer"},
+				"include_call_titles": map[string]any{"type": "boolean", "description": "Best-effort opt-in. Scoped Postgres reader functions may still blank call titles; use call_ref plus evidence/brief rows as the stable client path."},
+				"include_account_names": map[string]any{
+					"type":        "boolean",
+					"description": "Required with account_query because direct account-name probes are otherwise denied.",
+				},
 			}, nil),
 			Examples: []any{
 				map[string]any{
@@ -281,6 +287,43 @@ func FacadeOperations() []FacadeOperation {
 				},
 			},
 		},
+		{
+			Name:          OpQuestionAnswer,
+			Version:       "v1",
+			Description:   "Prepare a governed evidence pack for an ad-hoc business question. The host model should synthesize the final prose from returned coverage, evidence, warnings, and limitations; gongmcp does not invent unsupported conclusions.",
+			FacadeTool:    FacadeToolAnalyze,
+			RoutedTool:    internalRoutedToolQuestionAnswer,
+			ExposureLevel: "business-workbench",
+			AllowedPresets: []string{
+				"business-workbench",
+				"analyst-facade",
+				"analyst-business-core",
+				"analyst",
+				"all-readonly",
+				"redacted-all-readonly",
+			},
+			InputSchema: objectSchema(map[string]any{
+				"question":      map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength},
+				"filter":        map[string]any{"type": "object"},
+				"role_context":  map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
+				"output_intent": map[string]any{"type": "string", "enum": []string{"", "brief", "quotes", "risks", "themes", "next_steps"}},
+				"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
+			}, nil),
+			Examples: []any{
+				map[string]any{
+					"question": "What are prospects saying about implementation effort?",
+					"filter": map[string]any{
+						"from_date":         "2026-04-01",
+						"to_date":           "2026-04-30",
+						"lifecycle_bucket":  "active_sales_pipeline",
+						"transcript_status": "present",
+					},
+					"role_context":  "sales-enablement",
+					"output_intent": "brief",
+					"limit":         10,
+				},
+			},
+		},
 	}
 	sort.SliceStable(ops, func(i, j int) bool { return ops[i].Name < ops[j].Name })
 	return ops
@@ -332,8 +375,8 @@ func facadeTools(_ LimitPolicy) []tool {
 		},
 		{
 			Name:        FacadeToolAnalyze,
-			Description: "Stable facade for bounded analysis operations: cohort build/inspect, theme discovery, and limitations explanation.",
-			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain}),
+			Description: "Stable facade for bounded analysis operations: cohort build/inspect, theme discovery, ad-hoc question evidence preparation, and limitations explanation.",
+			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain, OpQuestionAnswer}),
 		},
 		{
 			Name:        FacadeToolGetEvidence,
@@ -603,10 +646,146 @@ func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json
 	if name == internalRoutedToolListAIHighlights {
 		return s.executeListCallAIHighlights(ctx, args)
 	}
+	if name == internalRoutedToolQuestionAnswer {
+		return s.executeQuestionAnswer(ctx, args)
+	}
 	if isBusinessAnalysisTool(name) {
 		return s.executeBusinessAnalysisTool(ctx, toolsCallParams{Name: name, Arguments: args})
 	}
 	return s.executeNonFacadeTool(ctx, toolsCallParams{Name: name, Arguments: args})
+}
+
+type questionAnswerArgs struct {
+	Question            string     `json:"question"`
+	Filter              callFilter `json:"filter"`
+	RoleContext         string     `json:"role_context"`
+	OutputIntent        string     `json:"output_intent"`
+	Query               string     `json:"query"`
+	ThemeQuery          string     `json:"theme_query"`
+	Limit               int        `json:"limit"`
+	IncludeCallIDs      bool       `json:"include_call_ids"`
+	IncludeCallTitles   bool       `json:"include_call_titles"`
+	IncludeAccountNames bool       `json:"include_account_names"`
+}
+
+func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args questionAnswerArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+	question := strings.TrimSpace(args.Question)
+	if question == "" {
+		return toolCallResult{}, fmt.Errorf("%s requires question", OpQuestionAnswer)
+	}
+	if len(question) > maxBusinessAnalysisFTSQueryLength {
+		return toolCallResult{}, fmt.Errorf("%s question exceeds %d characters", OpQuestionAnswer, maxBusinessAnalysisFTSQueryLength)
+	}
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError(OpQuestionAnswer)
+	}
+	if strings.TrimSpace(args.Filter.AccountQuery) != "" && !args.IncludeAccountNames {
+		// Account name probing is governed by include_account_names in the lower
+		// business-analysis tools. Keep the same explicit opt-in requirement.
+		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true because it can probe customer names")
+	}
+	if s.restrictedAccountQuery(args.Filter.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
+	normalized, err := normalizeCallFilter(args.Filter)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	if !businessAnalysisFilterIsSelective(normalized) {
+		return toolCallResult{}, fmt.Errorf("%s requires a selective filter such as date range, quarter, title_query, query, industry, opportunity_stage, crm_object_id, participant_title_query, or lifecycle_bucket", OpQuestionAnswer)
+	}
+	limit := s.limitPolicy.BusinessAnalysisLimit(args.Limit)
+	if normalized.Limit > 0 {
+		limit = s.limitPolicy.BusinessAnalysisLimit(normalized.Limit)
+		normalized.Limit = limit
+	}
+	evidenceQuery := firstNonBlank(args.Query, args.ThemeQuery, normalized.Query, question)
+	if strings.TrimSpace(evidenceQuery) == "" {
+		return toolCallResult{}, fmt.Errorf("%s requires a searchable question or query", OpQuestionAnswer)
+	}
+	if s.store == nil {
+		return newToolResult(map[string]any{
+			"operation": OpQuestionAnswer,
+			"status":    "store_unavailable",
+			"question":  question,
+			"warnings":  []string{"store_unavailable"},
+		})
+	}
+	cohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
+		Filter: sqliteBusinessAnalysisFilter(normalized),
+		Limit:  limit,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	baArgs := businessAnalysisArgs{
+		Filter:              normalized,
+		Query:               evidenceQuery,
+		Limit:               limit,
+		IncludeCallIDs:      args.IncludeCallIDs,
+		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeAccountNames: args.IncludeAccountNames,
+	}
+	items, quotes, err := s.businessAnalysisEvidence(ctx, normalized, evidenceQuery, limit, baArgs)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	warnings := businessAnalysisWarnings(OpQuestionAnswer, normalized)
+	if cohort.Summary.ParticipantTitleCallCount == 0 {
+		warnings = append(warnings, "participant_title_missing_or_unmapped")
+	}
+	if cohort.Summary.AccountIndustryCount == 0 {
+		warnings = append(warnings, "account_industry_missing_or_unmapped")
+	}
+	if cohort.Summary.OpportunityStageCount == 0 {
+		warnings = append(warnings, "opportunity_stage_missing_or_unmapped")
+	}
+	if len(items) == 0 {
+		warnings = append(warnings, "no_quote_evidence_returned_for_question_terms")
+	}
+	payload := map[string]any{
+		"operation":        OpQuestionAnswer,
+		"status":           "evidence_pack_ready",
+		"question":         question,
+		"role_context":     strings.TrimSpace(args.RoleContext),
+		"output_intent":    strings.TrimSpace(args.OutputIntent),
+		"searched_scope":   normalized,
+		"evidence_query":   evidenceQuery,
+		"limit":            limit,
+		"coverage_summary": businessAnalysisCoverageFromSummary(cohort.Summary),
+		"cohort_summary":   cohort.Summary,
+		"reviewed_calls":   mcpBusinessAnalysisCallRows(cohort.Rows, baArgs),
+		"evidence":         items,
+		"quotes":           quotes,
+		"evidence_count":   len(items),
+		"warnings":         warnings,
+		"limitations":      businessAnalysisLimitations(OpQuestionAnswer),
+		"answer_contract": []string{
+			"Use only the returned evidence and coverage when answering.",
+			"Label unsupported conclusions as limitations.",
+			"Prefer call_ref, source path, dates, and bounded excerpts for evidence.",
+			"Do not infer missing persona/title/account detail from transcript text alone.",
+		},
+		"suggested_followups": questionAnswerFollowups(args.OutputIntent),
+	}
+	return newToolResult(payload)
+}
+
+func questionAnswerFollowups(intent string) []string {
+	switch strings.ToLower(strings.TrimSpace(intent)) {
+	case "risks":
+		return []string{"Ask for quote evidence by risk theme.", "Compare the same risk across lifecycle buckets.", "Check whether risk mentions correlate with opportunity stage."}
+	case "themes":
+		return []string{"Run analyze.themes.discover on the same filter.", "Compare themes by industry or persona coverage.", "Build a quote pack for the highest-signal theme."}
+	case "next_steps":
+		return []string{"Pull Gong generated highlights for the strongest call_refs.", "Build a quote pack for the proposed next step.", "Narrow by opportunity stage or recent date range."}
+	default:
+		return []string{"Ask for a quote pack for the strongest theme.", "Narrow by lifecycle, industry, or opportunity stage.", "Check limitations before using the synthesis externally."}
+	}
 }
 
 // AI-highlights operation limits. These are intentionally low: highlights are

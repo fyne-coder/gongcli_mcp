@@ -104,7 +104,13 @@ gongctl profile schema
 
 Use `business-workbench` for first client business-user access when a client
 MCP host should see only the stable `gong_*` facade tools; `analyst-facade`
-and `facade-analyst` remain aliases for that six-tool surface. Use
+and `facade-analyst` remain aliases for that six-tool surface. For ad-hoc
+business questions, use `gong_analyze` operation `question.answer`; it returns
+a governed evidence pack for the host model to synthesize, including searched
+scope, coverage, bounded evidence/quotes, limitations, suggested follow-ups,
+and per-call duration. Scoped Postgres call-title exposure remains constrained
+because titles can contain customer names; use `call_ref` plus Gong
+brief/highlight rows and transcript quotes as the stable client path. Use
 `business-pilot` only for the older narrow aggregate/status pilot lane,
 `analyst-core` for the reviewed Postgres analyst starter surface including
 cached CRM schema/settings

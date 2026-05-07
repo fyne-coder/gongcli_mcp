@@ -48,7 +48,7 @@ gongmcp --list-tool-presets
 
 | Profile | Tools | Use |
 | --- | --- | --- |
-| `business-workbench` | `gong_status,gong_discover_capabilities,gong_query,gong_analyze,gong_get_evidence,gong_explain_limitations` | recommended stable facade-only client MCP surface |
+| `business-workbench` | `gong_status,gong_discover_capabilities,gong_query,gong_analyze,gong_get_evidence,gong_explain_limitations` | recommended stable facade-only client MCP surface; use `gong_analyze` / `question.answer` for governed ad-hoc evidence packs |
 | `analyst-facade` | alias for `business-workbench` | backward-compatible wording alias |
 | `facade-analyst` | alias for `business-workbench` | backward-compatible wording alias |
 | `business-pilot` | `get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog` | legacy narrow aggregate/status pilot lane |
