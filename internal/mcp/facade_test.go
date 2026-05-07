@@ -1412,15 +1412,21 @@ func TestFacadeEvidenceCallDrilldownEmitsSpeakerAttribution(t *testing.T) {
 
 	limitations, _ := inner["limitations"].([]any)
 	hasGongPartyOnly := false
+	hasUnprovenRole := false
 	for _, l := range limitations {
 		text := strings.ToLower(fmt.Sprintf("%v", l))
 		if strings.Contains(text, "gong_party") || strings.Contains(text, "exact_gong_party") || strings.Contains(text, "exact_speaker_id") {
 			hasGongPartyOnly = true
-			break
+		}
+		if strings.Contains(text, "buyer_versus_rep_role_is_not_proven") {
+			hasUnprovenRole = true
 		}
 	}
 	if !hasGongPartyOnly {
 		t.Fatalf("limitations missing exact-Gong-party caveat: %v", limitations)
+	}
+	if !hasUnprovenRole {
+		t.Fatalf("limitations should retain buyer-vs-rep caveat when any transcript row lacks speaker_role_status=available: %v", limitations)
 	}
 }
 

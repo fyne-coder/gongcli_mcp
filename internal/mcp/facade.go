@@ -856,7 +856,7 @@ func questionAnswerFallbackQueries(query string) []string {
 	out := make([]string, 0, 3)
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
-		token := strings.ToLower(strings.TrimSpace(field))
+		token := strings.ToLower(strings.Trim(strings.TrimSpace(field), `"'`))
 		if len(token) < 4 {
 			continue
 		}
@@ -986,8 +986,16 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		derivationMeta["initial_query"] = initialEvidenceQuery
 		derivationMeta["initial_term_count"] = len(strings.Fields(initialEvidenceQuery))
 		derivationMeta["fallback_attempted"] = true
-		derivationMeta["fallback_reason"] = "no_fallback_candidate_returned_evidence"
-		for _, candidate := range questionAnswerFallbackQueries(initialEvidenceQuery) {
+		derivationMeta["fallback_trigger_reason"] = "initial_derived_query_returned_no_evidence"
+		candidates := questionAnswerFallbackQueries(initialEvidenceQuery)
+		if len(candidates) == 0 {
+			derivationMeta["fallback_outcome"] = "no_fallback_candidates_available"
+			derivationMeta["fallback_reason"] = "no_fallback_candidates_available"
+		} else {
+			derivationMeta["fallback_outcome"] = "no_fallback_candidate_returned_evidence"
+			derivationMeta["fallback_reason"] = "no_fallback_candidate_returned_evidence"
+		}
+		for _, candidate := range candidates {
 			if candidate == evidenceQuery {
 				continue
 			}
@@ -1007,6 +1015,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 			fallbackUsed = true
 			derivationMeta["term_count"] = len(strings.Fields(candidate))
 			derivationMeta["fallback_query"] = candidate
+			derivationMeta["fallback_outcome"] = "fallback_query_returned_evidence"
 			derivationMeta["fallback_reason"] = "initial_derived_query_returned_no_evidence"
 			derivationMeta["fallback_source"] = "first_matching_high_signal_term"
 			break
@@ -1051,7 +1060,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 			"Prefer call_ref, source path, dates, and bounded excerpts for evidence.",
 			"Do not infer missing persona/title/account detail from transcript text alone.",
 		},
-		"derived_theme_query":    evidenceQuery,
+		"derived_theme_query":    initialEvidenceQuery,
 		"theme_query_derivation": derivationMeta,
 		"suggested_followups":    questionAnswerFollowups(args.OutputIntent),
 	}

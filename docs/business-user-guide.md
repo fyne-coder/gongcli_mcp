@@ -129,7 +129,9 @@ Treat `question.answer` as an evidence-pack generator, not a hidden analyst. It
 derives bounded search terms from the free-form question and may fall back to a
 matching high-signal term when the full derived phrase returns no quotes; the
 payload reports the actual `evidence_query` and derivation metadata so the
-host's final answer can disclose what was searched.
+host's final answer can disclose what was searched. Explicit `query` or
+`theme_query` inputs are authoritative and are not retried or rewritten by this
+fallback path.
 
 For a concise supported/caveated/blocked mapping of the SQLite-era question set
 to the reviewed Postgres pilot surface, see the

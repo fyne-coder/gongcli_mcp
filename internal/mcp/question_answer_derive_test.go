@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -151,6 +152,9 @@ func TestFacadeQuestionAnswerFallsBackToMatchedEvidenceTerm(t *testing.T) {
 	if got, _ := inner["evidence_query"].(string); got != "manual" {
 		t.Fatalf("evidence_query=%q want matched fallback term manual; inner=%v", got, inner)
 	}
+	if got, _ := inner["derived_theme_query"].(string); !strings.Contains(got, "manual") || !strings.Contains(got, "order") {
+		t.Fatalf("derived_theme_query=%q should preserve the original derived query even when evidence_query falls back", got)
+	}
 	derivation, _ := inner["theme_query_derivation"].(map[string]any)
 	if derivation == nil {
 		t.Fatalf("theme_query_derivation missing: %v", inner)
@@ -163,6 +167,22 @@ func TestFacadeQuestionAnswerFallsBackToMatchedEvidenceTerm(t *testing.T) {
 	}
 	if got, _ := derivation["fallback_reason"].(string); got == "" {
 		t.Fatalf("theme_query_derivation.fallback_reason missing: %v", derivation)
+	}
+	if got, _ := derivation["fallback_trigger_reason"].(string); got != "initial_derived_query_returned_no_evidence" {
+		t.Fatalf("theme_query_derivation.fallback_trigger_reason=%q want initial_derived_query_returned_no_evidence; derivation=%v", got, derivation)
+	}
+	if got, _ := derivation["fallback_outcome"].(string); got != "fallback_query_returned_evidence" {
+		t.Fatalf("theme_query_derivation.fallback_outcome=%q want fallback_query_returned_evidence; derivation=%v", got, derivation)
+	}
+}
+
+func TestQuestionAnswerFallbackQueriesStripsFTSQuotes(t *testing.T) {
+	t.Parallel()
+
+	got := questionAnswerFallbackQueries(`"manual" "order" "entry"`)
+	want := []string{"manual", "order", "entry"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("questionAnswerFallbackQueries()=%v want %v", got, want)
 	}
 }
 
