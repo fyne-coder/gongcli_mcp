@@ -1,6 +1,65 @@
 package postgres
 
-const postgresBusinessAnalysisFunctionsSQL = `
+import (
+	"strings"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+)
+
+// postgresBusinessAnalysisLossReasonBucketFunctionSQL is rendered from the
+// shared sqlite.LossReasonBucketWhenClauses helper so the deterministic
+// SQLite and Postgres bucket mappings stay in lockstep. Raw loss-reason
+// text never escapes this function; callers receive only a normalized
+// bucket label or, when raw text is blank but the cached
+// loss_reason_present flag is true, the legacy `loss_reason_present`
+// fallback for coverage purposes.
+var postgresBusinessAnalysisLossReasonBucketFunctionSQL = `
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_loss_reason_bucket(call_id_arg text, fact_loss_reason_present boolean)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH raw AS (
+	SELECT TRIM(f.field_value_text) AS r
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE f.call_id = call_id_arg
+	   AND o.object_type = 'Opportunity'
+	   AND f.field_name IN ('LossReason', 'Loss_Reason__c', 'Closed_Lost_Reason__c', 'Closed_Lost_Reason_Detail__c')
+	   AND TRIM(f.field_value_text) <> ''
+	 ORDER BY f.id
+	 LIMIT 1
+), normalized AS (
+	SELECT r,
+	       ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(r), ',', ' '), '/', ' '), '-', ' '), '.', ' '), '_', ' '), E'\t', ' '), E'\n', ' ') || ' ' AS norm
+	  FROM raw
+)
+SELECT COALESCE(
+	(SELECT CASE` + sqlite.LossReasonBucketWhenClauses("norm") + `
+		ELSE 'unknown_other'
+	END FROM normalized),
+	CASE WHEN COALESCE(fact_loss_reason_present, false) THEN 'loss_reason_present' ELSE '' END
+)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_loss_reason_bucket(text, boolean) FROM PUBLIC;
+`
+
+// postgresBusinessAnalysisFunctionsSQL is the full set of business-analysis
+// SECURITY DEFINER functions. It is composed at package init from a base
+// template plus the rendered loss-reason-bucket function so the SQLite and
+// Postgres bucket mappings are sourced from the same Go rule set.
+var postgresBusinessAnalysisFunctionsSQL = strings.Replace(
+	postgresBusinessAnalysisFunctionsTemplateSQL,
+	"-- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__",
+	postgresBusinessAnalysisLossReasonBucketFunctionSQL,
+	1,
+)
+
+const postgresBusinessAnalysisFunctionsTemplateSQL = `
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_by_call_facts(search_text text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, row_limit integer)
 RETURNS TABLE(call_id text, started_at text, call_date text, call_month text, duration_seconds bigint, lifecycle_bucket text, scope text, system text, direction text, speaker_id text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text)
 LANGUAGE sql
@@ -588,6 +647,8 @@ END
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_persona_bucket(text, boolean) FROM PUBLIC;
 
+-- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__
+
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension(dimension_arg text, theme_query_arg text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, row_limit integer)
 RETURNS TABLE(dimension text, value text, call_count bigint, transcript_count bigint, missing_transcript_count bigint, opportunity_call_count bigint, account_call_count bigint, external_call_count bigint, latest_call_at text)
 LANGUAGE sql
@@ -625,7 +686,7 @@ WITH rows AS (
 		       END
 		       WHEN 'won_lost' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
 		       WHEN 'outcome' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
-		       WHEN 'loss_reason' THEN CASE WHEN cf.loss_reason_present THEN 'loss_reason_present' ELSE '' END
+		       WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket(cf.call_id, cf.loss_reason_present)
 		       ELSE ''
 	       END AS dimension_value
 	  FROM call_facts cf

@@ -102,6 +102,32 @@ func TestStoreSyntheticVerticalSlice(t *testing.T) {
 	}
 }
 
+func TestPostgresBusinessAnalysisLossReasonBucketFunctionRenderedSafely(t *testing.T) {
+	sqlText := postgresBusinessAnalysisFunctionsSQL
+	if strings.Contains(sqlText, "__INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__") {
+		t.Fatal("postgres business-analysis SQL still contains the loss-reason helper placeholder")
+	}
+	for _, want := range []string{
+		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_loss_reason_bucket(call_id_arg text, fact_loss_reason_present boolean)",
+		"WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket(cf.call_id, cf.loss_reason_present)",
+		"REVOKE ALL ON FUNCTION gongmcp_business_analysis_loss_reason_bucket(text, boolean) FROM PUBLIC",
+		"THEN 'timing'",
+		"ELSE 'unknown_other'",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres business-analysis SQL missing %q", want)
+		}
+	}
+	if strings.Contains(postgresBusinessAnalysisReaderGrantsSQL, "gongmcp_business_analysis_loss_reason_bucket") {
+		t.Fatal("loss-reason bucket helper should not be directly granted to the scoped reader")
+	}
+	for _, signature := range DefaultReadOnlyFunctionSignatures() {
+		if strings.Contains(signature, "gongmcp_business_analysis_loss_reason_bucket") {
+			t.Fatalf("loss-reason bucket helper should not be directly exposed in read-only signatures: %s", signature)
+		}
+	}
+}
+
 func TestPostgresCacheInventoryAndDiagnostics(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -1575,7 +1601,10 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	if err != nil {
 		t.Fatalf("postgres loss_reason SummarizeBusinessAnalysisDimension: %v", err)
 	}
-	if len(pgLossReasonDimension) != 1 || pgLossReasonDimension[0].Value != "loss_reason_present" || pgLossReasonDimension[0].CallCount != 1 {
+	// Phase E: raw "Timeline uncertainty" must map to the deterministic
+	// `timing` bucket, not the legacy `loss_reason_present` collapse value
+	// or the raw loss-reason text.
+	if len(pgLossReasonDimension) != 1 || pgLossReasonDimension[0].Value != "timing" || pgLossReasonDimension[0].CallCount != 1 {
 		t.Fatalf("unexpected postgres loss_reason dimension summary: %+v", pgLossReasonDimension)
 	}
 	if strings.Contains(pgLossReasonDimension[0].Value, "Timeline uncertainty") {

@@ -1734,4 +1734,14 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 	`DROP FUNCTION IF EXISTS gongmcp_call_drilldown_transcript_evidence(text, text, integer);
 ` + postgresAIHighlightsFunctionSQL + `
 `,
+	// Phase E: deploy the normalized loss-reason bucket helper and the
+	// updated business-analysis dimension that consumes it. Re-applies
+	// the full business-analysis function set so the new
+	// gongmcp_business_analysis_loss_reason_bucket(text, boolean) function
+	// and the rewritten gongmcp_business_analysis_dimension(...) replace
+	// any prior deploy. Reader grants are re-applied via
+	// reconcileReaderGrants on connect; this migration only owns the
+	// SECURITY DEFINER definitions.
+	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

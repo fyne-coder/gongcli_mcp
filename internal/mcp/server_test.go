@@ -456,6 +456,149 @@ func TestBusinessAnalysisToolsRedactDefaultsAndReportLimitations(t *testing.T) {
 	}
 }
 
+func TestSummarizeLossReasonsByThemeReturnsNormalizedBucketsAndHidesRaw(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openSeededStore(t)
+	defer store.Close()
+
+	type lossFixture struct {
+		callID string
+		title  string
+		raw    string
+		bucket string
+	}
+	fixtures := []lossFixture{
+		{callID: "call_loss_price", title: "Loss reason coverage call price", raw: "Price too high", bucket: "price"},
+		{callID: "call_loss_timing", title: "Loss reason coverage call timing", raw: "Timeline uncertainty", bucket: "timing"},
+		{callID: "call_loss_competitor", title: "Loss reason coverage call competitor", raw: "Lost to Competitor", bucket: "competitor"},
+		{callID: "call_loss_no_decision", title: "Loss reason coverage call no decision", raw: "No Decision", bucket: "no_decision"},
+		{callID: "call_loss_unknown", title: "Loss reason coverage call unknown", raw: "Internal build on hadoop cluster", bucket: "unknown_other"},
+	}
+	for _, f := range fixtures {
+		raw := mustJSON(t, map[string]any{
+			"id":       f.callID,
+			"title":    f.title,
+			"started":  "2026-02-20T15:00:00Z",
+			"duration": 1500,
+			"metaData": map[string]any{
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+			"context": []any{
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp_" + f.callID,
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Closed Lost"},
+						map[string]any{"name": "LossReason", "value": f.raw},
+					},
+				},
+			},
+		})
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert loss-reason fixture %s: %v", f.callID, err)
+		}
+		if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": f.callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "buyer",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2500, "text": "Loss reason coverage discussion in this fixture."},
+							},
+						},
+					},
+				},
+			},
+		})); err != nil {
+			t.Fatalf("upsert loss-reason transcript %s: %v", f.callID, err)
+		}
+	}
+
+	for _, mode := range []struct {
+		name           string
+		hideLossReason bool
+	}{
+		{name: "default", hideLossReason: false},
+		{name: "hide_loss_reasons", hideLossReason: true},
+	} {
+		mode := mode
+		t.Run(mode.name, func(t *testing.T) {
+			opts := []ServerOption{}
+			if mode.hideLossReason {
+				opts = append(opts, WithPolicySwitches(PolicySwitches{HideLossReasons: true}))
+			}
+			server := NewServerWithOptions(store, "gongmcp", "test", opts...)
+			responses := runServer(t, server, requestFrame(Request{
+				JSONRPC: "2.0",
+				ID:      "loss",
+				Method:  "tools/call",
+				Params: mustJSON(t, map[string]any{
+					"name": "summarize_loss_reasons_by_theme",
+					"arguments": map[string]any{
+						"filter": map[string]any{
+							"title_query": "loss reason coverage",
+							"from_date":   "2026-01-01",
+							"to_date":     "2026-04-01",
+						},
+						"theme_query": "loss reason",
+						"limit":       50,
+					},
+				}),
+			}))
+
+			result := decodeBusinessAnalysisResult(t, responses[0])
+			if dim, _ := result["dimension"].(string); dim != "loss_reason" {
+				t.Fatalf("expected dimension=loss_reason, got %q in %+v", dim, result)
+			}
+			summaries := namedOrResultsArrayField(t, result, "summaries")
+			gotBuckets := map[string]int{}
+			rawText := mustJSONText(t, summaries)
+			for _, row := range summaries {
+				m, ok := row.(map[string]any)
+				if !ok {
+					continue
+				}
+				value := stringField(m, "value")
+				gotBuckets[value]++
+			}
+			for _, want := range []string{"price", "timing", "competitor", "no_decision", "unknown_other"} {
+				if gotBuckets[want] == 0 {
+					t.Fatalf("expected bucket %q in loss_reason summaries, got %+v", want, summaries)
+				}
+			}
+			for _, leak := range []string{"Price too high", "Timeline uncertainty", "Lost to Competitor", "No Decision", "Internal build on hadoop cluster"} {
+				if strings.Contains(rawText, leak) {
+					t.Fatalf("loss_reason summaries leaked raw value %q in %s", leak, rawText)
+				}
+			}
+			limitations := strings.ToLower(mustJSONText(t, result["limitations"]))
+			if !strings.Contains(limitations, "loss_reason_values_are_normalized_buckets_not_raw_text") {
+				t.Fatalf("expected normalized-bucket limitation, got %s", limitations)
+			}
+			if !strings.Contains(limitations, "raw_loss_reason_text_is_hidden_by_default_and_suppressed_when_hide_loss_reasons_is_enabled") {
+				t.Fatalf("expected hide-loss-reasons limitation, got %s", limitations)
+			}
+			warnings := strings.ToLower(mustJSONText(t, result["warnings"]))
+			if !strings.Contains(warnings, "deterministic normalized buckets") {
+				t.Fatalf("expected deterministic-buckets warning, got %s", warnings)
+			}
+			if mode.hideLossReason {
+				if !strings.Contains(warnings, "hide_loss_reasons_enforced") {
+					t.Fatalf("expected hide_loss_reasons_enforced warning when policy switch is enabled, got %s", warnings)
+				}
+			} else if strings.Contains(warnings, "hide_loss_reasons_enforced") {
+				t.Fatalf("did not expect hide_loss_reasons_enforced warning when policy switch is disabled, got %s", warnings)
+			}
+		})
+	}
+}
+
 func TestBusinessAnalysisSmallCellSuppressionOmitsLowCountDimensionBuckets(t *testing.T) {
 	t.Parallel()
 

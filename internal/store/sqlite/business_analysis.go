@@ -1080,7 +1080,7 @@ func businessAnalysisDimensionExpr(dimension string) (string, string, error) {
 			ELSE 'unknown'
 		END`, nil
 	case "loss_reason":
-		return "loss_reason", businessAnalysisOpportunityFieldExpr([]string{"LossReason", "Loss_Reason__c", "Closed_Lost_Reason__c", "Closed_Lost_Reason_Detail__c"}), nil
+		return "loss_reason", businessAnalysisLossReasonBucketSQL(), nil
 	default:
 		return "", "", fmt.Errorf("unsupported business-analysis dimension %q", dimension)
 	}
@@ -1220,6 +1220,126 @@ func businessAnalysisPersonaBucketSQL(callAlias, callFactsAlias string) string {
 		WHEN EXISTS (SELECT 1 FROM (` + titlesCTE + `) titles WHERE TRIM(titles.t) <> '') THEN 'other_title_present'
 		ELSE ''
 	END`
+}
+
+// LossReasonFieldNames is the deterministic list of Opportunity field names
+// that may carry a free-text loss reason for the call's primary opportunity.
+// The ordering reflects priority when multiple are populated.
+var LossReasonFieldNames = []string{"LossReason", "Loss_Reason__c", "Closed_Lost_Reason__c", "Closed_Lost_Reason_Detail__c"}
+
+// lossReasonBucketRule binds a normalized loss-reason bucket label to the
+// case-insensitive substring patterns that map raw CRM loss-reason text into
+// it. Patterns are matched against a normalized form (lower-cased, with
+// punctuation/underscores collapsed to spaces and one leading/trailing
+// space). Rule order is the deterministic priority used when raw text could
+// satisfy more than one bucket.
+type lossReasonBucketRule struct {
+	Bucket   string
+	Patterns []string
+}
+
+// lossReasonBucketRules returns the priority-ordered keyword mapping from
+// raw Opportunity loss-reason text to coarse normalized buckets. The mapping
+// intentionally returns coarse labels (`price`, `feature_gap`, ...) rather
+// than the original loss-reason string so business-analysis output cannot be
+// used to enumerate raw CRM values.
+func lossReasonBucketRules() []lossReasonBucketRule {
+	return []lossReasonBucketRule{
+		{Bucket: "competitor", Patterns: []string{"competitor", "competition", "competitive", "incumbent", "displaced"}},
+		{Bucket: "feature_gap", Patterns: []string{"feature gap", "missing feature", "feature missing", "missing functionality", "feature not", "lack of feature", "lacking feature", "product gap", "capability gap"}},
+		{Bucket: "budget", Patterns: []string{"budget", "no funding", "no funds", "funding cut", "out of money"}},
+		{Bucket: "price", Patterns: []string{"price", "pricing", "too expensive", "cost too high", "discount"}},
+		{Bucket: "timing", Patterns: []string{"timing", "timeline", "too early", "too late", "not the right time", "deferred", "deferral", "postponed", "delayed"}},
+		{Bucket: "relationship", Patterns: []string{"relationship", "champion", "sponsor left", "sponsor change", "buyer left", "contact left", "stakeholder change", "stakeholder left", "exec change", "no champion", "lost trust"}},
+		{Bucket: "no_decision", Patterns: []string{"no decision", "not a priority", "no business case", "stalled", "lost interest", "no action", "indecision"}},
+	}
+}
+
+// normalizeLossReasonForMatch returns the lower-cased, punctuation-collapsed
+// form of raw with one leading and trailing space added so substring patterns
+// can be matched as whole tokens.
+func normalizeLossReasonForMatch(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		",", " ",
+		"/", " ",
+		"-", " ",
+		".", " ",
+		"_", " ",
+		"\t", " ",
+		"\n", " ",
+	)
+	return " " + replacer.Replace(s) + " "
+}
+
+// NormalizeLossReasonBucket maps a raw CRM loss-reason string to one of the
+// deterministic normalized buckets surfaced by the loss_reason dimension.
+// Blank input returns an empty string so the dimension's existing <blank>
+// coverage row is preserved. Non-empty input that does not match any bucket
+// rule returns "unknown_other" so MCP callers can distinguish "no loss
+// reason recorded" from "loss reason recorded but unrecognized phrasing".
+func NormalizeLossReasonBucket(raw string) string {
+	normalized := normalizeLossReasonForMatch(raw)
+	if strings.TrimSpace(normalized) == "" {
+		return ""
+	}
+	for _, rule := range lossReasonBucketRules() {
+		for _, pattern := range rule.Patterns {
+			if strings.Contains(normalized, pattern) {
+				return rule.Bucket
+			}
+		}
+	}
+	return "unknown_other"
+}
+
+// LossReasonBucketWhenClauses returns the WHEN/THEN lines that map a
+// normalized (lower-cased, punctuation-collapsed, leading/trailing
+// space-padded) loss-reason text aliased as `normAlias` to the
+// deterministic loss-reason buckets in priority order. The clauses are
+// emitted in the same priority order as NormalizeLossReasonBucket so the
+// SQL CASE result and the Go normalization remain in lockstep.
+//
+// The caller is responsible for the surrounding `CASE` and the empty/raw
+// branches; this helper only emits the bucket WHEN clauses so it can be
+// reused by both the SQLite scalar-subquery shape and the Postgres
+// CREATE FUNCTION shape.
+func LossReasonBucketWhenClauses(normAlias string) string {
+	var b strings.Builder
+	for _, rule := range lossReasonBucketRules() {
+		predicates := make([]string, 0, len(rule.Patterns))
+		for _, pattern := range rule.Patterns {
+			predicates = append(predicates, normAlias+" LIKE '%"+escapeBucketLike(pattern)+"%'")
+		}
+		b.WriteString("\n\t\tWHEN ")
+		b.WriteString(strings.Join(predicates, " OR "))
+		b.WriteString(" THEN '")
+		b.WriteString(rule.Bucket)
+		b.WriteString("'")
+	}
+	return b.String()
+}
+
+// businessAnalysisLossReasonBucketSQL returns the SQLite scalar-subquery
+// expression that resolves to one of the normalized loss-reason buckets for
+// the call referenced by the cf alias. Raw loss-reason text never escapes
+// the subquery; only the bucket label is exposed to the dimension result.
+func businessAnalysisLossReasonBucketSQL() string {
+	raw := businessAnalysisOpportunityFieldExpr(LossReasonFieldNames)
+	return `(
+		SELECT CASE
+			WHEN TRIM(sub.r) = '' THEN ''` + LossReasonBucketWhenClauses("sub.norm") + `
+			ELSE 'unknown_other'
+		END
+		  FROM (
+			SELECT raw_lr.r AS r,
+			       ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(raw_lr.r)), ',', ' '), '/', ' '), '-', ' '), '.', ' '), '_', ' '), char(9), ' '), char(10), ' ') || ' ' AS norm
+			  FROM (SELECT ` + raw + ` AS r) raw_lr
+		  ) sub
+	)`
 }
 
 // escapeBucketLike escapes characters that would be misinterpreted by

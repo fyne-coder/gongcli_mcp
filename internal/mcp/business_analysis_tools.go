@@ -485,6 +485,12 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		}
 		response.Dimension = "loss_reason"
 		response.Summaries = summaries
+		if !businessAnalysisHasLossReasonBuckets(summaries) {
+			response.Limitations = append(response.Limitations, "loss_reason_not_populated")
+		}
+		if s.policySwitches.HideLossReasons {
+			response.Warnings = append(response.Warnings, "hide_loss_reasons_enforced: bucket coverage emitted; raw loss-reason text is not exposed by this tool")
+		}
 	case "compare_won_lost_theme_patterns":
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, "won_lost", themeQuery, limit)
 		if err != nil {
@@ -802,6 +808,22 @@ func businessAnalysisCoverageFromSummary(summary sqlite.BusinessAnalysisCohortSu
 	}
 }
 
+// businessAnalysisHasLossReasonBuckets reports whether at least one
+// summary row carries a populated, non-blank loss-reason bucket. Rows
+// collapsed to "<blank>" by the dimension query, or to the legacy
+// "loss_reason_present" coverage value emitted only when the materialized
+// flag is true but raw text is missing, are not counted as buckets.
+func businessAnalysisHasLossReasonBuckets(rows []sqlite.BusinessAnalysisDimensionRow) bool {
+	for _, row := range rows {
+		value := strings.TrimSpace(row.Value)
+		if value == "" || value == "<blank>" || value == "loss_reason_present" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func toolNeedsThemeQuery(toolName string) bool {
 	switch toolName {
 	case "summarize_themes_by_dimension", "compare_themes_over_time", "compare_themes_by_segment",
@@ -858,7 +880,10 @@ func businessAnalysisWarnings(toolName string, filter callFilter) []string {
 		warnings = append(warnings, "missing transcript cohorts cannot return quote evidence")
 	}
 	if strings.Contains(toolName, "loss_reason") {
-		warnings = append(warnings, "loss_reason depends on cached Opportunity loss-reason fields and may be blank")
+		warnings = append(warnings,
+			"loss_reason depends on cached Opportunity loss-reason fields and may be blank",
+			"loss_reason values are deterministic normalized buckets (price, no_decision, competitor, timing, feature_gap, budget, relationship, unknown_other); raw CRM loss-reason text is not exposed",
+		)
 	}
 	return warnings
 }
@@ -873,6 +898,9 @@ func businessAnalysisLimitations(toolName string) []string {
 	switch toolName {
 	case "compare_theme_outcomes", "summarize_pipeline_progression_by_theme", "summarize_loss_reasons_by_theme", "compare_won_lost_theme_patterns", "diagnose_attribution_coverage":
 		limitations = append(limitations, "outcome_attribution_may_be_missing_or_incomplete", "crm_outcome_fields_may_be_missing_or_sparse")
+		if toolName == "summarize_loss_reasons_by_theme" {
+			limitations = append(limitations, "loss_reason_values_are_normalized_buckets_not_raw_text", "raw_loss_reason_text_is_hidden_by_default_and_suppressed_when_hide_loss_reasons_is_enabled")
+		}
 	case "summarize_themes_by_persona", "rank_personas_by_insight_quality":
 		limitations = append(limitations, "participant_titles_may_be_missing_or_unmapped")
 	case "summarize_themes_by_industry", "recommend_target_personas_and_industries":
