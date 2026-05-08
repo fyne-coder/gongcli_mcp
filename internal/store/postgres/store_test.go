@@ -151,6 +151,34 @@ func TestPostgresCallDrilldownEvidenceFunctionExposesSpeakerRoleSQL(t *testing.T
 	}
 }
 
+func TestPostgresCallRefResolverFunctionSQL(t *testing.T) {
+	sqlText := postgresAIHighlightsFunctionSQL
+	for _, want := range []string{
+		"CREATE OR REPLACE FUNCTION gongmcp_resolve_call_ref(call_ref_arg text)",
+		"CREATE OR REPLACE FUNCTION gongmcp_call_detail(call_id_arg text)",
+		"SECURITY DEFINER",
+		"RETURNS TABLE(call_id text, title text, started_at text, duration_seconds integer, parties_count integer)",
+		"sha256(convert_to(c.call_id, 'UTF8'))",
+		"sha256(convert_to(md5(c.call_id), 'UTF8'))",
+		"REVOKE ALL ON FUNCTION gongmcp_resolve_call_ref(text) FROM PUBLIC",
+		"REVOKE ALL ON FUNCTION gongmcp_call_detail(text) FROM PUBLIC",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres call-ref resolver function SQL missing %q", want)
+		}
+	}
+	foundMigration := false
+	for _, migration := range migrations {
+		if strings.Contains(migration, "gongmcp_resolve_call_ref(call_ref_arg text)") {
+			foundMigration = true
+			break
+		}
+	}
+	if !foundMigration {
+		t.Fatalf("migrations do not create call-ref resolver function")
+	}
+}
+
 func TestPostgresBusinessAnalysisFunctionsExposeSpeakerRoleSQL(t *testing.T) {
 	sqlText := postgresBusinessAnalysisFunctionsSQL
 	for _, want := range []string{
@@ -165,7 +193,16 @@ func TestPostgresBusinessAnalysisFunctionsExposeSpeakerRoleSQL(t *testing.T) {
 			t.Fatalf("postgres business-analysis function SQL missing %q", want)
 		}
 	}
-	lastMigration := migrations[len(migrations)-1]
+	var speakerRoleMigration string
+	for _, migration := range migrations {
+		if strings.Contains(migration, "DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)") &&
+			strings.Contains(migration, "speaker_role text") {
+			speakerRoleMigration = migration
+		}
+	}
+	if speakerRoleMigration == "" {
+		t.Fatalf("migrations do not recreate business-analysis functions with speaker role columns")
+	}
 	for _, want := range []string{
 		"DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
@@ -173,7 +210,7 @@ func TestPostgresBusinessAnalysisFunctionsExposeSpeakerRoleSQL(t *testing.T) {
 		"speaker_role text",
 		"speaker_role_status text",
 	} {
-		if !strings.Contains(lastMigration, want) {
+		if !strings.Contains(speakerRoleMigration, want) {
 			t.Fatalf("latest migration missing %q", want)
 		}
 	}

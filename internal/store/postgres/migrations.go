@@ -1766,4 +1766,10 @@ DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, 
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	// Business-workbench scoped-reader call_ref resolver: facade tools return
+	// opaque call_ref values, while drilldown/highlight handlers need the
+	// internal call_id. Keep calls.call_id out of scoped table grants and
+	// expose only this SECURITY DEFINER resolver helper.
+	postgresAIHighlightsFunctionSQL + `
+`,
 }

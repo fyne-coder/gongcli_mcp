@@ -64,6 +64,47 @@ SELECT COUNT(*)::bigint FROM call_ai_highlights
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_call_ai_highlights_count() FROM PUBLIC;
 
+CREATE OR REPLACE FUNCTION gongmcp_resolve_call_ref(call_ref_arg text)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH normalized AS (
+	SELECT LOWER(TRIM(call_ref_arg)) AS ref
+	 WHERE LOWER(TRIM(call_ref_arg)) ~ '^call_ref_[0-9a-f]{12}$'
+)
+SELECT COALESCE((
+	SELECT c.call_id
+	  FROM calls c
+	  JOIN normalized n ON TRUE
+	 WHERE 'call_ref_' || SUBSTRING(encode(sha256(convert_to(c.call_id, 'UTF8')), 'hex') FROM 1 FOR 12) = n.ref
+	    OR 'call_ref_' || SUBSTRING(encode(sha256(convert_to(md5(c.call_id), 'UTF8')), 'hex') FROM 1 FOR 12) = n.ref
+	 ORDER BY c.call_id
+	 LIMIT 1
+), '')
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_resolve_call_ref(text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_call_detail(call_id_arg text)
+RETURNS TABLE(call_id text, title text, started_at text, duration_seconds integer, parties_count integer)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+SELECT c.call_id,
+       c.title,
+       c.started_at,
+       c.duration_seconds,
+       c.parties_count
+  FROM calls c
+ WHERE c.call_id = call_id_arg
+ LIMIT 1
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_call_detail(text) FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION gongmcp_call_drilldown_transcript_evidence(call_id_arg text, theme_query_arg text, row_limit integer)
 RETURNS TABLE(
         call_id text,

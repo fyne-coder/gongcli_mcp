@@ -145,6 +145,8 @@ func DefaultReadOnlyFunctionSignatures() []string {
 		"public.gongmcp_scorecards(boolean, integer)",
 		"public.gongmcp_list_call_ai_highlights(text, integer)",
 		"public.gongmcp_call_ai_highlights_count()",
+		"public.gongmcp_resolve_call_ref(text)",
+		"public.gongmcp_call_detail(text)",
 		"public.gongmcp_call_drilldown_transcript_evidence(text, text, integer)",
 		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_search_transcript_segments(text, integer)",
@@ -1240,6 +1242,8 @@ BEGIN
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_list_call_ai_highlights(text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_call_ai_highlights_count() TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_resolve_call_ref(text) TO gongmcp_reader;
+		GRANT EXECUTE ON FUNCTION gongmcp_call_detail(text) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_call_drilldown_transcript_evidence(text, text, integer) TO gongmcp_reader;
 		GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader;
 		GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader;
@@ -2551,7 +2555,11 @@ func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallD
 	}
 
 	var detail sqlite.CallDetail
-	if err := s.db.QueryRowContext(ctx, `SELECT call_id, title, started_at, duration_seconds, parties_count FROM calls WHERE call_id = $1`, callID).Scan(
+	detailQuery := `SELECT call_id, title, started_at, duration_seconds, parties_count FROM calls WHERE call_id = $1`
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		detailQuery = `SELECT call_id, title, started_at, duration_seconds, parties_count FROM gongmcp_call_detail($1)`
+	}
+	if err := s.db.QueryRowContext(ctx, detailQuery, callID).Scan(
 		&detail.CallID,
 		&detail.Title,
 		&detail.StartedAt,
@@ -2562,6 +2570,9 @@ func (s *Store) GetCallDetail(ctx context.Context, callID string) (*sqlite.CallD
 			return nil, fmt.Errorf("call %q not found", callID)
 		}
 		return nil, err
+	}
+	if s.readOnly && s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		return &detail, nil
 	}
 
 	objectIDSelect := `o.object_id`
@@ -2626,6 +2637,16 @@ func (s *Store) ResolveCallIDByRef(ctx context.Context, ref string) (string, err
 	normalized, err := sqlite.NormalizeStableCallRef(ref)
 	if err != nil {
 		return "", err
+	}
+	if s.readOnly {
+		var callID sql.NullString
+		if err := s.db.QueryRowContext(ctx, `SELECT NULLIF(gongmcp_resolve_call_ref($1), '')`, normalized).Scan(&callID); err != nil {
+			return "", fmt.Errorf("resolve call_ref with postgres reader helper: %w", err)
+		}
+		if callID.Valid && strings.TrimSpace(callID.String) != "" {
+			return callID.String, nil
+		}
+		return "", fmt.Errorf("call_ref not found")
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id FROM calls`)
 	if err != nil {

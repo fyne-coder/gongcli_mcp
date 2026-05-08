@@ -384,6 +384,17 @@ func TestBuildScopedReaderGrantSQLAnalystGrantsCallDrilldownEvidenceFunction(t *
 	if !strings.Contains(sql, `GRANT EXECUTE ON FUNCTION public.gongmcp_call_drilldown_transcript_evidence(text, text, integer) TO "gongmcp_analyst_reader";`) {
 		t.Fatalf("generated SQL missing call-drilldown evidence grant:\n%s", sql)
 	}
+	if !strings.Contains(sql, `GRANT EXECUTE ON FUNCTION public.gongmcp_resolve_call_ref(text) TO "gongmcp_analyst_reader";`) {
+		t.Fatalf("generated SQL missing call-ref resolver grant:\n%s", sql)
+	}
+	if !strings.Contains(sql, `GRANT EXECUTE ON FUNCTION public.gongmcp_call_detail(text) TO "gongmcp_analyst_reader";`) {
+		t.Fatalf("generated SQL missing call detail helper grant:\n%s", sql)
+	}
+	for _, line := range strings.Split(sql, "\n") {
+		if strings.Contains(line, `ON TABLE public."calls"`) && strings.Contains(line, `"call_id"`) {
+			t.Fatalf("generated SQL granted direct calls.call_id instead of resolver function:\n%s", sql)
+		}
+	}
 }
 
 func TestBuildScopedReaderGrantSQLRejectsUnsafeIdentifiers(t *testing.T) {
