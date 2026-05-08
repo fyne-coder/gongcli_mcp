@@ -213,8 +213,8 @@ The current Postgres development branch supports:
   field comparison, admin transcript-backfill call references, or
   CRM-constrained transcript snippets.
   `compare_lifecycle_crm_fields`, `missing_transcripts`, and
-  `search_transcripts_by_crm_context` are development-branch work after
-  `v0.3.3` until a tagged release includes them.
+  `search_transcripts_by_crm_context` require a tagged `v0.4.0` or later
+  release before customer deployment.
 - `gongmcp --tool-preset governance-search` with
   `GONGMCP_AI_GOVERNANCE_CONFIG` after a Postgres governance policy has been
   prepared; Postgres narrows this preset to supported search tools

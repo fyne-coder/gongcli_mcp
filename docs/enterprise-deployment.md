@@ -191,8 +191,8 @@ flowchart LR
   CRM-constrained transcript snippets
   through `search_transcripts_by_crm_context`, are available through explicit
   allowlists. The `compare_lifecycle_crm_fields`, `missing_transcripts`, and
-  `search_transcripts_by_crm_context` Postgres slices are development-branch
-  work after `v0.3.3` until a tagged release includes them. The reviewed
+  `search_transcripts_by_crm_context` Postgres slices require a tagged
+  `v0.4.0` or later release for customer deployment. The reviewed
   Postgres `analyst` preset combines the supported analyst tools for approved
   analyst sessions; `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).

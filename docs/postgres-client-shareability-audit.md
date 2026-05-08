@@ -2,11 +2,12 @@
 
 ## Verdict
 
-Current branch status: shareable for a controlled customer-hosted Postgres pilot
-after operator review. It is not yet a tagged release, not broad GA, and not a
+Current branch status: prepared for a `v0.4.0` customer-hosted Postgres
+business-workbench release after the release tag and image digest publication
+complete. Untagged branch builds remain controlled-pilot only. This is not a
 production capacity certification.
 
-The safe pilot boundary is:
+The safe customer-hosted boundary is:
 
 - SQLite remains complete/default for local and single-host installs.
 - Postgres is the shared-deployment path for separate sync and MCP containers.
@@ -27,10 +28,10 @@ The safe pilot boundary is:
 | Analyst aggregate privacy guard | Commit `6380418`; `docs/postgres-parity.md`; smoke artifact class proves singleton buckets suppressed and 1,200-call buckets remain visible | Proven as MCP-layer guard |
 | Client pilot packet | Commit `01c5b19`; `docs/postgres-client-pilot-release-packet.md` | Complete |
 | Client onboarding checklist | Commit `bb2477e`; `docs/postgres-client-onboarding-checklist.md` | Complete |
-| Release notes coverage | `CHANGELOG.md` Unreleased lists scoped analyst reader, small-cell suppression, and packet/checklist work as development-branch items | Complete |
+| Release notes coverage | `CHANGELOG.md` `0.4.0` lists business-workbench, GA acceptance, redaction audit, profile/readiness, and scoped Postgres evidence work | Complete |
 | Synthetic capacity evidence | Load/capacity smokes produce reviewed evidence summaries and EXPLAIN artifacts at bounded synthetic sizes | Proven synthetically only |
 | Customer-platform capacity/PITR | Packet/checklist require customer dry run on target Postgres service class | Not repo-proven |
-| Published release/image digests | `VERSION` is still `0.3.3`; no tag or GHCR publish was performed for this branch | Not done |
+| Published release/image digests | `VERSION` is prepared as `0.4.0`; tag/GHCR publish and digest verification are the remaining release actions | Pending tag |
 | Native OAuth in `gongmcp` | Docs route OAuth through customer-managed broker; native OAuth remains future | Not done |
 | Governed/RLS/materialized analyst aggregates | MCP-layer suppression exists; database-enforced governed aggregate variants remain queued | Not done |
 | Full Postgres query parity | Many explicit slices are complete; broad `all-readonly` remains rejected | Not complete |
@@ -74,20 +75,18 @@ Key smoke evidence classes:
 
 ## Current Client-Shareability Decision
 
-Shareable now:
+Shareable after tag/digest publication:
 
-- source review of this branch
-- controlled customer-hosted Postgres pilot planning
+- source review of this branch or the `v0.4.0` tag
+- controlled customer-hosted Postgres business-workbench deployment planning
 - synthetic evidence packet
 - operator onboarding checklist
-- `business-pilot` first user access
+- `business-workbench` first user access
 - reviewed analyst sessions only after scoped reader grant enforcement and
   sponsor approval
 
 Do not share as done:
 
-- a published versioned release
-- a GHCR digest-pinned release for these branch changes
 - production capacity benchmark
 - customer-platform PITR/restore proof
 - broad Postgres `all-readonly` parity
@@ -96,14 +95,14 @@ Do not share as done:
 
 ## Next Required Decision
 
-Before release publishing, Arthur needs to choose one path:
+Before release publishing, complete the tagged-release path:
 
-- Development-branch pilot: share source/commit plus local build instructions,
-  explicitly stating no published image tag exists for these changes.
-- Tagged release candidate: approve version bump, changelog finalization, tag,
-  GHCR publish, digest verification, and release notes.
-- Customer-platform dry run first: run the packet/checklist on the target
-  Postgres service before any wider release motion.
+- tag `v0.4.0` from the reviewed commit
+- let the publish-images workflow complete
+- verify and record GHCR digests for `gongctl` and `gongmcp`
+- run the GA acceptance smoke against the customer/lab deployment using the
+  released image digest
 
-Without that decision, the repo-side client-shareability work is complete for a
-controlled pilot packet, but the overall publish/release goal is not complete.
+Without tag, digest verification, and a released-image acceptance smoke, the
+repo-side implementation is complete but the overall publish/release goal is
+not complete.

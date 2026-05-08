@@ -38,8 +38,8 @@ local database files. Those workflows stay with the pilot operator.
   such as `compare_lifecycle_crm_fields` for reviewed Opportunity lifecycle
   CRM field comparison or `search_transcripts_by_crm_context` for reviewed CRM-constrained snippet
   investigations. The `compare_lifecycle_crm_fields` and
-  `search_transcripts_by_crm_context` Postgres slices are development-branch
-  work after `v0.3.3` until a tagged release includes them.
+  `search_transcripts_by_crm_context` Postgres slices require a tagged
+  `v0.4.0` or later release for customer deployment.
 
 For the first-session handoff, use
 [Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).

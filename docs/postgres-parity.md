@@ -379,8 +379,8 @@ currently supported, caveated, or blocked in Postgres pilots.
   reviewed `Opportunity` object type and returns only object type, field
   name/label, bucket call counts, bucket populated counts, rates, and rate
   delta. Unreviewed object types are rejected and governance-suppressed calls
-  are excluded inside SQL. This is development-branch work after `v0.3.3` until
-  a tagged release includes it.
+  are excluded inside SQL. Customer deployments require a tagged `v0.4.0` or
+  later release.
 - Still queued: `all-readonly` enablement, profile-derived lifecycle comparison
   parity, governance-safe aggregate variants, small-cell
   suppression, customer-scale aggregate performance testing, and per-surface

@@ -1,8 +1,9 @@
 # Postgres Client Onboarding Checklist
 
-Use this one-page checklist for a controlled customer-hosted Postgres pilot.
-It assumes the operator has already reviewed the
-[Postgres client pilot release packet](postgres-client-pilot-release-packet.md).
+Use this one-page checklist for a controlled customer-hosted Postgres
+deployment. It assumes the operator has already reviewed the
+[Postgres client pilot release packet](postgres-client-pilot-release-packet.md)
+or the equivalent customer security packet for the tagged release.
 Use the
 [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md)
 for first-session prompts, pass/fail notes, expected tool sequences, and
@@ -30,11 +31,11 @@ gateway smoke, backup/restore, and rollback.
 
 ## 2. Pin The Build
 
-- If using a published release, record the exact image tag and resolved digest
-  for both operator and MCP images.
-- If using this development branch before a tag exists, record the git commit,
-  local build command, and the fact that published image tags are not available
-  yet.
+- For GA, record the exact release image tag and resolved digest for both
+  operator and MCP images.
+- If using a development branch before a tag exists, record the git commit,
+  local build command, and the fact that it is pilot-only rather than a
+  versioned GA release.
 - Business-user MCP hosts should use the MCP-only image or target. Keep the full
   `gongctl` image restricted to operator sync jobs.
 

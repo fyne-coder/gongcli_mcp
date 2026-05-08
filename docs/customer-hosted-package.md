@@ -67,8 +67,9 @@ Default enterprise posture:
 2. For shared/containerized deployments, use the Postgres two-database path in
    the [Postgres deployment runbook](runbooks/postgres-client-deployment.md):
    a writable source DB for sync plus a governed/redacted serving DB for MCP.
-3. Pin the image or commit. If this branch is used before a tagged release,
-   record it as customer-ready pilot code, not a versioned GA tag.
+3. Pin the image tag/digest from a tagged release. If an operator deliberately
+   uses an untagged branch build, record it as customer-ready pilot code, not a
+   versioned GA release.
 4. Create a protected customer data root and secret-manager entries outside the
    source checkout. Gong credentials belong only to the operator sync job.
 5. Sync the approved date window, build the read model, and import only a
@@ -88,11 +89,11 @@ Default enterprise posture:
 10. Connect the first business user only after `fail` checks are clear and any
     `degraded` checks have an owner, caveat, and remediation path.
 
-Current customer-ready boundary: the package is suitable for controlled
-customer-hosted usage when the profile gate, redacted serving refresh, scoped
-reader grants, and GA acceptance smoke are all run and recorded. It is not a
-self-serve tagged GA release until release notes, image digests, and the final
-version tag are cut.
+Current customer-ready boundary: tagged releases at `v0.4.0` or later are
+suitable for customer-hosted Postgres business-workbench usage when the profile
+gate, redacted serving refresh, scoped reader grants, digest-pinned images, and
+GA acceptance smoke are all run and recorded. Untagged branch builds remain
+pilot-only even if the same checks pass locally.
 
 ## Audience Start Points
 

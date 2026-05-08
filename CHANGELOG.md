@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-07
+
+- Added the customer-hosted Postgres `business-workbench` GA acceptance
+  package. Operators can run `gongctl mcp ga-acceptance` or
+  `scripts/postgres-ga-acceptance-smoke.sh` to produce a non-secret
+  pass/degraded/fail report covering runtime identity, the six-tool facade
+  surface, routed evidence operations, profile/data readiness,
+  governance/redaction, `question.answer` -> `evidence.call_drilldown`
+  workflow, and scoped-reader read-only posture.
+- Added GA profile/readiness gates for customer deployments. `gongctl profile
+  validate --ga-readiness` fails when a reviewed profile is missing lifecycle
+  buckets, maps concepts only to `CreatedDate`, leaves methodology unmapped, or
+  lacks loss-reason mapping; `gong_status` now exposes profile and
+  call-facts-attribution readiness signals so data/config gaps are reported as
+  setup limitations instead of hidden failures.
+- Added a runtime provenance gate for GA acceptance. `version=dev`,
+  `commit=unknown`, missing `build_date`, or equivalent non-release metadata
+  now fails the `runtime_identity` acceptance check even when the MCP tool
+  workflow itself works.
+- Added redacted serving database acceptance evidence. The Postgres GA smoke
+  accepts `REDACTION_AUDIT_JSON` or compact `REDACTION_AUDIT_*` fields so
+  operators can record source-vs-serving redaction proof without including
+  database URLs, raw call IDs, customer names, or transcript text.
+- Added the six-tool `business-workbench` MCP preset for customer business
+  users. The visible surface is `gong_status`,
+  `gong_discover_capabilities`, `gong_query`, `gong_analyze`,
+  `gong_get_evidence`, and `gong_explain_limitations`, with reviewed routed
+  operations underneath for ad-hoc business questions, theme intelligence,
+  quotes, Gong AI highlights, and call drilldown.
+- Added `question.answer`, `theme_intelligence_report`, and
+  `evidence.call_drilldown` workflow improvements for business-user prompts,
+  including deterministic fallback metadata, explicit synonym guidance,
+  Gong AI brief/key-point/highlight source paths, per-call duration/title
+  metadata where permitted, and speaker-role/title attribution that never
+  infers missing titles from transcript text.
 - Made the persona business-analysis dimension role-aware (Phase 13f). The
   `summarize_themes_by_persona`, `rank_personas_by_insight_quality`,
   `summarize_themes_by_dimension(dimension="persona")` and

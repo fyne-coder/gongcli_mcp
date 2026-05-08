@@ -19,8 +19,8 @@ CRM context inventory, cached CRM schema/settings inventory, profile,
 lifecycle, and transcript-search tools while `analyst-business-core` adds
 bounded Postgres transcript-evidence and business-analysis tools. Scorecard
 settings inventory and aggregate answered scorecard activity are available
-through the Postgres analyst-core surface. In the development branch after
-`v0.3.3`, Postgres also supports explicit
+through the Postgres analyst-core surface. In `v0.4.0` and later, Postgres
+also supports explicit
 `list_unmapped_crm_fields`, `search_crm_field_values`, and
 `analyze_late_stage_crm_signals` allowlists with the same
 metadata-only/default-redaction contracts as SQLite. It also supports explicit
@@ -64,13 +64,15 @@ question, better tracker/theme inputs, and known coverage limits.
 
 ## Status
 
-Early public release. `v0.3.3` is enterprise-pilot ready for operator-managed
-local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
-requires signed/provenance-backed release artifacts, stable deprecation policy,
-and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
+Early public release. `v0.4.0` is the first customer-hosted Postgres
+`business-workbench` release candidate for operator-managed sync plus
+read-only MCP over a reviewed SQLite cache or scoped Postgres serving database.
+Public 1.0 still requires signed/provenance-backed release artifacts, stable
+deprecation policy, and the remaining production hardening tracked in
+[docs/roadmap.md](docs/roadmap.md).
 
 Postgres analyst preset support and explicit allowlist additions called out
-above are development-branch work until they appear in a tagged release.
+above require a tagged `v0.4.0` or later release before customer deployment.
 
 For company evaluation, start with the enterprise pilot packet:
 
@@ -215,18 +217,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#postgres-shared-contai
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.3 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.3 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.0 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.0 sync status --db /data/gong.db
 ```
 
-The `v0.3.3` image references require the `v0.3.3` tag workflow to have
+The `v0.4.0` image references require the `v0.4.0` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.3 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.0 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
@@ -791,7 +793,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 `opportunities_missing_transcripts` returns redacted per-Opportunity transcript coverage metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; Opportunity IDs/names, latest call IDs, raw CRM values, and raw storage fields are not returned.
 `opportunity_call_summary` returns redacted per-Opportunity call aggregate metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call count, transcript/missing-transcript counts, total duration, and latest-call timing; Opportunity IDs/names, latest call IDs, owner IDs, amount/close date, raw CRM values, and raw storage fields are not returned.
 `crm_field_population_matrix` returns aggregate field-population cells grouped by approved categorical fields. Approved group values are intentionally exposed as aggregate labels. The Postgres reader function returns only group value, field name/label, object count, call count, and populated count; MCP/store output derives `population_rate` from those counts. Object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, raw hashes, titles, and transcript text are not returned.
-`compare_lifecycle_crm_fields` returns aggregate CRM field-population differences between two lifecycle buckets for the reviewed `Opportunity` object type. The Postgres reader function returns only object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta; it omits call IDs, call titles, CRM object IDs/names/keys, raw CRM values, raw JSON, raw hashes, and transcript text, rejects unreviewed object types, and excludes governance-suppressed calls inside SQL. This Postgres slice is development-branch work after `v0.3.3` until a tagged release includes it.
+`compare_lifecycle_crm_fields` returns aggregate CRM field-population differences between two lifecycle buckets for the reviewed `Opportunity` object type. The Postgres reader function returns only object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta; it omits call IDs, call titles, CRM object IDs/names/keys, raw CRM values, raw JSON, raw hashes, and transcript text, rejects unreviewed object types, and excludes governance-suppressed calls inside SQL. Customer deployments require a tagged `v0.4.0` or later release.
 `search_transcripts_by_crm_context` returns CRM-constrained transcript snippets. MCP output redacts call IDs, call titles, speaker IDs, CRM object IDs/names, and object keys. The Postgres reader function filters governance-suppressed calls inside SQL and returns only started time, object type, matching-object count, segment timing, and snippet; it omits call IDs, call titles, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, and full transcript text.
 `missing_transcripts` returns direct missing-transcript call references for admin transcript-backfill workflows. Postgres supports the reviewed filter set: date range, lifecycle bucket, scope, system, direction, CRM object type, and CRM object ID; `crm_object_id` requires `crm_object_type` to avoid cross-object probing. It returns call IDs, titles, and start times, but not raw cached JSON, transcript text, CRM field values, raw JSON, or raw hashes. Use explicit allowlists; do not put it in business-user presets.
 The generic Postgres reader role can execute the reviewed bounded reader
