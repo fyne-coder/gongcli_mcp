@@ -111,12 +111,16 @@ jobs:
           elif [[ -n "${DISPATCH_VERSION}" ]]; then
             version="${DISPATCH_VERSION#v}"
           fi
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "version must be semver like 0.3.2 or v0.3.2" >&2
+          stable=false
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            stable=true
+          elif [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$ ]]; then
+            echo "version must be semver like 0.3.2, v0.3.2, or v0.4.0-rc1" >&2
             exit 1
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "major_minor=$(cut -d. -f1,2 <<<"$version")" >> "$GITHUB_OUTPUT"
+          echo "stable=${stable}" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Metadata for gongctl
@@ -127,8 +131,8 @@ jobs:
           tags: |
             type=semver,pattern={{raw}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
             type=sha,prefix=sha-
 
       - name: Build and publish gongctl image
@@ -154,8 +158,8 @@ jobs:
           tags: |
             type=semver,pattern={{raw}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
             type=sha,prefix=sha-
 
       - name: Build and publish gongmcp image

@@ -4,6 +4,7 @@
 
 - Version source for the next release: `VERSION`
 - Git tag format: `vX.Y.Z`
+- Release-candidate tag format: `vX.Y.Z-rcN`
 - Pre-1.0 minor releases may still change CLI or MCP contracts.
 - Release builds inject `version`, `commit`, and `date` into both `gongctl` and `gongmcp`.
 - Docker images should be published with immutable version tags and pinned by digest for customer deployments.
@@ -59,9 +60,14 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
     repository is public and external consumption is intended.
 16. Run GoReleaser from the tag.
 
+For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
+Release-candidate tags publish immutable candidate tags and SHA tags only; they
+do not publish `latest` or the moving `X.Y` alias. Stable `vX.Y.Z` tag pushes
+publish the immutable version tag, the `X.Y` alias, and `latest`.
+
 The GHCR workflow can also be run manually from GitHub Actions from the default
 branch. Manual runs publish SHA-tagged images only; release version tags come
-from protected `vX.Y.Z` tag pushes.
+from protected `vX.Y.Z` or `vX.Y.Z-rcN` tag pushes.
 
 Public docs may be prepared for the next `VERSION`, but a Docker image tag is
 not public until the corresponding protected tag workflow completes and
