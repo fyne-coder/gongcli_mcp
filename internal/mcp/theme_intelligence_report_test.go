@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -1285,6 +1286,27 @@ func TestAIBusinessBriefSummaryResolvesStableCallRefs(t *testing.T) {
 	}
 	if got := mustJSONText(t, summary.Candidates); !strings.Contains(strings.ToLower(got), "manual order entry") {
 		t.Fatalf("expected resolved call_ref to produce manual order entry candidate: %s", got)
+	}
+}
+
+func TestAIBusinessBriefSummaryResolvesSanitizedCallTokens(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	server := NewServerWithOptions(store, "gongmcp", "test")
+	token := fmt.Sprintf("%x", md5.Sum([]byte("call_theme_q1_won_001")))
+
+	summary, err := server.aiBusinessBriefThemeSummary(t.Context(), []sqlite.BusinessAnalysisCallRow{
+		{CallID: token},
+	}, false, 5)
+	if err != nil {
+		t.Fatalf("aiBusinessBriefThemeSummary: %v", err)
+	}
+	if summary.SourceRowCount == 0 {
+		t.Fatalf("expected AI brief rows for sanitized token input; summary=%+v", summary)
+	}
+	if got := mustJSONText(t, summary.Candidates); !strings.Contains(strings.ToLower(got), "manual order entry") {
+		t.Fatalf("expected resolved sanitized token to produce manual order entry candidate: %s", got)
 	}
 }
 

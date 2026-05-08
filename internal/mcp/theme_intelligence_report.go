@@ -701,6 +701,11 @@ func (s *Server) aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx context.Co
 				continue
 			}
 			callID = resolved
+		} else if looksLikeSanitizedCallToken(callID) {
+			resolved, err := s.store.ResolveCallIDByRef(ctx, sqlite.StableCallRef(callID))
+			if err == nil && strings.TrimSpace(resolved) != "" {
+				callID = resolved
+			}
 		}
 		if callID == "" || s.isSuppressedCall(callID) {
 			continue
@@ -900,6 +905,22 @@ func businessBriefCandidatePhrases(text string) []string {
 		}
 	}
 	return out
+}
+
+func looksLikeSanitizedCallToken(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		case r >= 'A' && r <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func businessBriefThemeTokens(text string) []string {
