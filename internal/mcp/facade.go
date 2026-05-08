@@ -61,6 +61,8 @@ const (
 	OpEvidenceCallDrilldown     = "evidence.call_drilldown"
 	OpQuestionAnswer            = "question.answer"
 	OpThemeIntelReport          = "theme_intelligence_report"
+	OpExtractBuyerQuestions     = "extract.buyer_questions"
+	OpExtractObjectionSignals   = "extract.objection_signals"
 )
 
 // internalRoutedToolListAIHighlights is the internal routed-tool name used by
@@ -71,6 +73,8 @@ const internalRoutedToolListAIHighlights = "list_call_ai_highlights"
 const internalRoutedToolQuestionAnswer = "question_answer"
 const internalRoutedToolCallDrilldown = "call_drilldown"
 const internalRoutedToolThemeIntelReport = "theme_intelligence_report"
+const internalRoutedToolBuyerQuestions = "extract_buyer_questions"
+const internalRoutedToolObjectionSignals = "extract_objection_signals"
 
 // FacadeOperations returns the registry of all known facade operations. The
 // list is sorted by operation name for stable output.
@@ -203,7 +207,7 @@ func FacadeOperations() []FacadeOperation {
 		{
 			Name:           OpAnalyzeThemesDiscover,
 			Version:        "v1",
-			Description:    "Discover bounded themes within a cohort filter.",
+			Description:    "Discover bounded candidate theme terms within a cohort filter. Seedless output is candidate_terms_only and suppresses common IVR/voicemail filler; use a concrete theme_query for evidence-ready business analysis.",
 			FacadeTool:     FacadeToolAnalyze,
 			RoutedTool:     "discover_themes_in_cohort",
 			ExposureLevel:  "scoped-analyst",
@@ -305,6 +309,7 @@ func FacadeOperations() []FacadeOperation {
 				"theme_query":               map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional theme/query used to scope verbatim transcript excerpts to the call."},
 				"query":                     map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for theme_query."},
 				"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": maxCallDrilldownTranscriptLimit},
+				"field_profile":             fieldProfileSchema(),
 				"include_call_titles":       map[string]any{"type": "boolean"},
 				"include_account_names":     map[string]any{"type": "boolean"},
 				"include_opportunity_names": map[string]any{"type": "boolean"},
@@ -322,7 +327,7 @@ func FacadeOperations() []FacadeOperation {
 		{
 			Name:          OpThemeIntelReport,
 			Version:       "v1",
-			Description:   "Compose a bounded theme intelligence report (top pain themes by quarter/industry/persona, top quotes per theme, sales-hook and outreach-sequence inputs, pipeline outcome and normalized loss-reason coverage) from existing cohort, theme, evidence, and drill-down primitives. Returns deterministic synthesis inputs only; gongmcp does not invent unsupported claims.",
+			Description:   "Compose a bounded theme intelligence report for one seeded business topic (for example pricing, implementation effort, manual order entry, ERP integration). Seedless calls return candidate_terms_only guidance, not a final theme synthesis. The report includes quarter/industry/persona rollups, buyer-first quote evidence, drilldown inputs, sales-hook inputs, pipeline outcome, and normalized loss-reason coverage; gongmcp does not invent unsupported claims.",
 			FacadeTool:    FacadeToolAnalyze,
 			RoutedTool:    internalRoutedToolThemeIntelReport,
 			ExposureLevel: "business-workbench",
@@ -340,7 +345,7 @@ func FacadeOperations() []FacadeOperation {
 				"from_date":     map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.from_date."},
 				"to_date":       map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.to_date."},
 				"quarter":       map[string]any{"type": "string", "description": "Calendar quarter such as 2026-Q1; alias for filter.quarter."},
-				"theme_query":   map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Primary theme query. When omitted, the operation returns bounded candidate theme terms only."},
+				"theme_query":   map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Primary business topic seed. Required for evidence-ready reports; when omitted, the operation returns bounded candidate theme terms only."},
 				"output_intent": map[string]any{"type": "string", "enum": []string{"", "full_report", "themes_only", "outreach_only"}},
 				"group_by": map[string]any{
 					"type":        "array",
@@ -348,6 +353,8 @@ func FacadeOperations() []FacadeOperation {
 					"items":       map[string]any{"type": "string"},
 				},
 				"top_quotes_per_theme":  map[string]any{"type": "integer", "minimum": 1, "maximum": maxThemeIntelReportQuotesPerTheme, "description": "Default 5; hard-capped at 5 in this slice to keep the report bounded."},
+				"field_profile":         fieldProfileSchema(),
+				"speaker_role":          speakerRoleSchema(),
 				"include_call_titles":   map[string]any{"type": "boolean"},
 				"include_account_names": map[string]any{"type": "boolean", "description": "Required to use filter.account_query."},
 				"include_speaker_refs":  map[string]any{"type": "boolean"},
@@ -366,9 +373,65 @@ func FacadeOperations() []FacadeOperation {
 			},
 		},
 		{
+			Name:          OpExtractBuyerQuestions,
+			Version:       "v1",
+			Description:   "Seeded extraction path for buyer/customer questions. Runs bounded external-speaker evidence searches over business topics instead of asking users to know internal tool names.",
+			FacadeTool:    FacadeToolAnalyze,
+			RoutedTool:    internalRoutedToolBuyerQuestions,
+			ExposureLevel: "business-workbench",
+			AllowedPresets: []string{
+				"business-workbench",
+				"analyst-facade",
+				"analyst-business-core",
+				"analyst",
+				"all-readonly",
+				"redacted-all-readonly",
+			},
+			InputSchema: businessSignalExtractionSchema(),
+			Examples: []any{
+				map[string]any{
+					"filter": map[string]any{
+						"from_date":         "2026-04-01",
+						"to_date":           "2026-04-30",
+						"transcript_status": "present",
+					},
+					"topics": []string{"pricing", "implementation", "security", "ERP integration"},
+					"limit":  10,
+				},
+			},
+		},
+		{
+			Name:          OpExtractObjectionSignals,
+			Version:       "v1",
+			Description:   "Seeded extraction path for likely buyer objections and risks. Defaults to external speakers and returns grouped evidence buckets for sales/marketing review.",
+			FacadeTool:    FacadeToolAnalyze,
+			RoutedTool:    internalRoutedToolObjectionSignals,
+			ExposureLevel: "business-workbench",
+			AllowedPresets: []string{
+				"business-workbench",
+				"analyst-facade",
+				"analyst-business-core",
+				"analyst",
+				"all-readonly",
+				"redacted-all-readonly",
+			},
+			InputSchema: businessSignalExtractionSchema(),
+			Examples: []any{
+				map[string]any{
+					"filter": map[string]any{
+						"from_date":         "2026-04-01",
+						"to_date":           "2026-04-30",
+						"transcript_status": "present",
+					},
+					"topics": []string{"price", "timeline", "security review", "integration risk"},
+					"limit":  10,
+				},
+			},
+		},
+		{
 			Name:          OpQuestionAnswer,
 			Version:       "v1",
-			Description:   "Prepare a governed evidence pack for an ad-hoc business question. The host model should synthesize the final prose from returned coverage, evidence, warnings, and limitations; gongmcp does not invent unsupported conclusions.",
+			Description:   "Prepare a governed evidence pack for an ad-hoc business question after the user or host has a specific topic seed. Broad prompts such as 'main themes this quarter' return status=needs_theme_seed with suggested seeds and operations instead of weak literal-word evidence. The host model should synthesize final prose from returned coverage, evidence, warnings, and limitations; gongmcp does not invent unsupported conclusions.",
 			FacadeTool:    FacadeToolAnalyze,
 			RoutedTool:    internalRoutedToolQuestionAnswer,
 			ExposureLevel: "business-workbench",
@@ -381,11 +444,16 @@ func FacadeOperations() []FacadeOperation {
 				"redacted-all-readonly",
 			},
 			InputSchema: objectSchema(map[string]any{
-				"question":      map[string]any{"type": "string", "maxLength": maxQuestionAnswerQuestionLength},
-				"filter":        map[string]any{"type": "object"},
-				"role_context":  map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
-				"output_intent": map[string]any{"type": "string", "enum": []string{"", "brief", "quotes", "risks", "themes", "next_steps"}},
-				"limit":         map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
+				"question":              map[string]any{"type": "string", "maxLength": maxQuestionAnswerQuestionLength},
+				"filter":                map[string]any{"type": "object"},
+				"role_context":          map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
+				"output_intent":         map[string]any{"type": "string", "enum": []string{"", "brief", "quotes", "risks", "themes", "next_steps"}},
+				"field_profile":         fieldProfileSchema(),
+				"speaker_role":          speakerRoleSchema(),
+				"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
+				"include_call_ids":      map[string]any{"type": "boolean"},
+				"include_call_titles":   map[string]any{"type": "boolean"},
+				"include_account_names": map[string]any{"type": "boolean"},
 			}, nil),
 			Examples: []any{
 				map[string]any{
@@ -733,6 +801,12 @@ func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json
 	if name == internalRoutedToolThemeIntelReport {
 		return s.executeThemeIntelReport(ctx, args)
 	}
+	if name == internalRoutedToolBuyerQuestions {
+		return s.executeBusinessSignalExtraction(ctx, OpExtractBuyerQuestions, args)
+	}
+	if name == internalRoutedToolObjectionSignals {
+		return s.executeBusinessSignalExtraction(ctx, OpExtractObjectionSignals, args)
+	}
 	if isBusinessAnalysisTool(name) {
 		return s.executeBusinessAnalysisTool(ctx, toolsCallParams{Name: name, Arguments: args})
 	}
@@ -788,6 +862,10 @@ var questionAnswerStopWords = map[string]struct{}{
 	"you": {}, "your": {}, "yours": {}, "yourself": {}, "yourselves": {},
 	// Domain-specific filler words that don't add to FTS recall.
 	"call": {}, "calls": {}, "across": {}, "us": {}, "talk": {}, "talked": {}, "talking": {},
+	"business": {}, "discovery": {}, "main": {}, "major": {}, "key": {}, "primary": {}, "top": {},
+	"theme": {}, "themes": {}, "show": {}, "shows": {}, "showing": {}, "shown": {},
+	"quarter": {}, "quarters": {}, "strong": {}, "enough": {}, "influence": {},
+	"concern": {}, "concerns": {}, "objection": {}, "objections": {},
 }
 
 // deriveBoundedThemeQuery shrinks a free-form question into a bounded
@@ -875,6 +953,74 @@ func questionAnswerFallbackQueries(query string) []string {
 	return out
 }
 
+func questionAnswerSuggestedSeedTopics() []string {
+	return []string{
+		"manual order entry",
+		"pricing",
+		"implementation effort",
+		"ERP integration",
+		"punchout",
+		"security review",
+		"timeline",
+		"ROI",
+		"supplier onboarding",
+		"support",
+	}
+}
+
+func questionAnswerRecommendedOperations() []map[string]string {
+	return []map[string]string{
+		{
+			"operation": OpThemeIntelReport,
+			"use_when":  "You need theme counts, segment rollups, and buyer quotes for one seeded business topic.",
+		},
+		{
+			"operation": OpExtractBuyerQuestions,
+			"use_when":  "You need buyer questions grouped by topic for sales follow-up, enablement, or content planning.",
+		},
+		{
+			"operation": OpExtractObjectionSignals,
+			"use_when":  "You need buyer objections or risks grouped by topic for coaching and pipeline review.",
+		},
+		{
+			"operation": OpEvidenceCallDrilldown,
+			"use_when":  "You have a call_ref from a report and need bounded transcript excerpts or Gong AI brief rows.",
+		},
+	}
+}
+
+func questionAnswerNeedsThemeSeedPayload(question string, args questionAnswerArgs, normalized callFilter, speakerRoleFilter string, limit int, cohort *sqlite.BusinessAnalysisCallSearchResult, derivationMeta map[string]any, warnings []string) map[string]any {
+	derivationMeta["outcome"] = "no_specific_theme_seed"
+	derivationMeta["guidance"] = "The question was broad enough that the derived search terms were generic business words. Pick one seed topic, then run a seeded report."
+	return map[string]any{
+		"operation":              OpQuestionAnswer,
+		"status":                 "needs_theme_seed",
+		"question":               question,
+		"role_context":           strings.TrimSpace(args.RoleContext),
+		"output_intent":          strings.TrimSpace(args.OutputIntent),
+		"searched_scope":         normalized,
+		"field_profile":          args.FieldProfile,
+		"speaker_role_filter":    speakerRoleFilter,
+		"evidence_query":         "",
+		"limit":                  limit,
+		"coverage_summary":       businessAnalysisCoverageFromSummary(cohort.Summary),
+		"cohort_summary":         cohort.Summary,
+		"reviewed_calls":         []any{},
+		"evidence":               []any{},
+		"quotes":                 []any{},
+		"evidence_count":         0,
+		"warnings":               append(warnings, "question_answer_needs_theme_seed"),
+		"limitations":            businessAnalysisLimitations(OpQuestionAnswer),
+		"answer_contract":        []string{"Do not answer the broad theme question from this payload alone.", "Choose one suggested_seed_topic or a customer-specific phrase, then run theme_intelligence_report.", "Use extract.buyer_questions or extract.objection_signals when the business question is about questions, objections, risks, or coaching."},
+		"derived_theme_query":    "",
+		"theme_query_derivation": derivationMeta,
+		"suggested_seed_topics":  questionAnswerSuggestedSeedTopics(),
+		"recommended_operations": questionAnswerRecommendedOperations(),
+		"suggested_followups":    []string{"Run theme_intelligence_report with theme_query=\"manual order entry\".", "Run theme_intelligence_report with theme_query=\"pricing\".", "Run extract.buyer_questions for pricing, implementation, integration, security, support, and timeline.", "Run extract.objection_signals for pricing, timeline, security review, ROI, IT bandwidth, and integration risk."},
+		"plain_language_message": "This is a broad theme-discovery question. I did not find a specific topic seed in the wording, so I am returning guidance instead of quotes that only match generic words.",
+	}
+}
+
 type questionAnswerArgs struct {
 	Question            string     `json:"question"`
 	Filter              callFilter `json:"filter"`
@@ -883,6 +1029,8 @@ type questionAnswerArgs struct {
 	Query               string     `json:"query"`
 	ThemeQuery          string     `json:"theme_query"`
 	Limit               int        `json:"limit"`
+	FieldProfile        string     `json:"field_profile"`
+	SpeakerRole         string     `json:"speaker_role"`
 	IncludeCallIDs      bool       `json:"include_call_ids"`
 	IncludeCallTitles   bool       `json:"include_call_titles"`
 	IncludeAccountNames bool       `json:"include_account_names"`
@@ -909,13 +1057,29 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	if s.governanceActive() {
 		return toolCallResult{}, governanceFilteredAggregateError(OpQuestionAnswer)
 	}
+	if s.restrictedAccountQuery(args.Filter.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
+	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:       args.IncludeCallIDs,
+		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeAccountNames: args.IncludeAccountNames,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.FieldProfile = profiled.Profile
+	args.IncludeCallIDs = profiled.IncludeRawIDs
+	args.IncludeCallTitles = profiled.IncludeCallTitles
+	args.IncludeAccountNames = profiled.IncludeAccountNames
 	if strings.TrimSpace(args.Filter.AccountQuery) != "" && !args.IncludeAccountNames {
 		// Account name probing is governed by include_account_names in the lower
 		// business-analysis tools. Keep the same explicit opt-in requirement.
 		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true because it can probe customer names")
 	}
-	if s.restrictedAccountQuery(args.Filter.AccountQuery) {
-		return toolCallResult{}, restrictedAccountQueryError()
+	speakerRoleFilter, err := normalizeSpeakerRoleFilter(firstNonBlank(args.SpeakerRole, speakerRoleExternalOrUnknown))
+	if err != nil {
+		return toolCallResult{}, err
 	}
 	normalized, err := normalizeCallFilter(args.Filter)
 	if err != nil {
@@ -942,9 +1106,6 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		evidenceQuery = derivedQuery
 		derivationSource = "derived_from_question"
 	}
-	if strings.TrimSpace(evidenceQuery) == "" {
-		return toolCallResult{}, fmt.Errorf("%s requires a searchable question or query", OpQuestionAnswer)
-	}
 	initialEvidenceQuery := evidenceQuery
 	derivationMeta := map[string]any{
 		"source":            derivationSource,
@@ -969,6 +1130,47 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return toolCallResult{}, err
 	}
+	warnings := businessAnalysisWarnings(OpQuestionAnswer, normalized)
+	if cohort.Summary.ParticipantTitleCallCount == 0 {
+		warnings = append(warnings, "participant_title_missing_or_unmapped")
+	}
+	if cohort.Summary.AccountIndustryCount == 0 {
+		warnings = append(warnings, "account_industry_missing_or_unmapped")
+	}
+	if cohort.Summary.OpportunityStageCount == 0 {
+		warnings = append(warnings, "opportunity_stage_missing_or_unmapped")
+	}
+	if cohort.Summary.CallCount == 0 {
+		warnings = append(warnings, "empty_cohort: no calls matched the normalized filter")
+		return newToolResult(map[string]any{
+			"operation":              OpQuestionAnswer,
+			"status":                 "empty_cohort",
+			"question":               question,
+			"role_context":           strings.TrimSpace(args.RoleContext),
+			"output_intent":          strings.TrimSpace(args.OutputIntent),
+			"searched_scope":         normalized,
+			"field_profile":          args.FieldProfile,
+			"speaker_role_filter":    speakerRoleFilter,
+			"evidence_query":         evidenceQuery,
+			"limit":                  limit,
+			"coverage_summary":       businessAnalysisCoverageFromSummary(cohort.Summary),
+			"cohort_summary":         cohort.Summary,
+			"reviewed_calls":         []any{},
+			"evidence":               []any{},
+			"quotes":                 []any{},
+			"evidence_count":         0,
+			"warnings":               warnings,
+			"limitations":            businessAnalysisLimitations(OpQuestionAnswer),
+			"answer_contract":        []string{"Do not answer the question from this payload alone.", "Widen or correct the filter before choosing a theme seed.", "If the cohort should contain calls, verify date range, lifecycle/stage, industry, transcript_status, and account filters."},
+			"derived_theme_query":    initialEvidenceQuery,
+			"theme_query_derivation": derivationMeta,
+			"suggested_followups":    []string{"Widen the date range.", "Remove or relax lifecycle, stage, industry, account, or transcript_status filters.", "Run gong_status to confirm cache coverage before retrying."},
+			"plain_language_message": "No calls matched the filter, so I am returning an empty-cohort status instead of suggesting theme seeds or quote evidence.",
+		})
+	}
+	if strings.TrimSpace(evidenceQuery) == "" {
+		return newToolResult(questionAnswerNeedsThemeSeedPayload(question, args, normalized, speakerRoleFilter, limit, cohort, derivationMeta, warnings))
+	}
 	baArgs := businessAnalysisArgs{
 		Filter:              normalized,
 		Query:               evidenceQuery,
@@ -976,6 +1178,8 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		IncludeCallIDs:      args.IncludeCallIDs,
 		IncludeCallTitles:   args.IncludeCallTitles,
 		IncludeAccountNames: args.IncludeAccountNames,
+		FieldProfile:        args.FieldProfile,
+		SpeakerRole:         speakerRoleFilter,
 	}
 	items, quotes, err := s.businessAnalysisEvidence(ctx, normalized, evidenceQuery, limit, baArgs)
 	if err != nil {
@@ -1021,39 +1225,31 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 			break
 		}
 	}
-	warnings := businessAnalysisWarnings(OpQuestionAnswer, normalized)
 	if fallbackUsed {
-		warnings = append(warnings, "question_answer_used_evidence_query_fallback")
-	}
-	if cohort.Summary.ParticipantTitleCallCount == 0 {
-		warnings = append(warnings, "participant_title_missing_or_unmapped")
-	}
-	if cohort.Summary.AccountIndustryCount == 0 {
-		warnings = append(warnings, "account_industry_missing_or_unmapped")
-	}
-	if cohort.Summary.OpportunityStageCount == 0 {
-		warnings = append(warnings, "opportunity_stage_missing_or_unmapped")
+		warnings = append(warnings, "question_answer_used_high_signal_evidence_query_fallback")
 	}
 	if len(items) == 0 {
 		warnings = append(warnings, "no_quote_evidence_returned_for_question_terms")
 	}
 	payload := map[string]any{
-		"operation":        OpQuestionAnswer,
-		"status":           "evidence_pack_ready",
-		"question":         question,
-		"role_context":     strings.TrimSpace(args.RoleContext),
-		"output_intent":    strings.TrimSpace(args.OutputIntent),
-		"searched_scope":   normalized,
-		"evidence_query":   evidenceQuery,
-		"limit":            limit,
-		"coverage_summary": businessAnalysisCoverageFromSummary(cohort.Summary),
-		"cohort_summary":   cohort.Summary,
-		"reviewed_calls":   s.businessAnalysisCallRows(cohort.Rows, baArgs),
-		"evidence":         items,
-		"quotes":           quotes,
-		"evidence_count":   len(items),
-		"warnings":         warnings,
-		"limitations":      businessAnalysisLimitations(OpQuestionAnswer),
+		"operation":           OpQuestionAnswer,
+		"status":              "evidence_pack_ready",
+		"question":            question,
+		"role_context":        strings.TrimSpace(args.RoleContext),
+		"output_intent":       strings.TrimSpace(args.OutputIntent),
+		"searched_scope":      normalized,
+		"field_profile":       args.FieldProfile,
+		"speaker_role_filter": speakerRoleFilter,
+		"evidence_query":      evidenceQuery,
+		"limit":               limit,
+		"coverage_summary":    businessAnalysisCoverageFromSummary(cohort.Summary),
+		"cohort_summary":      cohort.Summary,
+		"reviewed_calls":      s.businessAnalysisCallRows(cohort.Rows, baArgs),
+		"evidence":            items,
+		"quotes":              quotes,
+		"evidence_count":      len(items),
+		"warnings":            warnings,
+		"limitations":         businessAnalysisLimitations(OpQuestionAnswer),
 		"answer_contract": []string{
 			"Use only the returned evidence and coverage when answering.",
 			"Label unsupported conclusions as limitations.",
@@ -1322,6 +1518,7 @@ type callDrilldownArgs struct {
 	ThemeQuery              string `json:"theme_query"`
 	Query                   string `json:"query"`
 	Limit                   int    `json:"limit"`
+	FieldProfile            string `json:"field_profile"`
 	IncludeCallTitles       bool   `json:"include_call_titles"`
 	IncludeAccountNames     bool   `json:"include_account_names"`
 	IncludeOpportunityNames bool   `json:"include_opportunity_names"`
@@ -1388,6 +1585,20 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	if rawCallID != "" && s.policySwitches.HideRawCallIDs && callRef == "" {
 		return toolCallResult{}, fmt.Errorf("%s requires call_ref because the active policy hides raw call IDs", OpEvidenceCallDrilldown)
 	}
+	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:           args.IncludeRawIDs,
+		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeAccountNames:     args.IncludeAccountNames,
+		IncludeOpportunityNames: args.IncludeOpportunityNames,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.FieldProfile = profiled.Profile
+	args.IncludeRawIDs = profiled.IncludeRawIDs
+	args.IncludeCallTitles = profiled.IncludeCallTitles
+	args.IncludeAccountNames = profiled.IncludeAccountNames
+	args.IncludeOpportunityNames = profiled.IncludeOpportunityNames
 
 	limit := args.Limit
 	if limit <= 0 {
@@ -1618,6 +1829,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	payload := map[string]any{
 		"operation":                    OpEvidenceCallDrilldown,
 		"drilldown_status":             status,
+		"field_profile":                args.FieldProfile,
 		"call":                         call,
 		"ai_condensed_evidence":        aiRows,
 		"verbatim_transcript_excerpts": transcriptOut,

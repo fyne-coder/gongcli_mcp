@@ -332,6 +332,9 @@ func scopedReaderFunctionSignatures(signatures []string, redactedAll bool) []str
 		if signature == "public.gongmcp_profile_call_fact_cache_meta(bigint, text)" {
 			signature = "public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint)"
 		}
+		if signature == "public.gongmcp_profile_data_fingerprint()" && !redactedAll {
+			continue
+		}
 		if signature == "public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)" {
 			signature = "public.gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer)"
 		}
@@ -552,6 +555,8 @@ func facadeOnlyScopedReaderTools() map[string]struct{} {
 		"question_answer":           {},
 		"call_drilldown":            {},
 		"theme_intelligence_report": {},
+		"extract_buyer_questions":   {},
+		"extract_objection_signals": {},
 	}
 }
 
@@ -584,9 +589,28 @@ func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 		{Table: "gongmcp_call_context_fields", Column: "field_type"},
 		{Table: "gongmcp_call_context_fields", Column: "field_populated"},
 		{Table: "crm_integrations", Column: "integration_id"},
+		{Table: "crm_integrations", Column: "name"},
+		{Table: "crm_integrations", Column: "provider"},
+		{Table: "crm_integrations", Column: "first_seen_at"},
+		{Table: "crm_integrations", Column: "updated_at"},
+		{Table: "crm_schema_objects", Column: "integration_id"},
 		{Table: "crm_schema_objects", Column: "object_type"},
+		{Table: "crm_schema_objects", Column: "display_name"},
+		{Table: "crm_schema_objects", Column: "field_count"},
+		{Table: "crm_schema_objects", Column: "first_seen_at"},
+		{Table: "crm_schema_objects", Column: "updated_at"},
+		{Table: "crm_schema_fields", Column: "integration_id"},
+		{Table: "crm_schema_fields", Column: "object_type"},
 		{Table: "crm_schema_fields", Column: "field_name"},
+		{Table: "crm_schema_fields", Column: "field_label"},
+		{Table: "crm_schema_fields", Column: "field_type"},
+		{Table: "crm_schema_fields", Column: "first_seen_at"},
+		{Table: "crm_schema_fields", Column: "updated_at"},
 		{Table: "gong_settings", Column: "kind"},
+		{Table: "gong_settings", Column: "object_id"},
+		{Table: "gong_settings", Column: "name"},
+		{Table: "gong_settings", Column: "active"},
+		{Table: "gong_settings", Column: "updated_at"},
 		{Table: "call_facts", Column: "lifecycle_bucket"},
 		{Table: "call_facts", Column: "transcript_present"},
 		{Table: "call_facts", Column: "transcript_status"},
@@ -689,6 +713,7 @@ type groupedPostgresColumnGrant struct {
 
 func groupedColumnGrants(grants []ColumnSelectGrant) []groupedPostgresColumnGrant {
 	byTable := make(map[string][]string)
+	seen := make(map[string]struct{}, len(grants))
 	for _, grant := range grants {
 		table, err := quotePostgresIdentifier(grant.Table)
 		if err != nil {
@@ -698,6 +723,11 @@ func groupedColumnGrants(grants []ColumnSelectGrant) []groupedPostgresColumnGran
 		if err != nil {
 			panic(fmt.Sprintf("invalid built-in postgres grant column %q: %v", grant.Column, err))
 		}
+		key := table + "." + column
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		byTable[table] = append(byTable[table], column)
 	}
 	tables := make([]string, 0, len(byTable))

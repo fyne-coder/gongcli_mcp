@@ -896,10 +896,6 @@ func (s *Store) profileReadiness(ctx context.Context) (sqlite.ProfileReadiness, 
 	if doc, docErr := s.ActiveProfileDocument(ctx); docErr == nil {
 		readiness.Checklist = sqlite.EvaluateProfileReadinessChecklist(doc)
 	}
-	fingerprint, err := s.profileDataFingerprint(ctx)
-	if err != nil {
-		return readiness, err
-	}
 	var canonicalSHA256, dataFingerprint string
 	metaQuery := `
 SELECT canonical_sha256, data_fingerprint
@@ -929,6 +925,13 @@ SELECT canonical_sha256, data_fingerprint
 			return readiness, nil
 		}
 		return readiness, err
+	}
+	fingerprint := dataFingerprint
+	if !s.readOnlyOptions.EnforceAllowedColumnBoundary {
+		fingerprint, err = s.profileDataFingerprint(ctx)
+		if err != nil {
+			return readiness, err
+		}
 	}
 	readiness.CacheFresh = (profile.CanonicalSHA256 == "" || canonicalSHA256 == profile.CanonicalSHA256) && dataFingerprint == fingerprint
 	if readiness.CacheFresh {

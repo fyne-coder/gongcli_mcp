@@ -74,6 +74,46 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 	}
 }
 
+func TestToolsListSchemasUseObjectPropertiesRecord(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "init",
+		Method:  "initialize",
+		Params:  mustJSON(t, map[string]any{}),
+	})+requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "tools",
+		Method:  "tools/list",
+	}))
+
+	if len(responses) != 2 {
+		t.Fatalf("response count=%d want 2", len(responses))
+	}
+
+	var listed struct {
+		Result toolsListResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[1], &listed); err != nil {
+		t.Fatalf("unmarshal tools/list response: %v", err)
+	}
+
+	for _, item := range listed.Result.Tools {
+		props, ok := item.InputSchema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s inputSchema.properties=%T want object: %+v", item.Name, item.InputSchema["properties"], item.InputSchema)
+		}
+		if props == nil {
+			t.Fatalf("%s inputSchema.properties is nil", item.Name)
+		}
+	}
+}
+
 func TestToolsListOnlyReturnsAllowlistedTools(t *testing.T) {
 	t.Parallel()
 
@@ -2085,6 +2125,95 @@ func TestSearchTranscriptQuotesRejectsMissingTranscriptStatus(t *testing.T) {
 	}
 	if len(envelope.Result.Content) != 1 || !strings.Contains(envelope.Result.Content[0].Text, "transcript_status=missing") {
 		t.Fatalf("error did not explain invalid missing transcript status: %+v", envelope.Result)
+	}
+}
+
+func TestSearchTranscriptQuotesExternalOrUnknownPreservesUnmatchedSpeakers(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	call := mustJSON(t, map[string]any{
+		"id":      "call_attribution_unknown_role",
+		"title":   "Manufacturing implementation discussion",
+		"started": "2026-02-10T15:00:00Z",
+		"parties": []any{
+			map[string]any{
+				"id":          "buyer",
+				"name":        "Buyer",
+				"affiliation": "",
+				"email":       "buyer@example.com",
+			},
+		},
+		"context": []any{
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-unknown-role",
+				"fields": []any{
+					map[string]any{"name": "StageName", "value": "Discovery"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, call); err != nil {
+		t.Fatalf("upsert attribution call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_attribution_unknown_role",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is the problem."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert attribution transcript: %v", err)
+	}
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "external-or-unknown",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":        "implementation",
+				"speaker_role": "external_or_unknown",
+				"from_date":    "2026-02-01",
+				"to_date":      "2026-02-28",
+				"limit":        5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal attribution payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("external_or_unknown row count=%d want 1: %+v", len(rows), rows)
+	}
+	if rows[0]["speaker_role"] != sqlite.SpeakerRoleUnknown {
+		t.Fatalf("external_or_unknown should preserve unknown speaker role row: %+v", rows[0])
 	}
 }
 

@@ -91,6 +91,8 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpEvidenceHighlightsList,
 		OpEvidenceQuotePackBuild,
 		OpEvidenceQuotesSearch,
+		OpExtractBuyerQuestions,
+		OpExtractObjectionSignals,
 		OpQueryCalls,
 		OpQueryScorecardDetail,
 		OpQueryScorecards,

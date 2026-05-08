@@ -115,7 +115,10 @@ model to guess which narrow tool to use:
 
 1. Start with `gong_analyze` operation `theme_intelligence_report` for the
    chosen date range, lifecycle/stage, title query, industry, or persona
-   filter.
+   filter and a concrete `theme_query` such as `pricing`, `implementation
+   effort`, `manual order entry`, `ERP integration`, `punchout`, `security
+   review`, `timeline`, or `ROI`. Without `theme_query`, the report is
+   candidate-term guidance only.
 2. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
    the source of truth for drill-down terms.
 3. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
@@ -124,6 +127,12 @@ model to guess which narrow tool to use:
    bounded transcript excerpts for the same call.
 4. Use `gong_analyze` operation `question.answer` for a final governed
    evidence pack after the report has identified the strongest terms.
+5. For business-user objection and question discovery, prefer
+   `gong_analyze` operations `extract.objection_signals` and
+   `extract.buyer_questions`. They run seeded, external-speaker-first evidence
+   searches over familiar topics such as pricing, implementation, security
+   review, and timeline so a sales or marketing user does not need to know the
+   lower-level quote tools.
 
 For synonym work, do not assume the server expands meanings semantically. Run
 separate explicit seeds such as `manual order entry`, `double entry`,
@@ -135,11 +144,31 @@ LLM-based synonym expansion inside the MCP server.
 
 Treat `question.answer` as an evidence-pack generator, not a hidden analyst. It
 derives bounded search terms from the free-form question and may fall back to a
-matching high-signal term when the full derived phrase returns no quotes; the
-payload reports the actual `evidence_query` and derivation metadata so the
-host's final answer can disclose what was searched. Explicit `query` or
-`theme_query` inputs are authoritative and are not retried or rewritten by this
-fallback path.
+matching high-signal term when the full derived phrase returns no quotes. Generic
+business words such as "main", "themes", "concerns", and "business discovery"
+are not used as literal fallback searches; if only generic words remain, the
+payload returns `status: needs_theme_seed`, reports no evidence, and includes
+`suggested_seed_topics` plus `recommended_operations` for the host to continue.
+The payload reports the actual `evidence_query`, `speaker_role_filter`, and
+derivation metadata so the host's final answer can disclose what was searched.
+Explicit `query` or `theme_query` inputs are authoritative and are not retried
+or rewritten by this fallback path.
+
+### Field Exposure Profiles
+
+Use `field_profile` when a business-user prompt should switch between a narrow
+client-safe view and richer internal attribution without remembering every
+individual include flag:
+
+| Profile | Effect |
+| --- | --- |
+| `limited` | Hides raw IDs, call titles, account names, opportunity names, and speaker refs. Use for broad client-safe exploration. |
+| `attribution` | Enables call titles, account names, opportunity names, and speaker refs, but not raw IDs. Use when the client profile permits named account/opportunity attribution. |
+| `full` | Enables every opt-in field, including raw IDs, subject to active server policy switches. Use only for approved internal/operator sessions. |
+| `custom` or omitted | Keeps the explicit `include_*` flags supplied by the caller. |
+
+Policy switches still win. For example, `field_profile=full` cannot expose raw
+call IDs when `hide_raw_call_ids` is enabled.
 
 For a concise supported/caveated/blocked mapping of the SQLite-era question set
 to the reviewed Postgres pilot surface, see the

@@ -34,6 +34,8 @@ type themeIntelReportArgs struct {
 	OutputIntent        string     `json:"output_intent"`
 	GroupBy             []string   `json:"group_by"`
 	TopQuotesPerTheme   int        `json:"top_quotes_per_theme"`
+	FieldProfile        string     `json:"field_profile"`
+	SpeakerRole         string     `json:"speaker_role"`
 	IncludeCallTitles   bool       `json:"include_call_titles"`
 	IncludeAccountNames bool       `json:"include_account_names"`
 	IncludeSpeakerRefs  bool       `json:"include_speaker_refs"`
@@ -128,11 +130,29 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	if args.Quarter != "" && strings.TrimSpace(args.Filter.Quarter) == "" {
 		args.Filter.Quarter = args.Quarter
 	}
+	if s.restrictedAccountQuery(args.Filter.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
+	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:       args.IncludeRawIDs,
+		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeAccountNames: args.IncludeAccountNames,
+		IncludeSpeakerRefs:  args.IncludeSpeakerRefs,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.FieldProfile = profiled.Profile
+	args.IncludeRawIDs = profiled.IncludeRawIDs
+	args.IncludeCallTitles = profiled.IncludeCallTitles
+	args.IncludeAccountNames = profiled.IncludeAccountNames
+	args.IncludeSpeakerRefs = profiled.IncludeSpeakerRefs
 	if strings.TrimSpace(args.Filter.AccountQuery) != "" && (!args.IncludeAccountNames || s.policySwitches.HideAccountNames) {
 		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true and hide_account_names=false because it can probe customer names")
 	}
-	if s.restrictedAccountQuery(args.Filter.AccountQuery) {
-		return toolCallResult{}, restrictedAccountQueryError()
+	speakerRoleFilter, err := normalizeSpeakerRoleFilter(firstNonBlank(args.SpeakerRole, speakerRoleExternalOrUnknown))
+	if err != nil {
+		return toolCallResult{}, err
 	}
 
 	normalized, err := normalizeCallFilter(args.Filter)
@@ -211,6 +231,8 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		IncludeCallIDs:      includeRaw,
 		IncludeCallTitles:   includeTitles,
 		IncludeAccountNames: includeAccounts,
+		FieldProfile:        args.FieldProfile,
+		SpeakerRole:         speakerRoleFilter,
 	}
 
 	// Evidence: when theme_query is supplied we treat it as the primary
@@ -354,6 +376,8 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		"operation":                 OpThemeIntelReport,
 		"status":                    status,
 		"searched_scope":            normalized,
+		"field_profile":             args.FieldProfile,
+		"speaker_role_filter":       speakerRoleFilter,
 		"theme_query":               themeQuery,
 		"primary_theme":             primaryThemeName,
 		"coverage_summary":          businessAnalysisCoverageFromSummary(cohort.Summary),

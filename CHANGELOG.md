@@ -31,6 +31,14 @@
   `gong_get_evidence`, and `gong_explain_limitations`, with reviewed routed
   operations underneath for ad-hoc business questions, theme intelligence,
   quotes, Gong AI highlights, and call drilldown.
+- Improved the TC sales/marketing business-workbench prompt path for GA:
+  broad `question.answer` theme prompts now return `status=needs_theme_seed`
+  with suggested seeded workflows instead of weak literal-word evidence;
+  `theme_intelligence_report` and quote evidence support limited,
+  attribution, and full `field_profile` presets plus buyer/seller
+  `speaker_role` filtering; and `extract.buyer_questions` /
+  `extract.objection_signals` provide seeded external-speaker evidence paths
+  for sales enablement and marketing users.
 - Added `question.answer`, `theme_intelligence_report`, and
   `evidence.call_drilldown` workflow improvements for business-user prompts,
   including deterministic fallback metadata, explicit synonym guidance,

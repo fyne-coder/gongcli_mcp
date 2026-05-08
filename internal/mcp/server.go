@@ -432,6 +432,8 @@ type searchTranscriptQuotesWithAttributionArgs struct {
 	AccountQuery            string `json:"account_query"`
 	OpportunityStage        string `json:"opportunity_stage"`
 	Limit                   int    `json:"limit"`
+	FieldProfile            string `json:"field_profile"`
+	SpeakerRole             string `json:"speaker_role"`
 	IncludeCallIDs          bool   `json:"include_call_ids"`
 	IncludeCallTitles       bool   `json:"include_call_titles"`
 	IncludeAccountNames     bool   `json:"include_account_names"`
@@ -1073,6 +1075,8 @@ func defaultTools(policy LimitPolicy) []tool {
 					"account_query":             map[string]any{"type": "string"},
 					"opportunity_stage":         map[string]any{"type": "string"},
 					"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
+					"field_profile":             fieldProfileSchema(),
+					"speaker_role":              speakerRoleSchema(),
 					"include_call_ids":          map[string]any{"type": "boolean"},
 					"include_call_titles":       map[string]any{"type": "boolean"},
 					"include_account_names":     map[string]any{"type": "boolean"},
@@ -2287,12 +2291,31 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
-	if strings.TrimSpace(args.AccountQuery) != "" && !args.IncludeAccountNames {
-		return toolCallResult{}, errors.New("account_query requires include_account_names=true because it can probe customer names")
-	}
 	if s.restrictedAccountQuery(args.AccountQuery) {
 		return toolCallResult{}, restrictedAccountQueryError()
 	}
+	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:           args.IncludeCallIDs,
+		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeAccountNames:     args.IncludeAccountNames,
+		IncludeOpportunityNames: args.IncludeOpportunityNames,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.FieldProfile = profiled.Profile
+	args.IncludeCallIDs = profiled.IncludeRawIDs
+	args.IncludeCallTitles = profiled.IncludeCallTitles
+	args.IncludeAccountNames = profiled.IncludeAccountNames
+	args.IncludeOpportunityNames = profiled.IncludeOpportunityNames
+	if strings.TrimSpace(args.AccountQuery) != "" && !args.IncludeAccountNames {
+		return toolCallResult{}, errors.New("account_query requires include_account_names=true because it can probe customer names")
+	}
+	speakerRoleFilter, err := normalizeSpeakerRoleFilter(args.SpeakerRole)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.SpeakerRole = speakerRoleFilter
 	if strings.EqualFold(strings.TrimSpace(args.TranscriptStatus), "missing") {
 		return toolCallResult{}, errors.New("transcript_status=missing is not valid for quote search because quote tools require cached transcript segments")
 	}
@@ -2317,6 +2340,9 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	filtered := 0
 	out := results[:0]
 	for _, row := range results {
+		if !businessAnalysisSpeakerRoleAllowed(row.SpeakerRole, args.SpeakerRole) {
+			continue
+		}
 		if s.isSuppressedCall(row.CallID) {
 			filtered++
 			continue
@@ -3241,6 +3267,9 @@ func emptyObjectSchema() map[string]any {
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
 	schema := map[string]any{
 		"type":                 "object",
 		"properties":           properties,
