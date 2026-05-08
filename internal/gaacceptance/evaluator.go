@@ -180,6 +180,7 @@ type ReportSummary struct {
 	DeploymentID                 string `json:"deployment_id,omitempty"`
 	Version                      string `json:"version,omitempty"`
 	Commit                       string `json:"commit,omitempty"`
+	BuildDate                    string `json:"build_date,omitempty"`
 	StartedAtUTC                 string `json:"started_at_utc,omitempty"`
 	ToolPreset                   string `json:"tool_preset,omitempty"`
 	VisibleToolCount             int    `json:"visible_tool_count"`
@@ -213,6 +214,7 @@ func Evaluate(b ProbeBundle) (Report, error) {
 		DeploymentID:                 statusView.deploymentID,
 		Version:                      statusView.version,
 		Commit:                       statusView.commit,
+		BuildDate:                    statusView.buildDate,
 		StartedAtUTC:                 statusView.startedAtUTC,
 		ToolPreset:                   statusView.toolPreset,
 		VisibleToolCount:             statusView.toolCount,
@@ -239,6 +241,7 @@ type statusView struct {
 	deploymentID                 string
 	version                      string
 	commit                       string
+	buildDate                    string
 	startedAtUTC                 string
 	toolPreset                   string
 	toolCount                    int
@@ -283,6 +286,7 @@ func parseStatus(raw json.RawMessage) (statusView, error) {
 		view.deploymentID = stringField(mcp, "deployment_id")
 		view.version = stringField(mcp, "version")
 		view.commit = stringField(mcp, "commit")
+		view.buildDate = stringField(mcp, "build_date")
 		view.startedAtUTC = stringField(mcp, "started_at_utc")
 		view.toolPreset = stringField(mcp, "tool_preset")
 		view.toolCount = intField(mcp, "tool_count")
@@ -372,11 +376,18 @@ func readinessField(parent map[string]any, key string) (bool, string) {
 func evaluateRuntimeIdentity(view statusView) Check {
 	c := Check{ID: CheckRuntimeIdentity, Name: "Runtime identity"}
 	missing := []string{}
+	invalid := []string{}
 	if view.deploymentID == "" {
 		missing = append(missing, "deployment_id")
 	}
 	if view.version == "" {
 		missing = append(missing, "version")
+	}
+	if view.commit == "" {
+		missing = append(missing, "commit")
+	}
+	if view.buildDate == "" {
+		missing = append(missing, "build_date")
 	}
 	if view.startedAtUTC == "" {
 		missing = append(missing, "started_at_utc")
@@ -387,10 +398,20 @@ func evaluateRuntimeIdentity(view statusView) Check {
 	if view.toolCount == 0 {
 		missing = append(missing, "tool_count")
 	}
+	if isUnknownBuildValue(view.version) || strings.EqualFold(strings.TrimSpace(view.version), "dev") {
+		invalid = append(invalid, "version")
+	}
+	if isUnknownBuildValue(view.commit) {
+		invalid = append(invalid, "commit")
+	}
+	if isUnknownBuildValue(view.buildDate) {
+		invalid = append(invalid, "build_date")
+	}
 	c.Details = map[string]any{
 		"deployment_id":            view.deploymentID,
 		"version":                  view.version,
 		"commit":                   view.commit,
+		"build_date":               view.buildDate,
 		"started_at_utc":           view.startedAtUTC,
 		"tool_preset":              view.toolPreset,
 		"visible_tool_count":       view.toolCount,
@@ -401,9 +422,19 @@ func evaluateRuntimeIdentity(view statusView) Check {
 		c.Reason = fmt.Sprintf("runtime identity missing fields: %s", strings.Join(missing, ", "))
 		return c
 	}
+	if len(invalid) > 0 {
+		c.Status = StatusFail
+		c.Reason = fmt.Sprintf("runtime identity has non-release provenance fields: %s", strings.Join(invalid, ", "))
+		return c
+	}
 	c.Status = StatusPass
-	c.Reason = fmt.Sprintf("deployment_id=%s preset=%s version=%s tool_count=%d", view.deploymentID, view.toolPreset, view.version, view.toolCount)
+	c.Reason = fmt.Sprintf("deployment_id=%s preset=%s version=%s commit=%s tool_count=%d", view.deploymentID, view.toolPreset, view.version, view.commit, view.toolCount)
 	return c
+}
+
+func isUnknownBuildValue(v string) bool {
+	v = strings.TrimSpace(strings.ToLower(v))
+	return v == "" || v == "unknown" || v == "(unknown)"
 }
 
 func evaluateToolSurface(b ProbeBundle, view statusView) Check {
@@ -794,6 +825,9 @@ func RenderOperatorMarkdown(rep Report) string {
 	fmt.Fprintf(&b, "- version: %s\n", rep.Summary.Version)
 	if rep.Summary.Commit != "" {
 		fmt.Fprintf(&b, "- commit: %s\n", rep.Summary.Commit)
+	}
+	if rep.Summary.BuildDate != "" {
+		fmt.Fprintf(&b, "- build_date: %s\n", rep.Summary.BuildDate)
 	}
 	fmt.Fprintf(&b, "- started_at_utc: %s\n", rep.Summary.StartedAtUTC)
 	fmt.Fprintf(&b, "- visible_tool_count: %d\n", rep.Summary.VisibleToolCount)

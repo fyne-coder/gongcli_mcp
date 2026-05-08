@@ -157,8 +157,10 @@ source-vs-serving validation artifact, not a database URL or raw data export.
 The smoke validates seven contracts and reports each as `pass`, `degraded`, or
 `fail`:
 
-1. `runtime_identity` — `deployment_id`, version/commit, `started_at_utc`,
-   `tool_preset`, and visible tool count are present in `gong_status`.
+1. `runtime_identity` — `deployment_id`, release version, commit,
+   `build_date`, `started_at_utc`, `tool_preset`, and visible tool count are
+   present in `gong_status`. `version=dev`, `commit=unknown`, missing
+   `build_date`, or equivalent non-release provenance is a `fail` for GA.
 2. `tool_surface` — exactly the six business-workbench facade tools are
    visible to MCP clients.
 3. `routed_operations` — `question.answer`, `theme_intelligence_report`,

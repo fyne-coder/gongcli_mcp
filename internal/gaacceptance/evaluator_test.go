@@ -193,6 +193,61 @@ func TestEvaluatePassBundle(t *testing.T) {
 	}
 }
 
+func TestEvaluateRuntimeIdentityRejectsDevProvenance(t *testing.T) {
+	bundle := loadPassBundle(t)
+	var status map[string]any
+	if err := json.Unmarshal(bundle.Status, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	mcp := status["mcp_server"].(map[string]any)
+	mcp["version"] = "dev"
+	mcp["commit"] = "unknown"
+	mcp["build_date"] = "unknown"
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	bundle.Status = raw
+
+	rep := mustEvaluate(t, bundle)
+	c := findCheck(t, rep, CheckRuntimeIdentity)
+	if c.Status != StatusFail {
+		t.Fatalf("runtime_identity status=%q want fail for dev/unknown provenance; reason=%q", c.Status, c.Reason)
+	}
+	if rep.Status != StatusFail {
+		t.Fatalf("overall status=%q want fail", rep.Status)
+	}
+	for _, want := range []string{"version", "commit", "build_date"} {
+		if !strings.Contains(c.Reason, want) {
+			t.Errorf("runtime_identity reason should mention %q, got %q", want, c.Reason)
+		}
+	}
+}
+
+func TestEvaluateRuntimeIdentityRejectsMissingBuildDate(t *testing.T) {
+	bundle := loadPassBundle(t)
+	var status map[string]any
+	if err := json.Unmarshal(bundle.Status, &status); err != nil {
+		t.Fatalf("unmarshal status: %v", err)
+	}
+	mcp := status["mcp_server"].(map[string]any)
+	delete(mcp, "build_date")
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	bundle.Status = raw
+
+	rep := mustEvaluate(t, bundle)
+	c := findCheck(t, rep, CheckRuntimeIdentity)
+	if c.Status != StatusFail {
+		t.Fatalf("runtime_identity status=%q want fail for missing build_date; reason=%q", c.Status, c.Reason)
+	}
+	if !strings.Contains(c.Reason, "build_date") {
+		t.Errorf("runtime_identity reason should mention build_date, got %q", c.Reason)
+	}
+}
+
 func TestEvaluateMissingToolSurface(t *testing.T) {
 	bundle := loadPassBundle(t)
 	// Drop one of the six required facade tools.

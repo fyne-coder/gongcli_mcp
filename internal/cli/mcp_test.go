@@ -382,6 +382,7 @@ const gaAcceptancePassBundle = `{
       "name": "gongmcp",
       "version": "0.3.4",
       "commit": "abcdef0",
+      "build_date": "2026-05-07T00:00:00Z",
       "tool_preset": "business-workbench",
       "deployment_id": "ga-acceptance-cli-fixture",
       "started_at_utc": "2026-05-07T20:00:00Z",

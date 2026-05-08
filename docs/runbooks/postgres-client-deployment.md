@@ -302,8 +302,11 @@ call IDs, or transcript text through these fields.
 The smoke validates seven contracts (runtime identity, six-tool surface,
 routed operations, data readiness, governance/redaction, evidence workflow,
 and scoped-reader read-only posture) and emits both a JSON report and an
-operator Markdown summary. The script exits 0 on `pass` or `degraded` (the
-JSON status field carries the distinction) and exits 1 on `fail`. See
+operator Markdown summary. The runtime identity check is a GA release gate:
+`version=dev`, `commit=unknown`, missing `build_date`, or equivalent
+non-release provenance is a `fail` even if the MCP tools otherwise work. The
+script exits 0 on `pass` or `degraded` (the JSON status field carries the
+distinction) and exits 1 on `fail`. See
 [Postgres client onboarding checklist §7](../postgres-client-onboarding-checklist.md)
 for what each status means and how to record the result in the pilot
 closeout.
