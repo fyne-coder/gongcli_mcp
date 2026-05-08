@@ -17,6 +17,7 @@ const (
 	defaultThemeIntelReportQuotesPerTheme = 5
 	maxThemeIntelReportQuotesPerTheme     = 5
 	maxThemeIntelReportThemes             = 5
+	defaultThemeIntelBootstrapCallScan    = 100
 	maxThemeIntelReportCallDrilldowns     = 5
 	maxThemeIntelReportAICondensedRows    = 12
 	maxThemeIntelReportSalesHooks         = 8
@@ -226,9 +227,13 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		return newToolResult(payload)
 	}
 
+	callSearchLimit := limit
+	if themeQuery == "" && normalized.Limit == 0 {
+		callSearchLimit = s.limitPolicy.BusinessAnalysisLimit(defaultThemeIntelBootstrapCallScan)
+	}
 	cohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
 		Filter: sqliteBusinessAnalysisFilter(normalized),
-		Limit:  limit,
+		Limit:  callSearchLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -261,9 +266,13 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	if themeQuery == "" {
 		broadDiscovery = true
 		normalized = applyDefaultBroadThemeQualityFilters(normalized)
+		callSearchLimit := limit
+		if normalized.Limit == 0 {
+			callSearchLimit = s.limitPolicy.BusinessAnalysisLimit(defaultThemeIntelBootstrapCallScan)
+		}
 		cohort, err = s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
 			Filter: sqliteBusinessAnalysisFilter(normalized),
-			Limit:  limit,
+			Limit:  callSearchLimit,
 		})
 		if err != nil {
 			return toolCallResult{}, err

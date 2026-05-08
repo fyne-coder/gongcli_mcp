@@ -464,9 +464,13 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		seedless := strings.TrimSpace(query) == "" && strings.TrimSpace(themeQuery) == ""
 		if seedless {
 			broadFilter := applyDefaultBroadThemeQualityFilters(normalized)
+			broadCallLimit := limit
+			if broadFilter.Limit == 0 {
+				broadCallLimit = s.limitPolicy.BusinessAnalysisLimit(defaultThemeIntelBootstrapCallScan)
+			}
 			broadCohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
 				Filter: sqliteBusinessAnalysisFilter(broadFilter),
-				Limit:  limit,
+				Limit:  broadCallLimit,
 			})
 			if err != nil {
 				return toolCallResult{}, err

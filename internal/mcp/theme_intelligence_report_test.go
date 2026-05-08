@@ -1175,6 +1175,34 @@ func TestFacadeAnalyzeThemesDiscoverSeedlessUsesAIBusinessBriefs(t *testing.T) {
 	}
 }
 
+func TestFacadeAnalyzeThemeIntelReportSeedlessLimitDoesNotStarveAIBriefScan(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+	)
+
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, themeIntelReportOpName, map[string]any{
+		"from_date": "2026-01-01",
+		"to_date":   "2026-06-30",
+		"limit":     1,
+	}))
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	source, _ := inner["ai_business_brief_source"].(map[string]any)
+	if got, _ := source["source_calls"].(float64); got <= 1 {
+		t.Fatalf("seedless bootstrap should scan beyond candidate limit; source_calls=%v source=%v inner=%v", got, source, inner)
+	}
+}
+
 func TestBusinessBriefCandidatePhrasesExtractsNonSeedBusinessThemes(t *testing.T) {
 	t.Parallel()
 
