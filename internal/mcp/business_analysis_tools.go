@@ -151,6 +151,12 @@ type businessAnalysisResponse struct {
 	TimeGrain         string                                `json:"time_grain,omitempty"`
 	FieldProfile      string                                `json:"field_profile,omitempty"`
 	SpeakerRoleFilter string                                `json:"speaker_role_filter,omitempty"`
+	EvidencePolicy    map[string]any                        `json:"evidence_policy,omitempty"`
+	EvidenceType      string                                `json:"evidence_type,omitempty"`
+	SpeakerSummary    map[string]int                        `json:"speaker_attribution_summary,omitempty"`
+	DataCaveats       []string                              `json:"data_readiness_caveats,omitempty"`
+	DimensionReady    map[string]string                     `json:"dimension_readiness,omitempty"`
+	AnswerContract    []string                              `json:"answer_contract,omitempty"`
 	Limit             int                                   `json:"limit"`
 	Count             int                                   `json:"count"`
 	Coverage          map[string]any                        `json:"coverage_summary,omitempty"`
@@ -652,6 +658,24 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if strings.TrimSpace(themeQuery) == "" && toolNeedsThemeQuery(params.Name) {
 		response.Warnings = append(response.Warnings, "theme_query_missing: returned cohort-level evidence or summaries without a theme-specific filter")
 	}
+	policy := defaultBusinessEvidencePolicy()
+	response.EvidencePolicy = policy.payload()
+	response.EvidenceType = businessEvidenceTypeForOperation(params.Name, response.Status == "ai_brief_candidate_terms" || response.Status == "candidate_terms_only")
+	if len(response.Results) > 0 {
+		response.SpeakerSummary = speakerAttributionSummaryFromItems(response.Results)
+	} else if len(response.Quotes) > 0 {
+		response.SpeakerSummary = speakerAttributionSummaryFromQuotes(response.Quotes)
+	}
+	response.DataCaveats = businessEvidenceDataReadinessCaveats(cohort.Summary)
+	response.DimensionReady = businessEvidenceDimensionReadiness(cohort.Summary)
+	response.Warnings = append(response.Warnings, response.DataCaveats...)
+	if response.SpeakerSummary["affiliation_missing"] > 0 || response.SpeakerSummary["unknown"] > 0 {
+		response.Warnings = append(response.Warnings, "speaker_attribution_unknown_present: unknown or affiliation_missing evidence must be described as unattributed evidence, not buyer speech")
+	}
+	if response.FieldProfile == fieldProfileLimited && len(response.AIBriefEvidence) > 0 {
+		response.Warnings = append(response.Warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text: field_profile=limited suppresses structured metadata, but Gong AI brief/keyPoint/highlight text may still contain names or customer terms")
+	}
+	response.AnswerContract = businessEvidenceAnswerContract(response.EvidenceType)
 	return newToolResult(response)
 }
 
@@ -776,14 +800,6 @@ func businessAnalysisFilterExcludesRow(filter callFilter, lifecycleBucket string
 		}
 	}
 	return false
-}
-
-func applyDefaultBroadThemeQualityFilters(filter callFilter) callFilter {
-	if len(filter.ExcludeLifecycleBuckets) == 0 && strings.TrimSpace(filter.LifecycleBucket) == "" {
-		filter.ExcludeLifecycleBuckets = []string{"outbound_prospecting"}
-	}
-	filter.ExcludeLikelyVoicemail = true
-	return filter
 }
 
 func (args businessAnalysisArgs) AccountQuery() string {

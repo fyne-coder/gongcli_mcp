@@ -1602,6 +1602,15 @@ func TestFacadeEvidenceCallDrilldownLimitedProfileSuppressesSpeakerRef(t *testin
 	if !strings.Contains(warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text") {
 		t.Fatalf("limited field_profile should warn AI evidence text is not redacted: %s", warnings)
 	}
+	if got, _ := inner["evidence_type"].(string); got != evidenceTypeTranscriptQuote {
+		t.Fatalf("evidence_type=%q want %s: %v", got, evidenceTypeTranscriptQuote, inner)
+	}
+	if _, ok := inner["evidence_policy"].(map[string]any); !ok {
+		t.Fatalf("call drilldown should include evidence_policy: %v", inner)
+	}
+	if summary, _ := inner["speaker_attribution_summary"].(map[string]any); summary["external"] == nil {
+		t.Fatalf("call drilldown should include speaker_attribution_summary: %v", summary)
+	}
 }
 
 func TestFacadeEvidenceCallDrilldownOmitsUnprovenRoleLimitationWhenSpeakerRoleAvailable(t *testing.T) {

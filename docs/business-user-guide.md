@@ -19,6 +19,11 @@ local database files. Those workflows stay with the pilot operator.
 - Business users interact with a host application connected to `gongmcp`.
 - `gongmcp` reads a reviewed cache/store: SQLite by default, or a supported
   Postgres reader role for shared deployments. It does not call Gong live.
+- For the `business-workbench` facade, every business-facing response should
+  be treated as evidence-assisted analysis. The host must inspect
+  `evidence_policy`, `evidence_type`, `answer_contract`,
+  `speaker_attribution_summary`, `dimension_readiness`, and
+  `data_readiness_caveats` before writing a final business answer.
 - `gongmcp` can enforce a reviewed server-side tool subset through
   `--tool-preset business-pilot`, `GONGMCP_TOOL_PRESET=business-pilot`, or a
   custom allowlist. In SQLite stdio mode, if no preset or allowlist is set,
@@ -110,29 +115,48 @@ inside `gongmcp`.
 
 ### Business Workbench Workflow
 
-For broad ad-hoc prompts, prefer the facade workflow instead of asking the host
-model to guess which narrow tool to use:
+For broad ad-hoc prompts, prefer the `business-workbench` facade workflow
+instead of asking the host model to guess which narrow tool to use. The
+host-assistant contract is documented in
+[Business Workbench Host Instructions](business-workbench-host-instructions.md).
 
-1. Start with `gong_analyze` operation `theme_intelligence_report` for the
-   chosen date range, lifecycle/stage, title query, industry, or persona
-   filter and a concrete `theme_query` such as `pricing`, `implementation
-   effort`, `manual order entry`, `ERP integration`, `punchout`, `security
-   review`, `timeline`, or `ROI`. Without `theme_query`, the report is
-   candidate-term guidance only.
-2. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
+1. For broad prompts such as "what are the main themes this quarter", start
+   with `gong_analyze` operation `question.answer`. It should return either
+   `needs_theme_seed` with suggested seeds or directional Gong AI condensed
+   candidate evidence. Do not let the host synthesize final themes from
+   seedless candidate terms alone.
+2. Run `gong_analyze` operation `theme_intelligence_report` with a concrete
+   `theme_query` such as `pricing`, `implementation effort`, `manual order
+   entry`, `ERP integration`, `punchout`, `security review`, `timeline`, or
+   `ROI`. The business policy excludes outbound prospecting and likely
+   voicemail/IVR by default and reports that policy in `evidence_policy`.
+3. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
    the source of truth for drill-down terms.
-3. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
+4. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
    operation `evidence.call_drilldown` exactly as returned. This avoids fuzzy
    synonym misses and gives both Gong-generated brief/key-point evidence and
    bounded transcript excerpts for the same call.
-4. Use `gong_analyze` operation `question.answer` for a final governed
-   evidence pack after the report has identified the strongest terms.
 5. For business-user objection and question discovery, prefer
    `gong_analyze` operations `extract.objection_signals` and
    `extract.buyer_questions`. They run seeded, external-speaker-first evidence
    searches over familiar topics such as pricing, implementation, security
    review, and timeline so a sales or marketing user does not need to know the
    lower-level quote tools.
+
+Use this evidence hierarchy in host answers:
+
+1. `verbatim_transcript_quote`: strongest support for customer-facing claims.
+2. `gong_ai_condensed_candidate`: useful for candidate themes and direction,
+   not a verbatim buyer quote.
+3. `dimension_rollup`: useful when `dimension_readiness` is `ready` or clearly
+   disclosed as `degraded_sparse`.
+4. Seedless candidates: suggestions for what to investigate next, not final
+   conclusions.
+
+If `speaker_role_status` is `affiliation_missing` or the
+`speaker_attribution_summary` counts evidence under `unknown`, call it
+unattributed transcript evidence. Do not write "buyers said" unless the
+returned evidence proves external speaker attribution.
 
 For synonym work, do not assume the server expands meanings semantically. Run
 separate explicit seeds such as `manual order entry`, `double entry`,
@@ -154,6 +178,18 @@ derivation metadata so the host's final answer can disclose what was searched.
 Explicit `query` or `theme_query` inputs are authoritative and are not retried
 or rewritten by this fallback path.
 
+Business-workbench release validation is deterministic. Operators should run
+the scripted GA harness before broad business rollout:
+
+```bash
+MCP_URL="https://<host>/mcp" \
+MCP_BEARER_TOKEN="<redacted>" \
+scripts/business-workbench-ga-harness.sh
+```
+
+Manual Claude or ChatGPT prompt loops are still useful for exploratory review,
+but they are not the release gate.
+
 ### Field Exposure Profiles
 
 Use `field_profile` when a business-user prompt should switch between a narrow
@@ -169,6 +205,12 @@ individual include flag:
 
 Policy switches still win. For example, `field_profile=full` cannot expose raw
 call IDs when `hide_raw_call_ids` is enabled.
+
+Field profiles control structured metadata fields. They do not redact names
+embedded inside transcript snippets or Gong AI brief/keyPoint/highlight text.
+When `field_profile=limited` returns AI condensed evidence, the host should
+surface the warning and avoid treating the payload as externally shareable
+unless a separate text-redaction layer is enabled.
 
 For a concise supported/caveated/blocked mapping of the SQLite-era question set
 to the reviewed Postgres pilot surface, see the

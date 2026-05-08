@@ -84,6 +84,17 @@ func TestFacadeQuestionAnswerGenericThemeQuestionNeedsSeed(t *testing.T) {
 	if got, _ := inner["status"].(string); got != "needs_theme_seed" {
 		t.Fatalf("status=%q want needs_theme_seed; inner=%v", got, inner)
 	}
+	policy, _ := inner["evidence_policy"].(map[string]any)
+	if got, _ := policy["default_speaker_role"].(string); got != speakerRoleExternalOrUnknown {
+		t.Fatalf("evidence_policy.default_speaker_role=%q want %s: %v", got, speakerRoleExternalOrUnknown, policy)
+	}
+	if got, _ := inner["evidence_type"].(string); got != evidenceTypeGongAICondensedCandidate {
+		t.Fatalf("evidence_type=%q want %s: %v", got, evidenceTypeGongAICondensedCandidate, inner)
+	}
+	readiness, _ := inner["dimension_readiness"].(map[string]any)
+	if readiness["loss_reason"] != "unavailable_unmapped" || readiness["methodology"] != "unavailable_unmapped" {
+		t.Fatalf("dimension_readiness should flag unmapped loss_reason/methodology: %v", readiness)
+	}
 	if got, _ := inner["evidence_count"].(float64); got != 0 {
 		t.Fatalf("evidence_count=%v want 0 for seed guidance payload; inner=%v", got, inner)
 	}
@@ -301,6 +312,12 @@ func TestFacadeExtractObjectionSignalsDefaultsToExternalOrUnknownEvidenceAndProf
 	if got, _ := inner["speaker_role_filter"].(string); got != speakerRoleExternalOrUnknown {
 		t.Fatalf("speaker_role_filter=%q want %s: %v", got, speakerRoleExternalOrUnknown, inner)
 	}
+	if got, _ := inner["evidence_type"].(string); got != evidenceTypeKeywordSynonym {
+		t.Fatalf("evidence_type=%q want %s: %v", got, evidenceTypeKeywordSynonym, inner)
+	}
+	if got := strings.ToLower(mustJSONText(t, inner["answer_contract"])); !strings.Contains(got, "keyword/synonym") || !strings.Contains(got, "unattributed") {
+		t.Fatalf("answer_contract should tell hosts how to describe deterministic and unknown evidence: %s", got)
+	}
 	buckets, _ := inner["buckets"].([]any)
 	if len(buckets) != 1 {
 		t.Fatalf("buckets len=%d want 1: %v", len(buckets), inner)
@@ -329,6 +346,13 @@ func TestFacadeExtractObjectionSignalsDefaultsToExternalOrUnknownEvidenceAndProf
 	}
 	if text := strings.ToLower(mustJSONText(t, evidence)); strings.Contains(text, "rep script") {
 		t.Fatalf("internal seller evidence leaked into external objection extraction: %s", text)
+	}
+	speakerSummary, _ := inner["speaker_attribution_summary"].(map[string]any)
+	if speakerSummary["unknown"] == nil || speakerSummary["affiliation_missing"] == nil {
+		t.Fatalf("speaker_attribution_summary should expose unknown/affiliation_missing counts: %v", speakerSummary)
+	}
+	if warnings := strings.ToLower(mustJSONText(t, inner["warnings"])); !strings.Contains(warnings, "unattributed evidence") {
+		t.Fatalf("warnings should tell hosts not to call unknown rows buyer speech: %s", warnings)
 	}
 }
 

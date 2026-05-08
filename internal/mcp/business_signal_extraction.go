@@ -118,6 +118,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	}
 	buckets := make([]businessSignalBucket, 0, len(topics))
 	totalEvidence := 0
+	allEvidence := make([]businessAnalysisItem, 0)
 	perTopicLimit := limit
 	if perTopicLimit > 5 {
 		perTopicLimit = 5
@@ -136,6 +137,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 			Quotes:          quotes,
 		}
 		totalEvidence += len(items)
+		allEvidence = append(allEvidence, items...)
 		buckets = append(buckets, bucket)
 	}
 	warnings := businessAnalysisWarnings(operation, normalized)
@@ -153,12 +155,13 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	if totalEvidence == 0 {
 		status = "no_seeded_evidence"
 	}
-	return newToolResult(map[string]any{
+	payload := map[string]any{
 		"operation":           operation,
 		"status":              status,
 		"searched_scope":      normalized,
 		"field_profile":       baArgs.FieldProfile,
 		"speaker_role_filter": speakerRole,
+		"evidence_type":       evidenceTypeKeywordSynonym,
 		"extraction_mode":     "seeded_topic_evidence",
 		"topics":              topics,
 		"coverage_summary":    businessAnalysisCoverageFromSummary(cohort.Summary),
@@ -174,7 +177,9 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 			"Rerun with the strongest topic as theme_query in theme_intelligence_report.",
 			"Use evidence.call_drilldown on returned call_ref values for exact call context.",
 		},
-	})
+	}
+	addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceTypeKeywordSynonym, &cohort.Summary, baArgs.FieldProfile, false, speakerAttributionSummaryFromItems(allEvidence))
+	return newToolResult(payload)
 }
 
 func (s *Server) businessAnalysisEvidenceForTopicQueries(ctx context.Context, filter callFilter, queries []string, limit int, args businessAnalysisArgs) ([]businessAnalysisItem, []businessAnalysisQuote, error) {

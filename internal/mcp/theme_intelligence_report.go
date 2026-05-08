@@ -168,6 +168,8 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	if err != nil {
 		return toolCallResult{}, err
 	}
+	policy := defaultBusinessEvidencePolicy()
+	normalized = policy.applyFilter(normalized)
 	if !businessAnalysisFilterIsSelective(normalized) {
 		return toolCallResult{}, fmt.Errorf("%s requires a selective filter such as date range, quarter, title_query, query, industry, opportunity_stage, crm_object_id, participant_title_query, or lifecycle_bucket", OpThemeIntelReport)
 	}
@@ -361,6 +363,9 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	if broadDiscovery {
 		warnings = append(warnings,
 			"broad_discovery_ai_brief_first: no theme_query was provided, so candidate themes were ranked from Gong AI brief/keyPoint/highlight rows after excluding noisy lifecycle/voicemail calls. Rerun theme_intelligence_report with a chosen theme_query for buyer transcript quotes.")
+		if len(themeCandidates) == 0 {
+			warnings = append(warnings, "broad_discovery_no_business_like_candidates: no Gong AI brief/keyPoint/highlight candidate themes survived the business evidence policy; rerun with a suggested theme_query")
+		}
 	}
 	if loss, ok := lossSummary["status"].(string); ok && loss == "loss_reason_not_populated" {
 		limitations = append(limitations, "loss_reason_not_populated")
@@ -375,6 +380,9 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		warnings = append(warnings, "empty_cohort: no calls matched the normalized filter")
 	} else if broadDiscovery {
 		status = "ai_brief_candidate_themes"
+		if len(themeCandidates) == 0 {
+			status = "needs_theme_seed"
+		}
 	}
 
 	// Truncation accounting. The dimension paths apply their own caps; we
@@ -441,6 +449,15 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 			"max_outreach_seq_inputs": maxThemeIntelReportOutreachInputs,
 		},
 	}
+	evidenceType := evidenceTypeTranscriptQuote
+	if broadDiscovery {
+		evidenceType = evidenceTypeGongAICondensedCandidate
+	}
+	allQuoteRows := make([]themeIntelReportQuoteRow, 0)
+	for _, rows := range quoteRowsByTheme {
+		allQuoteRows = append(allQuoteRows, rows...)
+	}
+	addBusinessEvidenceMetadata(payload, policy, evidenceType, &cohort.Summary, args.FieldProfile, len(aiBriefSummary.EvidenceByTheme) > 0, speakerAttributionSummaryFromThemeQuotes(allQuoteRows))
 	return newToolResult(payload)
 }
 

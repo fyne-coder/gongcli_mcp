@@ -995,7 +995,7 @@ func questionAnswerRecommendedOperations() []map[string]string {
 func questionAnswerNeedsThemeSeedPayload(question string, args questionAnswerArgs, normalized callFilter, speakerRoleFilter string, limit int, cohort *sqlite.BusinessAnalysisCallSearchResult, derivationMeta map[string]any, warnings []string) map[string]any {
 	derivationMeta["outcome"] = "no_specific_theme_seed"
 	derivationMeta["guidance"] = "The question was broad enough that the derived search terms were generic business words. Pick one seed topic, then run a seeded report."
-	return map[string]any{
+	payload := map[string]any{
 		"operation":              OpQuestionAnswer,
 		"status":                 "needs_theme_seed",
 		"question":               question,
@@ -1022,6 +1022,7 @@ func questionAnswerNeedsThemeSeedPayload(question string, args questionAnswerArg
 		"suggested_followups":    []string{"Run theme_intelligence_report with theme_query=\"manual order entry\".", "Run theme_intelligence_report with theme_query=\"pricing\".", "Run extract.buyer_questions for pricing, implementation, integration, security, support, and timeline.", "Run extract.objection_signals for pricing, timeline, security review, ROI, IT bandwidth, and integration risk."},
 		"plain_language_message": "This is a broad theme-discovery question. I did not find a specific topic seed in the wording, so I am returning guidance instead of quotes that only match generic words.",
 	}
+	return addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceTypeGongAICondensedCandidate, &cohort.Summary, args.FieldProfile, false, nil)
 }
 
 type questionAnswerArgs struct {
@@ -1145,7 +1146,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	}
 	if cohort.Summary.CallCount == 0 {
 		warnings = append(warnings, "empty_cohort: no calls matched the normalized filter")
-		return newToolResult(map[string]any{
+		payload := map[string]any{
 			"operation":              OpQuestionAnswer,
 			"status":                 "empty_cohort",
 			"question":               question,
@@ -1169,7 +1170,9 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 			"theme_query_derivation": derivationMeta,
 			"suggested_followups":    []string{"Widen the date range.", "Remove or relax lifecycle, stage, industry, account, or transcript_status filters.", "Run gong_status to confirm cache coverage before retrying."},
 			"plain_language_message": "No calls matched the filter, so I am returning an empty-cohort status instead of suggesting theme seeds or quote evidence.",
-		})
+		}
+		addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), "", &cohort.Summary, args.FieldProfile, false, nil)
+		return newToolResult(payload)
 	}
 	if strings.TrimSpace(evidenceQuery) == "" {
 		broadFilter := applyDefaultBroadThemeQualityFilters(normalized)
@@ -1191,7 +1194,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		derivationMeta["outcome"] = "ai_business_brief_theme_candidates"
 		derivationMeta["source"] = "gong_ai_brief_keypoints_highlights"
 		warnings = append(warnings, "question_answer_ai_brief_first: broad theme question answered from Gong AI brief/keyPoint/highlight candidates after excluding noisy lifecycle/voicemail calls; rerun theme_intelligence_report with a chosen theme_query for buyer transcript quotes.")
-		return newToolResult(map[string]any{
+		payload := map[string]any{
 			"operation":                           OpQuestionAnswer,
 			"status":                              "ai_brief_theme_candidates_ready",
 			"question":                            question,
@@ -1224,7 +1227,9 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 			"recommended_operations": questionAnswerRecommendedOperations(),
 			"suggested_followups":    []string{"Run theme_intelligence_report with the top theme_query from theme_candidates.", "Run extract.buyer_questions for the top three candidate themes.", "Use evidence.call_drilldown on a call_ref from ai_business_brief_evidence_by_theme for a bounded call brief."},
 			"plain_language_message": "I found broad theme candidates from Gong AI business briefs after filtering out outbound-prospecting and likely voicemail calls. Treat these as directional themes, then pick a theme_query for verbatim buyer quotes.",
-		})
+		}
+		addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceTypeGongAICondensedCandidate, &broadCohort.Summary, args.FieldProfile, true, nil)
+		return newToolResult(payload)
 	}
 	baArgs := businessAnalysisArgs{
 		Filter:              normalized,
@@ -1315,6 +1320,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		"theme_query_derivation": derivationMeta,
 		"suggested_followups":    questionAnswerFollowups(args.OutputIntent),
 	}
+	addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceTypeTranscriptQuote, &cohort.Summary, args.FieldProfile, false, speakerAttributionSummaryFromItems(items))
 	return newToolResult(payload)
 }
 
@@ -1904,6 +1910,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"drilldown_truncated":          transcriptTruncated || highlightTruncated,
 		"theme_query":                  themeQuery,
 	}
+	addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceTypeTranscriptQuote, nil, args.FieldProfile, len(aiRows) > 0, speakerAttributionSummaryFromCallDrilldown(transcriptOut))
 	return newToolResult(payload)
 }
 
