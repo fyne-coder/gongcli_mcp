@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/gaacceptance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 )
@@ -18,7 +20,7 @@ import (
 func (a *app) mcp(ctx context.Context, args []string) error {
 	_ = ctx
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl mcp [tools|tool-info|postgres-reader-sql|postgres-reader-apply]")
+		fmt.Fprintln(a.err, "usage: gongctl mcp [tools|tool-info|postgres-reader-sql|postgres-reader-apply|ga-acceptance]")
 		return errUsage
 	}
 
@@ -49,6 +51,8 @@ func (a *app) mcp(ctx context.Context, args []string) error {
 		return a.mcpPostgresReaderSQL(args[1:])
 	case "postgres-reader-apply":
 		return a.mcpPostgresReaderApply(ctx, args[1:])
+	case "ga-acceptance":
+		return a.mcpGAAcceptance(args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown mcp command %q\n", args[0])
 		return errUsage
@@ -153,4 +157,56 @@ func (a *app) mcpPostgresReaderApply(ctx context.Context, args []string) error {
 		CredentialNote: "database_url_not_exported",
 		RoleNote:       "existing_role_only_passwords_managed_externally",
 	})
+}
+
+// mcpGAAcceptance evaluates a pre-collected probe bundle against the GA
+// customer-acceptance contract for a `business-workbench` Postgres MCP
+// deployment and emits a non-secret JSON report plus an optional Markdown
+// operator summary. The driver (e.g. scripts/postgres-ga-acceptance-smoke.sh)
+// is responsible for collecting probes from a live MCP endpoint and feeding
+// them in as a single JSON document on stdin or via --probes <file>.
+func (a *app) mcpGAAcceptance(args []string) error {
+	flags := flag.NewFlagSet("gongctl mcp ga-acceptance", flag.ContinueOnError)
+	flags.SetOutput(a.err)
+	probesPath := flags.String("probes", "-", "path to the probe-bundle JSON document; '-' reads stdin")
+	summaryPath := flags.String("summary", "", "optional path to write the operator-facing Markdown summary")
+	if err := flags.Parse(args); err != nil {
+		return errUsage
+	}
+	if flags.NArg() != 0 {
+		return errUsage
+	}
+
+	var raw []byte
+	var err error
+	switch strings.TrimSpace(*probesPath) {
+	case "", "-":
+		raw, err = io.ReadAll(os.Stdin)
+	default:
+		raw, err = os.ReadFile(*probesPath)
+	}
+	if err != nil {
+		return fmt.Errorf("read probe bundle: %w", err)
+	}
+	var bundle gaacceptance.ProbeBundle
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		return fmt.Errorf("parse probe bundle JSON: %w", err)
+	}
+	report, err := gaacceptance.Evaluate(bundle)
+	if err != nil {
+		return fmt.Errorf("evaluate probe bundle: %w", err)
+	}
+	if err := writeJSONValue(a.out, report); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*summaryPath) != "" {
+		md := gaacceptance.RenderOperatorMarkdown(report)
+		if err := writeOutput(*summaryPath, a.out, []byte(md)); err != nil {
+			return fmt.Errorf("write operator summary: %w", err)
+		}
+	}
+	if report.Status == gaacceptance.StatusFail {
+		return fmt.Errorf("ga-acceptance status=fail")
+	}
+	return nil
 }

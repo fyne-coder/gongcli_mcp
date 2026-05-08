@@ -271,6 +271,28 @@ The smoke should prove:
 - retained artifacts do not contain DB URLs, secrets, raw IDs, restricted
   values, or transcript text
 
+Then run the GA customer-acceptance smoke against the deployed MCP endpoint
+to produce a non-secret pass/degraded/fail acceptance artifact for the pilot
+record:
+
+```bash
+MCP_URL="https://mcp.example.com/mcp" \
+MCP_BEARER_TOKEN="$REVIEWED_BEARER_TOKEN" \
+READER_DB_URL="$GONGMCP_ANALYST_READER_URL" \
+KEEP_ARTIFACTS=1 \
+ARTIFACT_DIR=./ga-acceptance-evidence \
+scripts/postgres-ga-acceptance-smoke.sh
+```
+
+The smoke validates seven contracts (runtime identity, six-tool surface,
+routed operations, data readiness, governance/redaction, evidence workflow,
+and scoped-reader read-only posture) and emits both a JSON report and an
+operator Markdown summary. The script exits 0 on `pass` or `degraded` (the
+JSON status field carries the distinction) and exits 1 on `fail`. See
+[Postgres client onboarding checklist §7](../postgres-client-onboarding-checklist.md)
+for what each status means and how to record the result in the pilot
+closeout.
+
 Then run the manual business-user checklist:
 
 - [Postgres client manual-test checklist](../postgres-client-manual-test-checklist.md)

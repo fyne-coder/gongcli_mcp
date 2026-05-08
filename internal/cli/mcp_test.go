@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -371,5 +373,173 @@ func TestMCPPostgresReaderApplySuccessJSONOmitsURL(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr not empty: %q", stderr.String())
+	}
+}
+
+const gaAcceptancePassBundle = `{
+  "status": {
+    "mcp_server": {
+      "name": "gongmcp",
+      "version": "0.3.4",
+      "commit": "abcdef0",
+      "tool_preset": "business-workbench",
+      "deployment_id": "ga-acceptance-cli-fixture",
+      "started_at_utc": "2026-05-07T20:00:00Z",
+      "tool_count": 6,
+      "facade_routed_tool_count": 30,
+      "transcript_evidence_provenance": "redacted",
+      "policy_switches": {
+        "hide_account_names": false,
+        "hide_call_titles": true,
+        "hide_raw_call_ids": true,
+        "hide_contact_names": true
+      },
+      "policy_switch_reload_contract": "restart-required"
+    },
+    "total_calls": 4803,
+    "total_transcripts": 4803,
+    "total_scorecards": 4,
+    "total_ai_highlights": 4500,
+    "missing_transcripts": 0,
+    "call_facts_attribution": {"has_any_attribution_signal": true},
+    "profile_readiness": {
+      "active": true,
+      "status": "ready",
+      "checklist": {
+        "computed": true,
+        "lifecycle_rules_missing": false,
+        "methodology_unmapped": false,
+        "loss_reason_mapping_missing": false
+      }
+    },
+    "public_readiness": {
+      "transcript_coverage": {"ready": true, "status": "ready", "detail": "synthetic"},
+      "scorecard_themes": {"ready": true, "status": "ready", "detail": "synthetic"},
+      "lifecycle_separation": {"ready": true, "status": "ready", "detail": "synthetic"},
+      "crm_segmentation": {"ready": true, "status": "ready", "detail": "synthetic"},
+      "attribution_readiness": {"ready": true, "status": "ready", "detail": "synthetic"}
+    }
+  },
+  "tools_list": [
+    "gong_status",
+    "gong_discover_capabilities",
+    "gong_query",
+    "gong_analyze",
+    "gong_get_evidence",
+    "gong_explain_limitations"
+  ],
+  "facade_operations": [
+    {"operation": "status.sync", "facade_tool": "gong_status", "routed_tool": "get_sync_status"},
+    {"operation": "question.answer", "facade_tool": "gong_analyze", "routed_tool": "question_answer"},
+    {"operation": "theme_intelligence_report", "facade_tool": "gong_analyze", "routed_tool": "theme_intelligence_report"},
+    {"operation": "evidence.quotes.search", "facade_tool": "gong_get_evidence", "routed_tool": "search_quotes_in_cohort"},
+    {"operation": "evidence.highlights.list", "facade_tool": "gong_get_evidence", "routed_tool": "list_call_ai_highlights"},
+    {"operation": "evidence.call_drilldown", "facade_tool": "gong_get_evidence", "routed_tool": "call_drilldown"}
+  ],
+  "question_answer": {
+    "question": "synthetic prompt",
+    "evidence_pack_present": true,
+    "call_refs": ["call_ref_synthetic_aaa1"],
+    "item_count": 5
+  },
+  "call_drilldown": {
+    "call_ref": "call_ref_synthetic_aaa1",
+    "bounded_snippet_count": 3,
+    "gong_ai_source_path_count": 1,
+    "snippets_scoped_to_call": true
+  },
+  "account_query_without_opt_in": {
+    "is_error": true,
+    "error": "account_query requires include_account_names=true because it can probe customer names"
+  },
+  "account_query_with_opt_in": {"is_error": false, "row_count": 2},
+  "raw_call_ids_hidden": true,
+  "redaction_audit": {"available": true, "source_minus_redacted_rows": 0, "generated_at": "2026-05-07T18:00:00Z"},
+  "read_only_posture": {
+    "provided": true,
+    "write_denied": true,
+    "write_denial_detail": "permission denied for relation calls",
+    "raw_table_read_denied": true,
+    "raw_table_read_detail": "permission denied for relation calls_raw"
+  }
+}`
+
+func TestMCPGAAcceptancePassFromFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	probesPath := filepath.Join(dir, "probes.json")
+	if err := os.WriteFile(probesPath, []byte(gaAcceptancePassBundle), 0o600); err != nil {
+		t.Fatalf("write probes: %v", err)
+	}
+	summaryPath := filepath.Join(dir, "summary.md")
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"mcp", "ga-acceptance",
+		"--probes", probesPath,
+		"--summary", summaryPath,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(mcp ga-acceptance) code=%d stderr=%q", code, stderr.String())
+	}
+	body := stdout.String()
+	for _, want := range []string{
+		`"status": "pass"`,
+		`"deployment_id": "ga-acceptance-cli-fixture"`,
+		`"tool_preset": "business-workbench"`,
+		`"id": "runtime_identity"`,
+		`"id": "tool_surface"`,
+		`"id": "routed_operations"`,
+		`"id": "data_readiness"`,
+		`"id": "governance_redaction"`,
+		`"id": "evidence_workflow"`,
+		`"id": "read_only_posture"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("ga-acceptance JSON missing %q\n%s", want, body)
+		}
+	}
+	summary, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	for _, want := range []string{
+		"GA Customer Acceptance Smoke",
+		"overall_status: **pass**",
+		"ga-acceptance-cli-fixture",
+	} {
+		if !strings.Contains(string(summary), want) {
+			t.Fatalf("summary markdown missing %q\n%s", want, string(summary))
+		}
+	}
+}
+
+func TestMCPGAAcceptanceFailExitsNonZero(t *testing.T) {
+	t.Parallel()
+
+	// Mutate the pass bundle to drop one required facade tool, forcing fail.
+	bundle := strings.Replace(
+		gaAcceptancePassBundle,
+		`"gong_explain_limitations"`,
+		`"placeholder_filler_to_keep_tool_count_visible"`,
+		1,
+	)
+	dir := t.TempDir()
+	probesPath := filepath.Join(dir, "probes.json")
+	if err := os.WriteFile(probesPath, []byte(bundle), 0o600); err != nil {
+		t.Fatalf("write probes: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"mcp", "ga-acceptance",
+		"--probes", probesPath,
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("Run(mcp ga-acceptance fail) code=%d want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"status": "fail"`) {
+		t.Fatalf("expected fail status in JSON output\n%s", stdout.String())
 	}
 }

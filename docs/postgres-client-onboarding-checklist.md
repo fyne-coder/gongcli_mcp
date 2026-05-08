@@ -118,7 +118,62 @@ Postgres service class with synthetic or approved non-production data:
 
 Stop if the dry run is not reviewed and signed off.
 
-## 7. Connect The First Business User
+## 7. Run The GA Customer Acceptance Smoke
+
+Before connecting any business user, run the single GA acceptance command
+against the deployed MCP endpoint. The smoke is read-only and produces a
+non-secret JSON report plus an operator Markdown summary:
+
+```bash
+MCP_URL="https://mcp.example.com/mcp" \
+MCP_BEARER_TOKEN="$REVIEWED_BEARER_TOKEN" \
+READER_DB_URL="$GONGMCP_ANALYST_READER_URL" \
+KEEP_ARTIFACTS=1 \
+ARTIFACT_DIR=./ga-acceptance-evidence \
+scripts/postgres-ga-acceptance-smoke.sh
+```
+
+The smoke validates seven contracts and reports each as `pass`, `degraded`, or
+`fail`:
+
+1. `runtime_identity` — `deployment_id`, version/commit, `started_at_utc`,
+   `tool_preset`, and visible tool count are present in `gong_status`.
+2. `tool_surface` — exactly the six business-workbench facade tools are
+   visible to MCP clients.
+3. `routed_operations` — `question.answer`, `theme_intelligence_report`,
+   `evidence.quotes.search`, `evidence.highlights.list`, and
+   `evidence.call_drilldown` are advertised by `gong_discover_capabilities`.
+4. `data_readiness` — transcript coverage, profile readiness checklist
+   (lifecycle, methodology, loss-reason mapping), call-facts attribution
+   signals, AI highlight inventory, and scorecard inventory are populated.
+5. `governance_redaction` — raw call IDs are hidden, `account_query` without
+   `include_account_names=true` fails closed, `account_query` with the opt-in
+   succeeds, and source-minus-redacted audit evidence (when supplied) is
+   recorded.
+6. `evidence_workflow` — `question.answer` returns an evidence pack and one
+   returned `call_ref` flows into `evidence.call_drilldown` to retrieve
+   bounded transcript snippets plus Gong AI source paths.
+7. `read_only_posture` — when `READER_DB_URL` is supplied, the scoped MCP
+   role cannot write and cannot read raw source-only tables.
+
+Status meaning:
+
+- **pass** — all contracts satisfied; the deployment is ready for the first
+  business-user session.
+- **degraded** — the deployment is usable but missing optional probes or
+  partial readiness (no AI highlights yet, no `READER_DB_URL` supplied,
+  source-minus-redacted audit not yet generated). Record the degraded reasons
+  in the closeout. Operator should still review before connecting business
+  users.
+- **fail** — the deployment is not ready; rerun after the failing check is
+  remediated.
+
+The smoke binary exits 0 on `pass` and `degraded` (the JSON status field
+distinguishes them) and exits 1 on `fail`. Retain the JSON report and
+Markdown summary in the pilot record. The smoke never writes secrets,
+database URLs, or raw transcripts to artifacts.
+
+## 8. Connect The First Business User
 
 - Start with `business-workbench` unless the sponsor approved trained analyst
   workflows.
@@ -128,7 +183,7 @@ Stop if the dry run is not reviewed and signed off.
 - Escalate stale cache, missing tools, unexpected raw identifiers, or
   suppression warnings the user does not understand back to the operator.
 
-## 8. Record Closeout
+## 9. Record Closeout
 
 For the pilot record, save:
 
@@ -138,7 +193,9 @@ For the pilot record, save:
   provenance
 - enabled preset and role name, not passwords or URLs
 - sync scope and date window
-- smoke command names and reviewed evidence paths
+- smoke command names and reviewed evidence paths, including the GA
+  acceptance smoke JSON report and Markdown summary plus its overall status
+  and any degraded reasons
 - rollback artifact location
 - open limitations and next review date
 

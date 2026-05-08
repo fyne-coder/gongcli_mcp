@@ -137,6 +137,7 @@ func (a *app) usage() {
   gongctl mcp tool-info NAME
   gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE --database DB
   gongctl mcp postgres-reader-apply --preset business-pilot --role ROLE --database DB [--dry-run|--apply]
+  gongctl mcp ga-acceptance [--probes <file>|-] [--summary <file>]
   gongctl search transcripts --db gong.db --query TEXT [--limit N]
   gongctl search calls --db gong.db [--crm-object-type TYPE] [--crm-object-id ID] [--limit N]
   gongctl calls list --from YYYY-MM-DD --to YYYY-MM-DD [--context none|extended] [--out calls.json] [--allow-sensitive-export]
