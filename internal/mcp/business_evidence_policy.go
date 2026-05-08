@@ -216,8 +216,16 @@ func ratio(count int64, total int64) float64 {
 
 func speakerAttributionSummaryFromItems(items []businessAnalysisItem) map[string]int {
 	summary := newSpeakerAttributionSummary()
+	seenAttributionFields := false
 	for _, item := range items {
+		if strings.TrimSpace(item.SpeakerRole) == "" && strings.TrimSpace(item.SpeakerRoleStatus) == "" {
+			continue
+		}
+		seenAttributionFields = true
 		addSpeakerAttribution(summary, item.SpeakerRole, item.SpeakerRoleStatus)
+	}
+	if !seenAttributionFields {
+		return nil
 	}
 	return summary
 }

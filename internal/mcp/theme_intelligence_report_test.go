@@ -294,6 +294,7 @@ func newSeededThemeIntelReportStore(t *testing.T) *fakeThemeIntelReportStore {
 			"call_theme_q1_won_001": {
 				{CallID: "call_theme_q1_won_001", HighlightIndex: 0, HighlightType: "brief", HighlightText: "Procurement is anchored on manual order entry pain.", SourcePath: "content.brief", UpdatedAt: stamp},
 				{CallID: "call_theme_q1_won_001", HighlightIndex: 1, HighlightType: "key_point", HighlightText: "Manual order entry will be replaced as part of rollout.", SourcePath: "content.keyPoints", UpdatedAt: stamp},
+				{CallID: "call_theme_q1_won_001", HighlightIndex: 2, HighlightType: "key_point", HighlightText: "BigCommerce migration and Oracle Fusion storefront readiness are driving the discovery agenda.", SourcePath: "content.keyPoints", UpdatedAt: stamp},
 			},
 			"call_theme_q1_lost_002": {
 				{CallID: "call_theme_q1_lost_002", HighlightIndex: 0, HighlightType: "brief", HighlightText: "Pricing dominated the conversation; pain acknowledged.", SourcePath: "content.brief", UpdatedAt: stamp},
@@ -1108,6 +1109,9 @@ func TestFacadeAnalyzeThemeIntelReportSeedlessUsesAIBusinessBriefs(t *testing.T)
 	if !strings.Contains(candidates, "manual order entry") {
 		t.Fatalf("AI brief candidates missing manual order entry: %s", candidates)
 	}
+	if !strings.Contains(candidates, "bigcommerce migration") {
+		t.Fatalf("AI brief bootstrap should include dynamic non-seed phrase bigcommerce migration: %s", candidates)
+	}
 	aiEvidence, _ := inner["ai_business_brief_evidence_by_theme"].(map[string]any)
 	if len(aiEvidence) == 0 {
 		t.Fatalf("ai_business_brief_evidence_by_theme empty: %v", inner)
@@ -1162,9 +1166,24 @@ func TestFacadeAnalyzeThemesDiscoverSeedlessUsesAIBusinessBriefs(t *testing.T) {
 	if !strings.Contains(candidates, "manual order entry") {
 		t.Fatalf("AI brief discover candidates missing manual order entry: %s", candidates)
 	}
+	if !strings.Contains(candidates, "bigcommerce migration") {
+		t.Fatalf("AI brief discover should include dynamic non-seed phrase bigcommerce migration: %s", candidates)
+	}
 	rendered := strings.ToLower(result.Content[0].Text)
 	if strings.Contains(rendered, "please leave a detailed message") || strings.Contains(rendered, "after the tone") {
 		t.Fatalf("seedless AI brief discovery included voicemail boilerplate:\n%s", result.Content[0].Text)
+	}
+}
+
+func TestBusinessBriefCandidatePhrasesExtractsNonSeedBusinessThemes(t *testing.T) {
+	t.Parallel()
+
+	phrases := businessBriefCandidatePhrases("BigCommerce migration and Oracle Fusion storefront readiness are driving preferred vendor urgency.")
+	got := strings.ToLower(mustJSONText(t, phrases))
+	for _, want := range []string{"bigcommerce migration", "oracle fusion", "preferred vendor"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("candidate phrases missing %q: %s", want, got)
+		}
 	}
 }
 

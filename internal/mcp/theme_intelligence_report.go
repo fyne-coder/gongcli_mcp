@@ -649,15 +649,19 @@ func filterThemeIntelCohortRows(rows []sqlite.BusinessAnalysisCallRow, filter ca
 }
 
 func (s *Server) aiBusinessBriefThemeSummary(ctx context.Context, rows []sqlite.BusinessAnalysisCallRow, includeRaw bool, limit int) (aiBusinessBriefThemeSummary, error) {
-	return s.aiBusinessBriefThemeSummaryForSeeds(ctx, rows, includeRaw, limit, questionAnswerSuggestedSeedTopics())
+	return s.aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx, rows, includeRaw, limit, questionAnswerSuggestedSeedTopics(), true)
 }
 
 func (s *Server) aiBusinessBriefThemeSummaryForSeeds(ctx context.Context, rows []sqlite.BusinessAnalysisCallRow, includeRaw bool, limit int, seedTopics []string) (aiBusinessBriefThemeSummary, error) {
+	return s.aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx, rows, includeRaw, limit, seedTopics, false)
+}
+
+func (s *Server) aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx context.Context, rows []sqlite.BusinessAnalysisCallRow, includeRaw bool, limit int, seedTopics []string, includeDynamicBootstrap bool) (aiBusinessBriefThemeSummary, error) {
 	if limit <= 0 {
 		limit = maxThemeIntelReportThemes
 	}
 	seedTopics = normalizeBusinessSignalQueries(seedTopics, maxBusinessSignalTopics)
-	if len(seedTopics) == 0 {
+	if len(seedTopics) == 0 && !includeDynamicBootstrap {
 		return aiBusinessBriefThemeSummary{EvidenceByTheme: map[string][]themeIntelReportAIRow{}}, nil
 	}
 	callIDs := make([]string, 0, len(rows))
@@ -707,6 +711,28 @@ func (s *Server) aiBusinessBriefThemeSummaryForSeeds(ctx context.Context, rows [
 				evidence[seed] = append(evidence[seed], ai)
 			}
 		}
+		if includeDynamicBootstrap {
+			for _, phrase := range businessBriefCandidatePhrases(text) {
+				if callSupport[phrase] == nil {
+					callSupport[phrase] = map[string]struct{}{}
+				}
+				callSupport[phrase][row.CallID] = struct{}{}
+				ai := themeIntelReportAIRow{
+					CallRef:        sqlite.StableCallRef(row.CallID),
+					HighlightIndex: row.HighlightIndex,
+					HighlightType:  row.HighlightType,
+					HighlightText:  row.HighlightText,
+					SourcePath:     row.SourcePath,
+					UpdatedAt:      row.UpdatedAt,
+				}
+				if includeRaw {
+					ai.CallID = row.CallID
+				}
+				if len(evidence[phrase]) < maxThemeIntelReportQuotesPerTheme {
+					evidence[phrase] = append(evidence[phrase], ai)
+				}
+			}
+		}
 	}
 	type scored struct {
 		theme string
@@ -744,6 +770,131 @@ func (s *Server) aiBusinessBriefThemeSummaryForSeeds(ctx context.Context, rows [
 		SourceCallCount: len(callIDs),
 		SourceRowCount:  len(highlights),
 	}, nil
+}
+
+func businessBriefCandidatePhrases(text string) []string {
+	normalized := strings.ToLower(text)
+	patterns := []string{
+		"manual order entry",
+		"manual process",
+		"manual invoice",
+		"manual invoicing",
+		"manual data entry",
+		"order accuracy",
+		"pricing structure",
+		"pricing model",
+		"implementation timeline",
+		"implementation cost",
+		"integration timeline",
+		"integration complexity",
+		"erp integration",
+		"ecommerce integration",
+		"e-commerce integration",
+		"supplier onboarding",
+		"security review",
+		"compliance review",
+		"customer demand",
+		"customer-driven urgency",
+		"preferred vendor",
+		"lost business",
+		"punchout",
+		"punch out",
+		"bigcommerce migration",
+		"bigcommerce",
+		"oracle fusion",
+		"sap business network",
+		"sap s/4hana",
+		"shopify",
+		"coupa",
+		"ariba",
+		"jaggaer",
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 8)
+	add := func(phrase string) {
+		phrase = strings.TrimSpace(strings.ReplaceAll(phrase, "e-commerce", "ecommerce"))
+		if len(phrase) < 4 {
+			return
+		}
+		if _, ok := seen[phrase]; ok {
+			return
+		}
+		seen[phrase] = struct{}{}
+		out = append(out, phrase)
+	}
+	for _, phrase := range patterns {
+		if strings.Contains(normalized, phrase) {
+			add(phrase)
+		}
+	}
+
+	tokens := businessBriefThemeTokens(normalized)
+	anchors := map[string]struct{}{
+		"ariba": {}, "automation": {}, "bigcommerce": {}, "budget": {}, "catalog": {}, "catalogs": {},
+		"compliance": {}, "coupa": {}, "ecommerce": {}, "integration": {}, "jaggaer": {}, "migration": {},
+		"oracle": {}, "pricing": {}, "procurement": {}, "punchout": {}, "quote": {}, "quotes": {},
+		"roi": {}, "rollout": {}, "security": {}, "shopify": {}, "supplier": {}, "timeline": {},
+	}
+	for n := 3; n >= 2; n-- {
+		for i := 0; i+n <= len(tokens); i++ {
+			window := tokens[i : i+n]
+			hasAnchor := false
+			for _, token := range window {
+				if _, ok := anchors[token]; ok {
+					hasAnchor = true
+					break
+				}
+			}
+			if !hasAnchor {
+				continue
+			}
+			add(strings.Join(window, " "))
+			if len(out) >= 12 {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func businessBriefThemeTokens(text string) []string {
+	stop := map[string]struct{}{
+		"about": {}, "after": {}, "again": {}, "along": {}, "also": {}, "and": {}, "are": {}, "because": {},
+		"been": {}, "being": {}, "brief": {}, "call": {}, "calls": {}, "can": {}, "could": {}, "customer": {},
+		"customers": {}, "discussed": {}, "from": {}, "have": {}, "into": {}, "meeting": {}, "more": {},
+		"need": {}, "needs": {}, "only": {}, "part": {}, "prospect": {}, "prospects": {}, "really": {},
+		"reviewed": {}, "some": {}, "that": {}, "their": {}, "them": {}, "then": {}, "there": {}, "these": {},
+		"they": {}, "this": {}, "through": {}, "very": {}, "what": {}, "where": {}, "when": {}, "with": {},
+		"would": {}, "your": {},
+		"actually": {}, "doing": {}, "fine": {}, "gonna": {}, "good": {}, "great": {}, "guys": {},
+		"hello": {}, "just": {}, "know": {}, "like": {}, "okay": {}, "perfect": {}, "right": {}, "sorry": {},
+		"thank": {}, "thanks": {}, "today": {}, "yeah": {},
+	}
+	tokens := make([]string, 0)
+	var token strings.Builder
+	flush := func() {
+		value := token.String()
+		token.Reset()
+		if len(value) < 3 {
+			return
+		}
+		if _, ok := stop[value]; ok {
+			return
+		}
+		tokens = append(tokens, value)
+	}
+	for _, r := range text {
+		switch {
+		case r >= 'a' && r <= 'z':
+			token.WriteRune(r)
+		case r >= '0' && r <= '9':
+			token.WriteRune(r)
+		default:
+			flush()
+		}
+	}
+	flush()
+	return tokens
 }
 
 func businessBriefMatchesTopic(text string, seed string) bool {

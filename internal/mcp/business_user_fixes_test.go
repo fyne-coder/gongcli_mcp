@@ -201,6 +201,25 @@ func TestDiversifyBusinessAnalysisItemsByCallCapsSingleCallDominance(t *testing.
 	}
 }
 
+func TestSpeakerAttributionSummarySkipsCallRowsWithoutSpeakerFields(t *testing.T) {
+	t.Parallel()
+
+	if got := speakerAttributionSummaryFromItems([]businessAnalysisItem{
+		{CallRef: "call_ref_one", AccountIndustry: "Manufacturing"},
+		{CallRef: "call_ref_two", AccountIndustry: "Retail"},
+	}); got != nil {
+		t.Fatalf("cohort call rows without speaker fields should not be summarized as unknown speaker evidence: %v", got)
+	}
+
+	got := speakerAttributionSummaryFromItems([]businessAnalysisItem{
+		{CallRef: "call_ref_one", SpeakerRole: sqlite.SpeakerRoleUnknown, SpeakerRoleStatus: sqlite.SpeakerRoleStatusAffiliationMissing},
+		{CallRef: "call_ref_two", SpeakerRole: sqlite.SpeakerRoleExternal, SpeakerRoleStatus: sqlite.SpeakerRoleStatusAvailable},
+	})
+	if got["unknown"] != 1 || got["affiliation_missing"] != 1 || got["external"] != 1 {
+		t.Fatalf("evidence rows with speaker fields should still summarize attribution: %v", got)
+	}
+}
+
 func TestFacadeAnalyzeThemesDiscoverSeedlessSuppressesFillerRowsWhenNoBusinessCandidates(t *testing.T) {
 	t.Parallel()
 
