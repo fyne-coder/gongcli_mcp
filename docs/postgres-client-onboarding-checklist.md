@@ -77,11 +77,23 @@ profile kept outside git and confirm these mappings:
 - Post-sales/renewal/support lifecycle values, with negative examples proving
   they do not catch active new-logo sales calls.
 
-Run `gongctl profile validate`, import only the reviewed YAML, rebuild the
+Run both profile validation passes, import only the reviewed YAML, rebuild the
 read model, then confirm `gongctl sync status` reports an active profile and a
-fresh profile cache. If a source CRM field is not mapped or not populated,
-`gongmcp` should report that as a data-readiness limitation rather than filling
-the gap from transcript text.
+fresh profile cache:
+
+```bash
+gongctl profile validate --db "$SQLITE_OR_SOURCE_DB" --profile "$REVIEWED_PROFILE"
+gongctl profile validate --db "$SQLITE_OR_SOURCE_DB" --profile "$REVIEWED_PROFILE" --ga-readiness
+gongctl profile import --db "$SQLITE_OR_SOURCE_DB" --profile "$REVIEWED_PROFILE"
+gongctl sync read-model --db "$SQLITE_OR_SOURCE_DB" --rebuild
+```
+
+The `--ga-readiness` pass is the customer-deployment gate. It exits non-zero
+when baseline validation fails or when the mechanical readiness checklist finds
+CreatedDate-only concepts, missing lifecycle buckets, unmapped methodology, or
+missing loss-reason mapping. If a source CRM field is not mapped or not
+populated, `gongmcp` should report that as a data-readiness limitation rather
+than filling the gap from transcript text.
 
 ## 5. Run Synthetic Repo Evidence
 
@@ -128,10 +140,19 @@ non-secret JSON report plus an operator Markdown summary:
 MCP_URL="https://mcp.example.com/mcp" \
 MCP_BEARER_TOKEN="$REVIEWED_BEARER_TOKEN" \
 READER_DB_URL="$GONGMCP_ANALYST_READER_URL" \
+REDACTION_AUDIT_SOURCE_MINUS_REDACTED_ROWS="$SOURCE_MINUS_REDACTED_ROWS" \
+REDACTION_AUDIT_GENERATED_AT="$REDACTION_AUDIT_GENERATED_AT" \
+REDACTION_AUDIT_EVIDENCE_PATH="$REDACTION_AUDIT_EVIDENCE_PATH" \
 KEEP_ARTIFACTS=1 \
 ARTIFACT_DIR=./ga-acceptance-evidence \
 scripts/postgres-ga-acceptance-smoke.sh
 ```
+
+Instead of the three `REDACTION_AUDIT_*` fields, operators may pass
+`REDACTION_AUDIT_JSON=/path/to/redaction-audit.json` with
+`available`, `source_minus_redacted_rows`, `generated_at`, and
+`evidence_path`. The evidence path should be a non-secret pointer to the
+source-vs-serving validation artifact, not a database URL or raw data export.
 
 The smoke validates seven contracts and reports each as `pass`, `degraded`, or
 `fail`:
@@ -148,8 +169,8 @@ The smoke validates seven contracts and reports each as `pass`, `degraded`, or
    signals, AI highlight inventory, and scorecard inventory are populated.
 5. `governance_redaction` — raw call IDs are hidden, `account_query` without
    `include_account_names=true` fails closed, `account_query` with the opt-in
-   succeeds, and source-minus-redacted audit evidence (when supplied) is
-   recorded.
+   succeeds, and source-minus-redacted audit evidence is recorded when supplied
+   through `REDACTION_AUDIT_JSON` or the compact `REDACTION_AUDIT_*` fields.
 6. `evidence_workflow` — `question.answer` returns an evidence pack and one
    returned `call_ref` flows into `evidence.call_drilldown` to retrieve
    bounded transcript snippets plus Gong AI source paths.

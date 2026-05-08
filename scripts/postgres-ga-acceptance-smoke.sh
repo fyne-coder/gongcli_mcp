@@ -34,6 +34,26 @@
 #   GONGCTL_BIN        path to a gongctl binary; defaults to "gongctl" on PATH.
 #   KEEP_ARTIFACTS=1   leave the artifact directory in place on success.
 #
+# Redaction audit (source-minus-redacted) evidence -- supply ONE of the
+# following so the GA smoke records audit evidence in the probe bundle. When
+# none of these is set the redaction_audit field is reported as
+# {available:false} and the governance_redaction check is degraded:
+#   REDACTION_AUDIT_JSON
+#       Path to a JSON document with the shape
+#         {"available": true,
+#          "source_minus_redacted_rows": <int>,
+#          "generated_at": "<RFC3339 timestamp>",
+#          "evidence_path": "<non-secret pointer or summary>"}
+#       The file is read from the operator's filesystem; nothing in it is
+#       written to ARTIFACT_DIR beyond the assembled probe bundle.
+#   REDACTION_AUDIT_SOURCE_MINUS_REDACTED_ROWS
+#   REDACTION_AUDIT_GENERATED_AT
+#   REDACTION_AUDIT_EVIDENCE_PATH
+#       Compact direct env contract; supplying any of these flips
+#       redaction_audit.available=true. SOURCE_MINUS_REDACTED_ROWS must parse
+#       as a non-negative integer; if both REDACTION_AUDIT_JSON and the
+#       direct env vars are set, REDACTION_AUDIT_JSON wins.
+#
 # Synthetic prompt and theme defaults are generic; they must not contain
 # customer names, products, or restricted vocabulary.
 #
@@ -114,6 +134,50 @@ call_tool() {
 
 extract_text_payload() {
   jq -r '.result.content[0].text // ""'
+}
+
+build_redaction_audit_probe() {
+  if [[ -n "${REDACTION_AUDIT_JSON:-}" ]]; then
+    if [[ ! -r "$REDACTION_AUDIT_JSON" ]]; then
+      echo "REDACTION_AUDIT_JSON is not readable: $REDACTION_AUDIT_JSON" >&2
+      exit 2
+    fi
+    jq '
+      {
+        available: (.available // true),
+        source_minus_redacted_rows: (.source_minus_redacted_rows // .sourceMinusRedactedRows // 0),
+        generated_at: (.generated_at // .generatedAt // ""),
+        evidence_path: (.evidence_path // .evidencePath // "")
+      }
+      | if (.source_minus_redacted_rows | type) != "number" or .source_minus_redacted_rows < 0 then
+          error("source_minus_redacted_rows must be a non-negative number")
+        else
+          .
+        end
+    ' "$REDACTION_AUDIT_JSON"
+    return
+  fi
+
+  if [[ -n "${REDACTION_AUDIT_SOURCE_MINUS_REDACTED_ROWS:-}" || -n "${REDACTION_AUDIT_GENERATED_AT:-}" || -n "${REDACTION_AUDIT_EVIDENCE_PATH:-}" ]]; then
+    local rows="${REDACTION_AUDIT_SOURCE_MINUS_REDACTED_ROWS:-0}"
+    if ! [[ "$rows" =~ ^[0-9]+$ ]]; then
+      echo "REDACTION_AUDIT_SOURCE_MINUS_REDACTED_ROWS must be a non-negative integer" >&2
+      exit 2
+    fi
+    jq -n \
+      --argjson rows "$rows" \
+      --arg generated_at "${REDACTION_AUDIT_GENERATED_AT:-}" \
+      --arg evidence_path "${REDACTION_AUDIT_EVIDENCE_PATH:-}" \
+      '{
+        available: true,
+        source_minus_redacted_rows: $rows
+      }
+      + (if $generated_at != "" then {generated_at: $generated_at} else {} end)
+      + (if $evidence_path != "" then {evidence_path: $evidence_path} else {} end)'
+    return
+  fi
+
+  jq -n '{available: false}'
 }
 
 echo "[ga-acceptance] artifact dir: $ARTIFACT_DIR" >&2
@@ -273,6 +337,8 @@ if [[ -n "${READER_DB_URL:-}" ]]; then
     '{provided:true, write_denied:$write_denied, write_denial_detail:$write_detail, raw_table_read_denied:$raw_table_read_denied, raw_table_read_detail:$raw_table_read_detail}')"
 fi
 
+REDACTION_AUDIT_PROBE="$(build_redaction_audit_probe)"
+
 # 10. Assemble the probe bundle and hand to the evaluator. The evaluator
 # emits the JSON report on stdout and the operator Markdown summary at
 # --summary.
@@ -288,6 +354,7 @@ jq -n \
   --argjson acct_no_optin "$ACCT_NO_OPTIN_PROBE" \
   --argjson acct_optin "$ACCT_OPTIN_PROBE" \
   --argjson raw_id_hidden "$RAW_ID_HIDDEN" \
+  --argjson redaction_audit "$REDACTION_AUDIT_PROBE" \
   --argjson read_only "$RO_PROBE" \
   '{
     status: $status,
@@ -303,7 +370,7 @@ jq -n \
     account_query_without_opt_in: $acct_no_optin,
     account_query_with_opt_in: $acct_optin,
     raw_call_ids_hidden: $raw_id_hidden,
-    redaction_audit: {available: false},
+    redaction_audit: $redaction_audit,
     read_only_posture: $read_only
   }' >"$PROBES_PATH"
 

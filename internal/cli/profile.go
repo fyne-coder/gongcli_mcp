@@ -134,17 +134,73 @@ func (a *app) profileValidate(ctx context.Context, args []string) error {
 	fs.SetOutput(a.err)
 	dbPath := fs.String("db", "", "SQLite database path")
 	profilePath := fs.String("profile", "", "YAML profile path")
+	gaReadiness := fs.Bool("ga-readiness", false, "fail with non-zero exit when the mechanical GA readiness checklist has blocking findings (CreatedDate-only field concepts, missing lifecycle buckets, methodology unmapped, loss-reason mapping missing); the JSON report is still emitted")
+	strictReadiness := fs.Bool("strict-readiness", false, "alias of --ga-readiness")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil
 		}
 		return errUsage
 	}
-	_, result, err := a.validateProfileFile(ctx, *dbPath, *profilePath)
+	p, result, err := a.validateProfileFile(ctx, *dbPath, *profilePath)
 	if err != nil {
 		return err
 	}
-	return writeJSONValue(a.out, result)
+	strict := *gaReadiness || *strictReadiness
+	if !strict {
+		return writeJSONValue(a.out, result)
+	}
+	checklist := sqlite.EvaluateProfileReadinessChecklist(p)
+	gaReport := buildProfileGAReadinessReport(checklist)
+	output := struct {
+		profilepkg.ValidationResult
+		GAReadiness profileGAReadinessReport `json:"ga_readiness"`
+	}{
+		ValidationResult: result,
+		GAReadiness:      gaReport,
+	}
+	if err := writeJSONValue(a.out, output); err != nil {
+		return err
+	}
+	if !result.Valid {
+		return fmt.Errorf("profile validation failed; see findings in JSON output")
+	}
+	if len(gaReport.BlockingFindings) > 0 {
+		return fmt.Errorf("GA readiness gate failed: %d blocking finding(s); see ga_readiness.blocking_findings in JSON output", len(gaReport.BlockingFindings))
+	}
+	return nil
+}
+
+// profileGAReadinessReport is the operator-visible structure surfaced by
+// `gongctl profile validate --ga-readiness`. It exposes the mechanical
+// readiness checklist and the subset of findings that block GA gating.
+type profileGAReadinessReport struct {
+	Checklist        sqlite.ProfileReadinessChecklist `json:"checklist"`
+	BlockingFindings []string                         `json:"blocking_findings"`
+	Passed           bool                             `json:"passed"`
+}
+
+func buildProfileGAReadinessReport(checklist sqlite.ProfileReadinessChecklist) profileGAReadinessReport {
+	report := profileGAReadinessReport{Checklist: checklist, BlockingFindings: []string{}}
+	if len(checklist.CreatedDateOnlyConcepts) > 0 {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"created_date_only_field_concepts: "+strings.Join(checklist.CreatedDateOnlyConcepts, ","))
+	}
+	if len(checklist.MissingLifecycleBuckets) > 0 {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"missing_lifecycle_buckets: "+strings.Join(checklist.MissingLifecycleBuckets, ","))
+	}
+	if checklist.MethodologyUnmapped {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"methodology_concepts_unmapped: profile defines no methodology concepts (pain, next steps, MEDDICC, etc.)")
+	}
+	if checklist.LossReasonMappingMissing {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"loss_reason_mapping_missing: no field concept references a known loss-reason field")
+	}
+	sort.Strings(report.BlockingFindings)
+	report.Passed = len(report.BlockingFindings) == 0
+	return report
 }
 
 func (a *app) profileImport(ctx context.Context, args []string) error {

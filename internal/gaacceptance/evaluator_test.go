@@ -409,6 +409,74 @@ func TestEvaluateReadOnlyPostureRawTableSelectAllowed(t *testing.T) {
 	}
 }
 
+// TestEvaluateRedactionAuditMissing proves that a probe bundle with no
+// source-minus-redacted audit evidence reports the governance check as
+// degraded (not fail) and surfaces the "no source-minus-redacted audit
+// evidence supplied" reason. This covers the operator path where the GA
+// smoke is run before redaction tooling is available.
+func TestEvaluateRedactionAuditMissing(t *testing.T) {
+	bundle := loadPassBundle(t)
+	bundle.RedactionAudit = nil
+	rep := mustEvaluate(t, bundle)
+	c := findCheck(t, rep, CheckGovernanceRedaction)
+	if c.Status != StatusDegraded {
+		t.Fatalf("governance_redaction status=%q want degraded when redaction audit missing; reason=%q", c.Status, c.Reason)
+	}
+	if !strings.Contains(strings.ToLower(c.Reason), "redacted audit") && !strings.Contains(strings.ToLower(c.Reason), "source-minus-redacted") {
+		t.Errorf("reason should mention missing redaction audit, got %q", c.Reason)
+	}
+}
+
+// TestEvaluateRedactionAuditSuppliedZero proves that a supplied audit with
+// zero source-minus-redacted rows clears the governance degradation reason
+// (the check passes when paired with a clean account_query gate and raw-id
+// redaction). This is the "operator supplied evidence" path the GA smoke
+// drives via REDACTION_AUDIT_* env vars.
+func TestEvaluateRedactionAuditSuppliedZero(t *testing.T) {
+	bundle := loadPassBundle(t)
+	bundle.RedactionAudit = &RedactionAuditProbe{
+		Available:               true,
+		SourceMinusRedactedRows: 0,
+		GeneratedAt:             "2026-05-07T18:00:00Z",
+		EvidencePath:            "synthetic://redaction-audit/2026-05-07.json",
+	}
+	rep := mustEvaluate(t, bundle)
+	c := findCheck(t, rep, CheckGovernanceRedaction)
+	if c.Status != StatusPass {
+		t.Fatalf("governance_redaction status=%q want pass with supplied audit; reason=%q", c.Status, c.Reason)
+	}
+	got, _ := c.Details["redaction_audit_source_minus_redacted_rows"].(int64)
+	if got != 0 {
+		t.Errorf("expected redaction_audit_source_minus_redacted_rows=0 in details, got %v", c.Details["redaction_audit_source_minus_redacted_rows"])
+	}
+	if c.Details["redaction_audit_generated_at"] != "2026-05-07T18:00:00Z" {
+		t.Errorf("expected supplied generated_at echoed in details, got %v", c.Details["redaction_audit_generated_at"])
+	}
+}
+
+// TestEvaluateRedactionAuditSuppliedNonZero proves that a supplied audit with
+// non-zero source-minus-redacted rows is still surfaced (and recorded in
+// details) without flipping the check to fail; this is operator-visible
+// evidence rather than a hard gate, so the evaluator records it but does not
+// treat redaction-reduced row counts as a failure on its own.
+func TestEvaluateRedactionAuditSuppliedNonZero(t *testing.T) {
+	bundle := loadPassBundle(t)
+	bundle.RedactionAudit = &RedactionAuditProbe{
+		Available:               true,
+		SourceMinusRedactedRows: 42,
+		GeneratedAt:             "2026-05-07T18:00:00Z",
+	}
+	rep := mustEvaluate(t, bundle)
+	c := findCheck(t, rep, CheckGovernanceRedaction)
+	if c.Status != StatusPass {
+		t.Fatalf("governance_redaction status=%q want pass when audit supplied (non-zero rows are evidence, not failure); reason=%q", c.Status, c.Reason)
+	}
+	got, _ := c.Details["redaction_audit_source_minus_redacted_rows"].(int64)
+	if got != 42 {
+		t.Errorf("expected redaction_audit_source_minus_redacted_rows=42 in details, got %v", c.Details["redaction_audit_source_minus_redacted_rows"])
+	}
+}
+
 func TestRenderOperatorMarkdownContainsSummary(t *testing.T) {
 	rep := mustEvaluate(t, loadPassBundle(t))
 	md := RenderOperatorMarkdown(rep)

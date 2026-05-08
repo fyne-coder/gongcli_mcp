@@ -279,10 +279,25 @@ record:
 MCP_URL="https://mcp.example.com/mcp" \
 MCP_BEARER_TOKEN="$REVIEWED_BEARER_TOKEN" \
 READER_DB_URL="$GONGMCP_ANALYST_READER_URL" \
+REDACTION_AUDIT_JSON="./serving-refresh-redaction-audit.json" \
 KEEP_ARTIFACTS=1 \
 ARTIFACT_DIR=./ga-acceptance-evidence \
 scripts/postgres-ga-acceptance-smoke.sh
 ```
+
+If the redaction audit is not stored as a JSON file, pass the compact
+non-secret fields instead:
+
+```bash
+REDACTION_AUDIT_SOURCE_MINUS_REDACTED_ROWS="$SOURCE_MINUS_REDACTED_ROWS" \
+REDACTION_AUDIT_GENERATED_AT="$REDACTION_AUDIT_GENERATED_AT" \
+REDACTION_AUDIT_EVIDENCE_PATH="$REDACTION_AUDIT_EVIDENCE_PATH" \
+scripts/postgres-ga-acceptance-smoke.sh
+```
+
+The audit values should point at the reviewed source-vs-serving validation
+artifact from the refresh job. Do not pass database URLs, customer names, raw
+call IDs, or transcript text through these fields.
 
 The smoke validates seven contracts (runtime identity, six-tool surface,
 routed operations, data readiness, governance/redaction, evidence workflow,

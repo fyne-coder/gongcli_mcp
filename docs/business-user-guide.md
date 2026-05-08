@@ -125,6 +125,14 @@ model to guess which narrow tool to use:
 4. Use `gong_analyze` operation `question.answer` for a final governed
    evidence pack after the report has identified the strongest terms.
 
+For synonym work, do not assume the server expands meanings semantically. Run
+separate explicit seeds such as `manual order entry`, `double entry`,
+`hand keying`, and `manually enter`, then compare the resulting
+`top_quotes_by_theme`, `support_count`, and drilldown inputs. The GA-supported
+path is deterministic and bounded: exact seeded reports first, exact drilldown
+terms second, and host-model synthesis last. `gongmcp` does not run fuzzy
+LLM-based synonym expansion inside the MCP server.
+
 Treat `question.answer` as an evidence-pack generator, not a hidden analyst. It
 derives bounded search terms from the free-form question and may fall back to a
 matching high-signal term when the full derived phrase returns no quotes; the
