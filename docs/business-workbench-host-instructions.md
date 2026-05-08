@@ -33,6 +33,18 @@ Never say "buyers said" when `speaker_role` is `unknown` or
 `speaker_role_status` is `affiliation_missing`. Use "unattributed transcript
 evidence" or "external-or-unknown evidence" instead.
 
+## Display Defaults
+
+- Follow `evidence_policy.host_display_policy` when present.
+- Default business-user answers should use `business_summary` mode: findings,
+  evidence, caveats, and next step.
+- Do not include an "Exact MCP operations exercised", raw tool trace, tool
+  inventory, runtime identity table, or schema/debug section unless the user
+  explicitly asks for it.
+- When comparing filtered and unfiltered cohorts, avoid negative deltas in
+  business prose. Say "excluded 1,337 low-signal calls" or "reduced from 1,573
+  to 236" instead of showing `-1,337`.
+
 ## Caveats To Surface
 
 - Show `data_readiness_caveats` when using industry, persona, stage, won/lost,

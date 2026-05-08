@@ -271,7 +271,7 @@ def case(name, obj, required_paths=(), allowed_status=(), degraded_status=(), fo
 
 cases = []
 cases.append(case("broad_business_theme_prompt", load("broad-question.json"),
-    required_paths=("evidence_policy","answer_contract","dimension_readiness","data_readiness_caveats"),
+    required_paths=("evidence_policy","evidence_policy.host_display_policy","answer_contract","dimension_readiness","data_readiness_caveats"),
     allowed_status=("needs_theme_seed","ai_brief_theme_candidates_ready")))
 cases.append(case("seedless_discovery", load("seedless-discovery.json"),
     required_paths=("evidence_policy","answer_contract"),

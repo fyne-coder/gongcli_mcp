@@ -38,6 +38,25 @@ func TestFieldProfilePresetsControlExposureFlags(t *testing.T) {
 	}
 }
 
+func TestBusinessEvidencePolicyIncludesHostDisplayDefaults(t *testing.T) {
+	t.Parallel()
+
+	payload := defaultBusinessEvidencePolicy().payload()
+	display, ok := payload["host_display_policy"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing host_display_policy: %v", payload)
+	}
+	if got, _ := display["tool_trace"].(string); got != "omit_unless_requested" {
+		t.Fatalf("tool_trace=%q want omit_unless_requested: %v", got, display)
+	}
+	if got, _ := display["include_exact_mcp_operations"].(bool); got {
+		t.Fatalf("include_exact_mcp_operations should default false: %v", display)
+	}
+	if got, _ := display["delta_language"].(string); !strings.Contains(got, "avoid negative deltas") {
+		t.Fatalf("delta_language should tell hosts to avoid negative business deltas: %v", display)
+	}
+}
+
 func TestQuestionAnswerFallbackQueriesSkipGenericBusinessWords(t *testing.T) {
 	t.Parallel()
 

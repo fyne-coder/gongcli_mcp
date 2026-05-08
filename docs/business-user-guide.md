@@ -158,6 +158,14 @@ If `speaker_role_status` is `affiliation_missing` or the
 unattributed transcript evidence. Do not write "buyers said" unless the
 returned evidence proves external speaker attribution.
 
+For non-technical Sales and Marketing users, keep the tool trace out of the
+answer unless they ask for it. Business-workbench responses include
+`evidence_policy.host_display_policy`; by default hosts should omit exact MCP
+operations, raw tool inventories, schema details, and runtime identity tables.
+Use those details in QA reports and operator handoffs, not in the normal
+business answer. When showing filter impact, use before/after counts and
+positive excluded counts instead of negative deltas such as `-1337`.
+
 For synonym work, do not assume the server expands meanings semantically. Run
 separate explicit seeds such as `manual order entry`, `double entry`,
 `hand keying`, and `manually enter`, then compare the resulting

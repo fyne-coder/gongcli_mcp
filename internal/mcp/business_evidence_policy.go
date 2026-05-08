@@ -105,6 +105,13 @@ func (p businessEvidencePolicy) payload() map[string]any {
 		"broad_theme_evidence_first": p.BroadThemeEvidenceFirst,
 		"transcript_quote_use":       p.TranscriptQuoteUse,
 		"unknown_speaker_contract":   "unknown or affiliation_missing evidence is unattributed evidence, not buyer-attributed speech",
+		"host_display_policy": map[string]any{
+			"default_mode":                 "business_summary",
+			"tool_trace":                   "omit_unless_requested",
+			"include_exact_mcp_operations": false,
+			"include_runtime_identity":     "only_when_relevant_or_requested",
+			"delta_language":               "show before/after counts and positive excluded_or_added counts; avoid negative deltas in business-user prose unless the metric is inherently signed",
+		},
 	}
 }
 
