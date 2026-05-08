@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1179,9 +1180,55 @@ func TestFacadeAnalyzeThemeIntelReportSeedlessLimitDoesNotStarveAIBriefScan(t *t
 	t.Parallel()
 
 	store := newSeededThemeIntelReportStore(t)
+	for day := 5; day <= 31; day++ {
+		callID := fmt.Sprintf("call_theme_q1_no_high_%02d", day)
+		rawCall := mustJSON(t, map[string]any{
+			"id":        callID,
+			"title":     "Theme intel Q1 no-highlight business discovery",
+			"started":   fmt.Sprintf("2026-03-%02dT15:00:00Z", day),
+			"duration":  1800,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"parties": []any{
+				map[string]any{"speakerId": "speaker_no_high_buyer", "title": "Procurement"},
+				map[string]any{"speakerId": "speaker_no_high_rep", "title": "Account Executive"},
+			},
+		})
+		if _, err := store.Store.UpsertCall(context.Background(), rawCall); err != nil {
+			t.Fatalf("upsert no-highlight call: %v", err)
+		}
+		rawTranscript := mustJSON(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "speaker_no_high_buyer",
+							"sentences": []any{
+								map[string]any{
+									"start": 1000,
+									"end":   2000,
+									"text":  "We are here for a discovery conversation.",
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+		if _, err := store.Store.UpsertTranscript(context.Background(), rawTranscript); err != nil {
+			t.Fatalf("upsert no-highlight transcript: %v", err)
+		}
+	}
+	policy, err := DefaultLimitPolicy().WithOverride("business_analysis_rows", 1)
+	if err != nil {
+		t.Fatalf("limit policy: %v", err)
+	}
 	server := NewServerWithOptions(store, "gongmcp", "test",
 		WithToolAllowlist(FacadeToolNames()),
 		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+		WithLimitPolicy(policy),
 	)
 
 	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, themeIntelReportOpName, map[string]any{
@@ -1197,9 +1244,15 @@ func TestFacadeAnalyzeThemeIntelReportSeedlessLimitDoesNotStarveAIBriefScan(t *t
 	}
 	wrapper := decodeFacadeWrapper(t, result)
 	inner, _ := wrapper["result"].(map[string]any)
+	if got, _ := inner["status"].(string); got != "ai_brief_candidate_themes" {
+		t.Fatalf("status=%q want ai_brief_candidate_themes; inner=%v", got, inner)
+	}
 	source, _ := inner["ai_business_brief_source"].(map[string]any)
-	if got, _ := source["source_calls"].(float64); got <= 1 {
+	if got, _ := source["source_calls"].(float64); got <= 25 {
 		t.Fatalf("seedless bootstrap should scan beyond candidate limit; source_calls=%v source=%v inner=%v", got, source, inner)
+	}
+	if got, _ := source["source_rows"].(float64); got == 0 {
+		t.Fatalf("seedless bootstrap should find AI rows beyond early no-highlight calls; source=%v inner=%v", source, inner)
 	}
 }
 

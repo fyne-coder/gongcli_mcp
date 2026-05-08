@@ -18,6 +18,7 @@ const (
 	maxThemeIntelReportQuotesPerTheme     = 5
 	maxThemeIntelReportThemes             = 5
 	defaultThemeIntelBootstrapCallScan    = 100
+	maxThemeIntelReportBootstrapCallIDs   = 100
 	maxThemeIntelReportCallDrilldowns     = 5
 	maxThemeIntelReportAICondensedRows    = 12
 	maxThemeIntelReportSalesHooks         = 8
@@ -229,7 +230,7 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 
 	callSearchLimit := limit
 	if themeQuery == "" && normalized.Limit == 0 {
-		callSearchLimit = s.limitPolicy.BusinessAnalysisLimit(defaultThemeIntelBootstrapCallScan)
+		callSearchLimit = businessAnalysisBootstrapScanLimit(defaultThemeIntelBootstrapCallScan)
 	}
 	cohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
 		Filter: sqliteBusinessAnalysisFilter(normalized),
@@ -268,7 +269,7 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		normalized = applyDefaultBroadThemeQualityFilters(normalized)
 		callSearchLimit := limit
 		if normalized.Limit == 0 {
-			callSearchLimit = s.limitPolicy.BusinessAnalysisLimit(defaultThemeIntelBootstrapCallScan)
+			callSearchLimit = businessAnalysisBootstrapScanLimit(defaultThemeIntelBootstrapCallScan)
 		}
 		cohort, err = s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
 			Filter: sqliteBusinessAnalysisFilter(normalized),
@@ -468,6 +469,16 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	}
 	addBusinessEvidenceMetadata(payload, policy, evidenceType, &cohort.Summary, args.FieldProfile, len(aiBriefSummary.EvidenceByTheme) > 0, speakerAttributionSummaryFromThemeQuotes(allQuoteRows))
 	return newToolResult(payload)
+}
+
+func businessAnalysisBootstrapScanLimit(value int) int {
+	if value <= 0 {
+		value = defaultThemeIntelBootstrapCallScan
+	}
+	if value > defaultThemeIntelBootstrapCallScan {
+		return defaultThemeIntelBootstrapCallScan
+	}
+	return value
 }
 
 func (s *Server) themeIntelReportBuildDrilldown(ctx context.Context, callID, themeQuery string, includeRaw, includeTitles, includeAccounts, includeSpeakerRefs bool) (themeIntelReportDrilldown, error) {
@@ -679,7 +690,7 @@ func (s *Server) aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx context.Co
 			continue
 		}
 		callIDs = append(callIDs, row.CallID)
-		if len(callIDs) >= 25 {
+		if len(callIDs) >= maxThemeIntelReportBootstrapCallIDs {
 			break
 		}
 	}

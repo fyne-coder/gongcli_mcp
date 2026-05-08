@@ -466,7 +466,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 			broadFilter := applyDefaultBroadThemeQualityFilters(normalized)
 			broadCallLimit := limit
 			if broadFilter.Limit == 0 {
-				broadCallLimit = s.limitPolicy.BusinessAnalysisLimit(defaultThemeIntelBootstrapCallScan)
+				broadCallLimit = businessAnalysisBootstrapScanLimit(defaultThemeIntelBootstrapCallScan)
 			}
 			broadCohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
 				Filter: sqliteBusinessAnalysisFilter(broadFilter),
