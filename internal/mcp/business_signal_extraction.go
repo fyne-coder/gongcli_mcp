@@ -255,9 +255,7 @@ func businessSignalTopicQueries(operation string, topic string) []string {
 		return nil
 	}
 	queries := []string{base}
-	for _, alias := range businessSignalTopicAliases(operation, base) {
-		queries = append(queries, alias)
-	}
+	queries = append(queries, businessSignalTopicAliases(operation, base)...)
 	return normalizeBusinessSignalQueries(queries, maxBusinessSignalTopics)
 }
 
