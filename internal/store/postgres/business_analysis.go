@@ -493,6 +493,10 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	if err != nil {
 		return nil, err
 	}
+	excludeBucketsJSON, err := postgresBusinessAnalysisExcludeBucketsArg(filter)
+	if err != nil {
+		return nil, err
+	}
 	limit := boundedLimit(firstPositivePostgres(params.Limit, filter.Limit), defaultBusinessAnalysisLimit, maxBusinessAnalysisLimit)
 	queryText := strings.TrimSpace(firstNonEmptyPostgres(params.Query, filter.Query))
 	if err := validatePostgresBusinessAnalysisSearchText(queryText, "query"); err != nil {
@@ -504,7 +508,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	var rows *sql.Rows
 	if params.BroadDiscovery {
 		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
-  FROM `+s.postgresBusinessAnalysisThemeSeedFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+  FROM `+s.postgresBusinessAnalysisThemeSeedFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 			filter.TitleQuery,
 			filter.Query,
 			filter.FromDate,
@@ -520,11 +524,13 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 			filter.CRMObjectType,
 			filter.CRMObjectID,
 			filter.ParticipantTitleQuery,
+			excludeBucketsJSON,
+			filter.ExcludeLikelyVoicemail,
 			limit,
 		)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
-  FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+  FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 			queryText,
 			filter.TitleQuery,
 			filter.Query,
@@ -541,6 +547,8 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 			filter.CRMObjectType,
 			filter.CRMObjectID,
 			filter.ParticipantTitleQuery,
+			excludeBucketsJSON,
+			filter.ExcludeLikelyVoicemail,
 			limit,
 		)
 	}
@@ -564,6 +572,10 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 	if err != nil {
 		return nil, err
 	}
+	excludeBucketsJSON, err := postgresBusinessAnalysisExcludeBucketsArg(filter)
+	if err != nil {
+		return nil, err
+	}
 	dimension, err := postgresBusinessAnalysisDimension(params.Dimension)
 	if err != nil {
 		return nil, err
@@ -574,7 +586,7 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 	}
 	limit := boundedLimit(firstPositivePostgres(params.Limit, filter.Limit), defaultBusinessAnalysisLimit, maxBusinessAnalysisLimit)
 	rows, err := s.db.QueryContext(ctx, `SELECT dimension, value, call_count, transcript_count, missing_transcript_count, opportunity_call_count, account_call_count, external_call_count, latest_call_at
-  FROM gongmcp_business_analysis_dimension($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+  FROM gongmcp_business_analysis_dimension($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		dimension,
 		themeQuery,
 		filter.TitleQuery,
@@ -592,6 +604,8 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 		filter.CRMObjectType,
 		filter.CRMObjectID,
 		filter.ParticipantTitleQuery,
+		excludeBucketsJSON,
+		filter.ExcludeLikelyVoicemail,
 		limit,
 	)
 	if err != nil {
@@ -611,8 +625,12 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 }
 
 func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sqlite.BusinessAnalysisFilter, limit int) ([]sqlite.BusinessAnalysisCallRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, duration_seconds, lifecycle_bucket, scope, system, direction, transcript_status, account_industry, opportunity_stage, opportunity_type, forecast_category, opportunity_count, account_count, participant_status, person_title_status, person_title_source
-  FROM `+s.postgresBusinessAnalysisCallsFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+	excludeBucketsJSON, err := postgresBusinessAnalysisExcludeBucketsArg(filter)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, duration_seconds, lifecycle_bucket, likely_voicemail_or_ivr, scope, system, direction, transcript_status, account_industry, opportunity_stage, opportunity_type, forecast_category, opportunity_count, account_count, participant_status, person_title_status, person_title_source
+  FROM `+s.postgresBusinessAnalysisCallsFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		filter.TitleQuery,
 		filter.Query,
 		filter.FromDate,
@@ -628,6 +646,8 @@ func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sql
 		filter.CRMObjectType,
 		filter.CRMObjectID,
 		filter.ParticipantTitleQuery,
+		excludeBucketsJSON,
+		filter.ExcludeLikelyVoicemail,
 		limit,
 	)
 	if err != nil {
@@ -637,8 +657,11 @@ func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sql
 	out := []sqlite.BusinessAnalysisCallRow{}
 	for rows.Next() {
 		var row sqlite.BusinessAnalysisCallRow
-		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.CallDate, &row.CallMonth, &row.DurationSeconds, &row.LifecycleBucket, &row.Scope, &row.System, &row.Direction, &row.TranscriptStatus, &row.AccountIndustry, &row.OpportunityStage, &row.OpportunityType, &row.ForecastCategory, &row.OpportunityCount, &row.AccountCount, &row.ParticipantStatus, &row.PersonTitleStatus, &row.PersonTitleSource); err != nil {
+		if err := rows.Scan(&row.CallID, &row.Title, &row.StartedAt, &row.CallDate, &row.CallMonth, &row.DurationSeconds, &row.LifecycleBucket, &row.LikelyVoicemailOrIVR, &row.Scope, &row.System, &row.Direction, &row.TranscriptStatus, &row.AccountIndustry, &row.OpportunityStage, &row.OpportunityType, &row.ForecastCategory, &row.OpportunityCount, &row.AccountCount, &row.ParticipantStatus, &row.PersonTitleStatus, &row.PersonTitleSource); err != nil {
 			return nil, err
+		}
+		if businessAnalysisFilterExcludesCall(filter, row.LifecycleBucket, row.LikelyVoicemailOrIVR) {
+			continue
 		}
 		out = append(out, row)
 	}
@@ -694,8 +717,12 @@ func (s *Store) postgresTranscriptSegmentsByCallFactsFunction() string {
 
 func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqlite.BusinessAnalysisFilter) (sqlite.BusinessAnalysisCohortSummary, error) {
 	var summary sqlite.BusinessAnalysisCohortSummary
+	excludeBucketsJSON, err := postgresBusinessAnalysisExcludeBucketsArg(filter)
+	if err != nil {
+		return sqlite.BusinessAnalysisCohortSummary{}, err
+	}
 	if err := s.db.QueryRowContext(ctx, `SELECT call_count, transcript_count, missing_transcript_count, account_industry_count, opportunity_stage_count, opportunity_call_count, account_call_count, external_call_count, participant_call_count, participant_title_call_count, earliest_call_at, latest_call_at, total_duration_seconds, average_duration_seconds
-  FROM gongmcp_business_analysis_summary($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+  FROM gongmcp_business_analysis_summary($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		filter.TitleQuery,
 		filter.Query,
 		filter.FromDate,
@@ -711,6 +738,8 @@ func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqli
 		filter.CRMObjectType,
 		filter.CRMObjectID,
 		filter.ParticipantTitleQuery,
+		excludeBucketsJSON,
+		filter.ExcludeLikelyVoicemail,
 	).Scan(
 		&summary.CallCount,
 		&summary.TranscriptCount,
@@ -745,6 +774,7 @@ func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAn
 	filter.ToDate = strings.TrimSpace(filter.ToDate)
 	filter.Quarter = strings.TrimSpace(filter.Quarter)
 	filter.LifecycleBucket = strings.TrimSpace(filter.LifecycleBucket)
+	filter.ExcludeLifecycleBuckets = normalizePostgresLifecycleExclusions(filter.ExcludeLifecycleBuckets)
 	filter.Scope = strings.TrimSpace(filter.Scope)
 	filter.System = strings.TrimSpace(filter.System)
 	filter.Direction = strings.TrimSpace(filter.Direction)
@@ -781,6 +811,14 @@ func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAn
 	if filter.LifecycleBucket, err = postgresNormalizeLifecycleBucket(filter.LifecycleBucket); err != nil {
 		return sqlite.BusinessAnalysisFilter{}, err
 	}
+	for _, bucket := range filter.ExcludeLifecycleBuckets {
+		if _, err := postgresNormalizeLifecycleBucket(bucket); err != nil {
+			return sqlite.BusinessAnalysisFilter{}, fmt.Errorf("unknown excluded lifecycle bucket %q", bucket)
+		}
+		if filter.LifecycleBucket != "" && strings.EqualFold(filter.LifecycleBucket, bucket) {
+			return sqlite.BusinessAnalysisFilter{}, fmt.Errorf("lifecycle_bucket %q cannot also be excluded", filter.LifecycleBucket)
+		}
+	}
 	if filter.Scope, err = postgresNormalizeOptionalScope(filter.Scope); err != nil {
 		return sqlite.BusinessAnalysisFilter{}, err
 	}
@@ -800,6 +838,49 @@ func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAn
 		filter.Limit = boundedLimit(filter.Limit, defaultBusinessAnalysisLimit, maxBusinessAnalysisLimit)
 	}
 	return filter, nil
+}
+
+func normalizePostgresLifecycleExclusions(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func postgresBusinessAnalysisExcludeBucketsArg(filter sqlite.BusinessAnalysisFilter) (string, error) {
+	if len(filter.ExcludeLifecycleBuckets) == 0 {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal(filter.ExcludeLifecycleBuckets)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func businessAnalysisFilterExcludesCall(filter sqlite.BusinessAnalysisFilter, lifecycleBucket string, likelyVoicemail bool) bool {
+	if filter.ExcludeLikelyVoicemail && likelyVoicemail {
+		return true
+	}
+	for _, bucket := range filter.ExcludeLifecycleBuckets {
+		if strings.EqualFold(bucket, lifecycleBucket) {
+			return true
+		}
+	}
+	return false
 }
 
 func postgresNormalizeDateRange(rawFrom string, rawTo string) (string, string, error) {

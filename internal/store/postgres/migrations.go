@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS call_facts (
 	transcript_present BOOLEAN NOT NULL DEFAULT false,
 	transcript_status TEXT NOT NULL DEFAULT 'missing',
 	lifecycle_bucket TEXT NOT NULL DEFAULT 'unknown',
+	likely_voicemail_or_ivr BOOLEAN NOT NULL DEFAULT false,
 	lifecycle_confidence TEXT NOT NULL DEFAULT 'low',
 	lifecycle_reason TEXT NOT NULL DEFAULT '',
 	lifecycle_evidence_fields TEXT NOT NULL DEFAULT '',
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS call_facts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_lifecycle ON call_facts(lifecycle_bucket, transcript_present);
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_likely_voicemail ON call_facts(likely_voicemail_or_ivr, lifecycle_bucket, call_date, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_backlog ON call_facts(transcript_present, lifecycle_bucket, call_date, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_call_date ON call_facts(call_date);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_call_month ON call_facts(call_month);
@@ -389,7 +391,7 @@ BEGIN
 		EXECUTE 'GRANT SELECT (id, call_id, object_type) ON call_context_objects TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE gongmcp_call_context_objects TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE gongmcp_call_context_fields TO gongmcp_reader';
-		EXECUTE 'GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader';
+		EXECUTE 'GRANT SELECT (call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket, system, direction, scope, purpose, calendar_event_present, transcript_present, transcript_status, lifecycle_bucket, likely_voicemail_or_ivr, lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_type, account_industry, account_revenue_range, opportunity_stage, opportunity_type, opportunity_forecast_category, opportunity_primary_lead_source, opportunity_count, account_count) ON call_facts TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE postgres_read_model_state TO gongmcp_reader';
 		EXECUTE 'GRANT SELECT ON TABLE call_read_model_diagnostics TO gongmcp_reader';
 	END IF;
@@ -1677,8 +1679,10 @@ REVOKE ALL ON FUNCTION gongmcp_profile_transcript_backlog_sanitized(bigint, text
 	`
 ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS participant_title_present BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS loss_reason_present BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS likely_voicemail_or_ivr BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_participant_title_present ON call_facts(participant_title_present, call_date, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pg_call_facts_loss_reason_present ON call_facts(loss_reason_present, call_date, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_likely_voicemail ON call_facts(likely_voicemail_or_ivr, lifecycle_bucket, call_date, started_at DESC);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
 	`
@@ -1760,10 +1764,22 @@ CREATE INDEX IF NOT EXISTS idx_pg_call_ai_highlights_search
 	// so each affected function must be dropped before redefinition.
 	`DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
 	// Business-workbench scoped-reader call_ref resolver: facade tools return
@@ -1771,5 +1787,31 @@ DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(te
 	// internal call_id. Keep calls.call_id out of scoped table grants and
 	// expose only this SECURITY DEFINER resolver helper.
 	postgresAIHighlightsFunctionSQL + `
+`,
+	// Business-workbench brief-first/voicemail aggregate rollout: this must
+	// remain at the end so already-deployed databases that had the earlier
+	// business-analysis function migrations marked applied still receive the
+	// durable voicemail column and the widened aggregate function signatures.
+	`ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS likely_voicemail_or_ivr BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_pg_call_facts_likely_voicemail ON call_facts(likely_voicemail_or_ivr, lifecycle_bucket, call_date, started_at DESC);
+
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
 }

@@ -162,8 +162,17 @@ func seedThemeIntelReportFixtures(t *testing.T, store *sqlite.Store) {
 			},
 		},
 	})
+	vmCall := mustJSON(t, map[string]any{
+		"id":        "call_theme_q2_vm_005",
+		"title":     "Theme intel Q2 outbound voicemail",
+		"started":   "2026-05-22T15:00:00Z",
+		"duration":  35,
+		"system":    "Upload API",
+		"direction": "Outbound",
+		"scope":     "External",
+	})
 
-	for _, raw := range []json.RawMessage{wonCall, lostCall, q2NegCall, q2DiscCall} {
+	for _, raw := range []json.RawMessage{wonCall, lostCall, q2NegCall, q2DiscCall, vmCall} {
 		if _, err := store.UpsertCall(ctx, raw); err != nil {
 			t.Fatalf("upsert theme intel call: %v", err)
 		}
@@ -198,6 +207,12 @@ func seedThemeIntelReportFixtures(t *testing.T, store *sqlite.Store) {
 			callID: "call_theme_q2_disc_004",
 			lines: []string{
 				"Manual order entry creates reconciliation pain in finance.",
+			},
+		},
+		{
+			callID: "call_theme_q2_vm_005",
+			lines: []string{
+				"Please leave a detailed message after the tone.",
 			},
 		},
 	}
@@ -289,6 +304,9 @@ func newSeededThemeIntelReportStore(t *testing.T) *fakeThemeIntelReportStore {
 			},
 			"call_theme_q2_disc_004": {
 				{CallID: "call_theme_q2_disc_004", HighlightIndex: 0, HighlightType: "key_point", HighlightText: "Reconciliation pain in finance from manual order entry.", SourcePath: "content.keyPoints", UpdatedAt: stamp},
+			},
+			"call_theme_q2_vm_005": {
+				{CallID: "call_theme_q2_vm_005", HighlightIndex: 0, HighlightType: "brief", HighlightText: "Please leave a detailed message after the tone.", SourcePath: "content.brief", UpdatedAt: stamp},
 			},
 		},
 		transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
@@ -1033,6 +1051,201 @@ func TestFacadeAnalyzeThemeIntelReportAccountQueryFailsClosedWhenNamesHidden(t *
 	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
 	if err == nil || !strings.Contains(err.Error(), "hide_account_names=false") {
 		t.Fatalf("expected account_query to fail closed when hide_account_names is enabled, got %v", err)
+	}
+}
+
+func TestFacadeAnalyzeThemeIntelReportSeedlessUsesAIBusinessBriefs(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": themeIntelReportOpName,
+		"arguments": map[string]any{
+			"from_date": "2026-01-01",
+			"to_date":   "2026-06-30",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result type=%T", wrapper["result"])
+	}
+	if got, _ := inner["status"].(string); got != "ai_brief_candidate_themes" {
+		t.Fatalf("status=%q want ai_brief_candidate_themes; inner=%v", got, inner)
+	}
+	scope, _ := inner["searched_scope"].(map[string]any)
+	if got := mustJSONText(t, scope["exclude_lifecycle_buckets"]); !strings.Contains(got, "outbound_prospecting") {
+		t.Fatalf("seedless searched_scope missing default outbound exclusion: %s", got)
+	}
+	if got, _ := scope["exclude_likely_voicemail"].(bool); !got {
+		t.Fatalf("seedless searched_scope exclude_likely_voicemail=false")
+	}
+	coverage, _ := inner["coverage_summary"].(map[string]any)
+	if got, _ := coverage["call_count"].(float64); got != 6 {
+		t.Fatalf("coverage_summary.call_count=%v want 6 after default seedless noise exclusions; coverage=%v", got, coverage)
+	}
+	candidates := mustJSONText(t, inner["theme_candidates"])
+	if !strings.Contains(candidates, "manual order entry") {
+		t.Fatalf("AI brief candidates missing manual order entry: %s", candidates)
+	}
+	aiEvidence, _ := inner["ai_business_brief_evidence_by_theme"].(map[string]any)
+	if len(aiEvidence) == 0 {
+		t.Fatalf("ai_business_brief_evidence_by_theme empty: %v", inner)
+	}
+	rendered := result.Content[0].Text
+	if strings.Contains(strings.ToLower(rendered), "please leave a message") || strings.Contains(strings.ToLower(rendered), "after the tone") {
+		t.Fatalf("seedless AI brief report included voicemail boilerplate:\n%s", rendered)
+	}
+}
+
+func TestFacadeAnalyzeThemesDiscoverSeedlessUsesAIBusinessBriefs(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"discover_themes_in_cohort"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpAnalyzeThemesDiscover,
+		"arguments": map[string]any{
+			"filter": map[string]any{
+				"from_date": "2026-01-01",
+				"to_date":   "2026-06-30",
+			},
+			"limit": 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("inner result type=%T", wrapper["result"])
+	}
+	if got, _ := inner["status"].(string); got != "ai_brief_candidate_terms" {
+		t.Fatalf("status=%q want ai_brief_candidate_terms; inner=%v", got, inner)
+	}
+	if rows, _ := inner["results"].([]any); len(rows) != 0 {
+		t.Fatalf("AI-brief seedless discovery should not include transcript sample rows when brief candidates exist: %v", rows)
+	}
+	candidates := mustJSONText(t, inner["themes"])
+	if !strings.Contains(candidates, "manual order entry") {
+		t.Fatalf("AI brief discover candidates missing manual order entry: %s", candidates)
+	}
+	rendered := strings.ToLower(result.Content[0].Text)
+	if strings.Contains(rendered, "please leave a detailed message") || strings.Contains(rendered, "after the tone") {
+		t.Fatalf("seedless AI brief discovery included voicemail boilerplate:\n%s", result.Content[0].Text)
+	}
+}
+
+func TestFacadeAnalyzeThemeIntelReportSeededIncludesAIBriefEvidence(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	store.highlights["call_theme_q2_disc_004"] = append(store.highlights["call_theme_q2_disc_004"], sqlite.AIHighlightRow{
+		CallID:         "call_theme_q2_disc_004",
+		HighlightIndex: 9,
+		HighlightType:  "key_point",
+		HighlightText:  "ERP integrations with SAP and Oracle are part of the buyer roadmap.",
+		SourcePath:     "content.keyPoints",
+		UpdatedAt:      "2026-04-25T00:00:00Z",
+	})
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": themeIntelReportOpName,
+		"arguments": map[string]any{
+			"from_date":   "2026-04-01",
+			"to_date":     "2026-06-30",
+			"theme_query": "ERP integration",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	aiEvidence, _ := inner["ai_business_brief_evidence_by_theme"].(map[string]any)
+	rows, _ := aiEvidence["ERP integration"].([]any)
+	if len(rows) == 0 {
+		t.Fatalf("seeded ERP integration report missing AI brief evidence: %v", inner)
+	}
+}
+
+func TestFacadeAnalyzeThemeIntelReportDrilldownsPreferQuoteBackedCalls(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{themeIntelReportOpName}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": themeIntelReportOpName,
+		"arguments": map[string]any{
+			"from_date":   "2026-05-21",
+			"to_date":     "2026-05-23",
+			"theme_query": "manual order entry",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	drills, _ := inner["call_drilldowns"].([]any)
+	if len(drills) != 1 {
+		t.Fatalf("quote-backed drilldowns len=%d want 1 real quote call; inner=%v", len(drills), inner)
+	}
+	drill, _ := drills[0].(map[string]any)
+	if got, _ := drill["call_ref"].(string); got != sqlite.StableCallRef("call_theme_q2_disc_004") {
+		t.Fatalf("drilldown call_ref=%q want quote-backed q2 discovery call, drills=%v", got, drills)
+	}
+	if got, _ := drill["call_ref"].(string); got == sqlite.StableCallRef("call_theme_q2_vm_005") {
+		t.Fatalf("drilldown selected voicemail cohort filler call: %v", drills)
 	}
 }
 

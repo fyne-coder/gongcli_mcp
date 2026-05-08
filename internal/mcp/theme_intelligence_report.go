@@ -69,6 +69,8 @@ type themeIntelReportQuoteRow struct {
 	// the same matched segment. Phase C deliberately defers fuzzy/synonym
 	// matching; the explicit workflow uses these literal terms instead.
 	DrilldownTerm string `json:"drilldown_term"`
+
+	callIDForDrilldown string
 }
 
 type themeIntelReportAIRow struct {
@@ -79,6 +81,13 @@ type themeIntelReportAIRow struct {
 	HighlightText  string `json:"highlight_text"`
 	SourcePath     string `json:"source_path,omitempty"`
 	UpdatedAt      string `json:"updated_at,omitempty"`
+}
+
+type aiBusinessBriefThemeSummary struct {
+	Candidates      []businessAnalysisTheme
+	EvidenceByTheme map[string][]themeIntelReportAIRow
+	SourceCallCount int
+	SourceRowCount  int
 }
 
 type themeIntelReportTranscriptRow struct {
@@ -246,15 +255,29 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		themeCandidates  []businessAnalysisTheme
 		primaryThemeName string
 	)
+	var aiBriefSummary aiBusinessBriefThemeSummary
 	if themeQuery == "" {
 		broadDiscovery = true
-		evidenceItems, evidenceQuotes, err = s.businessAnalysisEvidenceBroadDiscovery(ctx, normalized, "", limit, baArgs, true)
+		normalized = applyDefaultBroadThemeQualityFilters(normalized)
+		cohort, err = s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
+			Filter: sqliteBusinessAnalysisFilter(normalized),
+			Limit:  limit,
+		})
 		if err != nil {
 			return toolCallResult{}, err
 		}
-		themeCandidates = discoverBusinessAnalysisThemes(evidenceItems, maxThemeIntelReportThemes)
+		cohort.Rows = filterThemeIntelCohortRows(cohort.Rows, normalized)
+		aiBriefSummary, err = s.aiBusinessBriefThemeSummary(ctx, cohort.Rows, includeRaw, maxThemeIntelReportThemes)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		themeCandidates = aiBriefSummary.Candidates
 	} else {
 		evidenceItems, evidenceQuotes, err = s.businessAnalysisEvidence(ctx, normalized, themeQuery, limit, baArgs)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		aiBriefSummary, err = s.aiBusinessBriefThemeSummaryForSeeds(ctx, cohort.Rows, includeRaw, maxThemeIntelReportThemes, []string{themeQuery})
 		if err != nil {
 			return toolCallResult{}, err
 		}
@@ -299,7 +322,10 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	quoteRowsByTheme := buildThemeIntelQuotePartitions(themeCandidates, evidenceItems, evidenceQuotes, primaryThemeName, topQuotes, includeRaw, includeTitles, includeAccounts, includeSpeakerRefs)
 
 	// Pick representative calls for drilldown — at most maxThemeIntelReportCallDrilldowns.
-	drillCalls := selectThemeIntelDrilldownCalls(cohort.Rows, evidenceItems, maxThemeIntelReportCallDrilldowns)
+	drillCalls := selectThemeIntelQuoteBackedDrilldownCalls(quoteRowsByTheme, maxThemeIntelReportCallDrilldowns)
+	if len(drillCalls) == 0 {
+		drillCalls = selectThemeIntelDrilldownCalls(cohort.Rows, evidenceItems, maxThemeIntelReportCallDrilldowns)
+	}
 	drilldowns := make([]themeIntelReportDrilldown, 0, len(drillCalls))
 	for _, callID := range drillCalls {
 		drill, err := s.themeIntelReportBuildDrilldown(ctx, callID, themeQuery, includeRaw, includeTitles, includeAccounts, includeSpeakerRefs)
@@ -334,7 +360,7 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	}
 	if broadDiscovery {
 		warnings = append(warnings,
-			"broad_discovery_seedless: returned candidate theme terms from a bounded transcript sample because no theme_query was provided. These are suggested seed terms, not synthesized claims; rerun theme_intelligence_report with a chosen theme_query for stronger evidence.")
+			"broad_discovery_ai_brief_first: no theme_query was provided, so candidate themes were ranked from Gong AI brief/keyPoint/highlight rows after excluding noisy lifecycle/voicemail calls. Rerun theme_intelligence_report with a chosen theme_query for buyer transcript quotes.")
 	}
 	if loss, ok := lossSummary["status"].(string); ok && loss == "loss_reason_not_populated" {
 		limitations = append(limitations, "loss_reason_not_populated")
@@ -348,7 +374,7 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		status = "empty_cohort"
 		warnings = append(warnings, "empty_cohort: no calls matched the normalized filter")
 	} else if broadDiscovery {
-		status = "candidate_terms_only"
+		status = "ai_brief_candidate_themes"
 	}
 
 	// Truncation accounting. The dimension paths apply their own caps; we
@@ -373,15 +399,22 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	}
 
 	payload := map[string]any{
-		"operation":                 OpThemeIntelReport,
-		"status":                    status,
-		"searched_scope":            normalized,
-		"field_profile":             args.FieldProfile,
-		"speaker_role_filter":       speakerRoleFilter,
-		"theme_query":               themeQuery,
-		"primary_theme":             primaryThemeName,
-		"coverage_summary":          businessAnalysisCoverageFromSummary(cohort.Summary),
-		"theme_candidates":          themeCandidates,
+		"operation":                           OpThemeIntelReport,
+		"status":                              status,
+		"searched_scope":                      normalized,
+		"field_profile":                       args.FieldProfile,
+		"speaker_role_filter":                 speakerRoleFilter,
+		"theme_query":                         themeQuery,
+		"primary_theme":                       primaryThemeName,
+		"coverage_summary":                    businessAnalysisCoverageFromSummary(cohort.Summary),
+		"theme_candidates":                    themeCandidates,
+		"ai_business_brief_evidence_by_theme": themeIntelReportAIMapAsPayload(aiBriefSummary.EvidenceByTheme),
+		"ai_business_brief_source": map[string]any{
+			"source":          "gong_ai_brief_keypoints_highlights",
+			"source_calls":    aiBriefSummary.SourceCallCount,
+			"source_rows":     aiBriefSummary.SourceRowCount,
+			"filters_applied": []string{"exclude_lifecycle_buckets", "exclude_likely_voicemail"},
+		},
 		"themes_by_quarter":         themeIntelReportDimensionPayload("quarter", quarterRows),
 		"themes_by_industry":        themeIntelReportDimensionPayload("industry", industryRows),
 		"themes_by_persona":         themeIntelReportDimensionPayload("persona", personaRows),
@@ -554,6 +587,194 @@ func selectThemeIntelDrilldownCalls(cohortRows []sqlite.BusinessAnalysisCallRow,
 	return out
 }
 
+func selectThemeIntelQuoteBackedDrilldownCalls(quotes map[string][]themeIntelReportQuoteRow, max int) []string {
+	if max <= 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(quotes))
+	for theme := range quotes {
+		keys = append(keys, theme)
+	}
+	sort.Strings(keys)
+	seen := make(map[string]struct{}, max)
+	out := make([]string, 0, max)
+	for _, theme := range keys {
+		for _, row := range quotes[theme] {
+			if len(out) >= max {
+				return out
+			}
+			callID := strings.TrimSpace(row.callIDForDrilldown)
+			if callID == "" {
+				continue
+			}
+			if _, ok := seen[callID]; ok {
+				continue
+			}
+			seen[callID] = struct{}{}
+			out = append(out, callID)
+		}
+	}
+	return out
+}
+
+func filterThemeIntelCohortRows(rows []sqlite.BusinessAnalysisCallRow, filter callFilter) []sqlite.BusinessAnalysisCallRow {
+	if len(rows) == 0 {
+		return rows
+	}
+	out := make([]sqlite.BusinessAnalysisCallRow, 0, len(rows))
+	for _, row := range rows {
+		if businessAnalysisFilterExcludesRow(filter, row.LifecycleBucket, row.LikelyVoicemailOrIVR) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func (s *Server) aiBusinessBriefThemeSummary(ctx context.Context, rows []sqlite.BusinessAnalysisCallRow, includeRaw bool, limit int) (aiBusinessBriefThemeSummary, error) {
+	return s.aiBusinessBriefThemeSummaryForSeeds(ctx, rows, includeRaw, limit, questionAnswerSuggestedSeedTopics())
+}
+
+func (s *Server) aiBusinessBriefThemeSummaryForSeeds(ctx context.Context, rows []sqlite.BusinessAnalysisCallRow, includeRaw bool, limit int, seedTopics []string) (aiBusinessBriefThemeSummary, error) {
+	if limit <= 0 {
+		limit = maxThemeIntelReportThemes
+	}
+	seedTopics = normalizeBusinessSignalQueries(seedTopics, maxBusinessSignalTopics)
+	if len(seedTopics) == 0 {
+		return aiBusinessBriefThemeSummary{EvidenceByTheme: map[string][]themeIntelReportAIRow{}}, nil
+	}
+	callIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(row.CallID) == "" || s.isSuppressedCall(row.CallID) {
+			continue
+		}
+		callIDs = append(callIDs, row.CallID)
+		if len(callIDs) >= 25 {
+			break
+		}
+	}
+	if len(callIDs) == 0 {
+		return aiBusinessBriefThemeSummary{EvidenceByTheme: map[string][]themeIntelReportAIRow{}}, nil
+	}
+	highlights, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: callIDs, Limit: maxThemeIntelReportAICondensedRows * len(callIDs)})
+	if err != nil {
+		return aiBusinessBriefThemeSummary{}, err
+	}
+	callSupport := make(map[string]map[string]struct{}, len(seedTopics))
+	evidence := make(map[string][]themeIntelReportAIRow, len(seedTopics))
+	for _, row := range highlights {
+		text := strings.ToLower(row.HighlightText)
+		if strings.TrimSpace(text) == "" || businessBriefLooksLikeVoicemail(text) {
+			continue
+		}
+		for _, seed := range seedTopics {
+			if !businessBriefMatchesTopic(text, seed) {
+				continue
+			}
+			if callSupport[seed] == nil {
+				callSupport[seed] = map[string]struct{}{}
+			}
+			callSupport[seed][row.CallID] = struct{}{}
+			ai := themeIntelReportAIRow{
+				CallRef:        sqlite.StableCallRef(row.CallID),
+				HighlightIndex: row.HighlightIndex,
+				HighlightType:  row.HighlightType,
+				HighlightText:  row.HighlightText,
+				SourcePath:     row.SourcePath,
+				UpdatedAt:      row.UpdatedAt,
+			}
+			if includeRaw {
+				ai.CallID = row.CallID
+			}
+			if len(evidence[seed]) < maxThemeIntelReportQuotesPerTheme {
+				evidence[seed] = append(evidence[seed], ai)
+			}
+		}
+	}
+	type scored struct {
+		theme string
+		count int
+	}
+	scoredThemes := make([]scored, 0, len(callSupport))
+	for theme, calls := range callSupport {
+		if len(calls) == 0 {
+			continue
+		}
+		scoredThemes = append(scoredThemes, scored{theme: theme, count: len(calls)})
+	}
+	sort.Slice(scoredThemes, func(i, j int) bool {
+		if scoredThemes[i].count == scoredThemes[j].count {
+			return scoredThemes[i].theme < scoredThemes[j].theme
+		}
+		return scoredThemes[i].count > scoredThemes[j].count
+	})
+	if len(scoredThemes) > limit {
+		scoredThemes = scoredThemes[:limit]
+	}
+	candidates := make([]businessAnalysisTheme, 0, len(scoredThemes))
+	filteredEvidence := make(map[string][]themeIntelReportAIRow, len(scoredThemes))
+	for _, item := range scoredThemes {
+		candidates = append(candidates, businessAnalysisTheme{
+			Theme:        item.theme,
+			SupportCount: item.count,
+			EvidenceType: "gong_ai_business_brief_signal",
+		})
+		filteredEvidence[item.theme] = evidence[item.theme]
+	}
+	return aiBusinessBriefThemeSummary{
+		Candidates:      candidates,
+		EvidenceByTheme: filteredEvidence,
+		SourceCallCount: len(callIDs),
+		SourceRowCount:  len(highlights),
+	}, nil
+}
+
+func businessBriefMatchesTopic(text string, seed string) bool {
+	if businessBriefMatchesSeed(text, seed) {
+		return true
+	}
+	for _, alias := range businessSignalTopicAliases("", seed) {
+		if businessBriefMatchesSeed(text, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func businessBriefMatchesSeed(text string, seed string) bool {
+	for _, term := range strings.Fields(strings.ToLower(seed)) {
+		term = strings.Trim(term, " -_/")
+		if len(term) <= 2 {
+			continue
+		}
+		if !strings.Contains(text, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func businessBriefLooksLikeVoicemail(text string) bool {
+	for _, phrase := range []string{"please leave", "leave a message", "after the tone", "voicemail", "not available", "unable to take", "customer care team", "your call is important"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func themeIntelReportAIMapAsPayload(rows map[string][]themeIntelReportAIRow) map[string]any {
+	out := make(map[string]any, len(rows))
+	for theme, list := range rows {
+		if len(list) == 0 {
+			out[theme] = []any{}
+			continue
+		}
+		out[theme] = list
+	}
+	return out
+}
+
 // buildThemeIntelQuotePartitions returns top-N quotes per theme. For a
 // single primary theme the entire bounded evidence set is pinned to that
 // bucket. With broad discovery, the same evidence is partitioned across
@@ -591,6 +812,7 @@ func buildThemeIntelQuotePartitions(candidates []businessAnalysisTheme, items []
 			SpeakerRole:           speakerRole,
 			SpeakerRoleStatus:     speakerStatus,
 			DrilldownTerm:         themeName,
+			callIDForDrilldown:    strings.TrimSpace(firstNonBlank(quote.callIDForDrilldown, quote.CallID, item.CallID)),
 		}
 		if includeRaw {
 			row.CallID = quote.CallID

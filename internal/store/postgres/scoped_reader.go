@@ -170,17 +170,17 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
 	)
 	businessAnalysisCoreFunctions := []string{
-		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean)",
 	}
 	businessAnalysisEvidenceFunctions := append(copyPostgresFunctionSignatures(businessAnalysisCoreFunctions),
-		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
 	)
 	businessAnalysisThemeDiscoveryFunctions := append(copyPostgresFunctionSignatures(businessAnalysisEvidenceFunctions),
-		"public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
 	)
 	businessAnalysisDimensionFunctions := append(copyPostgresFunctionSignatures(businessAnalysisCoreFunctions),
-		"public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
 	)
 	functionsByTool := map[string][]string{
 		"analyze_late_stage_crm_signals": {
@@ -344,14 +344,14 @@ func scopedReaderFunctionSignatures(signatures []string, redactedAll bool) []str
 		if signature == "public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
 			signature = "public.gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer)"
 		}
-		if signature == "public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
-			signature = "public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
+		if signature == "public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)" && !redactedAll {
+			signature = "public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)"
 		}
-		if signature == "public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
-			signature = "public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
+		if signature == "public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)" && !redactedAll {
+			signature = "public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)"
 		}
-		if signature == "public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)" && !redactedAll {
-			signature = "public.gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)"
+		if signature == "public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)" && !redactedAll {
+			signature = "public.gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)"
 		}
 		if signature == "public.gongmcp_search_transcript_segments(text, integer)" {
 			signature = "public.gongmcp_search_transcript_segments_sanitized(text, integer)"
@@ -615,6 +615,7 @@ func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 		{Table: "call_facts", Column: "transcript_present"},
 		{Table: "call_facts", Column: "transcript_status"},
 		{Table: "call_facts", Column: "duration_seconds"},
+		{Table: "call_facts", Column: "likely_voicemail_or_ivr"},
 		{Table: "call_facts", Column: "started_at"},
 		{Table: "call_facts", Column: "lifecycle_confidence"},
 		{Table: "call_facts", Column: "account_industry"},
@@ -679,9 +680,9 @@ func rawScopedReaderFunctionRevokes() []string {
 		"public.gongmcp_profile_call_fact_cache_sanitized(bigint, text)",
 		"public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
 		"public.gongmcp_search_transcript_segments(text, integer)",
 		"public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)",
 	}

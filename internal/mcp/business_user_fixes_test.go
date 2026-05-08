@@ -152,7 +152,7 @@ func TestDiscoverBusinessAnalysisThemesFiltersSeedlessNoise(t *testing.T) {
 		{Snippet: "Please press zero for the main desk. Sarah said pricing review and manual order entry came up."},
 	}, 8)
 	text := strings.ToLower(mustJSONText(t, themes))
-	for _, noisy := range []string{"please", "press", "leave", "message", "tone", "zero", "main", "desk", "john", "sarah"} {
+	for _, noisy := range []string{"please", "press", "leave", "message", "tone", "zero", "main", "desk", "john", "sarah", "just", "gonna", "guys", "anybody", "depends"} {
 		if strings.Contains(text, `"`+noisy+`"`) {
 			t.Fatalf("seedless candidate themes should filter IVR/voicemail noise %q: %s", noisy, text)
 		}
@@ -162,6 +162,104 @@ func TestDiscoverBusinessAnalysisThemesFiltersSeedlessNoise(t *testing.T) {
 	}
 	if strings.Contains(text, `"support_count":4`) {
 		t.Fatalf("candidate theme support should count per snippet, not repeated tokens inside one snippet: %s", text)
+	}
+}
+
+func TestDiversifyBusinessAnalysisItemsByCallCapsSingleCallDominance(t *testing.T) {
+	t.Parallel()
+
+	items := []businessAnalysisItem{
+		{CallRef: "call_ref_one", SegmentIndex: 1, Snippet: "pricing"},
+		{CallRef: "call_ref_one", SegmentIndex: 2, Snippet: "pricing"},
+		{CallRef: "call_ref_one", SegmentIndex: 3, Snippet: "pricing"},
+		{CallRef: "call_ref_one", SegmentIndex: 4, Snippet: "pricing"},
+		{CallRef: "call_ref_two", SegmentIndex: 1, Snippet: "implementation"},
+	}
+	got := diversifyBusinessAnalysisItemsByCall(items, 2, 10)
+	if len(got) != 3 {
+		t.Fatalf("diversified len=%d want 3: %v", len(got), got)
+	}
+	seenOne := 0
+	for _, item := range got {
+		if item.CallRef == "call_ref_one" {
+			seenOne++
+		}
+	}
+	if seenOne != 2 {
+		t.Fatalf("call_ref_one count=%d want 2: %v", seenOne, got)
+	}
+}
+
+func TestFacadeAnalyzeThemesDiscoverSeedlessSuppressesFillerRowsWhenNoBusinessCandidates(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":        "call_seedless_filler_only",
+		"title":     "Business discovery filler only",
+		"started":   "2026-04-18T15:00:00Z",
+		"duration":  1200,
+		"system":    "Zoom",
+		"direction": "Conference",
+		"scope":     "External",
+		"parties": []any{
+			map[string]any{"speakerId": "buyer_filler", "affiliation": "External", "title": "VP Operations"},
+		},
+	})); err != nil {
+		t.Fatalf("upsert filler call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_seedless_filler_only",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer_filler",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Hey Amanda, sorry I am a little late here."},
+							map[string]any{"start": 2200, "end": 3500, "text": "No, that is fine. How are you doing today?"},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert filler transcript: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{"discover_themes_in_cohort"}),
+	)
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpAnalyzeThemesDiscover, map[string]any{
+		"filter": map[string]any{
+			"title_query": "Business discovery filler only",
+			"from_date":   "2026-04-01",
+			"to_date":     "2026-04-30",
+		},
+		"limit": 5,
+	}))
+	if err != nil {
+		t.Fatalf("analyze themes discover dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	if got, _ := inner["status"].(string); got != "needs_theme_seed" {
+		t.Fatalf("status=%q want needs_theme_seed when only filler remains: %v", got, inner)
+	}
+	if rows, _ := inner["results"].([]any); len(rows) != 0 {
+		t.Fatalf("seedless filler-only path should not emit raw transcript sample rows: %v", rows)
+	}
+	text := strings.ToLower(result.Content[0].Text)
+	for _, filler := range []string{"little late", "doing today"} {
+		if strings.Contains(text, filler) {
+			t.Fatalf("seedless filler-only response leaked filler snippet %q: %s", filler, text)
+		}
 	}
 }
 
@@ -231,6 +329,229 @@ func TestFacadeExtractObjectionSignalsDefaultsToExternalOrUnknownEvidenceAndProf
 	}
 	if text := strings.ToLower(mustJSONText(t, evidence)); strings.Contains(text, "rep script") {
 		t.Fatalf("internal seller evidence leaked into external objection extraction: %s", text)
+	}
+}
+
+func TestFacadeExtractBuyerQuestionsUsesTCSpecificSynonymExpansion(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":        "call_rollout_synonym_001",
+		"title":     "External rollout discussion",
+		"started":   "2026-04-14T15:00:00Z",
+		"duration":  1200,
+		"system":    "Zoom",
+		"direction": "Conference",
+		"scope":     "External",
+		"parties": []any{
+			map[string]any{"speakerId": "buyer_rollout_1", "affiliation": "External", "title": "Director of IT"},
+		},
+	})); err != nil {
+		t.Fatalf("upsert rollout call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_rollout_synonym_001",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer_rollout_1",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "The rollout plan will need IT bandwidth before launch."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert rollout transcript: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolBuyerQuestions}),
+	)
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
+		"filter": map[string]any{
+			"from_date":         "2026-04-01",
+			"to_date":           "2026-04-30",
+			"transcript_status": "present",
+		},
+		"topics": []string{"implementation"},
+		"limit":  10,
+	}))
+	if err != nil {
+		t.Fatalf("extract buyer questions dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	buckets, _ := inner["buckets"].([]any)
+	if len(buckets) != 1 {
+		t.Fatalf("buckets len=%d want 1: %v", len(buckets), inner)
+	}
+	bucket, _ := buckets[0].(map[string]any)
+	if got, _ := bucket["evidence_count"].(float64); got < 1 {
+		t.Fatalf("implementation synonym expansion returned no evidence: %v", bucket)
+	}
+	expanded := strings.ToLower(mustJSONText(t, bucket["expanded_queries"]))
+	if !strings.Contains(expanded, "rollout") {
+		t.Fatalf("expanded_queries missing rollout synonym: %s", expanded)
+	}
+	evidence := strings.ToLower(mustJSONText(t, bucket["evidence"]))
+	if !strings.Contains(evidence, "rollout plan") {
+		t.Fatalf("expected rollout evidence from implementation topic: %s", evidence)
+	}
+	securityExpanded := strings.ToLower(mustJSONText(t, businessSignalTopicQueries(OpExtractBuyerQuestions, "security")))
+	if !strings.Contains(securityExpanded, "infosec") || !strings.Contains(securityExpanded, "compliance review") {
+		t.Fatalf("buyer-question security aliases should match objection alias breadth: %s", securityExpanded)
+	}
+}
+
+func TestFacadeExtractBuyerQuestionsDefaultsExcludeVoicemailAndIVRSupportRows(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	for _, raw := range []json.RawMessage{
+		mustJSON(t, map[string]any{
+			"id":        "call_support_outbound_ivr",
+			"title":     "Outbound support IVR",
+			"started":   "2026-04-20T15:00:00Z",
+			"duration":  45,
+			"system":    "Telephony",
+			"direction": "Outbound",
+			"scope":     "External",
+			"parties": []any{
+				map[string]any{"speakerId": "ivr_support_1", "affiliation": "External", "title": "Customer Support"},
+			},
+		}),
+		mustJSON(t, map[string]any{
+			"id":        "call_support_closed_transfer",
+			"title":     "Closed review support transfer",
+			"started":   "2026-04-21T15:00:00Z",
+			"duration":  1200,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"parties": []any{
+				map[string]any{"speakerId": "ivr_support_2", "affiliation": "External", "title": "Customer Support"},
+			},
+			"context": []any{
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp_support_closed",
+					"name":       "Support Closed Lost",
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Closed Lost"},
+					},
+				},
+			},
+		}),
+		mustJSON(t, map[string]any{
+			"id":        "call_support_real_buyer",
+			"title":     "Business discovery support question",
+			"started":   "2026-04-22T15:00:00Z",
+			"duration":  1200,
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"parties": []any{
+				map[string]any{"speakerId": "buyer_support_1", "affiliation": "External", "title": "VP Operations"},
+			},
+		}),
+	} {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert support fixture call: %v", err)
+		}
+	}
+	for _, raw := range []json.RawMessage{
+		mustJSON(t, map[string]any{
+			"callTranscripts": []any{map[string]any{
+				"callId": "call_support_outbound_ivr",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "ivr_support_1",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "Our customer support center is open from eight AM to five PM central."},
+						},
+					},
+				},
+			}},
+		}),
+		mustJSON(t, map[string]any{
+			"callTranscripts": []any{map[string]any{
+				"callId": "call_support_closed_transfer",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "ivr_support_2",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "This call will be recorded for quality and training purposes. Transferring you to customer support."},
+						},
+					},
+				},
+			}},
+		}),
+		mustJSON(t, map[string]any{
+			"callTranscripts": []any{map[string]any{
+				"callId": "call_support_real_buyer",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer_support_1",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "What post implementation support do you provide after go live?"},
+						},
+					},
+				},
+			}},
+		}),
+	} {
+		if _, err := store.UpsertTranscript(ctx, raw); err != nil {
+			t.Fatalf("upsert support transcripts: %v", err)
+		}
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolBuyerQuestions}),
+	)
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
+		"filter": map[string]any{
+			"from_date": "2026-04-01",
+			"to_date":   "2026-04-30",
+		},
+		"topics": []string{"support"},
+		"limit":  10,
+	}))
+	if err != nil {
+		t.Fatalf("extract buyer questions support dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	scope, _ := inner["searched_scope"].(map[string]any)
+	if got := strings.ToLower(mustJSONText(t, scope["exclude_lifecycle_buckets"])); !strings.Contains(got, "outbound_prospecting") {
+		t.Fatalf("support extraction should default exclude outbound_prospecting: %v", scope)
+	}
+	if got, _ := scope["exclude_likely_voicemail"].(bool); !got {
+		t.Fatalf("support extraction should default exclude likely voicemail: %v", scope)
+	}
+	rendered := strings.ToLower(mustJSONText(t, inner["buckets"]))
+	if !strings.Contains(rendered, "post implementation support") {
+		t.Fatalf("support extraction should keep real buyer support question: %s", rendered)
+	}
+	for _, noisy := range []string{"customer support center", "transferring you to customer support", "quality and training purposes"} {
+		if strings.Contains(rendered, noisy) {
+			t.Fatalf("support extraction included IVR row %q: %s", noisy, rendered)
+		}
 	}
 }
 

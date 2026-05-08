@@ -2948,6 +2948,20 @@ func TestGovernanceSuppressedCallIDTableRegistryCoversSchema(t *testing.T) {
 	}
 }
 
+func TestBusinessAnalysisLikelyVoicemailAvoidsLoosePressSubstring(t *testing.T) {
+	t.Parallel()
+
+	sqlText := businessAnalysisLikelyVoicemailSQL()
+	if strings.Contains(sqlText, "LIKE '%press %'") {
+		t.Fatal("sqlite voicemail detection must not use loose percent-press-space-percent substring")
+	}
+	for _, want := range []string{"LIKE '%press 1%'", "LIKE '%press one%'", "LIKE '%press the %'"} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("sqlite voicemail detection missing anchored IVR phrase %q", want)
+		}
+	}
+}
+
 func schemaTablesWithColumn(ctx context.Context, store *Store, column string) ([]string, error) {
 	rows, err := store.DB().QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 	if err != nil {

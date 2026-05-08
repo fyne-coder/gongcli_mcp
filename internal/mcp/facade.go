@@ -213,9 +213,10 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":      map[string]any{"type": "object"},
-				"theme_query": map[string]any{"type": "string"},
-				"limit":       map[string]any{"type": "integer"},
+				"filter":        map[string]any{"type": "object"},
+				"theme_query":   map[string]any{"type": "string"},
+				"limit":         map[string]any{"type": "integer"},
+				"field_profile": fieldProfileSchema(),
 			}, nil),
 		},
 		{
@@ -240,9 +241,10 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":      map[string]any{"type": "object"},
-				"theme_query": map[string]any{"type": "string"},
-				"limit":       map[string]any{"type": "integer"},
+				"filter":        map[string]any{"type": "object"},
+				"theme_query":   map[string]any{"type": "string"},
+				"limit":         map[string]any{"type": "integer"},
+				"field_profile": fieldProfileSchema(),
 			}, nil),
 		},
 		{
@@ -254,9 +256,10 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":      map[string]any{"type": "object"},
-				"theme_query": map[string]any{"type": "string"},
-				"limit":       map[string]any{"type": "integer"},
+				"filter":        map[string]any{"type": "object"},
+				"theme_query":   map[string]any{"type": "string"},
+				"limit":         map[string]any{"type": "integer"},
+				"field_profile": fieldProfileSchema(),
 			}, nil),
 		},
 		{
@@ -1169,7 +1172,59 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 		})
 	}
 	if strings.TrimSpace(evidenceQuery) == "" {
-		return newToolResult(questionAnswerNeedsThemeSeedPayload(question, args, normalized, speakerRoleFilter, limit, cohort, derivationMeta, warnings))
+		broadFilter := applyDefaultBroadThemeQualityFilters(normalized)
+		broadCohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
+			Filter: sqliteBusinessAnalysisFilter(broadFilter),
+			Limit:  limit,
+		})
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		filteredRows := filterThemeIntelCohortRows(broadCohort.Rows, broadFilter)
+		briefSummary, err := s.aiBusinessBriefThemeSummary(ctx, filteredRows, args.IncludeCallIDs, maxThemeIntelReportThemes)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		if len(briefSummary.Candidates) == 0 {
+			return newToolResult(questionAnswerNeedsThemeSeedPayload(question, args, broadFilter, speakerRoleFilter, limit, broadCohort, derivationMeta, warnings))
+		}
+		derivationMeta["outcome"] = "ai_business_brief_theme_candidates"
+		derivationMeta["source"] = "gong_ai_brief_keypoints_highlights"
+		warnings = append(warnings, "question_answer_ai_brief_first: broad theme question answered from Gong AI brief/keyPoint/highlight candidates after excluding noisy lifecycle/voicemail calls; rerun theme_intelligence_report with a chosen theme_query for buyer transcript quotes.")
+		return newToolResult(map[string]any{
+			"operation":                           OpQuestionAnswer,
+			"status":                              "ai_brief_theme_candidates_ready",
+			"question":                            question,
+			"role_context":                        strings.TrimSpace(args.RoleContext),
+			"output_intent":                       strings.TrimSpace(args.OutputIntent),
+			"searched_scope":                      broadFilter,
+			"field_profile":                       args.FieldProfile,
+			"speaker_role_filter":                 speakerRoleFilter,
+			"evidence_query":                      "",
+			"limit":                               limit,
+			"coverage_summary":                    businessAnalysisCoverageFromSummary(broadCohort.Summary),
+			"cohort_summary":                      broadCohort.Summary,
+			"reviewed_calls":                      s.businessAnalysisCallRows(filteredRows, businessAnalysisArgs{Filter: broadFilter, IncludeCallIDs: args.IncludeCallIDs, IncludeCallTitles: args.IncludeCallTitles, IncludeAccountNames: args.IncludeAccountNames, FieldProfile: args.FieldProfile, SpeakerRole: speakerRoleFilter}),
+			"theme_candidates":                    briefSummary.Candidates,
+			"ai_business_brief_evidence_by_theme": themeIntelReportAIMapAsPayload(briefSummary.EvidenceByTheme),
+			"ai_business_brief_source": map[string]any{
+				"source":       "gong_ai_brief_keypoints_highlights",
+				"source_calls": briefSummary.SourceCallCount,
+				"source_rows":  briefSummary.SourceRowCount,
+			},
+			"evidence":               []any{},
+			"quotes":                 []any{},
+			"evidence_count":         0,
+			"warnings":               warnings,
+			"limitations":            append(businessAnalysisLimitations(OpQuestionAnswer), "ai_business_brief_candidates_are_not_verbatim_buyer_quotes"),
+			"answer_contract":        []string{"Use theme_candidates as directional themes from Gong AI condensed evidence.", "Use ai_business_brief_evidence_by_theme as AI-generated support, not verbatim transcript quotes.", "For customer-facing claims, rerun theme_intelligence_report with one chosen theme_query to retrieve buyer transcript quotes."},
+			"derived_theme_query":    "",
+			"theme_query_derivation": derivationMeta,
+			"suggested_seed_topics":  questionAnswerSuggestedSeedTopics(),
+			"recommended_operations": questionAnswerRecommendedOperations(),
+			"suggested_followups":    []string{"Run theme_intelligence_report with the top theme_query from theme_candidates.", "Run extract.buyer_questions for the top three candidate themes.", "Use evidence.call_drilldown on a call_ref from ai_business_brief_evidence_by_theme for a bounded call brief."},
+			"plain_language_message": "I found broad theme candidates from Gong AI business briefs after filtering out outbound-prospecting and likely voicemail calls. Treat these as directional themes, then pick a theme_query for verbatim buyer quotes.",
+		})
 	}
 	baArgs := businessAnalysisArgs{
 		Filter:              normalized,
@@ -1590,6 +1645,10 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		IncludeCallTitles:       args.IncludeCallTitles,
 		IncludeAccountNames:     args.IncludeAccountNames,
 		IncludeOpportunityNames: args.IncludeOpportunityNames,
+		// Drilldown historically emits stable speaker refs by default for
+		// internal attribution. The limited profile must still be able to
+		// suppress them because its public contract says so.
+		IncludeSpeakerRefs: true,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1663,6 +1722,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	includeTitles := args.IncludeCallTitles && !s.policySwitches.HideCallTitles
 	includeAccounts := args.IncludeAccountNames && !s.policySwitches.HideAccountNames
 	includeOpportunities := args.IncludeOpportunityNames && !s.policySwitches.HideOpportunityNames
+	includeSpeakerRefs := profiled.IncludeSpeakerRefs
 	// Phase B-1: raw participant titles never leak by default. The opt-in
 	// `include_person_titles` arg only takes effect when the active policy
 	// also permits contact-name exposure (HideContactNames=false). gongmcp
@@ -1766,7 +1826,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 			out.SpeakerRoleStatus = sqlite.SpeakerRoleStatusAffiliationMissing
 		}
 		out.IsInternalSpeaker = out.SpeakerRole == sqlite.SpeakerRoleInternal
-		if strings.TrimSpace(row.SpeakerID) != "" {
+		if includeSpeakerRefs && strings.TrimSpace(row.SpeakerID) != "" {
 			out.SpeakerRef = stableEvidenceRef("speaker", resolvedCallID+"\x00"+row.SpeakerID)
 		}
 		if s.policySwitches.HideSpeakerIDs {
@@ -1796,6 +1856,9 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 			status = "no_highlights_for_call"
 		}
 	}
+	if args.FieldProfile == fieldProfileLimited && len(aiRows) > 0 {
+		warnings = append(warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text: field_profile=limited suppresses structured attribution fields, but Gong AI brief/keyPoint text may still contain names or customer terms")
+	}
 
 	coverage := map[string]any{
 		"transcript_excerpt_count":     len(transcriptOut),
@@ -1813,6 +1876,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"call_drilldown_does_not_re-derive_lifecycle_industry_or_opportunity_stage_in_this_spine",
 		"speaker_attribution_uses_exact_gong_party_speaker_id_only_no_crm_contact_or_lead_matching_in_this_phase",
 		"person_title_is_never_inferred_from_transcript_text_or_persona_buckets",
+		"field_profile_controls_structured_metadata_not_names_inside_evidence_text",
 	}
 	if !callDrilldownSpeakerRolesAvailable(transcriptOut) {
 		limitations = append(limitations, "buyer_versus_rep_role_is_not_proven_by_this_evidence_pack_callers_must_treat_attribution_confidence_as_authoritative")

@@ -797,6 +797,9 @@ signals AS (
 	       ) AS call_party_title_present,
 	       CASE WHEN t.call_id IS NULL THEN false ELSE true END AS transcript_present,
 	       CASE WHEN t.call_id IS NULL THEN 'missing' ELSE 'present' END AS transcript_status,
+	       COALESCE(vm.vm_phrase_segment_count, 0) AS vm_phrase_segment_count,
+	       COALESCE(vm.vm_phrase_chars, 0) AS vm_phrase_chars,
+	       COALESCE(vm.total_transcript_chars, 0) AS total_transcript_chars,
 	       COALESCE(crm.account_id, '') AS account_id,
 	       COALESCE(crm.account_type, '') AS account_type,
 	       COALESCE(crm.account_industry, '') AS account_industry,
@@ -824,14 +827,21 @@ signals AS (
 	       COALESCE(crm.has_loss_reason, 0) AS has_loss_reason
 	  FROM calls c
 	  LEFT JOIN transcripts t ON t.call_id = c.call_id
+	  LEFT JOIN LATERAL (
+	       SELECT COUNT(*) FILTER (WHERE LOWER(ts.text) LIKE '%please leave%' OR LOWER(ts.text) LIKE '%leave a message%' OR LOWER(ts.text) LIKE '%after the tone%' OR LOWER(ts.text) LIKE '%press one%' OR LOWER(ts.text) LIKE '%press 1%' OR LOWER(ts.text) LIKE '%press two%' OR LOWER(ts.text) LIKE '%press 2%' OR LOWER(ts.text) LIKE '%press zero%' OR LOWER(ts.text) LIKE '%press 0%' OR LOWER(ts.text) LIKE '%press star%' OR LOWER(ts.text) LIKE '%press pound%' OR LOWER(ts.text) LIKE '%press the %' OR LOWER(ts.text) LIKE '%voicemail%' OR LOWER(ts.text) LIKE '%not available%' OR LOWER(ts.text) LIKE '%unable to take%' OR LOWER(ts.text) LIKE '%customer care team%' OR LOWER(ts.text) LIKE '%your call is important%') AS vm_phrase_segment_count,
+	              COALESCE(SUM(length(ts.text)) FILTER (WHERE LOWER(ts.text) LIKE '%please leave%' OR LOWER(ts.text) LIKE '%leave a message%' OR LOWER(ts.text) LIKE '%after the tone%' OR LOWER(ts.text) LIKE '%press one%' OR LOWER(ts.text) LIKE '%press 1%' OR LOWER(ts.text) LIKE '%press two%' OR LOWER(ts.text) LIKE '%press 2%' OR LOWER(ts.text) LIKE '%press zero%' OR LOWER(ts.text) LIKE '%press 0%' OR LOWER(ts.text) LIKE '%press star%' OR LOWER(ts.text) LIKE '%press pound%' OR LOWER(ts.text) LIKE '%press the %' OR LOWER(ts.text) LIKE '%voicemail%' OR LOWER(ts.text) LIKE '%not available%' OR LOWER(ts.text) LIKE '%unable to take%' OR LOWER(ts.text) LIKE '%customer care team%' OR LOWER(ts.text) LIKE '%your call is important%'), 0) AS vm_phrase_chars,
+	              COALESCE(SUM(length(ts.text)), 0) AS total_transcript_chars
+	         FROM transcript_segments ts
+	        WHERE ts.call_id = c.call_id
+	  ) vm ON true
 	  LEFT JOIN crm ON crm.call_id = c.call_id
 	 WHERE c.call_id = $1
 )
 INSERT INTO call_facts(
 	call_id, title, started_at, call_date, call_month, duration_seconds, duration_bucket,
 	system, direction, scope, purpose, primary_user_id, calendar_event_present, calendar_event_status,
-	sdr_disposition, transcript_present, transcript_status, lifecycle_bucket, lifecycle_confidence,
-	lifecycle_reason, lifecycle_evidence_fields, account_id, account_type, account_industry,
+	sdr_disposition, transcript_present, transcript_status, lifecycle_bucket, likely_voicemail_or_ivr,
+	lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_id, account_type, account_industry,
 	account_revenue_range, account_primary_procurement_system, opportunity_id, opportunity_stage,
 	opportunity_type, opportunity_amount, opportunity_probability, opportunity_forecast_category,
 	opportunity_primary_lead_source, opportunity_procurement_system, opportunity_count, account_count,
@@ -865,6 +875,7 @@ SELECT c.call_id,
 	       WHEN LOWER(c.system) = 'upload api' AND LOWER(c.direction) = 'outbound' THEN 'outbound_prospecting'
 	       ELSE 'unknown'
        END AS lifecycle_bucket,
+       (c.transcript_present AND c.duration_seconds <= 120 AND c.vm_phrase_segment_count > 0 AND (c.vm_phrase_chars::numeric / GREATEST(c.total_transcript_chars, 1)) >= 0.5),
        CASE
 	       WHEN c.has_partner_opportunity = 1 OR c.has_partner_account = 1 OR c.has_renewal_opportunity = 1 OR c.has_upsell_opportunity = 1 OR c.has_expansion_signal = 1 OR c.has_closed_stage = 1 OR c.has_late_stage = 1 OR c.has_customer_account = 1 THEN 'high'
 	       WHEN c.opportunity_count > 0 OR (LOWER(c.system) = 'upload api' AND LOWER(c.direction) = 'outbound') THEN 'medium'

@@ -129,6 +129,19 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 	}
 }
 
+func TestFacadeQuotePackSchemaAdvertisesFieldProfile(t *testing.T) {
+	t.Parallel()
+
+	op, ok := FacadeOperationByName(OpEvidenceQuotePackBuild)
+	if !ok {
+		t.Fatalf("missing operation %s", OpEvidenceQuotePackBuild)
+	}
+	props, _ := op.InputSchema["properties"].(map[string]any)
+	if _, ok := props["field_profile"]; !ok {
+		t.Fatalf("quote_pack schema should advertise field_profile; props=%v", props)
+	}
+}
+
 func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 	t.Parallel()
 
@@ -1513,6 +1526,81 @@ func TestFacadeEvidenceCallDrilldownAttributionRespectsHideSpeakerIDs(t *testing
 	}
 	if got, _ := row["person_title_status"].(string); got != "participant_matched_title_missing" {
 		t.Fatalf("person_title_status=%q want participant_matched_title_missing", got)
+	}
+}
+
+func TestFacadeEvidenceCallDrilldownLimitedProfileSuppressesSpeakerRef(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+
+	const callID = "call_sanitized_001"
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeDrilldownStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		highlights: map[string][]sqlite.AIHighlightRow{
+			callID: {
+				{CallID: callID, HighlightIndex: 0, HighlightType: "brief", HighlightText: "Brief names Buyer Co and Hannah.", SourcePath: "content.brief", UpdatedAt: "2026-04-25T00:00:00Z"},
+			},
+		},
+		transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
+			callID: {
+				{
+					CallID:                callID,
+					SegmentIndex:          0,
+					SpeakerID:             "speaker_internal_001",
+					StartMS:               1000,
+					EndMS:                 3500,
+					Snippet:               "Synthetic internal speaker sentence.",
+					ContextExcerpt:        "Synthetic internal speaker sentence.",
+					PersonTitleStatus:     "available",
+					PersonTitleSource:     "call_parties",
+					AttributionSource:     "gong_party",
+					AttributionConfidence: "exact_speaker_id",
+				},
+			},
+		},
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{"call_drilldown"}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpEvidenceCallDrilldown,
+		"arguments": map[string]any{
+			"call_ref":      callRef,
+			"theme_query":   "Synthetic",
+			"field_profile": "limited",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
+	if len(verbatim) != 1 {
+		t.Fatalf("verbatim len=%d want 1: %v", len(verbatim), inner)
+	}
+	row, _ := verbatim[0].(map[string]any)
+	if got, _ := row["speaker_ref"].(string); got != "" {
+		t.Fatalf("limited field_profile leaked speaker_ref=%q row=%v", got, row)
+	}
+	warnings := strings.ToLower(mustJSONText(t, inner["warnings"]))
+	if !strings.Contains(warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text") {
+		t.Fatalf("limited field_profile should warn AI evidence text is not redacted: %s", warnings)
 	}
 }
 

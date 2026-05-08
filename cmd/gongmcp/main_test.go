@@ -202,7 +202,7 @@ func TestBuildPostgresReaderGrantSQLBusinessPilot(t *testing.T) {
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
-		`GRANT SELECT ("account_count", "account_industry", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "opportunity_stage", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("account_count", "account_industry", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "likely_voicemail_or_ivr", "opportunity_count", "opportunity_stage", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,
@@ -302,7 +302,7 @@ func TestPrintPostgresReaderGrantsForBusinessPilot(t *testing.T) {
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
-		`GRANT SELECT ("account_count", "account_industry", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "opportunity_count", "opportunity_stage", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("account_count", "account_industry", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "likely_voicemail_or_ivr", "opportunity_count", "opportunity_stage", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_active_business_profile_sanitized() TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint) TO "gongmcp_business_pilot_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer) TO "gongmcp_business_pilot_reader";`,
@@ -416,9 +416,9 @@ func TestPostgresReadOnlyOptionsForFilteredTranscriptSearchIncludesCallFactFunct
 func TestPostgresReadOnlyOptionsForBusinessAnalysisToolsIncludeCoreFunctions(t *testing.T) {
 	options := postgresReadOnlyOptionsForAllowlist([]string{"extract_theme_quotes"})
 	for _, want := range []string{
-		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
-		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
 	} {
 		if !containsString(options.RequiredFunctionSignatures, want) {
 			t.Fatalf("extract_theme_quotes required functions=%v missing %s", options.RequiredFunctionSignatures, want)

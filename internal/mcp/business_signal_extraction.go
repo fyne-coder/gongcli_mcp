@@ -26,10 +26,11 @@ type businessSignalExtractionArgs struct {
 }
 
 type businessSignalBucket struct {
-	Topic         string                  `json:"topic"`
-	EvidenceCount int                     `json:"evidence_count"`
-	Evidence      []businessAnalysisItem  `json:"evidence"`
-	Quotes        []businessAnalysisQuote `json:"quotes"`
+	Topic           string                  `json:"topic"`
+	ExpandedQueries []string                `json:"expanded_queries,omitempty"`
+	EvidenceCount   int                     `json:"evidence_count"`
+	Evidence        []businessAnalysisItem  `json:"evidence"`
+	Quotes          []businessAnalysisQuote `json:"quotes"`
 }
 
 func businessSignalExtractionSchema() map[string]any {
@@ -80,6 +81,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	if err != nil {
 		return toolCallResult{}, err
 	}
+	normalized = applyDefaultBroadThemeQualityFilters(normalized)
 	if !businessAnalysisFilterIsSelective(normalized) {
 		return toolCallResult{}, fmt.Errorf("%s requires a selective filter such as date range, quarter, title_query, query, industry, opportunity_stage, crm_object_id, participant_title_query, or lifecycle_bucket", operation)
 	}
@@ -121,20 +123,23 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 		perTopicLimit = 5
 	}
 	for _, topic := range topics {
-		items, quotes, err := s.businessAnalysisEvidence(ctx, normalized, topic, perTopicLimit, baArgs)
+		expandedQueries := businessSignalTopicQueries(operation, topic)
+		items, quotes, err := s.businessAnalysisEvidenceForTopicQueries(ctx, normalized, expandedQueries, perTopicLimit, baArgs)
 		if err != nil {
 			return toolCallResult{}, err
 		}
 		bucket := businessSignalBucket{
-			Topic:         topic,
-			EvidenceCount: len(items),
-			Evidence:      items,
-			Quotes:        quotes,
+			Topic:           topic,
+			ExpandedQueries: expandedQueries,
+			EvidenceCount:   len(items),
+			Evidence:        items,
+			Quotes:          quotes,
 		}
 		totalEvidence += len(items)
 		buckets = append(buckets, bucket)
 	}
 	warnings := businessAnalysisWarnings(operation, normalized)
+	warnings = append(warnings, "business_signal_default_quality_filters: extraction defaults exclude outbound_prospecting and likely voicemail/IVR calls; override with an explicit lifecycle_bucket or exclusion list when reviewing prospecting workflows")
 	if speakerRole == sqlite.SpeakerRoleExternal {
 		warnings = append(warnings, "speaker_role_filter_external: extraction returns buyer/customer/prospect speaker evidence only when cached speaker_role is available")
 	} else if speakerRole == speakerRoleExternalOrUnknown {
@@ -143,6 +148,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	if totalEvidence == 0 {
 		warnings = append(warnings, "no_seeded_signal_evidence_returned: try narrower domain topics such as pricing, implementation, security review, ERP integration, or timeline")
 	}
+	warnings = append(warnings, "seeded_topic_synonym_expansion: topic buckets transparently try common TC sales/marketing synonyms and expose expanded_queries")
 	status := "seeded_extraction_ready"
 	if totalEvidence == 0 {
 		status = "no_seeded_evidence"
@@ -169,6 +175,148 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 			"Use evidence.call_drilldown on returned call_ref values for exact call context.",
 		},
 	})
+}
+
+func (s *Server) businessAnalysisEvidenceForTopicQueries(ctx context.Context, filter callFilter, queries []string, limit int, args businessAnalysisArgs) ([]businessAnalysisItem, []businessAnalysisQuote, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	seen := make(map[string]struct{})
+	itemsOut := make([]businessAnalysisItem, 0, limit)
+	quotesOut := make([]businessAnalysisQuote, 0, limit)
+	for _, query := range normalizeBusinessSignalQueries(queries, maxBusinessSignalTopics) {
+		if len(itemsOut) >= limit {
+			break
+		}
+		items, quotes, err := s.businessAnalysisEvidence(ctx, filter, query, limit, args)
+		if err != nil {
+			return nil, nil, err
+		}
+		for i, item := range items {
+			if len(itemsOut) >= limit {
+				break
+			}
+			if filter.ExcludeLikelyVoicemail && businessAnalysisItemLooksLikeVoicemail(item) {
+				continue
+			}
+			key := businessSignalEvidenceKey(item)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			itemsOut = append(itemsOut, item)
+			if i < len(quotes) {
+				quotesOut = append(quotesOut, quotes[i])
+			}
+		}
+	}
+	return itemsOut, quotesOut, nil
+}
+
+func businessAnalysisItemLooksLikeVoicemail(item businessAnalysisItem) bool {
+	text := strings.ToLower(strings.TrimSpace(item.Snippet + " " + item.ContextExcerpt))
+	if text == "" {
+		return false
+	}
+	if businessBriefLooksLikeVoicemail(text) {
+		return true
+	}
+	ivrPhrases := []string{
+		"customer support center",
+		"support center is open",
+		"recorded for quality",
+		"quality and training purposes",
+		"transferring you to",
+		"please hold while",
+		"next available representative",
+		"next available agent",
+	}
+	hits := 0
+	for _, phrase := range ivrPhrases {
+		if strings.Contains(text, phrase) {
+			hits++
+		}
+	}
+	return hits >= 2 || (hits >= 1 && strings.Contains(text, "customer support"))
+}
+
+func businessSignalEvidenceKey(item businessAnalysisItem) string {
+	return strings.Join([]string{
+		strings.TrimSpace(item.CallRef),
+		strings.TrimSpace(item.CallID),
+		fmt.Sprintf("%d", item.SegmentIndex),
+		strings.TrimSpace(item.Snippet),
+	}, "\x00")
+}
+
+func businessSignalTopicQueries(operation string, topic string) []string {
+	base := strings.TrimSpace(topic)
+	if base == "" {
+		return nil
+	}
+	queries := []string{base}
+	for _, alias := range businessSignalTopicAliases(operation, base) {
+		queries = append(queries, alias)
+	}
+	return normalizeBusinessSignalQueries(queries, maxBusinessSignalTopics)
+}
+
+func businessSignalTopicAliases(operation string, topic string) []string {
+	key := strings.ToLower(strings.TrimSpace(topic))
+	key = strings.Join(strings.Fields(key), " ")
+	aliases := map[string][]string{
+		"implementation":        {"implementation timeline", "implementation plan", "rollout", "deployment", "go live", "launch"},
+		"implementation effort": {"implementation timeline", "implementation plan", "rollout effort", "deployment effort", "IT bandwidth", "resource constraints"},
+		"integration":           {"ERP integration", "system integration", "API integration", "punchout integration"},
+		"integration risk":      {"ERP integration", "integration timeline", "integration effort", "API support", "technical lift", "IT bandwidth"},
+		"erp integration":       {"ERP", "integrate with ERP", "direct ERP", "SAP integration", "Oracle integration", "NetSuite integration"},
+		"security":              {"security review", "security questionnaire", "infosec", "information security", "compliance review", "risk review"},
+		"security review":       {"security", "security questionnaire", "infosec", "information security", "compliance review", "risk review"},
+		"pricing":               {"price", "budget", "cost", "investment", "pricing model", "quote"},
+		"price":                 {"pricing", "budget", "cost", "investment", "quote"},
+		"budget":                {"pricing", "price", "cost", "investment", "funding"},
+		"roi":                   {"ROI", "return on investment", "business case", "value", "payback", "justify"},
+		"punchout":              {"punchout integration", "punch out", "eprocurement", "Coupa", "Ariba", "Jaggaer"},
+		"supplier onboarding":   {"supplier enablement", "vendor onboarding", "trading relationship", "supplier setup", "supplier adoption"},
+		"timeline":              {"implementation timeline", "go live", "launch date", "rollout", "schedule"},
+		"support":               {"customer support", "post implementation support", "training", "enablement", "help desk"},
+	}
+	out := append([]string{}, aliases[key]...)
+	if operation == OpExtractObjectionSignals {
+		switch key {
+		case "implementation", "implementation effort":
+			out = append(out, "too much work", "resource constraints", "IT capacity")
+		case "integration", "integration risk", "erp integration":
+			out = append(out, "concerned about integration", "integration complexity", "technical risk")
+		case "security", "security review":
+			out = append(out, "security concern", "compliance concern", "review process")
+		}
+	}
+	return out
+}
+
+func normalizeBusinessSignalQueries(queries []string, max int) []string {
+	if max <= 0 {
+		max = maxBusinessSignalTopics
+	}
+	seen := make(map[string]struct{}, len(queries))
+	out := make([]string, 0, len(queries))
+	for _, query := range queries {
+		value := strings.TrimSpace(query)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(strings.Join(strings.Fields(value), " "))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
 }
 
 func businessSignalTopics(operation string, args businessSignalExtractionArgs) []string {

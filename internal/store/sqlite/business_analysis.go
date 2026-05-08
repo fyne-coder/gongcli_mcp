@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -48,23 +49,25 @@ const (
 )
 
 type BusinessAnalysisFilter struct {
-	TitleQuery            string `json:"title_query,omitempty"`
-	Query                 string `json:"query,omitempty"`
-	FromDate              string `json:"from_date,omitempty"`
-	ToDate                string `json:"to_date,omitempty"`
-	Quarter               string `json:"quarter,omitempty"`
-	LifecycleBucket       string `json:"lifecycle_bucket,omitempty"`
-	Scope                 string `json:"scope,omitempty"`
-	System                string `json:"system,omitempty"`
-	Direction             string `json:"direction,omitempty"`
-	TranscriptStatus      string `json:"transcript_status,omitempty"`
-	Industry              string `json:"industry,omitempty"`
-	AccountQuery          string `json:"account_query,omitempty"`
-	OpportunityStage      string `json:"opportunity_stage,omitempty"`
-	CRMObjectType         string `json:"crm_object_type,omitempty"`
-	CRMObjectID           string `json:"crm_object_id,omitempty"`
-	ParticipantTitleQuery string `json:"participant_title_query,omitempty"`
-	Limit                 int    `json:"limit,omitempty"`
+	TitleQuery              string   `json:"title_query,omitempty"`
+	Query                   string   `json:"query,omitempty"`
+	FromDate                string   `json:"from_date,omitempty"`
+	ToDate                  string   `json:"to_date,omitempty"`
+	Quarter                 string   `json:"quarter,omitempty"`
+	LifecycleBucket         string   `json:"lifecycle_bucket,omitempty"`
+	ExcludeLifecycleBuckets []string `json:"exclude_lifecycle_buckets,omitempty"`
+	ExcludeLikelyVoicemail  bool     `json:"exclude_likely_voicemail,omitempty"`
+	Scope                   string   `json:"scope,omitempty"`
+	System                  string   `json:"system,omitempty"`
+	Direction               string   `json:"direction,omitempty"`
+	TranscriptStatus        string   `json:"transcript_status,omitempty"`
+	Industry                string   `json:"industry,omitempty"`
+	AccountQuery            string   `json:"account_query,omitempty"`
+	OpportunityStage        string   `json:"opportunity_stage,omitempty"`
+	CRMObjectType           string   `json:"crm_object_type,omitempty"`
+	CRMObjectID             string   `json:"crm_object_id,omitempty"`
+	ParticipantTitleQuery   string   `json:"participant_title_query,omitempty"`
+	Limit                   int      `json:"limit,omitempty"`
 }
 
 type BusinessAnalysisCallSearchParams struct {
@@ -102,26 +105,27 @@ type BusinessAnalysisCohortSummary struct {
 }
 
 type BusinessAnalysisCallRow struct {
-	CallID            string `json:"call_id,omitempty"`
-	Title             string `json:"title,omitempty"`
-	StartedAt         string `json:"started_at,omitempty"`
-	CallDate          string `json:"call_date,omitempty"`
-	CallMonth         string `json:"call_month,omitempty"`
-	DurationSeconds   int64  `json:"duration_seconds,omitempty"`
-	LifecycleBucket   string `json:"lifecycle_bucket,omitempty"`
-	Scope             string `json:"scope,omitempty"`
-	System            string `json:"system,omitempty"`
-	Direction         string `json:"direction,omitempty"`
-	TranscriptStatus  string `json:"transcript_status,omitempty"`
-	AccountIndustry   string `json:"account_industry,omitempty"`
-	OpportunityStage  string `json:"opportunity_stage,omitempty"`
-	OpportunityType   string `json:"opportunity_type,omitempty"`
-	ForecastCategory  string `json:"forecast_category,omitempty"`
-	OpportunityCount  int64  `json:"opportunity_count,omitempty"`
-	AccountCount      int64  `json:"account_count,omitempty"`
-	ParticipantStatus string `json:"participant_status,omitempty"`
-	PersonTitleStatus string `json:"person_title_status,omitempty"`
-	PersonTitleSource string `json:"person_title_source,omitempty"`
+	CallID               string `json:"call_id,omitempty"`
+	Title                string `json:"title,omitempty"`
+	StartedAt            string `json:"started_at,omitempty"`
+	CallDate             string `json:"call_date,omitempty"`
+	CallMonth            string `json:"call_month,omitempty"`
+	DurationSeconds      int64  `json:"duration_seconds,omitempty"`
+	LifecycleBucket      string `json:"lifecycle_bucket,omitempty"`
+	LikelyVoicemailOrIVR bool   `json:"likely_voicemail_or_ivr,omitempty"`
+	Scope                string `json:"scope,omitempty"`
+	System               string `json:"system,omitempty"`
+	Direction            string `json:"direction,omitempty"`
+	TranscriptStatus     string `json:"transcript_status,omitempty"`
+	AccountIndustry      string `json:"account_industry,omitempty"`
+	OpportunityStage     string `json:"opportunity_stage,omitempty"`
+	OpportunityType      string `json:"opportunity_type,omitempty"`
+	ForecastCategory     string `json:"forecast_category,omitempty"`
+	OpportunityCount     int64  `json:"opportunity_count,omitempty"`
+	AccountCount         int64  `json:"account_count,omitempty"`
+	ParticipantStatus    string `json:"participant_status,omitempty"`
+	PersonTitleStatus    string `json:"person_title_status,omitempty"`
+	PersonTitleSource    string `json:"person_title_source,omitempty"`
 }
 
 type BusinessAnalysisEvidenceSearchParams struct {
@@ -144,6 +148,7 @@ type BusinessAnalysisEvidenceRow struct {
 	CallDate               string `json:"call_date,omitempty"`
 	CallMonth              string `json:"call_month,omitempty"`
 	LifecycleBucket        string `json:"lifecycle_bucket,omitempty"`
+	LikelyVoicemailOrIVR   bool   `json:"likely_voicemail_or_ivr,omitempty"`
 	AccountIndustry        string `json:"account_industry,omitempty"`
 	AccountName            string `json:"account_name,omitempty"`
 	OpportunityName        string `json:"opportunity_name,omitempty"`
@@ -568,6 +573,7 @@ SELECT cf.call_id,
        cf.call_month,
        cf.duration_seconds,
        cf.lifecycle_bucket,
+       (` + businessAnalysisLikelyVoicemailSQL() + `) AS likely_voicemail_or_ivr,
        cf.scope,
        cf.system,
        cf.direction,
@@ -607,6 +613,7 @@ SELECT cf.call_id,
 			&row.CallMonth,
 			&row.DurationSeconds,
 			&row.LifecycleBucket,
+			&row.LikelyVoicemailOrIVR,
 			&row.Scope,
 			&row.System,
 			&row.Direction,
@@ -688,6 +695,7 @@ SELECT cf.call_id,
        cf.call_date,
        cf.call_month,
        cf.lifecycle_bucket,
+       (` + businessAnalysisLikelyVoicemailSQL() + `) AS likely_voicemail_or_ivr,
        cf.account_industry,
        COALESCE((SELECT TRIM(o.object_name) FROM call_context_objects o WHERE o.call_id = cf.call_id AND o.object_type = 'Account' AND TRIM(o.object_name) <> '' ORDER BY o.object_key LIMIT 1), '') AS account_name,
        COALESCE((SELECT TRIM(o.object_name) FROM call_context_objects o WHERE o.call_id = cf.call_id AND o.object_type = 'Opportunity' AND TRIM(o.object_name) <> '' ORDER BY o.object_key LIMIT 1), '') AS opportunity_name,
@@ -739,6 +747,7 @@ SELECT cf.call_id,
 			&row.CallDate,
 			&row.CallMonth,
 			&row.LifecycleBucket,
+			&row.LikelyVoicemailOrIVR,
 			&row.AccountIndustry,
 			&row.AccountName,
 			&row.OpportunityName,
@@ -1042,6 +1051,17 @@ func businessAnalysisCallFromWhere(filter BusinessAnalysisFilter, includeFilterQ
 		where = append(where, `cf.lifecycle_bucket = ?`)
 		args = append(args, strings.ToLower(value))
 	}
+	if len(filter.ExcludeLifecycleBuckets) > 0 {
+		placeholders := make([]string, 0, len(filter.ExcludeLifecycleBuckets))
+		for _, value := range filter.ExcludeLifecycleBuckets {
+			placeholders = append(placeholders, "?")
+			args = append(args, strings.ToLower(strings.TrimSpace(value)))
+		}
+		where = append(where, `cf.lifecycle_bucket NOT IN (`+strings.Join(placeholders, ",")+`)`)
+	}
+	if filter.ExcludeLikelyVoicemail {
+		where = append(where, `NOT (`+businessAnalysisLikelyVoicemailSQL()+`)`)
+	}
 	if value := strings.TrimSpace(filter.Scope); value != "" {
 		where = append(where, `cf.scope = ?`)
 		args = append(args, value)
@@ -1093,6 +1113,17 @@ func businessAnalysisCallFromWhere(filter BusinessAnalysisFilter, includeFilterQ
 		args = append(args, value, value, value)
 	}
 	return from, where, args, nil
+}
+
+func businessAnalysisLikelyVoicemailSQL() string {
+	vmLike := `(LOWER(ts.text) LIKE '%please leave%' OR LOWER(ts.text) LIKE '%leave a message%' OR LOWER(ts.text) LIKE '%after the tone%' OR LOWER(ts.text) LIKE '%press one%' OR LOWER(ts.text) LIKE '%press 1%' OR LOWER(ts.text) LIKE '%press two%' OR LOWER(ts.text) LIKE '%press 2%' OR LOWER(ts.text) LIKE '%press zero%' OR LOWER(ts.text) LIKE '%press 0%' OR LOWER(ts.text) LIKE '%press star%' OR LOWER(ts.text) LIKE '%press pound%' OR LOWER(ts.text) LIKE '%press the %' OR LOWER(ts.text) LIKE '%voicemail%' OR LOWER(ts.text) LIKE '%not available%' OR LOWER(ts.text) LIKE '%unable to take%' OR LOWER(ts.text) LIKE '%customer care team%' OR LOWER(ts.text) LIKE '%your call is important%')`
+	return `cf.duration_seconds <= 120
+		AND EXISTS (SELECT 1 FROM transcript_segments ts WHERE ts.call_id = cf.call_id AND ` + vmLike + `)
+		AND (
+			SELECT COALESCE(SUM(CASE WHEN ` + vmLike + ` THEN LENGTH(ts.text) ELSE 0 END), 0) * 1.0 / MAX(COALESCE(SUM(LENGTH(ts.text)), 0), 1)
+			  FROM transcript_segments ts
+			 WHERE ts.call_id = cf.call_id
+		) >= 0.5`
 }
 
 func businessAnalysisAppendTranscriptQueryFilter(where []string, args []any, rawQuery string, field string) ([]string, []any, error) {
@@ -1175,6 +1206,7 @@ func normalizeBusinessAnalysisFilter(filter BusinessAnalysisFilter) (BusinessAna
 	filter.ToDate = strings.TrimSpace(filter.ToDate)
 	filter.Quarter = strings.TrimSpace(filter.Quarter)
 	filter.LifecycleBucket = strings.TrimSpace(filter.LifecycleBucket)
+	filter.ExcludeLifecycleBuckets = normalizeBusinessAnalysisLifecycleExclusions(filter.ExcludeLifecycleBuckets)
 	filter.Scope = strings.TrimSpace(filter.Scope)
 	filter.System = strings.TrimSpace(filter.System)
 	filter.Direction = strings.TrimSpace(filter.Direction)
@@ -1212,6 +1244,14 @@ func normalizeBusinessAnalysisFilter(filter BusinessAnalysisFilter) (BusinessAna
 	if filter.LifecycleBucket != "" && !isKnownLifecycleBucket(filter.LifecycleBucket) {
 		return BusinessAnalysisFilter{}, fmt.Errorf("unknown lifecycle bucket %q", filter.LifecycleBucket)
 	}
+	for _, bucket := range filter.ExcludeLifecycleBuckets {
+		if !isKnownLifecycleBucket(bucket) {
+			return BusinessAnalysisFilter{}, fmt.Errorf("unknown excluded lifecycle bucket %q", bucket)
+		}
+		if filter.LifecycleBucket != "" && strings.EqualFold(filter.LifecycleBucket, bucket) {
+			return BusinessAnalysisFilter{}, fmt.Errorf("lifecycle_bucket %q cannot also be excluded", filter.LifecycleBucket)
+		}
+	}
 	if filter.Scope != "" {
 		scope, ok := normalizedScope(filter.Scope)
 		if !ok {
@@ -1230,6 +1270,27 @@ func normalizeBusinessAnalysisFilter(filter BusinessAnalysisFilter) (BusinessAna
 		filter.Limit = boundedLimit(filter.Limit, defaultBusinessAnalysisLimit, maxBusinessAnalysisLimit)
 	}
 	return filter, nil
+}
+
+func normalizeBusinessAnalysisLifecycleExclusions(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func normalizeBusinessAnalysisQuarter(value string) (string, string, string, error) {

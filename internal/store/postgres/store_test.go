@@ -205,8 +205,8 @@ func TestPostgresBusinessAnalysisFunctionsExposeSpeakerRoleSQL(t *testing.T) {
 	}
 	for _, want := range []string{
 		"DROP FUNCTION IF EXISTS gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
-		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
 		"speaker_role text",
 		"speaker_role_status text",
 	} {
@@ -1425,6 +1425,41 @@ func TestPostgresBusinessAnalysisEvidenceFunctionKeepsFTSQueryRequired(t *testin
 	} {
 		if !strings.Contains(postgresBusinessAnalysisFunctionsSQL, want) {
 			t.Fatalf("missing seedless theme discovery function %q", want)
+		}
+	}
+}
+
+func TestPostgresBusinessAnalysisFunctionsApplyVoicemailExclusionsInSQL(t *testing.T) {
+	t.Parallel()
+
+	sqlText := postgresBusinessAnalysisFunctionsSQL
+	for _, want := range []string{
+		"exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean",
+		"jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb)",
+		"NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr",
+		"gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean)",
+		"gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres business-analysis SQL missing aggregate exclusion contract %q", want)
+		}
+	}
+}
+
+func TestVoicemailDetectionAvoidsLoosePressSubstring(t *testing.T) {
+	t.Parallel()
+
+	sqlBytes, err := os.ReadFile("read_model.go")
+	if err != nil {
+		t.Fatalf("read_model.go: %v", err)
+	}
+	sqlText := string(sqlBytes)
+	if strings.Contains(sqlText, "LIKE '%press %'") {
+		t.Fatal("postgres voicemail detection must not use loose percent-press-space-percent substring")
+	}
+	for _, want := range []string{"LIKE '%press 1%'", "LIKE '%press one%'", "LIKE '%press the %'"} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres voicemail detection missing anchored IVR phrase %q", want)
 		}
 	}
 }
