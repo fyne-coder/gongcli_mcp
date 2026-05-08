@@ -303,7 +303,7 @@ when the coverage tools say those fields are missing. Only call excerpts
 buyer-side or customer-side when speaker-role attribution is present.
 ```
 
-Expected tool sequence:
+Expected tool sequence for the full analyst preset:
 
 - `build_call_cohort`
 - `inspect_call_cohort`
@@ -314,6 +314,19 @@ Expected tool sequence:
 - `diagnose_attribution_coverage`
 - `explain_analysis_limitations`
 
+Business-workbench facade equivalent, covered by
+`scripts/business-workbench-ga-harness.sh`:
+
+- `gong_query` operation `query.calls`
+- `gong_get_evidence` operation `evidence.highlights.list`
+- `gong_analyze` operation `theme_intelligence_report` without a seed to
+  return Gong AI candidate themes, or `needs_theme_seed` when no candidate
+  survives
+- `gong_analyze` operation `theme_intelligence_report` with a concrete seed
+  before making customer-facing theme claims
+- `gong_get_evidence` operation `evidence.quote_pack.build` for bounded quote
+  candidates
+
 ### Example: Cross-Quarter Persona And Industry Themes
 
 ```text
@@ -323,7 +336,7 @@ present. Report missing-title and missing-industry rates before ranking any
 persona or industry.
 ```
 
-Expected tool sequence:
+Expected tool sequence for the full analyst preset:
 
 - `build_call_cohort` for each quarter
 - `compare_call_cohorts`
@@ -332,6 +345,13 @@ Expected tool sequence:
 - `summarize_themes_by_industry`
 - `rank_personas_by_insight_quality`
 - `diagnose_attribution_coverage`
+
+Business-workbench facade equivalent:
+
+- Run `gong_analyze` operation `theme_intelligence_report` for each quarter
+  with the same `theme_query` and groupings.
+- Compare returned `dimension_readiness`, `themes_by_persona`,
+  `themes_by_industry`, and `data_readiness_caveats` in the host response.
 
 ### Example: Top Quotes
 
@@ -343,13 +363,23 @@ for sales enablement. Only label a snippet customer-side when speaker-role
 attribution is present. Do not request full transcripts.
 ```
 
-Expected tool sequence:
+Expected tool sequence for the full analyst preset:
 
 - `search_quotes_in_cohort`
 - `extract_theme_quotes`
 - `rank_quotes_for_sales_use`
 - `build_quote_pack`
 - `score_cohort_evidence_quality`
+
+Business-workbench facade equivalent, covered by the harness with the
+`manual process` Q1 Business Discovery prompt:
+
+- `gong_get_evidence` operation `evidence.quote_pack.build` with
+  `theme_query`, `speaker_role: external_or_unknown`, the same cohort filter,
+  and `field_profile: limited`.
+- Treat rows with `speaker_role: unknown` or
+  `speaker_role_status: affiliation_missing` as unattributed evidence, not
+  buyer/customer speech.
 
 ### Example: Pipeline Outcomes
 
@@ -366,13 +396,23 @@ before the MCP can answer "why did these close lost?" questions reliably. When
 the profile or source data is missing, use the empty/limitation status as a
 readiness finding rather than inferring a loss reason from transcript text.
 
-Expected tool sequence:
+Expected tool sequence for the full analyst preset:
 
 - `compare_theme_outcomes`
 - `summarize_pipeline_progression_by_theme`
 - `summarize_loss_reasons_by_theme`
 - `compare_won_lost_theme_patterns`
 - `explain_analysis_limitations`
+
+Business-workbench facade equivalent, covered by the harness with the
+`manual process` Q1 Business Discovery prompt:
+
+- `gong_analyze` operation `theme_intelligence_report` with a concrete
+  `theme_query`, the cohort filter, and
+  `group_by: ["industry","persona","quarter","won_lost"]`.
+- Use `pipeline_outcome_summary`, `dimension_readiness`, and
+  `data_readiness_caveats`; do not infer loss reasons when
+  `loss_reason` is `unavailable_unmapped`.
 
 ### Example: Attribution Gaps
 

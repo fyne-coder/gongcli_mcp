@@ -117,6 +117,53 @@ save_tool business-discovery-cohort.json gong_query "$(jq -n '{
   }
 }')"
 
+business_discovery_call_refs="$(jq -r '.result.content[0].text' "$ARTIFACT_DIR/business-discovery-cohort.json" \
+  | jq -c '(.result.results // []) | map(.call_ref) | map(select(. != null and . != ""))[:15]')"
+if [[ "$business_discovery_call_refs" == "[]" ]]; then
+  echo "business discovery cohort returned no call_refs" >&2
+  exit 1
+fi
+
+save_tool business-discovery-highlights.json gong_get_evidence "$(jq -n --argjson call_refs "$business_discovery_call_refs" '{
+  operation:"evidence.highlights.list",
+  arguments:{
+    call_refs:$call_refs,
+    limit:50
+  }
+}
+')"
+
+save_tool q1-business-discovery-ai-themes.json gong_analyze "$(jq -n '{
+  operation:"theme_intelligence_report",
+  arguments:{
+    filter:{quarter:"2026-Q1",title_query:"business discovery",transcript_status:"present"},
+    field_profile:"limited",
+    limit:25
+  }
+}')"
+
+save_tool q1-manual-process-quote-pack.json gong_get_evidence "$(jq -n '{
+  operation:"evidence.quote_pack.build",
+  arguments:{
+    theme_query:"manual process",
+    speaker_role:"external_or_unknown",
+    filter:{quarter:"2026-Q1",title_query:"business discovery",transcript_status:"present"},
+    field_profile:"limited",
+    limit:12
+  }
+}')"
+
+save_tool q1-manual-process-report.json gong_analyze "$(jq -n '{
+  operation:"theme_intelligence_report",
+  arguments:{
+    theme_query:"manual process",
+    filter:{quarter:"2026-Q1",title_query:"business discovery",transcript_status:"present"},
+    field_profile:"limited",
+    group_by:["industry","persona","quarter","won_lost"],
+    limit:25
+  }
+}')"
+
 save_tool objections.json gong_analyze "$(jq -n '{
   operation:"extract.objection_signals",
   arguments:{
@@ -233,6 +280,58 @@ cases.append(case("seedless_discovery", load("seedless-discovery.json"),
 cases.append(case("business_discovery_title_filter", load("business-discovery-cohort.json"),
     required_paths=("results","coverage_summary","evidence_policy"),
     allowed_status=("cache_derived","ready","ok"), forbid=False))
+
+highlights = load("business-discovery-highlights.json")
+highlights_grade = "PASS"
+highlights_problems = []
+if not isinstance(highlights, dict):
+    highlights_grade = "FAIL"
+    highlights_problems.append("expected object payload")
+else:
+    if len(highlights.get("rows") or []) == 0:
+        highlights_grade = "FAIL"
+        highlights_problems.append("no Gong AI highlight rows returned for title-filtered cohort")
+    if "caveats" not in highlights:
+        highlights_grade = "FAIL"
+        highlights_problems.append("missing AI highlight caveats")
+    if re.search(r'"call_id"\s*:\s*"[^"]+', text(highlights)):
+        highlights_grade = "FAIL"
+        highlights_problems.append("highlight rows exposed raw call_id")
+cases.append({"name": "business_discovery_highlights_flow", "grade": highlights_grade, "status": highlights.get("facade_status") if isinstance(highlights, dict) else None, "problems": highlights_problems})
+
+q1_ai_themes = load("q1-business-discovery-ai-themes.json")
+cases.append(case("docs_q1_business_discovery_ai_theme_bootstrap", q1_ai_themes,
+    required_paths=("evidence_policy","answer_contract","ai_business_brief_source","data_readiness_caveats","dimension_readiness"),
+    allowed_status=("ai_brief_candidate_themes","needs_theme_seed"),
+    degraded_status=("needs_theme_seed",)))
+
+q1_quotes = load("q1-manual-process-quote-pack.json")
+q1_quote_grade = "PASS"
+q1_quote_problems = []
+if not isinstance(q1_quotes, dict):
+    q1_quote_grade = "FAIL"
+    q1_quote_problems.append("expected object payload")
+else:
+    if len(q1_quotes.get("quotes") or []) == 0:
+        q1_quote_grade = "FAIL"
+        q1_quote_problems.append("no manual-process quote candidates returned")
+    roles = {q.get("speaker_role") for q in (q1_quotes.get("quotes") or [])}
+    if "internal" in roles:
+        q1_quote_grade = "FAIL"
+        q1_quote_problems.append("manual-process quote pack included internal speaker evidence despite external_or_unknown filter")
+    if "speaker_attribution_summary" not in q1_quotes:
+        q1_quote_grade = "FAIL"
+        q1_quote_problems.append("missing speaker_attribution_summary")
+    if "answer_contract" not in q1_quotes:
+        q1_quote_grade = "FAIL"
+        q1_quote_problems.append("missing answer_contract")
+cases.append({"name": "docs_manual_process_quote_candidates", "grade": q1_quote_grade, "status": q1_quotes.get("status") if isinstance(q1_quotes, dict) else None, "problems": q1_quote_problems})
+
+cases.append(case("docs_manual_process_pipeline_report", load("q1-manual-process-report.json"),
+    required_paths=("evidence_policy","dimension_readiness","data_readiness_caveats","pipeline_outcome_summary","speaker_attribution_summary","answer_contract"),
+    allowed_status=("ready","needs_theme_seed","empty_cohort"),
+    degraded_status=("empty_cohort",)))
+
 cases.append(case("objection_extraction", load("objections.json"),
     required_paths=("evidence_policy","speaker_attribution_summary","dimension_readiness","buckets"),
     allowed_status=("seeded_extraction_ready","no_seeded_evidence"),

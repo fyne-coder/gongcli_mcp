@@ -73,6 +73,15 @@ For trained analyst manual testing over the broader 68-tool surface, the
 small, stable tool list while reviewed operations continue to evolve
 underneath.
 
+The deterministic release harness mirrors the business-workbench versions of
+the manual prompts below. It exercises the six facade tools directly, including
+Business Discovery title filtering, Gong AI highlight/keyPoint retrieval, Q1
+Business Discovery seedless AI theme bootstrap, manual-process quote packs,
+pipeline/dimension caveats, objection extraction, buyer-question extraction,
+field-profile behavior, and transcript-enumeration probes. Use
+`scripts/business-workbench-ga-harness.sh` as the release gate; use the manual
+prompts for exploratory host-model behavior only.
+
 For internal redacted-DB broad testing, `redacted-all-readonly` exposes every
 reviewed Postgres-readable MCP tool, including `search_calls`, `get_call`,
 `search_crm_field_values`, CRM/settings inventory, scorecard activity
