@@ -12,6 +12,9 @@ cache through a narrow MCP tool set, while operator-owned sync and profile
 workflows remain separate. Enforce the approved tool set with
 `gongmcp --tool-preset business-pilot` or a reviewed custom allowlist, and layer host policy
 on top if the deployment needs stricter prompts or routing.
+For shared Postgres pilots with separate sync and MCP containers, use the
+[Postgres client pilot release packet](postgres-client-pilot-release-packet.md)
+before exposing business users.
 
 This is now a software-enforced pilot lane for the first risk gates: `gongmcp`
 can enforce the reviewed MCP tool subset, and restricted/company CLI mode blocks

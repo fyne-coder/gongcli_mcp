@@ -42,6 +42,43 @@ func TestMigrateIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsGovernanceIngestLedgerToExistingDB(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "existing.db")
+	db, err := sql.Open("sqlite", sqliteFileURI(path, nil))
+	if err != nil {
+		t.Fatalf("open pre-migration db: %v", err)
+	}
+	for idx := 0; idx < len(migrations)-1; idx++ {
+		if _, err := db.ExecContext(ctx, migrations[idx]); err != nil {
+			_ = db.Close()
+			t.Fatalf("apply pre-existing migration %d: %v", idx+1, err)
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", idx+1)); err != nil {
+			_ = db.Close()
+			t.Fatalf("set pre-existing user_version %d: %v", idx+1, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close pre-migration db: %v", err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open migrated db: %v", err)
+	}
+	defer store.Close()
+	var tableName string
+	if err := store.DB().QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'governance_ingest_skipped_calls'`).Scan(&tableName); err != nil {
+		t.Fatalf("governance_ingest_skipped_calls missing after migrate: %v", err)
+	}
+	if tableName != "governance_ingest_skipped_calls" {
+		t.Fatalf("ledger table name=%q", tableName)
+	}
+}
+
 func TestUpsertIdempotency(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +358,167 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 	}
 	if len(summary) != 1 || summary[0].Value != "Discovery" || summary[0].CallCount != 1 {
 		t.Fatalf("dimension summary should intersect filter.query and theme_query, got %+v", summary)
+	}
+}
+
+// personaBucketFixture exposes the synthetic call layout used by the persona
+// bucket tests so SQLite and Postgres can be seeded from the same source.
+type personaBucketFixture struct {
+	CallID    string
+	Title     string
+	PartyText string         // raw party title (parties[].title); empty means no party title
+	CRMTitle  string         // Contact/Lead Title field; empty means none
+	Bucket    string         // expected coarse persona bucket
+	StartedAt string         // YYYY-MM-DDTHH:MM:SSZ; defaults to 2026-02-12T15:00:00Z
+	NoParties bool           // when true, omit the parties array entirely (no participants)
+	Extra     map[string]any // optional extra raw_json keys (rarely needed)
+}
+
+func phase13fPersonaBucketFixtures() []personaBucketFixture {
+	return []personaBucketFixture{
+		{CallID: "call-persona-procurement", Title: "Procurement workflow", PartyText: "VP Procurement", Bucket: "procurement"},
+		{CallID: "call-persona-procurement-purchasing", Title: "Procurement workflow alt", PartyText: "Director of Purchasing", Bucket: "procurement"},
+		{CallID: "call-persona-supplier", Title: "Procurement workflow supplier", PartyText: "Supplier Enablement Lead", Bucket: "supplier_enablement"},
+		{CallID: "call-persona-it", Title: "Procurement workflow IT", PartyText: "IT Director", Bucket: "it_security_integration"},
+		{CallID: "call-persona-it-security", Title: "Procurement workflow security", PartyText: "Information Security Manager", Bucket: "it_security_integration"},
+		{CallID: "call-persona-operations", Title: "Procurement workflow ops", PartyText: "Operations Manager", Bucket: "operations"},
+		{CallID: "call-persona-operations-coo", Title: "Procurement workflow exec ops", PartyText: "COO", Bucket: "operations"},
+		{CallID: "call-persona-finance", Title: "Procurement workflow finance", PartyText: "", CRMTitle: "CFO", Bucket: "finance"},
+		{CallID: "call-persona-executive", Title: "Procurement workflow CEO", PartyText: "CEO", Bucket: "executive"},
+		{CallID: "call-persona-sales", Title: "Procurement workflow sales", PartyText: "VP Sales", Bucket: "sales_revenue"},
+		{CallID: "call-persona-other", Title: "Procurement workflow eng", PartyText: "Engineering Manager", Bucket: "other_title_present"},
+		{CallID: "call-persona-no-title", Title: "Procurement workflow no title", PartyText: "", Bucket: ""},
+	}
+}
+
+func mustNormalizePersonaCall(t *testing.T, f personaBucketFixture) json.RawMessage {
+	t.Helper()
+	started := f.StartedAt
+	if started == "" {
+		started = "2026-02-12T15:00:00Z"
+	}
+	parties := []any{}
+	if !f.NoParties {
+		party := map[string]any{"id": "party-" + f.CallID}
+		if f.PartyText != "" {
+			party["title"] = f.PartyText
+		}
+		parties = append(parties, party)
+	}
+	context := []any{}
+	if f.CRMTitle != "" {
+		context = append(context, map[string]any{
+			"objectType": "Contact",
+			"id":         "contact-" + f.CallID,
+			"fields": []any{
+				map[string]any{"name": "Title", "value": f.CRMTitle},
+			},
+		})
+	}
+	raw := map[string]any{
+		"id":        f.CallID,
+		"title":     f.Title,
+		"started":   started,
+		"duration":  1500,
+		"system":    "Zoom",
+		"direction": "Conference",
+		"scope":     "External",
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"parties":   parties,
+		},
+	}
+	if len(context) > 0 {
+		raw["context"] = context
+	}
+	for k, v := range f.Extra {
+		raw[k] = v
+	}
+	return mustNormalizeValue(t, raw)
+}
+
+func TestSummarizeBusinessAnalysisDimensionPersonaBucketsCoarseMapping(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	for _, f := range phase13fPersonaBucketFixtures() {
+		if _, err := store.UpsertCall(ctx, mustNormalizePersonaCall(t, f)); err != nil {
+			t.Fatalf("upsert persona fixture %s: %v", f.CallID, err)
+		}
+	}
+
+	filter := BusinessAnalysisFilter{TitleQuery: "procurement workflow"}
+	summary, err := store.SummarizeBusinessAnalysisDimension(ctx, BusinessAnalysisDimensionSummaryParams{
+		Filter:    filter,
+		Dimension: "persona",
+		Limit:     50,
+	})
+	if err != nil {
+		t.Fatalf("SummarizeBusinessAnalysisDimension persona: %v", err)
+	}
+
+	got := map[string]int64{}
+	for _, row := range summary {
+		got[row.Value] = row.CallCount
+	}
+	expectedBuckets := []string{
+		"procurement",
+		"supplier_enablement",
+		"it_security_integration",
+		"operations",
+		"finance",
+		"executive",
+		"sales_revenue",
+		"other_title_present",
+	}
+	for _, bucket := range expectedBuckets {
+		if got[bucket] == 0 {
+			t.Fatalf("persona bucket %q missing or zero in dimension summary: %+v", bucket, summary)
+		}
+	}
+	if got["procurement"] < 2 {
+		t.Fatalf("expected procurement bucket to count both VP Procurement and Director of Purchasing, got %d in %+v", got["procurement"], summary)
+	}
+	if got["it_security_integration"] < 2 {
+		t.Fatalf("expected it_security_integration bucket to count IT Director and Information Security Manager, got %d in %+v", got["it_security_integration"], summary)
+	}
+	if got["operations"] < 2 {
+		t.Fatalf("expected operations bucket to count Operations Manager and COO, got %d in %+v", got["operations"], summary)
+	}
+
+	// Privacy boundary: raw participant title strings must never appear as
+	// dimension values, even though they are present in the call fixtures.
+	leakages := []string{
+		"VP Procurement",
+		"Director of Purchasing",
+		"Supplier Enablement Lead",
+		"IT Director",
+		"Information Security Manager",
+		"Operations Manager",
+		"COO",
+		"CFO",
+		"CEO",
+		"VP Sales",
+		"Engineering Manager",
+	}
+	for _, row := range summary {
+		for _, leak := range leakages {
+			if strings.EqualFold(row.Value, leak) || strings.Contains(row.Value, leak) {
+				t.Fatalf("persona dimension exposed raw title %q in row %+v", leak, row)
+			}
+		}
+	}
+
+	// Calls with participants but no title text must not be collapsed into a
+	// title bucket; existing behavior groups them under <blank> via the
+	// TRIM(...) coalescing in the dimension summary.
+	if _, ok := got["<blank>"]; !ok {
+		t.Fatalf("expected a <blank> coverage row for the no-title fixture, got %+v", summary)
 	}
 }
 
@@ -1921,6 +2119,9 @@ func TestSearchTranscriptQuotesWithAttributionJoinsCRMMetadata(t *testing.T) {
 		"title":    "Attribution evidence call",
 		"started":  "2026-02-12T15:00:00Z",
 		"duration": 1800,
+		"parties": []any{
+			map[string]any{"speakerId": "buyer", "affiliation": "External", "title": "Procurement Manager"},
+		},
 		"context": []any{
 			map[string]any{
 				"objectType": "Account",
@@ -1994,8 +2195,11 @@ func TestSearchTranscriptQuotesWithAttributionJoinsCRMMetadata(t *testing.T) {
 	if row.CallID != "call-attribution" || row.Title != "Attribution evidence call" || row.AccountName != "Example Manufacturing" || row.AccountIndustry != "Manufacturing" || row.OpportunityName != "Example Deal" || row.OpportunityStage != "Discovery" {
 		t.Fatalf("unexpected attribution row: %+v", row)
 	}
-	if row.ParticipantStatus != "missing_from_cache" || row.PersonTitleStatus != "missing_from_cache" {
+	if row.ParticipantStatus != "present" || row.PersonTitleStatus != "available" {
 		t.Fatalf("unexpected person/title status: %+v", row)
+	}
+	if row.SpeakerRole != SpeakerRoleExternal || row.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("unexpected speaker role/status: %+v", row)
 	}
 	if !strings.Contains(strings.ToLower(row.ContextExcerpt), "implementation timeline") {
 		t.Fatalf("context excerpt=%q missing evidence", row.ContextExcerpt)
@@ -2476,6 +2680,14 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 	})); err != nil {
 		t.Fatalf("UpsertTranscript blocked returned error: %v", err)
 	}
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, GovernanceIngestSkippedCallParams{
+		CallID:         "call-governance-export-blocked",
+		ConfigSHA256:   "synthetic-export-config",
+		MatchedList:    "no_ai",
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall blocked returned error: %v", err)
+	}
 	if _, err := store.UpsertCall(ctx, mustNormalizeValue(t, map[string]any{
 		"id":       "call-governance-export-allowed",
 		"title":    "Allowed export call",
@@ -2565,7 +2777,7 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 	if err != nil {
 		t.Fatalf("ExportGovernanceFilteredDB returned error: %v", err)
 	}
-	if plan.DeletedCalls != 3 || plan.DeletedTranscripts != 2 || plan.DeletedTranscriptSegments != 2 || plan.RemainingSuppressedCandidates != 0 {
+	if plan.DeletedCalls != 3 || plan.DeletedTranscripts != 2 || plan.DeletedTranscriptSegments != 2 || plan.DeletedGovernanceIngestRows != 1 || plan.RemainingSuppressedCandidates != 0 {
 		t.Fatalf("unexpected export plan: %+v", plan)
 	}
 
@@ -2596,6 +2808,32 @@ func TestExportGovernanceFilteredDBPhysicallyRemovesSuppressedRows(t *testing.T)
 		if strings.Contains(candidate.Value, "Blocked Export Corp") || candidate.CallID == "call-governance-export-blocked" {
 			t.Fatalf("filtered DB retained blocked governance candidate: %+v", candidate)
 		}
+	}
+	var ledgerRows int
+	if err := filtered.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM governance_ingest_skipped_calls WHERE call_id = 'call-governance-export-blocked'`).Scan(&ledgerRows); err != nil {
+		t.Fatalf("query filtered ledger rows: %v", err)
+	}
+	if ledgerRows != 0 {
+		t.Fatalf("filtered DB retained governance ingest ledger rows=%d want 0", ledgerRows)
+	}
+}
+
+func TestExportGovernanceFilteredDBRejectsSourceSidecarOutputOverlap(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source-overlap.db")
+	store, err := Open(ctx, sourcePath)
+	if err != nil {
+		t.Fatalf("Open source returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close source returned error: %v", err)
+	}
+	_, err = ExportGovernanceFilteredDB(ctx, sourcePath, sourcePath+"-wal", nil, true)
+	if err == nil || !strings.Contains(err.Error(), "must not overlap source") {
+		t.Fatalf("ExportGovernanceFilteredDB error=%v, want source sidecar overlap rejection", err)
 	}
 }
 
@@ -3562,6 +3800,266 @@ func assertCount(t *testing.T, db *sql.DB, table string, want int) {
 	}
 	if got != want {
 		t.Fatalf("%s count=%d want %d", table, got, want)
+	}
+}
+
+func TestCallDrilldownEvidenceSpeakerAttribution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	const callID = "call_attr_001"
+	callRaw := mustNormalizeValue(t, map[string]any{
+		"id":       callID,
+		"title":    "Synthetic attribution call",
+		"started":  "2026-04-30T10:00:00Z",
+		"duration": 1200,
+		"parties": []map[string]any{
+			{"speakerId": "spk_titled", "name": "Titled Speaker", "title": "VP Procurement"},
+			{"speakerId": "spk_untitled", "name": "Untitled Speaker"},
+		},
+		"metaData": map[string]any{
+			"parties": []map[string]any{
+				{"id": "spk_dup", "title": "Director Sourcing"},
+				{"speaker_id": "spk_dup", "title": "Head of Operations"},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, callRaw); err != nil {
+		t.Fatalf("upsert call: %v", err)
+	}
+	transcriptRaw := mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []map[string]any{{
+			"callId": callID,
+			"transcript": []map[string]any{
+				{"speakerId": "spk_titled", "sentences": []map[string]any{{"start": 1000, "end": 2000, "text": "Synthetic procurement quote alpha."}}},
+				{"speakerId": "spk_untitled", "sentences": []map[string]any{{"start": 2000, "end": 3000, "text": "Synthetic procurement quote bravo."}}},
+				{"speakerId": "spk_dup", "sentences": []map[string]any{{"start": 3000, "end": 4000, "text": "Synthetic procurement quote charlie."}}},
+				{"speakerId": "spk_unknown", "sentences": []map[string]any{{"start": 4000, "end": 5000, "text": "Synthetic procurement quote delta."}}},
+			},
+		}},
+	})
+	if _, err := store.UpsertTranscript(ctx, transcriptRaw); err != nil {
+		t.Fatalf("upsert transcript: %v", err)
+	}
+
+	rows, err := store.CallDrilldownEvidence(ctx, CallDrilldownEvidenceParams{
+		CallID: callID,
+		Query:  "Synthetic procurement quote",
+		Limit:  20,
+	})
+	if err != nil {
+		t.Fatalf("CallDrilldownEvidence: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("rows=%d want 4: %+v", len(rows), rows)
+	}
+
+	bySpeaker := map[string]CallDrilldownEvidenceRow{}
+	for _, r := range rows {
+		bySpeaker[r.SpeakerID] = r
+	}
+
+	titled := bySpeaker["spk_titled"]
+	if titled.PersonTitleStatus != AttributionStatusAvailable {
+		t.Fatalf("spk_titled status=%q want %q", titled.PersonTitleStatus, AttributionStatusAvailable)
+	}
+	if titled.AttributionConfidence != AttributionConfidenceExactSpeakerID {
+		t.Fatalf("spk_titled confidence=%q want %q", titled.AttributionConfidence, AttributionConfidenceExactSpeakerID)
+	}
+	if titled.PersonTitle != "VP Procurement" {
+		t.Fatalf("spk_titled title=%q want VP Procurement", titled.PersonTitle)
+	}
+	if titled.PersonTitleSource != AttributionSourceCallParties {
+		t.Fatalf("spk_titled source=%q want %q", titled.PersonTitleSource, AttributionSourceCallParties)
+	}
+
+	untitled := bySpeaker["spk_untitled"]
+	if untitled.PersonTitleStatus != AttributionStatusParticipantTitleMissing {
+		t.Fatalf("spk_untitled status=%q want %q", untitled.PersonTitleStatus, AttributionStatusParticipantTitleMissing)
+	}
+	if untitled.PersonTitle != "" {
+		t.Fatalf("spk_untitled title=%q want empty", untitled.PersonTitle)
+	}
+	if untitled.AttributionSource != AttributionSourceGongParty {
+		t.Fatalf("spk_untitled attribution_source=%q want gong_party", untitled.AttributionSource)
+	}
+
+	dup := bySpeaker["spk_dup"]
+	if dup.PersonTitleStatus != AttributionStatusSpeakerAmbiguous {
+		t.Fatalf("spk_dup status=%q want %q", dup.PersonTitleStatus, AttributionStatusSpeakerAmbiguous)
+	}
+	if dup.AttributionConfidence != AttributionConfidenceAmbiguous {
+		t.Fatalf("spk_dup confidence=%q want ambiguous", dup.AttributionConfidence)
+	}
+	if dup.PersonTitle != "" {
+		t.Fatalf("spk_dup title=%q want empty (ambiguous)", dup.PersonTitle)
+	}
+
+	unknown := bySpeaker["spk_unknown"]
+	if unknown.PersonTitleStatus != AttributionStatusSpeakerUnmatched {
+		t.Fatalf("spk_unknown status=%q want %q", unknown.PersonTitleStatus, AttributionStatusSpeakerUnmatched)
+	}
+	if unknown.AttributionSource != AttributionSourceUnmatched {
+		t.Fatalf("spk_unknown source=%q want unmatched", unknown.AttributionSource)
+	}
+}
+
+// TestCallDrilldownEvidenceSpeakerRoleAttribution proves that the
+// gap-followup `speaker_role` / `speaker_role_status` signal is derived
+// from the cached Gong party `affiliation` field where present, and that
+// uncertainty is preserved (`unknown` + an explicit status) when the
+// underlying data does not give us an answer.
+func TestCallDrilldownEvidenceSpeakerRoleAttribution(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	const callID = "call_attr_role_001"
+	callRaw := mustNormalizeValue(t, map[string]any{
+		"id":       callID,
+		"title":    "Synthetic role attribution call",
+		"started":  "2026-04-30T10:00:00Z",
+		"duration": 1200,
+		"parties": []map[string]any{
+			{"speakerId": "spk_internal", "name": "Internal Speaker", "affiliation": "Internal"},
+			{"speakerId": "spk_external", "name": "External Speaker", "affiliation": "External"},
+			{"speakerId": "spk_bool_internal", "name": "Bool Internal Speaker", "isInternal": true},
+			{"speakerId": "spk_bool_external", "name": "Bool External Speaker", "is_internal": false},
+			{"speakerId": "spk_no_affiliation", "name": "Uncategorized Speaker"},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, callRaw); err != nil {
+		t.Fatalf("upsert call: %v", err)
+	}
+	transcriptRaw := mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []map[string]any{{
+			"callId": callID,
+			"transcript": []map[string]any{
+				{"speakerId": "spk_internal", "sentences": []map[string]any{{"start": 1000, "end": 2000, "text": "Synthetic role quote alpha."}}},
+				{"speakerId": "spk_external", "sentences": []map[string]any{{"start": 2000, "end": 3000, "text": "Synthetic role quote bravo."}}},
+				{"speakerId": "spk_bool_internal", "sentences": []map[string]any{{"start": 3000, "end": 4000, "text": "Synthetic role quote charlie."}}},
+				{"speakerId": "spk_bool_external", "sentences": []map[string]any{{"start": 4000, "end": 5000, "text": "Synthetic role quote delta."}}},
+				{"speakerId": "spk_no_affiliation", "sentences": []map[string]any{{"start": 5000, "end": 6000, "text": "Synthetic role quote echo."}}},
+				{"speakerId": "spk_role_unknown", "sentences": []map[string]any{{"start": 6000, "end": 7000, "text": "Synthetic role quote foxtrot."}}},
+			},
+		}},
+	})
+	if _, err := store.UpsertTranscript(ctx, transcriptRaw); err != nil {
+		t.Fatalf("upsert transcript: %v", err)
+	}
+
+	rows, err := store.CallDrilldownEvidence(ctx, CallDrilldownEvidenceParams{
+		CallID: callID,
+		Query:  "Synthetic role quote",
+		Limit:  20,
+	})
+	if err != nil {
+		t.Fatalf("CallDrilldownEvidence: %v", err)
+	}
+	bySpeaker := map[string]CallDrilldownEvidenceRow{}
+	for _, r := range rows {
+		bySpeaker[r.SpeakerID] = r
+	}
+
+	internal := bySpeaker["spk_internal"]
+	if internal.SpeakerRole != SpeakerRoleInternal {
+		t.Fatalf("spk_internal role=%q want %q", internal.SpeakerRole, SpeakerRoleInternal)
+	}
+	if internal.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_internal role_status=%q want %q", internal.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	external := bySpeaker["spk_external"]
+	if external.SpeakerRole != SpeakerRoleExternal {
+		t.Fatalf("spk_external role=%q want %q", external.SpeakerRole, SpeakerRoleExternal)
+	}
+	if external.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_external role_status=%q want %q", external.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	boolInternal := bySpeaker["spk_bool_internal"]
+	if boolInternal.SpeakerRole != SpeakerRoleInternal {
+		t.Fatalf("spk_bool_internal role=%q want %q", boolInternal.SpeakerRole, SpeakerRoleInternal)
+	}
+	if boolInternal.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_bool_internal role_status=%q want %q", boolInternal.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	boolExternal := bySpeaker["spk_bool_external"]
+	if boolExternal.SpeakerRole != SpeakerRoleExternal {
+		t.Fatalf("spk_bool_external role=%q want %q", boolExternal.SpeakerRole, SpeakerRoleExternal)
+	}
+	if boolExternal.SpeakerRoleStatus != SpeakerRoleStatusAvailable {
+		t.Fatalf("spk_bool_external role_status=%q want %q", boolExternal.SpeakerRoleStatus, SpeakerRoleStatusAvailable)
+	}
+
+	noAff := bySpeaker["spk_no_affiliation"]
+	if noAff.SpeakerRole != SpeakerRoleUnknown {
+		t.Fatalf("spk_no_affiliation role=%q want %q", noAff.SpeakerRole, SpeakerRoleUnknown)
+	}
+	if noAff.SpeakerRoleStatus != SpeakerRoleStatusAffiliationMissing {
+		t.Fatalf("spk_no_affiliation role_status=%q want %q", noAff.SpeakerRoleStatus, SpeakerRoleStatusAffiliationMissing)
+	}
+
+	unmatched := bySpeaker["spk_role_unknown"]
+	if unmatched.SpeakerRole != SpeakerRoleUnknown {
+		t.Fatalf("spk_role_unknown role=%q want %q", unmatched.SpeakerRole, SpeakerRoleUnknown)
+	}
+	if unmatched.SpeakerRoleStatus != SpeakerRoleStatusSpeakerUnmatched {
+		t.Fatalf("spk_role_unknown role_status=%q want %q", unmatched.SpeakerRoleStatus, SpeakerRoleStatusSpeakerUnmatched)
+	}
+}
+
+// TestStableCallRefDeterministicAndRedactionSafe locks in the
+// gap-followup call_ref stability contract: StableCallRef is a pure
+// function of the raw call_id (no clock, no entropy, no per-process
+// state), so a redacted call_ref produced today resolves to the same
+// value after a process restart and can be shared safely with a
+// customer host without leaking the underlying call_id.
+func TestStableCallRefDeterministicAndRedactionSafe(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		callID string
+		want   string
+	}{
+		// Pinned literals: changing these requires intentional review of
+		// the stability contract because customer hosts may already
+		// reference these refs.
+		{callID: "call_extended_001", want: "call_ref_631d3128fa54"},
+		{callID: "call_sanitized_001", want: "call_ref_0fa3e082b9a9"},
+	}
+	for _, tc := range cases {
+		got := StableCallRef(tc.callID)
+		if got != tc.want {
+			t.Fatalf("StableCallRef(%q) = %q, want %q (stability contract changed?)", tc.callID, got, tc.want)
+		}
+		// Determinism: every invocation must return the same value.
+		for i := 0; i < 16; i++ {
+			if again := StableCallRef(tc.callID); again != got {
+				t.Fatalf("StableCallRef(%q) returned %q on retry %d after %q", tc.callID, again, i, got)
+			}
+		}
+		// Redaction safety: the raw call_id must NOT appear inside the
+		// stable ref. The hash prefix has only 12 hex chars, so a
+		// substring match would be a real leak.
+		if strings.Contains(got, tc.callID) {
+			t.Fatalf("StableCallRef(%q) leaks raw call_id in %q", tc.callID, got)
+		}
+		// Round-trip: NormalizeStableCallRef must accept the produced
+		// value and return it unchanged after lower-casing.
+		if normalized, err := NormalizeStableCallRef(got); err != nil || normalized != got {
+			t.Fatalf("NormalizeStableCallRef(%q) = (%q, %v); want (%q, nil)", got, normalized, err, got)
+		}
+	}
+	// Empty input must not produce a ref.
+	if got := StableCallRef(""); got != "" {
+		t.Fatalf("StableCallRef(\"\") = %q, want empty", got)
 	}
 }
 

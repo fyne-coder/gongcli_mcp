@@ -12,6 +12,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
 
 const (
@@ -42,12 +43,12 @@ type SearchResult struct {
 	Snippet      string `json:"snippet"`
 }
 
-func SyncMissingTranscripts(ctx context.Context, client *gong.Client, store *sqlite.Store, params SyncMissingParams) (result *SyncMissingResult, err error) {
+func SyncMissingTranscripts(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, params SyncMissingParams) (result *SyncMissingResult, err error) {
 	if client == nil {
 		return nil, errors.New("gong client is required")
 	}
 	if store == nil {
-		return nil, errors.New("sqlite store is required")
+		return nil, errors.New("store is required")
 	}
 
 	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
@@ -113,9 +114,11 @@ func SyncMissingTranscripts(ctx context.Context, client *gong.Client, store *sql
 	return result, nil
 }
 
-func SearchTranscripts(ctx context.Context, store *sqlite.Store, query string, limit int) ([]SearchResult, error) {
+func SearchTranscripts(ctx context.Context, store interface {
+	SearchTranscriptSegments(context.Context, string, int) ([]sqlite.TranscriptSearchResult, error)
+}, query string, limit int) ([]SearchResult, error) {
 	if store == nil {
-		return nil, errors.New("sqlite store is required")
+		return nil, errors.New("store is required")
 	}
 
 	rows, err := store.SearchTranscriptSegments(ctx, query, limit)

@@ -7,7 +7,7 @@ flag/env surfaces should probably move to optional YAML next.
 
 | Surface | File or command | Purpose | Status |
 | --- | --- | --- | --- |
-| Sync run plan | `gongctl sync run --config PATH` | Repeatable call/user/transcript/schema/settings refresh steps | Implemented |
+| Sync run plan | `gongctl sync run --config PATH` | Repeatable call/user/transcript/schema/settings/scorecard-activity refresh steps | Implemented |
 | Business profile | `gongctl profile discover --out PATH`, then `profile validate/import --profile PATH` | Tenant CRM object, field, lifecycle, and methodology mappings | Implemented |
 | AI governance exclusions | `gongctl governance audit --config PATH` and `export-filtered-db --config PATH` | Customer/account names and aliases that should be excluded before MCP/AI use | Implemented |
 | Docker Compose | `compose.yaml` | Local container wiring for CLI and MCP services | Implemented |
@@ -66,7 +66,8 @@ Recommended contract:
 - Flags and env vars can override YAML for local debugging and container
   platform integration.
 - Built-in presets are the fast path for common deployments:
-  `business-pilot`, `operator-smoke`, `analyst`, `governance-search`, and
+  `business-pilot`, `operator-smoke`, `analyst-core`,
+  `analyst-business-core`, `analyst`, `governance-search`, and
   `all-readonly`.
 - HTTP must still have an explicit tool policy, but that policy can be a named
   preset such as `business-pilot` or `all-readonly`, or a custom allowlist.
@@ -107,8 +108,8 @@ paths:
   backups: backups
 
 images:
-  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2
-  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2
+  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.0
+  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.0
 ```
 
 Use published image tags only after the corresponding tag workflow has
@@ -120,33 +121,34 @@ This should not contain Gong credentials. Credentials should remain environment
 variables, `.env` files outside Git, Docker/Kubernetes secrets, or a company
 secret manager.
 
-## Strong Candidate: Retention And Cache Policy
+## Implemented: Retention Policy YAML
 
-Cache purge is currently flag-driven:
+Scheduled cache purge can use reviewed retention policy YAML:
 
 - `cache purge --older-than DATE`
+- `cache purge --config PATH`
 - `--dry-run`
 - `--confirm`
+- `--db PATH` for SQLite, or `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
 
-A YAML policy would help operators review and schedule retention decisions:
+The implemented policy shape is intentionally narrow:
 
 ```yaml
 version: 1
-
-cache:
-  db: /srv/gongctl/cache/gong.db
-  retention:
-    older_than: 2026-04-01
-    require_backup: true
-    dry_run_first: true
-  preserve:
-    transcripts_dir: true
-    profiles: true
-    sync_history: true
+older_than: 2026-04-01
+approval:
+  reference: CHANGE-RETENTION-123
+  approved_by: revops-retention-reviewer
+  approved_at: 2024-01-01
+  data_owner: revenue-operations
+  backup_reference: backup-20240101-approved
+  legal_hold_reviewed: true
 ```
 
-Confirmed deletion should still require a runtime confirmation flag or operator
-approval. Do not let a checked-in YAML file self-authorize destructive deletes.
+Confirmed deletion still requires the runtime `--confirm` flag and, for
+Postgres, a writable operator URL. The YAML file does not install a scheduler,
+self-authorize destructive deletes, or move WAL, replica, snapshot, transcript
+file, profile, or backup retention into `gongctl`.
 
 ## Possible Candidate: Analysis Presets
 
@@ -186,5 +188,7 @@ already work. It becomes useful when teams want repeatable review packs.
 
 1. Add `gongmcp --config PATH` for MCP runtime config.
 2. Add an optional operator workspace config to reduce repeated path/image args.
-3. Add retention policy YAML only if scheduled cache purge becomes common.
+3. Retention policy YAML is implemented for scheduled `cache purge --config`
+   jobs; next retention work should focus on customer scheduler/runbook
+   integration rather than expanding config shape by default.
 4. Add analysis preset YAML after the operational config surface is stable.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/auth"
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -40,22 +41,29 @@ func TestSyncMissingTranscriptsSelectsOnlyMissingCalls(t *testing.T) {
 		"title":   "Missing transcript 1",
 		"started": "2026-04-24T11:00:00Z",
 	})
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+		CallID:         "call-missing-2",
+		ConfigSHA256:   "synthetic-config-sha",
+		MatchedList:    "no_ai",
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall returned error: %v", err)
+	}
 	mustUpsertTranscript(t, ctx, store, wrappedTranscriptPayload("call-existing", "speaker-a", "Already synced."))
 
 	client, requested := newFakeTranscriptClient(t, map[string]string{
 		"call-missing-1": wrappedTranscriptPayload("call-missing-1", "speaker-b", "First missing transcript."),
-		"call-missing-2": wrappedTranscriptPayload("call-missing-2", "speaker-c", "Second missing transcript."),
 	})
 
 	result, err := SyncMissingTranscripts(ctx, client, store, SyncMissingParams{})
 	if err != nil {
 		t.Fatalf("SyncMissingTranscripts returned error: %v", err)
 	}
-	if result.CallsSeen != 2 {
-		t.Fatalf("CallsSeen=%d want 2", result.CallsSeen)
+	if result.CallsSeen != 1 {
+		t.Fatalf("CallsSeen=%d want 1", result.CallsSeen)
 	}
-	if result.TranscriptsSynced != 2 {
-		t.Fatalf("TranscriptsSynced=%d want 2", result.TranscriptsSynced)
+	if result.TranscriptsSynced != 1 {
+		t.Fatalf("TranscriptsSynced=%d want 1", result.TranscriptsSynced)
 	}
 
 	gotBatches := requested()
@@ -64,7 +72,7 @@ func TestSyncMissingTranscriptsSelectsOnlyMissingCalls(t *testing.T) {
 		gotIDs = append(gotIDs, batch...)
 	}
 	slices.Sort(gotIDs)
-	wantIDs := []string{"call-missing-1", "call-missing-2"}
+	wantIDs := []string{"call-missing-1"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("requested call ids=%v want %v", gotIDs, wantIDs)
 	}
@@ -74,7 +82,7 @@ func TestSyncMissingTranscriptsSelectsOnlyMissingCalls(t *testing.T) {
 		t.Fatalf("SyncStatusSummary returned error: %v", err)
 	}
 	if summary.MissingTranscripts != 0 {
-		t.Fatalf("MissingTranscripts=%d want 0", summary.MissingTranscripts)
+		t.Fatalf("MissingTranscripts=%d want 0; governed skipped calls should not be transcript candidates", summary.MissingTranscripts)
 	}
 	if summary.LastRun == nil {
 		t.Fatal("LastRun is nil")
@@ -82,8 +90,67 @@ func TestSyncMissingTranscriptsSelectsOnlyMissingCalls(t *testing.T) {
 	if summary.LastRun.Scope != "transcripts" || summary.LastRun.Status != "success" {
 		t.Fatalf("LastRun=%+v want scope=transcripts status=success", summary.LastRun)
 	}
-	if summary.LastRun.RecordsSeen != 2 || summary.LastRun.RecordsWritten != 2 {
-		t.Fatalf("LastRun counts=%d/%d want 2/2", summary.LastRun.RecordsSeen, summary.LastRun.RecordsWritten)
+	if summary.LastRun.RecordsSeen != 1 || summary.LastRun.RecordsWritten != 1 {
+		t.Fatalf("LastRun counts=%d/%d want 1/1", summary.LastRun.RecordsSeen, summary.LastRun.RecordsWritten)
+	}
+}
+
+func TestSyncMissingWithBatchGovernanceSkipsCachedRestrictedCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	cfg, err := governance.ParseYAML([]byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example Transcript Restricted Corp"
+`))
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+
+	mustUpsertCall(t, ctx, store, map[string]any{
+		"id":      "call-transcript-governed-skip",
+		"title":   "Example Transcript Restricted Corp discovery",
+		"started": "2026-04-24T10:00:00Z",
+	})
+	mustUpsertCall(t, ctx, store, map[string]any{
+		"id":      "call-transcript-governed-allowed",
+		"title":   "Allowed account discovery",
+		"started": "2026-04-24T11:00:00Z",
+	})
+
+	client, requested := newFakeTranscriptClient(t, map[string]string{
+		"call-transcript-governed-allowed": wrappedTranscriptPayload("call-transcript-governed-allowed", "speaker-b", "Allowed governed transcript."),
+	})
+	result, err := SyncMissingWithBatchGoverned(ctx, client, store, filepath.Join(t.TempDir(), "transcripts"), 10, 10, cfg)
+	if err != nil {
+		t.Fatalf("SyncMissingWithBatchGoverned returned error: %v", err)
+	}
+	if result.Considered != 2 || result.Skipped != 1 || result.Stored != 1 {
+		t.Fatalf("considered/skipped/stored=%d/%d/%d want 2/1/1", result.Considered, result.Skipped, result.Stored)
+	}
+	gotBatches := requested()
+	if len(gotBatches) != 1 || !slices.Equal(gotBatches[0], []string{"call-transcript-governed-allowed"}) {
+		t.Fatalf("requested batches=%v want allowed call only", gotBatches)
+	}
+	var restrictedRows int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM calls WHERE call_id = 'call-transcript-governed-skip'`).Scan(&restrictedRows); err != nil {
+		t.Fatalf("query restricted call: %v", err)
+	}
+	if restrictedRows != 0 {
+		t.Fatalf("restricted cached call rows=%d want 0", restrictedRows)
+	}
+	var ledgerRows int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM governance_ingest_skipped_calls WHERE call_id = 'call-transcript-governed-skip'`).Scan(&ledgerRows); err != nil {
+		t.Fatalf("query skipped ledger: %v", err)
+	}
+	if ledgerRows != 1 {
+		t.Fatalf("ledger rows=%d want 1", ledgerRows)
 	}
 }
 

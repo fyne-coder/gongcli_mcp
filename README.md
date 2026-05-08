@@ -2,7 +2,45 @@
 
 `gongctl` is an unofficial Gong API command-line client. It is designed as an open-source wrapper: source code can be public, but every user brings their own Gong credentials and is responsible for consent, data handling, and Gong terms. This project is not affiliated with or endorsed by Gong.
 
-This project starts as a local CLI and keeps the API client boundary narrow. A read-only local MCP server is available over the SQLite cache; it does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+This project starts as a local CLI and keeps the API client boundary narrow. A read-only MCP server is available over the configured cache store; SQLite is complete/default, while Postgres supports a client-facing `business-workbench` facade plus bounded shared-deployment `business-pilot`, `analyst-core`, `analyst-business-core`, and approved `analyst` surfaces. MCP does not expose raw Gong API access. `gongctl` is the ingestion wedge; multi-user transcript review, evidence workflows, artifact generation, and customer-specific customization belong in a separate pipeline/application layer.
+SQLite remains the default local/single-host cache. For shared multi-container
+deployments, the first Postgres vertical slice supports a shared database for
+sync status, cached calls, users, transcripts, transcript segments, and the
+read-only MCP `business-pilot` foundation preset: `get_sync_status`,
+`summarize_call_facts`, `summarize_calls_by_lifecycle`, and
+`rank_transcript_backlog`. Operator smoke deployments can also explicitly
+allow `get_sync_status`, `search_calls`, `search_transcript_segments`,
+`get_call`, and `rank_transcript_backlog`. Postgres also supports profile
+metadata import/show/readiness, MCP profile reads, and profile-derived
+lifecycle facts when an active profile has a fresh profile fact cache. Postgres
+governance mode supports a prepared private policy for the narrowed
+`governance-search` MCP slice. `analyst-core` adds Postgres-supported call,
+CRM context inventory, cached CRM schema/settings inventory, profile,
+lifecycle, and transcript-search tools while `analyst-business-core` adds
+bounded Postgres transcript-evidence and business-analysis tools. Scorecard
+settings inventory and aggregate answered scorecard activity are available
+through the Postgres analyst-core surface. In `v0.4.0` and later, Postgres
+also supports explicit
+`list_unmapped_crm_fields`, `search_crm_field_values`, and
+`analyze_late_stage_crm_signals` allowlists with the same
+metadata-only/default-redaction contracts as SQLite. It also supports explicit
+`opportunities_missing_transcripts` for redacted Opportunity transcript
+coverage gaps and explicit `opportunity_call_summary` for redacted Opportunity
+call aggregates. Explicit `crm_field_population_matrix` support is also
+available for aggregate field-population diagnostics by approved object/field
+pairs: `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`,
+`Opportunity.Forecast_Category_AE__c`, `Account.Industry`,
+`Account.Account_Type__c`, and `Account.Revenue_Range_f__c`. Explicit
+`compare_lifecycle_crm_fields` support is available for aggregate lifecycle CRM
+field comparison for the reviewed `Opportunity` object type. Explicit
+`search_transcripts_by_crm_context`
+support is available for CRM-constrained transcript snippet search with default
+MCP redaction of call, title, object, and speaker identifiers. Explicit
+`missing_transcripts` support is available for admin transcript-backfill
+workflows with date, lifecycle, scope, system, direction, and CRM object
+filters. The Postgres `analyst` preset is available for approved analyst
+sessions over the reviewed catalog; `all-readonly` remains gated until
+full-catalog query parity is complete.
 
 ## Positioning
 
@@ -26,16 +64,26 @@ question, better tracker/theme inputs, and known coverage limits.
 
 ## Status
 
-Early public release. `v0.3.2` is enterprise-pilot ready for operator-managed
-local sync plus read-only MCP over a reviewed SQLite cache. Public 1.0 still
-requires signed/provenance-backed release artifacts, stable deprecation policy,
-and the remaining production hardening tracked in [docs/roadmap.md](docs/roadmap.md).
+Early public release. `v0.4.0` is the first customer-hosted Postgres
+`business-workbench` release candidate for operator-managed sync plus
+read-only MCP over a reviewed SQLite cache or scoped Postgres serving database.
+Public 1.0 still requires signed/provenance-backed release artifacts, stable
+deprecation policy, and the remaining production hardening tracked in
+[docs/roadmap.md](docs/roadmap.md).
+
+Postgres analyst preset support and explicit allowlist additions called out
+above require a tagged `v0.4.0` or later release before customer deployment.
 
 For company evaluation, start with the enterprise pilot packet:
 
 - [Developer orientation](docs/developer-orientation.md)
 - [Quickstart](docs/quickstart.md)
 - [Customer-hosted package](docs/customer-hosted-package.md)
+- [Postgres client pilot release packet](docs/postgres-client-pilot-release-packet.md)
+- [Postgres client onboarding checklist](docs/postgres-client-onboarding-checklist.md)
+- [Postgres client manual-test checklist](docs/postgres-client-manual-test-checklist.md)
+- [Postgres client deployment runbook](docs/runbooks/postgres-client-deployment.md)
+- [Postgres question-parity matrix](docs/postgres-question-parity.md)
 - [Data Boundary Statement](docs/data-boundary-statement.md)
 - [Support model](docs/support.md)
 - [Enterprise deployment](docs/enterprise-deployment.md)
@@ -56,8 +104,42 @@ gongmcp --list-tool-presets
 gongctl profile schema
 ```
 
-Use `business-pilot` for first business-user access and `all-readonly` only for
-trusted admin/analyst sessions or a fully reviewed filtered DB.
+Use `business-workbench` for first client business-user access when a client
+MCP host should see only the stable `gong_*` facade tools; `analyst-facade`
+and `facade-analyst` remain aliases for that six-tool surface. For ad-hoc
+business questions, use `gong_analyze` operation `question.answer`; it returns
+a governed evidence pack for the host model to synthesize, including searched
+scope, coverage, bounded evidence/quotes, limitations, suggested follow-ups,
+and per-call duration. Scoped Postgres call-title exposure remains constrained
+because titles can contain customer names; use `call_ref` plus Gong
+brief/highlight rows and transcript quotes as the stable client path. Use
+`business-pilot` only for the older narrow aggregate/status pilot lane,
+`analyst-core` for the reviewed Postgres analyst starter surface including
+cached CRM schema/settings
+inventory, scorecard inventory, and scorecard activity aggregates,
+`analyst-business-core` for bounded Postgres
+transcript-evidence/business analysis workflows. For directed Postgres CRM
+field discovery, use an explicit `list_unmapped_crm_fields` allowlist; for
+directed CRM value lookup, use an explicit `search_crm_field_values` allowlist.
+For aggregate late-stage pipeline signal review, use an explicit
+`analyze_late_stage_crm_signals` allowlist. For redacted Opportunity transcript
+coverage gaps, use an explicit `opportunities_missing_transcripts` allowlist.
+For redacted Opportunity call aggregates, use an explicit
+`opportunity_call_summary` allowlist. For Postgres CRM field-population
+diagnostics, use an explicit `crm_field_population_matrix` allowlist and keep
+grouping to the approved object/field pairs listed below. For targeted
+transcript snippets tied to a CRM object type or record, use an explicit
+`search_transcripts_by_crm_context` allowlist and keep snippet exposure
+reviewed. For approved analyst workflows on Postgres, use `analyst`; use
+`analyst-core` or `analyst-business-core` when you need a narrower starter
+surface. Use `redacted-all-readonly` only for internal manual testing against a
+physically redacted Postgres serving DB with scoped reader grants. That preset
+is the explicit broad redacted-DB exception where business-analysis tools can
+return remaining call titles/raw call IDs when the caller sets the include
+flags.
+Use `all-readonly` only for
+trusted SQLite admin/analyst sessions against a reviewed SQLite or filtered
+cache.
 
 - Deployment worksheet: [Customer implementation checklist](docs/implementation-checklist.md)
 - Local/container start: [Quickstart](docs/quickstart.md)
@@ -71,11 +153,16 @@ sharing logs or payloads:
 
 ```bash
 gongctl support bundle --db "$HOME/gongctl-data/gong-mcp-governed.db" --out "$HOME/gongctl-data/support-bundle"
+# Postgres shared deployment:
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl support bundle --out "$HOME/gongctl-data/support-bundle"
 ```
 
-The command opens SQLite read-only, does not need Gong credentials, and does
-not make network calls. See [Support model](docs/support.md) for what the
-bundle includes and excludes.
+The command opens the configured cache read-only, does not need Gong
+credentials, and does not make network calls. SQLite uses `--db PATH`;
+Postgres uses `GONG_DATABASE_URL` or `DATABASE_URL` and does not export the
+database URL. The `--out` directory must be new or empty so stale files are not
+included by accident. See [Support model](docs/support.md) for what the bundle
+includes and excludes.
 
 Current pilot hardening in this worktree includes a restricted/company CLI mode
 for high-risk commands. Enable it with `GONGCTL_RESTRICTED=1` or
@@ -122,21 +209,26 @@ GoReleaser and Docker builds inject `version`, `commit`, and `date` into both `g
 
 For the fastest end-to-end path, use the [Quickstart](docs/quickstart.md).
 
+For shared deployments where the sync job and `gongmcp` run in separate
+containers without a shared filesystem, use Postgres instead of a mounted
+SQLite cache. See [Docker Deployment](docs/docker.md#postgres-shared-deployment)
+and [Enterprise Deployment](docs/enterprise-deployment.md#postgres-shared-container-deployment).
+
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.3.2 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.0 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.0 sync status --db /data/gong.db
 ```
 
-The `v0.3.2` image references require the `v0.3.2` tag workflow to have
+The `v0.4.0` image references require the `v0.4.0` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.0 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
@@ -172,6 +264,26 @@ scripts/docker-smoke.sh
 ```
 
 See [docs/docker.md](docs/docker.md) for Compose usage, MCP host configuration, and OCI registry deployment notes.
+
+Run the synthetic Postgres shared-deployment smoke:
+
+```bash
+scripts/postgres-smoke.sh
+```
+
+The smoke uses synthetic data only. It initializes Postgres, writes the
+synthetic cache through `gongctl sync synthetic`, checks Postgres read-model
+state with `gongctl sync read-model`, validates cached CRM schema/settings and
+scorecard inventory through the read-only role, starts `gongmcp`, calls the
+supported MCP tools, and proves the reader role cannot write or directly read
+raw/sensitive tables. It also prepares a synthetic Postgres AI governance
+policy and proves restricted synthetic records are absent from governed MCP
+search outputs.
+The smoke also creates a synthetic `business-pilot` scoped reader role, proves
+the selected business-pilot MCP calls work, denies direct reads of
+`calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`,
+verifies startup fails on an extra direct column grant, and applies that role
+from the generated `gongctl mcp postgres-reader-sql` SQL artifact.
 
 Compose requires `GONGCTL_DATA_DIR` to point at an external data directory so customer SQLite/transcript data does not land under the source checkout.
 
@@ -209,7 +321,7 @@ When restricted mode is enabled, these commands are blocked unless you add
 `--allow-sensitive-export` or set `GONGCTL_ALLOW_SENSITIVE_EXPORT=1`:
 
 - `gongctl api raw ...`
-- `gongctl calls show --json`
+- `gongctl calls show --db PATH --json` for raw SQLite cached call JSON
 - `gongctl calls list --context extended ...`
 - `gongctl calls export ...`
 - `gongctl calls transcript ...`
@@ -218,6 +330,7 @@ When restricted mode is enabled, these commands are blocked unless you add
 - `gongctl sync calls --preset business`
 - `gongctl sync calls --preset all`
 - `gongctl sync calls --include-parties`
+- `gongctl sync calls --include-highlights`
 
 Approved override example:
 
@@ -225,6 +338,7 @@ Approved override example:
 GONGCTL_RESTRICTED=1 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --allow-sensitive-export --out calls-with-crm-context.json
 GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business --allow-sensitive-export
 GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset minimal --include-parties --allow-sensitive-export
+GONGCTL_RESTRICTED=1 gongctl sync calls --db ~/gongctl-data/gong.db --from 2026-04-01 --to 2026-04-24 --preset minimal --include-highlights --allow-sensitive-export
 ```
 
 ## Public Quickstart Shape
@@ -254,12 +368,25 @@ them before the scheduled job uses the same file:
 ```bash
 gongctl sync run --config testdata/fixtures/sync-run-minimal.yaml --dry-run
 gongctl cache inventory --db ~/gongctl-data/gong.db
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache inventory
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01 --confirm
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --dry-run
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --confirm
 ```
 
 ## Advanced Local Operator Commands
 
 These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
+When using Postgres, `gongctl search calls` and `gongctl calls show --json`
+return minimized read-model metadata. Use explicit SQLite/operator raw-export
+commands such as `calls export` with `--allow-sensitive-export` for
+operator-controlled raw payload access.
+With `GONG_DATABASE_URL` set, `gongctl profile discover/validate/import/show`
+can operate on the shared Postgres cache when `--db` is omitted; keep generated
+profile YAML outside git because discovery evidence can contain tenant CRM
+field names and values.
 
 ```bash
 gongctl sync crm-integrations --db ~/gongctl-data/gong.db
@@ -271,6 +398,10 @@ gongctl sync run --config ~/gongctl-data/company-sync.yaml
 gongctl sync status --db ~/gongctl-data/gong.db
 gongctl cache inventory --db ~/gongctl-data/gong.db
 gongctl cache purge --db ~/gongctl-data/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --older-than 2026-04-01 --confirm
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --dry-run
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --config ~/gongctl-data/retention-policy.yaml --confirm
 gongctl profile discover --db ~/gongctl-data/gong.db --out ~/gongctl-data/gongctl-profile.yaml
 gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
 gongctl profile import --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
@@ -286,6 +417,14 @@ gongctl analyze transcript-backlog --db ~/gongctl-data/gong.db --limit 25
 gongctl mcp tool-info list_gong_settings
 gongctl search calls --db ~/gongctl-data/gong.db --crm-object-type Opportunity --crm-object-id opp_001 --limit 10
 gongctl calls show --db ~/gongctl-data/gong.db --call-id CALL_ID --json
+# With GONG_DATABASE_URL set, Postgres returns minimized call detail without --db.
+gongctl calls show --call-id CALL_ID --json
+gongctl sync crm-integrations
+gongctl sync crm-schema --integration-id CRM_INTEGRATION_ID --object-type Opportunity
+gongctl sync settings --kind scorecards
+gongctl analyze crm-schema --integration-id CRM_INTEGRATION_ID --object-type Opportunity
+gongctl analyze scorecards
+gongctl analyze scorecard --scorecard-id SCORECARD_ID
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --json
 gongctl calls list --from 2026-04-01 --to 2026-04-24 --context extended --out calls-with-crm-context.json --allow-sensitive-export
 gongctl calls export --from 2026-04-01 --to 2026-04-24 --out calls.jsonl
@@ -322,8 +461,8 @@ The Agent E CLI flow is SQLite-backed:
 7. `gongctl sync scorecard-activity --db PATH --call-from DATE --call-to DATE [--review-method AUTOMATIC|MANUAL|BOTH]`
 8. `gongctl sync run --config PATH [--dry-run]`
 9. `gongctl sync status --db PATH`
-10. `gongctl cache inventory --db PATH`
-11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`
+10. `gongctl cache inventory --db PATH` for SQLite, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
+11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres; scheduled retention jobs can use `gongctl cache purge --config PATH [--dry-run|--confirm]`
 12. `gongctl profile discover --db PATH --out PATH`
 13. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
 14. `gongctl profile validate --db PATH --profile PATH`
@@ -340,36 +479,68 @@ The Agent E CLI flow is SQLite-backed:
 
 Rules:
 
-- `--db` is required for all SQLite-backed `sync`, `search`, and `calls show` commands.
+- `--db` is required for all SQLite-backed `sync`, `search`, and `calls show` commands. With `GONG_DATABASE_URL` or `DATABASE_URL`, supported Postgres read-only commands use the shared database instead.
 - `sync calls --preset business` requests Gong `Extended` context.
 - `sync calls --preset minimal` does not request Gong context.
 - `sync calls --preset all` currently maps to `Extended` context as well; it is documented separately so it can diverge later without changing the CLI shape.
 - `sync calls --include-parties` requests Gong call participant fields such as names, emails, speaker IDs, and titles. Use it only for approved operator refreshes because returned participant payloads are cached in raw call JSON.
-- `sync crm-integrations` caches Gong CRM integration IDs needed by `sync crm-schema`.
-- `sync crm-schema` caches selected CRM field metadata by integration/object type; it stores field names and labels, not CRM field values.
-- `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces.
-- `sync scorecard-activity` caches answered scorecard activity from Gong's scorecard
-  activity stats endpoint. It stores local raw JSON for operator audit, but
-  public summaries should use aggregate analyze/MCP surfaces.
+- `sync calls --include-highlights` requests Gong AI Highlights / brief /
+  next-step fields. Use it only for approved operator refreshes because
+  returned summary/next-step text is cached in raw call JSON. No MCP tool reads
+  these fields until a typed redacted read model is added.
+- `sync crm-integrations` caches Gong CRM integration IDs needed by
+  `sync crm-schema`. With `GONG_DATABASE_URL` set and `--db` omitted, this
+  inventory can be written to Postgres for shared deployments.
+- `sync crm-schema` caches selected CRM field metadata by integration/object
+  type; it stores field names and labels, not CRM field values. With
+  `GONG_DATABASE_URL` set and `--db` omitted, this metadata can be written to
+  Postgres and read through `analyze crm-schema` or the reviewed MCP inventory
+  tools.
+- `sync settings` caches read-only Gong inventory for trackers, scorecards, and workspaces. With `GONG_DATABASE_URL` set and `--db` omitted, this cache can be written to Postgres for shared deployments.
+- `sync scorecard-activity` caches answered scorecard activity from Gong's
+  scorecard activity stats endpoint. It stores local raw JSON for operator
+  audit, but public summaries should use aggregate analyze/MCP surfaces. With
+  `GONG_DATABASE_URL` set and `--db` omitted, supported writes use Postgres for
+  shared deployments.
 - `sync run --config PATH` executes a staged refresh plan from YAML. Relative
   `db` and `out_dir` paths resolve from the config file location, and
-  `--dry-run` validates the file without calling Gong. Sensitive transcript and
-  extended-context steps are flagged in dry-run output, but runtime approval is
-  still required through `--allow-sensitive-export` or
+  `--dry-run` validates the file without calling Gong. Supported stages include
+  calls, users, transcripts, CRM integrations/schema, settings, and
+  scorecard-activity. Sensitive transcript and extended-context steps are
+  flagged in dry-run output, but runtime approval is still required through
+  `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` when restricted mode is enabled.
 - `sync transcripts` selects calls that do not already have cached transcripts, batches missing call IDs into Gong transcript requests, and writes one normalized transcript JSON file per returned call transcript. The default `--batch-size` is 100, and the CLI caps it at 100.
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.
-- `cache inventory --db PATH` opens the database read-only and reports file
-  size, primary table counts, call date range, transcript and CRM-context
-  presence, profile status, and last sync metadata with a sensitive-data
-  warning.
-- `cache purge --db PATH --older-than YYYY-MM-DD` is dry-run by default and
-  reports calls, transcripts, transcript segments, CRM context, and profile
-  fact-cache rows that would be deleted. Confirmed purges enable SQLite
-  `secure_delete`, checkpoint/truncate WAL state, and run `VACUUM`; still add
-  `--confirm` only after backup, retention, and legal-hold checks are complete.
+- `cache inventory --db PATH` opens SQLite read-only and reports file size,
+  primary table counts, call date range, transcript and CRM-context presence,
+  profile status, and last sync metadata with a sensitive-data warning. With
+  `GONG_DATABASE_URL` or `DATABASE_URL` and no `--db`, it opens Postgres
+  read-only, reports safe table/version/readiness diagnostics, and never
+  exports the database URL.
+- `cache purge --db PATH --older-than YYYY-MM-DD` is dry-run by default for
+  SQLite. Omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` for
+  Postgres. A Postgres reader URL can preview metadata-only counts through the
+  read-only role; confirmed Postgres purges require a writable URL and delete
+  matching calls plus dependent transcript, CRM-context, read-model, profile
+  fact-cache, scorecard-activity, and governance-suppression rows. SQLite
+  confirmed purges additionally enable `secure_delete`, checkpoint/truncate WAL
+  state, and run `VACUUM`. Postgres WAL, replicas, snapshots, backups, transcript
+  files, sync history, profiles, CRM schema inventory, and settings inventory
+  remain operator-owned retention surfaces. Postgres keeps call-ID tombstones as
+  operational metadata to prevent later sync steps from accidentally
+  rehydrating purged call-scoped rows; add `--confirm` only after backup,
+  retention, and legal-hold checks are complete.
+- `cache purge --config PATH` reads a retention-policy YAML file for scheduled
+  purge jobs. The policy records `version: 1`, `older_than`, and approval
+  metadata for the change reference, approver, approval date, data owner, backup
+  reference, and legal-hold review. Dry-run output includes the policy SHA-256
+  and sanitized metadata, while confirmed config-driven purge fails closed until
+  required approval fields are present and `approval.approved_at` is a
+  non-future `YYYY-MM-DD` date. The YAML does not install a scheduler or
+  self-authorize deletion; `--confirm` and the writable URL are still required.
 - `profile discover` generates an editable YAML profile from cached CRM inventory and includes confidence plus evidence for discovered mappings. Discovery is an English-biased starter and may include CRM evidence values in the YAML, so write real-tenant output to a local file outside git rather than shared logs.
 - Discovered profiles are starter drafts, not universal truth. A human should review tenant lifecycle, object, field, and methodology mappings before relying on profile-aware separation of sales and post-sales calls.
 - `profile validate` reports malformed YAML, unsupported profile versions,
@@ -378,21 +549,29 @@ Rules:
   JSON validation report; for semantic validity gates, inspect the report's
   `valid` field. `profile import` is the command that refuses `valid:false`
   profiles before writing.
-- `profile import` stores the active profile in SQLite in one transaction. Re-importing identical profile content is a no-op; changed source metadata for the same canonical profile updates metadata without changing profile meaning.
-- Profile-aware analysis uses a materialized SQLite read model keyed by active profile and canonical hash. Writable CLI sync/profile commands rebuild or warm it; read-only MCP requires that cache to be current and reports a stale-cache error instead of writing to SQLite.
+- `profile import` stores the active profile in SQLite or Postgres in one transaction. Re-importing identical profile content is a no-op; changed source metadata for the same canonical profile updates metadata without changing profile meaning.
+- Profile-aware analysis uses a materialized read model keyed by active profile
+  and canonical hash. Writable SQLite/Postgres CLI sync/profile commands rebuild
+  or warm it; read-only MCP requires that cache to be current and reports a
+  stale-cache error instead of writing to the cache.
 - Profile rules are a closed Go-evaluated grammar: `equals`, `in`, `prefix`, `iprefix`, `regex`, `is_set`, and `is_empty`. Profiles do not run SQL, templates, JSONPath, JMESPath, or arbitrary expressions.
-- `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads.
-- `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is answered-scorecard activity and supports grouping by scorecard, review method, reviewed user, lifecycle, or transcript status.
+- `analyze scorecards` and `analyze scorecard` expose scorecard names and question text from cached settings without returning raw settings payloads. With `GONG_DATABASE_URL` set and `--db` omitted, these read from Postgres through the read-only role.
+- `analyze scorecards` is scorecard inventory. `analyze scorecard-activity` is
+  answered-scorecard activity and supports grouping by scorecard, review
+  method, reviewed user, lifecycle, or transcript status. With
+  `GONG_DATABASE_URL` set and `--db` omitted, Postgres reads use the read-only
+  role and aggregate functions instead of raw table access; the Postgres
+  read-only path rejects `reviewed_user` grouping so it does not emit user IDs.
 - After upgrading to a build with new SQLite migrations, run a writable `gongctl sync ...` command before starting `gongmcp`; read-only MCP refuses older schema versions and tells the operator to run a sync command first.
 - `sync` commands write concise progress summaries to `stderr`.
-- `sync status`, `search ...`, and `calls show --json` write JSON to `stdout`.
+- `sync status`, `search ...`, and `calls show --json` write JSON to `stdout`. Postgres `calls show --json` returns minimized call detail rather than raw cached JSON.
 - `analyze ...` commands write metadata-only JSON summaries to `stdout`.
 - `search transcripts` returns segment metadata and snippets only; it does not emit full segment text.
 - `search calls` CRM filters only match rows that were synced with stored CRM context, so use `business` or `all` when those searches are needed.
 - `analyze calls` groups the normalized `call_facts` view by safe dimensions such as `lifecycle`, `opportunity_stage`, `account_industry`, `scope`, `system`, `direction`, `transcript_status`, `duration_bucket`, `month`, `lead_source`, and `forecast_category`.
 - `analyze coverage` includes lifecycle, scope, system, and direction summaries so transcript coverage gaps can be understood by conversation type.
 - `analyze transcript-backlog` prioritizes External and Conference-style customer conversations ahead of short dialer-style events by default.
-- With an active profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model.
+- With an active profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model. In Postgres, `auto` falls back to builtin only when no active profile exists; when a profile is active, read-only Postgres requires a fresh profile fact cache and fails closed until a writable `gongctl sync read-model --rebuild`, `profile import`, or `profile activate` warms it.
 
 For non-client-specific business prompt examples, see [docs/public-readiness.md](docs/public-readiness.md). Public examples should avoid tenant field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs.
 
@@ -402,8 +581,10 @@ For companies with customer-specific AI-use restrictions, keep the real
 restricted-customer list in a private YAML file outside Git and load it with
 `gongmcp --ai-governance-config PATH` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
 `gongctl governance audit --db PATH --config PATH` verifies deterministic
-name/alias matches before MCP use. This is a local exclusion filter, not legal
-consent management or contractual enforcement. See
+SQLite name/alias matches before MCP use. For Postgres, omit `--db`, set a
+writable `GONG_DATABASE_URL`, and run `gongctl governance audit --config PATH
+--apply-postgres-policy` before starting read-only `gongmcp`. This is a local
+exclusion filter, not legal consent management or contractual enforcement. See
 [docs/ai-governance.md](docs/ai-governance.md); the tracked example config uses
 synthetic names only. For MCP/LLM use, default to a physically filtered MCP DB:
 
@@ -412,28 +593,103 @@ gongctl governance export-filtered-db --db ~/gongctl-data/gong.db --config ~/gon
 gongmcp --db ~/gongctl-data/gong-mcp-governed.db --tool-preset business-pilot
 ```
 
-Raw-DB governance remains available as a fallback; when it is enabled,
-`gongmcp` requires an explicit governance-compatible `--tool-preset`,
-`--tool-allowlist`, `GONGMCP_TOOL_PRESET`, or `GONGMCP_TOOL_ALLOWLIST`, and
-unsupported aggregate/config tools are refused.
+Raw-DB governance remains available as a fallback. SQLite computes suppression at
+`gongmcp` startup. Postgres requires a previously prepared policy because the
+MCP container should use the read-only role and should not receive raw candidate
+value access. In both modes, `gongmcp` requires an explicit
+governance-compatible `--tool-preset`, `--tool-allowlist`,
+`GONGMCP_TOOL_PRESET`, or `GONGMCP_TOOL_ALLOWLIST`, and unsupported
+aggregate/config tools are refused.
 
 ## Local MCP (stdio)
 
-`gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache.
+`gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache. For the Postgres shared-deployment slice, omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` to a read-only database role.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
 
-By default, `gongmcp` exposes the full read-only MCP catalog to any connected
-host. Company pilots should narrow that surface with `gongmcp --tool-preset`
-or `--tool-allowlist`, then layer host and filesystem controls around the
-approved business-user subset. Trusted single-user analyst workstations may
-use `--tool-preset all-readonly` or intentionally skip the allowlist in stdio
-mode and turn on per-tool opt-ins
+For SQLite stdio, `gongmcp` exposes the full read-only MCP catalog by default
+to any connected host. Company pilots should narrow that surface with
+`gongmcp --tool-preset` or `--tool-allowlist`, then layer host and filesystem
+controls around the approved business-user subset. Trusted single-user analyst
+workstations may use `--tool-preset all-readonly` or intentionally skip the
+allowlist in stdio mode and turn on per-tool opt-ins
 (`include_call_ids`, `include_speaker_ids`, `include_value_snippets`) for
 deeper, identifier-bearing questions; see
 [docs/mcp-data-exposure.md](docs/mcp-data-exposure.md) for the trade-off and
 [docs/mcp-data-exposure.md#mcp-call-volume-and-limits](docs/mcp-data-exposure.md#mcp-call-volume-and-limits)
 for configurable row caps, cap-hit feedback, and filter-first guidance that
 keeps MCP traffic from overwhelming the host context window.
+
+For Postgres stdio, the no-allowlist default is the bounded vertical-slice
+surface (`get_sync_status`, `search_calls`, and `search_transcript_segments`).
+Broader Postgres tools require a supported preset such as `business-pilot`,
+`analyst-core`, `analyst-business-core`, or `analyst`, or an explicit
+`GONGMCP_TOOL_ALLOWLIST`; `all-readonly` remains rejected until full-catalog
+query parity is complete.
+The default Postgres reader contract preserves the broad `gongmcp_reader`
+service role for compatibility. Operators who create a narrower function-scoped
+role for a specific preset or allowlist can start `gongmcp` with
+`--enforce-tool-scoped-db-grants` or `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`;
+startup then requires exactly the reviewed `gongmcp_*` function grants and
+reviewed table/column grants for the selected scoped surface and fails closed on
+extra function grants such as admin-only `missing_transcripts` helpers outside
+the selected preset. The reviewed scoped surfaces are currently
+`business-pilot` and `analyst`. They deny direct base-table identifiers such as
+`calls.call_id`, `calls.title`, `call_facts.call_id`, and `call_facts.title`;
+the analyst surface also grants sanitized business-analysis wrapper functions
+instead of the raw identifier-bearing SQL helpers. The scoped reader URL is
+still a service secret because selected functions and sanitized views can expose
+minimized call metadata, snippets, timings, counts, and tenant terminology.
+To generate a reviewed grant block without copying smoke script internals, use
+the `gongctl` operator command. The `gongmcp` flag is a compatibility path for
+MCP-only images:
+
+```bash
+gongctl mcp postgres-reader-sql --preset business-pilot \
+  --role gongmcp_business_pilot_reader --database gongctl
+
+gongctl mcp postgres-reader-apply --preset business-pilot \
+  --role gongmcp_business_pilot_reader --database gongctl --dry-run
+
+GONG_DATABASE_URL="$WRITER_URL" \
+  gongctl mcp postgres-reader-apply --preset business-pilot \
+  --role gongmcp_business_pilot_reader --database gongctl --apply
+
+gongmcp --print-postgres-reader-grants \
+  --tool-preset business-pilot \
+  --postgres-reader-role gongmcp_business_pilot_reader \
+  --postgres-database gongctl
+```
+
+Use `--preset analyst` and a separate role such as
+`gongmcp_analyst_reader` for approved analyst sessions that need the broader
+reviewed catalog.
+
+The generated SQL and apply JSON do not create credentials or print database
+URLs. Create a standalone `LOGIN NOINHERIT` role and password through your
+normal secret management process; do not grant that role to/from other roles.
+Then dry-run/review the grant block and use `--apply` with a writable operator
+URL to reconcile grants for that existing role. The apply command is safe to
+rerun to clear stale current public table/function grants and regrant the
+reviewed surface, and it validates the role posture plus final effective grants
+for current public objects. It also rejects effective sequence grants after
+apply. It is not a password or role-creation manager and it cannot clear
+default privileges created by other grantors for future objects. Avoid default
+grants to this scoped service role or to `PUBLIC`; MCP startup detects explicit
+default privileges targeting the role or `PUBLIC`, but PostgreSQL still grants
+EXECUTE on newly-created functions to `PUBLIC` by default, so keep public
+function grant drift checks and MCP startup privilege enforcement enabled. Run
+`gongmcp` with the scoped reader URL and
+`GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. This is a `gongmcp`
+service credential, not an analyst SQL login. The scoped active-profile and
+profile-cache helpers redact source metadata and call IDs/titles, and scoped
+analyst business-analysis helpers return redacted call references/titles through
+sanitized SQL wrappers, but selected functions still expose minimized
+operational metadata, snippets, timings, counts, and tenant terminology. MCP
+result limits are still enforced above those SQL helpers. The scoped
+`business-pilot` role is profile-backed: warm/import an active profile and use
+the default/profile lifecycle path. Explicit `lifecycle_source=builtin` still
+requires the broader compatibility reader role until a sanitized builtin SQL
+surface exists.
 
 For approved analyst sessions, the full cohort workflow is documented
 in [Business User Guide](docs/business-user-guide.md#analyst-cohort-workflow),
@@ -444,7 +700,8 @@ That workflow is filter -> cohort -> inspect -> analyze -> quotes ->
 limitations, and it is intended for ChatGPT, Claude, or another reviewed MCP
 host after the operator confirms that `tools/list` exposes the requested
 cohort, theme, quote, pipeline, persona/industry, synthesis, and limitation
-tools under `analyst` or `all-readonly`.
+tools under `analyst` / `analyst-expansion` for approved Postgres sessions, or
+`analyst` / `all-readonly` for trusted SQLite sessions.
 
 ## Private HTTP MCP Pilot
 
@@ -459,10 +716,13 @@ GONGMCP_MAX_SEARCH_RESULTS=100 \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 
-HTTP mode is a request/response JSON-RPC bridge over one operator-owned SQLite
-cache. Put it behind TLS termination at a trusted company proxy/gateway before
-non-local use. It is not a hosted SaaS layer, tenant router, browser app, or
-full streaming MCP service. Every HTTP mode requires an explicit tool preset or
+HTTP mode is a request/response JSON-RPC bridge over one operator-owned cache
+store: SQLite for local/single-host pilots, or the Postgres shared-deployment
+slice for approved presets such as `business-pilot`, narrower analyst presets,
+and `analyst`. Put it behind TLS termination at a trusted company
+proxy/gateway before non-local use. It is not a hosted SaaS layer, tenant
+router, browser app, or full streaming MCP service. Every HTTP mode requires an
+explicit tool preset or
 allowlist, including loopback binds behind a proxy; the preferred shape is a
 loopback bind behind the TLS gateway. Any non-loopback `--http` bind also requires
 `--allow-open-network`. Unauthenticated HTTP is blocked by default and is
@@ -486,7 +746,9 @@ so the server can reject unexpected browser `Origin` headers.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
 JSON-RPC traffic.
 
-Tools:
+Full SQLite catalog tools. Postgres availability is limited to the supported
+presets and explicit allowlists described above; unsupported Postgres tools and
+the full Postgres `all-readonly` preset fail closed.
 
 - `get_sync_status`
 - `search_calls`
@@ -521,14 +783,33 @@ Tools:
 - `search_transcript_quotes_with_attribution`
 - `missing_transcripts`
 
-The MCP server requires `--db`, reads SQLite only, and intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
-`get_call` returns minimized call detail instead of raw cached call JSON. `crm_field_population_matrix` only allows safe categorical group fields such as `StageName`.
+The SQLite MCP path requires `--db`; the Postgres path omits `--db` and uses `GONG_DATABASE_URL` or `DATABASE_URL`. In both modes, the MCP server intentionally does not expose raw Gong API calls, arbitrary SQL, or full transcript dumps.
+`get_call` returns minimized call detail instead of raw cached call JSON. It accepts either a raw `call_id` or a stable `call_ref`; when called with `call_ref`, the response keeps `call_ref` and omits the raw `call_id`. `crm_field_population_matrix` only allows safe categorical object/field pairs: `Opportunity.StageName`, `Opportunity.Forecast_Category_VP__c`, `Opportunity.Forecast_Category_AE__c`, `Account.Industry`, `Account.Account_Type__c`, and `Account.Revenue_Range_f__c`.
 Lifecycle tools classify calls through the imported profile when one is active, otherwise through the builtin compatibility view. Profile-aware responses include `lifecycle_source` and profile provenance. Use `lifecycle_source=builtin` to force buckets such as `active_sales_pipeline`, `late_stage_sales`, `renewal`, `upsell_expansion`, and `customer_success_account`.
-`summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
+`summarize_call_facts` reads metadata-only facts for ad-hoc grouping. MCP only allows safe business dimensions there; use `list_unmapped_crm_fields` for profile field-discovery gaps and `search_crm_field_values` with explicit opt-in for directed value lookups. `rank_transcript_backlog` is the business-facing transcript-sync priority tool; model-facing MCP output redacts call IDs and titles while preserving rank, lifecycle, scope, system, direction, duration, and rationale. `list_unmapped_crm_fields` returns field names, types, cardinality, population/null rates, and length distribution only; it does not return raw example values by default.
 `summarize_scorecard_activity` returns aggregate answered-scorecard counts and scores only. By default it does not return call IDs, scorecard IDs, user IDs, answer text, call titles, transcript snippets, emails, raw JSON, or raw scorecard activity payloads.
 `search_crm_field_values` is the narrow MCP exception for value search: it requires an object type, field name, and value query. It redacts call IDs by default unless `include_call_ids=true` is explicitly set, and only returns bounded short value snippets plus call titles when `include_value_snippets=true` is explicitly set.
+`analyze_late_stage_crm_signals` returns aggregate stage counts, field names, population rates, and lift only. In the current Postgres slice it is limited to `Opportunity.StageName` so custom field selection cannot be used as a raw value-distribution path. It does not return raw arbitrary CRM values, CRM object IDs/names, call IDs, call titles, transcript text, or profile payloads.
+`opportunities_missing_transcripts` returns redacted per-Opportunity transcript coverage metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call counts, missing/present transcript counts, and latest-call timing; Opportunity IDs/names, latest call IDs, raw CRM values, and raw storage fields are not returned.
+`opportunity_call_summary` returns redacted per-Opportunity call aggregate metadata. The Postgres reader function groups by Opportunity internally but returns only stage, call count, transcript/missing-transcript counts, total duration, and latest-call timing; Opportunity IDs/names, latest call IDs, owner IDs, amount/close date, raw CRM values, and raw storage fields are not returned.
+`crm_field_population_matrix` returns aggregate field-population cells grouped by approved categorical fields. Approved group values are intentionally exposed as aggregate labels. The Postgres reader function returns only group value, field name/label, object count, call count, and populated count; MCP/store output derives `population_rate` from those counts. Object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, raw hashes, titles, and transcript text are not returned.
+`compare_lifecycle_crm_fields` returns aggregate CRM field-population differences between two lifecycle buckets for the reviewed `Opportunity` object type. The Postgres reader function returns only object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta; it omits call IDs, call titles, CRM object IDs/names/keys, raw CRM values, raw JSON, raw hashes, and transcript text, rejects unreviewed object types, and excludes governance-suppressed calls inside SQL. Customer deployments require a tagged `v0.4.0` or later release.
+`search_transcripts_by_crm_context` returns CRM-constrained transcript snippets. MCP output redacts call IDs, call titles, speaker IDs, CRM object IDs/names, and object keys. The Postgres reader function filters governance-suppressed calls inside SQL and returns only started time, object type, matching-object count, segment timing, and snippet; it omits call IDs, call titles, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, and full transcript text.
+`missing_transcripts` returns direct missing-transcript call references for admin transcript-backfill workflows. Postgres supports the reviewed filter set: date range, lifecycle bucket, scope, system, direction, CRM object type, and CRM object ID; `crm_object_id` requires `crm_object_type` to avoid cross-object probing. It returns call IDs, titles, and start times, but not raw cached JSON, transcript text, CRM field values, raw JSON, or raw hashes. Use explicit allowlists; do not put it in business-user presets.
+The generic Postgres reader role can execute the reviewed bounded reader
+functions, so treat that database URL as a service secret rather than a
+general-purpose SQL login; direct table reads of raw CRM values, object names,
+and transcript text remain denied. For narrower deployments, use a tool-scoped
+reader role plus `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`; startup rejects a
+role that can currently execute functions outside the selected preset/allowlist.
+For `business-pilot`, startup also validates the first reviewed table/column
+boundary and rejects direct `calls.call_id`, `calls.title`,
+`call_facts.call_id`, and `call_facts.title` grants. The scoped reader URL
+remains a service secret because selected functions and sanitized views can
+still expose minimized call metadata, timings, counts, and tenant terminology.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
 `search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
+When serving a physically redacted Postgres MCP database with account-name search enabled, run `gongmcp` with `GONGMCP_AI_GOVERNANCE_CONFIG` or `--ai-governance-config` pointing at the same private policy used to build the serving DB. This lets MCP deny configured restricted names and aliases before query execution instead of returning row counts for restricted-name probes.
 
 ## Data Handling Rules
 
@@ -543,7 +824,7 @@ Lifecycle tools classify calls through the imported profile when one is active, 
 
 ```text
 cmd/gongctl/              CLI entrypoint
-cmd/gongmcp/              read-only local MCP server over SQLite
+cmd/gongmcp/              read-only MCP server over cache stores
 internal/gong/            typed API client + raw request support
 internal/auth/            env/config credential loading
 internal/ratelimit/       3 rps limiter + Retry-After-friendly client retries
@@ -552,9 +833,10 @@ internal/checkpoint/      resumable batch checkpoints
 internal/redact/          safe logging helpers
 internal/profile/         tenant-editable business profile parser, validator, discovery, and rule evaluation
 internal/store/sqlite/    local SQLite cache for calls, users, transcripts, CRM schema, settings, profiles, and sync state
-internal/syncsvc/         SQLite-backed call/user/inventory sync orchestration
+internal/store/postgres/  shared Postgres cache backend, migrations, read models, and scoped reader helpers
+internal/syncsvc/         call/user/inventory sync orchestration over the store/cache layer
 internal/transcripts/     transcript sync/search helpers on top of store + Gong client
-internal/mcp/             read-only MCP adapter over SQLite
+internal/mcp/             read-only MCP adapter over the store interface
 testdata/fixtures/        sanitized sample payloads only
 docs/                     architecture, data handling, MCP phase plan
 ```

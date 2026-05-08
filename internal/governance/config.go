@@ -3,6 +3,7 @@ package governance
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -188,6 +189,21 @@ func (c *Config) Targets() []Target {
 		return out[i].Alias < out[j].Alias
 	})
 	return out
+}
+
+func (c *Config) Fingerprint() string {
+	hash := sha256.New()
+	for _, target := range c.Targets() {
+		_, _ = hash.Write([]byte(target.List))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(target.Name))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(target.Alias))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(target.Normalized))
+		_, _ = hash.Write([]byte{0})
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
 }
 
 func BuildAudit(ctx context.Context, store CandidateStore, cfg *Config) (*Audit, error) {

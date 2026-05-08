@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -58,6 +60,47 @@ func (a *app) profileUsage() {
 `)
 }
 
+type profileInventoryStore interface {
+	ProfileInventory(context.Context) (*profilepkg.Inventory, error)
+	Close() error
+}
+
+type writableProfileStore interface {
+	profileInventoryStore
+	ImportProfile(context.Context, sqlite.ProfileImportParams) (*sqlite.ProfileImportResult, error)
+	ListProfiles(context.Context) ([]sqlite.ProfileHistoryEntry, error)
+	ProfileDocument(context.Context, string) (*sqlite.StoredProfileDocument, error)
+	ActivateProfile(context.Context, string) (*sqlite.ProfileImportResult, error)
+	ActiveBusinessProfile(context.Context) (*sqlite.BusinessProfile, error)
+	ActiveProfileDocument(context.Context) (*profilepkg.Profile, error)
+}
+
+type profileDocumentStore interface {
+	ProfileDocument(context.Context, string) (*sqlite.StoredProfileDocument, error)
+}
+
+func openProfileInventoryStore(ctx context.Context, path string) (profileInventoryStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.OpenProfileInventory(ctx, databaseURL)
+}
+
+func openWritableProfileStore(ctx context.Context, path string) (writableProfileStore, error) {
+	if strings.TrimSpace(path) != "" {
+		return sqlite.Open(ctx, path)
+	}
+	databaseURL := postgres.URLFromEnv(os.Getenv)
+	if databaseURL == "" {
+		return nil, errors.New("--db is required")
+	}
+	return postgres.Open(ctx, databaseURL)
+}
+
 func (a *app) profileDiscover(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("profile discover", flag.ContinueOnError)
 	fs.SetOutput(a.err)
@@ -69,7 +112,7 @@ func (a *app) profileDiscover(ctx context.Context, args []string) error {
 		}
 		return errUsage
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openProfileInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -91,17 +134,73 @@ func (a *app) profileValidate(ctx context.Context, args []string) error {
 	fs.SetOutput(a.err)
 	dbPath := fs.String("db", "", "SQLite database path")
 	profilePath := fs.String("profile", "", "YAML profile path")
+	gaReadiness := fs.Bool("ga-readiness", false, "fail with non-zero exit when the mechanical GA readiness checklist has blocking findings (CreatedDate-only field concepts, missing lifecycle buckets, methodology unmapped, loss-reason mapping missing); the JSON report is still emitted")
+	strictReadiness := fs.Bool("strict-readiness", false, "alias of --ga-readiness")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil
 		}
 		return errUsage
 	}
-	_, result, err := a.validateProfileFile(ctx, *dbPath, *profilePath)
+	p, result, err := a.validateProfileFile(ctx, *dbPath, *profilePath)
 	if err != nil {
 		return err
 	}
-	return writeJSONValue(a.out, result)
+	strict := *gaReadiness || *strictReadiness
+	if !strict {
+		return writeJSONValue(a.out, result)
+	}
+	checklist := sqlite.EvaluateProfileReadinessChecklist(p)
+	gaReport := buildProfileGAReadinessReport(checklist)
+	output := struct {
+		profilepkg.ValidationResult
+		GAReadiness profileGAReadinessReport `json:"ga_readiness"`
+	}{
+		ValidationResult: result,
+		GAReadiness:      gaReport,
+	}
+	if err := writeJSONValue(a.out, output); err != nil {
+		return err
+	}
+	if !result.Valid {
+		return fmt.Errorf("profile validation failed; see findings in JSON output")
+	}
+	if len(gaReport.BlockingFindings) > 0 {
+		return fmt.Errorf("GA readiness gate failed: %d blocking finding(s); see ga_readiness.blocking_findings in JSON output", len(gaReport.BlockingFindings))
+	}
+	return nil
+}
+
+// profileGAReadinessReport is the operator-visible structure surfaced by
+// `gongctl profile validate --ga-readiness`. It exposes the mechanical
+// readiness checklist and the subset of findings that block GA gating.
+type profileGAReadinessReport struct {
+	Checklist        sqlite.ProfileReadinessChecklist `json:"checklist"`
+	BlockingFindings []string                         `json:"blocking_findings"`
+	Passed           bool                             `json:"passed"`
+}
+
+func buildProfileGAReadinessReport(checklist sqlite.ProfileReadinessChecklist) profileGAReadinessReport {
+	report := profileGAReadinessReport{Checklist: checklist, BlockingFindings: []string{}}
+	if len(checklist.CreatedDateOnlyConcepts) > 0 {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"created_date_only_field_concepts: "+strings.Join(checklist.CreatedDateOnlyConcepts, ","))
+	}
+	if len(checklist.MissingLifecycleBuckets) > 0 {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"missing_lifecycle_buckets: "+strings.Join(checklist.MissingLifecycleBuckets, ","))
+	}
+	if checklist.MethodologyUnmapped {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"methodology_concepts_unmapped: profile defines no methodology concepts (pain, next steps, MEDDICC, etc.)")
+	}
+	if checklist.LossReasonMappingMissing {
+		report.BlockingFindings = append(report.BlockingFindings,
+			"loss_reason_mapping_missing: no field concept references a known loss-reason field")
+	}
+	sort.Strings(report.BlockingFindings)
+	report.Passed = len(report.BlockingFindings) == 0
+	return report
 }
 
 func (a *app) profileImport(ctx context.Context, args []string) error {
@@ -131,7 +230,7 @@ func (a *app) profileImport(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -165,7 +264,7 @@ func (a *app) profileHistory(ctx context.Context, args []string) error {
 		}
 		return errUsage
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -203,7 +302,7 @@ func (a *app) profileActivate(ctx context.Context, args []string) error {
 	if ref == "" || (strings.TrimSpace(*id) != "" && strings.TrimSpace(*canonicalSHA) != "") {
 		return fmt.Errorf("set exactly one of --id or --canonical-sha")
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -234,7 +333,7 @@ func (a *app) profileDiff(ctx context.Context, args []string) error {
 	if strings.TrimSpace(*toRef) == "" {
 		return fmt.Errorf("--to is required")
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -277,7 +376,7 @@ func (a *app) profileShow(ctx context.Context, args []string) error {
 		}
 		return errUsage
 	}
-	store, err := openSQLiteStore(ctx, *dbPath)
+	store, err := openWritableProfileStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -313,7 +412,7 @@ func (a *app) validateProfileFile(ctx context.Context, dbPath string, profilePat
 	if err != nil {
 		return nil, profilepkg.ValidationResult{}, err
 	}
-	store, err := openSQLiteStore(ctx, dbPath)
+	store, err := openProfileInventoryStore(ctx, dbPath)
 	if err != nil {
 		return nil, profilepkg.ValidationResult{}, err
 	}
@@ -351,7 +450,7 @@ type profileSectionDiff struct {
 	Changed []string `json:"changed,omitempty"`
 }
 
-func loadProfileDiffSide(ctx context.Context, store *sqlite.Store, ref string) (profileDiffSide, error) {
+func loadProfileDiffSide(ctx context.Context, store profileDocumentStore, ref string) (profileDiffSide, error) {
 	trimmed := strings.TrimSpace(ref)
 	if trimmed == "" {
 		trimmed = "active"

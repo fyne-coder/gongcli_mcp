@@ -154,6 +154,13 @@ func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T)
 			Scope string `json:"scope"`
 		} `json:"states"`
 	}
+	var rawStatus map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &rawStatus); err != nil {
+		t.Fatalf("decode raw status JSON: %v", err)
+	}
+	if _, ok := rawStatus["call_facts_attribution"]; !ok {
+		t.Fatalf("status JSON missing call_facts_attribution: %s", stdout.String())
+	}
 	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
 		t.Fatalf("decode status JSON: %v", err)
 	}
@@ -186,6 +193,68 @@ func TestSyncCallsBusinessPresetAndStatusJSONWithSensitiveOverride(t *testing.T)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("status stderr=%q want empty", stderr.String())
+	}
+}
+
+func TestPostgresSearchCallsDoesNotRequireSensitiveExportOptIn(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongctl:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	err := a.search(context.Background(), []string{"calls", "--limit", "5"})
+	if err == nil {
+		t.Fatalf("search calls error=nil, want unavailable Postgres connection error")
+	}
+	if strings.Contains(err.Error(), "allow-sensitive-export") {
+		t.Fatalf("search calls error=%v, want no sensitive export opt-in error", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+}
+
+func TestPostgresProfileValidateUsesReadOnlyInventoryOpen(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongmcp_reader:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
+
+	profilePath := filepath.Join(t.TempDir(), "profile.yaml")
+	if err := os.WriteFile(profilePath, []byte("version: 1\nlifecycle: {}\n"), 0o600); err != nil {
+		t.Fatalf("write profile fixture: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	err := a.profile(context.Background(), []string{"validate", "--profile", profilePath})
+	if err == nil {
+		t.Fatalf("profile validate error=nil, want unavailable Postgres connection error")
+	}
+	if got := err.Error(); got == "--db is required" || strings.Contains(got, "write privileges") {
+		t.Fatalf("profile validate error=%v, want read-only inventory connection path", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+}
+
+func TestPostgresCallsShowUsesSafeDetailPathWithoutSensitiveExportOptIn(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongmcp_reader:secret@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("DATABASE_URL", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr, restricted: true}
+	err := a.callsShow(context.Background(), []string{"--call-id", "pg-call-001", "--json"})
+	if err == nil {
+		t.Fatalf("calls show error=nil, want unavailable Postgres connection error")
+	}
+	if got := err.Error(); got == "--db is required" || strings.Contains(got, "allow-sensitive-export") || strings.Contains(got, "raw cached call JSON") {
+		t.Fatalf("calls show error=%v, want postgres connection error without SQLite/raw-export fallback", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
 	}
 }
 
@@ -376,6 +445,108 @@ func TestReadOnlyCommandsExistingDBDoNotMutateDatabase(t *testing.T) {
 	}
 }
 
+func TestSyncCallsIncludeHighlightsRequestsExposedFieldsAndStoresContent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/extensive" {
+			t.Fatalf("path=%q want /v2/calls/extensive", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		selector, ok := body["contentSelector"].(map[string]any)
+		if !ok {
+			t.Fatalf("contentSelector missing: %#v", body)
+		}
+		exposed, ok := selector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", selector)
+		}
+		assertSpotlightContentSelector(t, exposed)
+		if _, hasParties := exposed["parties"]; hasParties {
+			t.Fatalf("exposedFields.parties unexpectedly present: %#v", exposed)
+		}
+
+		writeCLIJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"calls": []map[string]any{
+				{
+					"id":       "call-highlights-cli-001",
+					"title":    "Synthetic highlights call",
+					"started":  "2026-04-22T15:00:00Z",
+					"duration": 600,
+					"content": map[string]any{
+						"highlights": []map[string]any{
+							{"type": "summary", "text": "Synthetic Phase 13k summary."},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+
+	err := a.sync(context.Background(), []string{
+		"calls",
+		"--db", dbPath,
+		"--from", "2026-04-22",
+		"--to", "2026-04-22",
+		"--preset", "minimal",
+		"--include-highlights",
+		"--allow-sensitive-export",
+		"--max-pages", "1",
+	})
+	if err != nil {
+		t.Fatalf("sync calls returned error: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "synced calls:") {
+		t.Fatalf("stderr=%q missing sync summary", got)
+	}
+
+	store := openCLITestStore(t, dbPath)
+	defer store.Close()
+
+	raw, err := store.GetCallRaw(context.Background(), "call-highlights-cli-001")
+	if err != nil {
+		t.Fatalf("GetCallRaw returned error: %v", err)
+	}
+	if !strings.Contains(string(raw), "Synthetic Phase 13k summary") {
+		t.Fatalf("stored call missing highlight content: %s", raw)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		context.Background(),
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	for _, want := range []string{
+		"include_highlights_requested=true",
+		"include_highlights_result=request_sent",
+	} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+	if strings.Contains(requestContext, "include_parties_requested=true") {
+		t.Fatalf("requestContext=%q must not advertise include_parties when only highlights opted in", requestContext)
+	}
+}
+
 func TestSyncRestrictedModeBlocksSensitiveSubcommands(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "gong.db")
@@ -400,6 +571,11 @@ func TestSyncRestrictedModeBlocksSensitiveSubcommands(t *testing.T) {
 			name: "sync-calls-include-parties",
 			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "minimal", "--include-parties"},
 			want: "sync calls --include-parties is blocked because restricted mode is enabled",
+		},
+		{
+			name: "sync-calls-include-highlights",
+			args: []string{"calls", "--db", dbPath, "--from", "2026-04-20", "--to", "2026-04-24", "--preset", "minimal", "--include-highlights"},
+			want: "sync calls --include-highlights is blocked because restricted mode is enabled",
 		},
 		{
 			name: "sync-transcripts",
@@ -842,6 +1018,88 @@ func TestSyncTranscriptsDownloadsMissingCalls(t *testing.T) {
 	}
 	if summary.MissingTranscripts != 0 {
 		t.Fatalf("missing_transcripts=%d want 0", summary.MissingTranscripts)
+	}
+}
+
+func TestSyncTranscriptsGovernanceConfigSkipsCachedRestrictedCall(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "gong.db")
+	outDir := filepath.Join(dir, "transcripts")
+	governancePath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(governancePath, []byte(`version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example CLI Transcript Restricted Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write governance config: %v", err)
+	}
+	store := openCLITestStore(t, dbPath)
+	if _, err := store.UpsertCall(context.Background(), mustMarshalJSON(t, map[string]any{
+		"id":      "call-cli-transcript-skip",
+		"title":   "Example CLI Transcript Restricted Corp discovery",
+		"started": "2026-04-21T14:00:00Z",
+	})); err != nil {
+		t.Fatalf("UpsertCall restricted returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(context.Background(), mustMarshalJSON(t, map[string]any{
+		"id":      "call-cli-transcript-allowed",
+		"title":   "Allowed CLI transcript",
+		"started": "2026-04-21T15:00:00Z",
+	})); err != nil {
+		t.Fatalf("UpsertCall allowed returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/transcript" {
+			t.Fatalf("path=%q want /v2/calls/transcript", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		filter := body["filter"].(map[string]any)
+		callIDs := filter["callIds"].([]any)
+		if len(callIDs) != 1 || callIDs[0] != "call-cli-transcript-allowed" {
+			t.Fatalf("callIds=%v want [call-cli-transcript-allowed]", callIDs)
+		}
+		writeCLIJSON(t, w, map[string]any{
+			"callTranscripts": []map[string]any{{
+				"callId": "call-cli-transcript-allowed",
+				"transcript": []map[string]any{{
+					"speakerId": "speaker-001",
+					"sentences": []map[string]any{{"start": 0, "end": 1000, "text": "Allowed transcript sentence."}},
+				}},
+			}},
+		})
+	}))
+	defer server.Close()
+	setTestEnv(t, server.URL)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	a := &app{out: &stdout, err: &stderr}
+	err := a.sync(context.Background(), []string{
+		"transcripts",
+		"--db", dbPath,
+		"--out-dir", outDir,
+		"--limit", "10",
+		"--governance-config", governancePath,
+	})
+	if err != nil {
+		t.Fatalf("sync transcripts returned error: %v", err)
+	}
+	store = openCLITestStore(t, dbPath)
+	defer store.Close()
+	var restrictedRows int
+	if err := store.DB().QueryRowContext(context.Background(), `SELECT COUNT(*) FROM calls WHERE call_id = 'call-cli-transcript-skip'`).Scan(&restrictedRows); err != nil {
+		t.Fatalf("query restricted rows: %v", err)
+	}
+	if restrictedRows != 0 {
+		t.Fatalf("restricted rows=%d want 0", restrictedRows)
 	}
 }
 
@@ -1384,6 +1642,23 @@ func mustMarshalJSON(t *testing.T, value any) json.RawMessage {
 		t.Fatalf("json.Marshal returned error: %v", err)
 	}
 	return json.RawMessage(body)
+}
+
+func assertSpotlightContentSelector(t *testing.T, exposed map[string]any) {
+	t.Helper()
+
+	if _, hasLegacyHighlights := exposed["highlights"]; hasLegacyHighlights {
+		t.Fatalf("exposedFields must use content selector, got legacy highlights=true: %#v", exposed)
+	}
+	content, ok := exposed["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("exposedFields.content missing: %#v", exposed)
+	}
+	for _, field := range []string{"brief", "callOutcome", "highlights", "keyPoints", "outline"} {
+		if content[field] != true {
+			t.Fatalf("exposedFields.content.%s=%v want true; content=%#v", field, content[field], content)
+		}
+	}
 }
 
 func writeCLIJSON(t *testing.T, w http.ResponseWriter, value any) {

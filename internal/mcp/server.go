@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -39,6 +40,7 @@ type Store interface {
 	SyncStatusSummary(ctx context.Context) (*sqlite.SyncStatusSummary, error)
 	SearchCallsRaw(ctx context.Context, params sqlite.CallSearchParams) ([]json.RawMessage, error)
 	GetCallDetail(ctx context.Context, callID string) (*sqlite.CallDetail, error)
+	ResolveCallIDByRef(ctx context.Context, ref string) (string, error)
 	ListCRMObjectTypes(ctx context.Context) ([]sqlite.CRMObjectTypeSummary, error)
 	ListCRMFields(ctx context.Context, objectType string, limit int) ([]sqlite.CRMFieldSummary, error)
 	SearchCRMFieldValues(ctx context.Context, params sqlite.CRMFieldValueSearchParams) ([]sqlite.CRMFieldValueMatch, error)
@@ -77,21 +79,59 @@ type Store interface {
 	SummarizeBusinessAnalysisDimension(ctx context.Context, params sqlite.BusinessAnalysisDimensionSummaryParams) ([]sqlite.BusinessAnalysisDimensionRow, error)
 	FindCallsMissingTranscripts(ctx context.Context, limit int) ([]sqlite.MissingTranscriptCall, error)
 	FindCallsMissingTranscriptsByFilters(ctx context.Context, params sqlite.MissingTranscriptSearchParams) ([]sqlite.MissingTranscriptCall, error)
+	ListAIHighlights(ctx context.Context, params sqlite.AIHighlightListParams) ([]sqlite.AIHighlightRow, error)
+	CallDrilldownEvidence(ctx context.Context, params sqlite.CallDrilldownEvidenceParams) ([]sqlite.CallDrilldownEvidenceRow, error)
 }
 
 type Server struct {
 	store                        Store
 	name                         string
 	version                      string
+	runtimeInfo                  RuntimeInfo
 	tools                        []tool
 	limitPolicy                  LimitPolicy
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
+	businessAnalysisSmallCellMin int
 	allowedToolNames             map[string]struct{}
+	facadeRoutedToolNames        map[string]struct{}
 	suppressedCallIDs            map[string]struct{}
+	restrictedAccountQueries     map[string]struct{}
 	governanceCheck              func(context.Context) error
+	policySwitches               PolicySwitches
+	blocklistGuard               *governance.BlocklistGuard
 }
 
+// BlocklistGuard is re-exported from the governance package so MCP
+// server-option callers do not need to import internal/governance directly.
+type BlocklistGuard = governance.BlocklistGuard
+
 type ServerOption func(*Server)
+
+// RuntimeInfo captures non-secret runtime metadata that helps MCP clients and
+// manual testers prove which server instance they are connected to.
+type RuntimeInfo struct {
+	Commit       string
+	BuildDate    string
+	ToolPreset   string
+	DeploymentID string
+	StartedAtUTC string
+}
+
+type PublicRuntimeInfo struct {
+	Name                         string         `json:"name"`
+	Version                      string         `json:"version"`
+	Commit                       string         `json:"commit,omitempty"`
+	BuildDate                    string         `json:"build_date,omitempty"`
+	ToolPreset                   string         `json:"tool_preset,omitempty"`
+	DeploymentID                 string         `json:"deployment_id,omitempty"`
+	StartedAtUTC                 string         `json:"started_at_utc,omitempty"`
+	ToolCount                    int            `json:"tool_count"`
+	FacadeRoutedToolCount        int            `json:"facade_routed_tool_count"`
+	TranscriptEvidenceProvenance string         `json:"transcript_evidence_provenance"`
+	PolicySwitches               PolicySwitches `json:"policy_switches"`
+	PolicySwitchesEnabled        []string       `json:"policy_switches_enabled,omitempty"`
+	PolicySwitchReloadContract   string         `json:"policy_switch_reload_contract"`
+}
 
 type TranscriptEvidenceProvenance string
 
@@ -177,24 +217,27 @@ type ToolInfo struct {
 }
 
 type publicSyncStatus struct {
-	TotalCalls                   int64                      `json:"total_calls"`
-	TotalUsers                   int64                      `json:"total_users"`
-	TotalTranscripts             int64                      `json:"total_transcripts"`
-	TotalTranscriptSegments      int64                      `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64                      `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64                      `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64                      `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64                      `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64                      `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64                      `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64                      `json:"total_gong_settings"`
-	TotalScorecards              int64                      `json:"total_scorecards"`
-	TotalScorecardActivity       int64                      `json:"total_scorecard_activity"`
-	MissingTranscripts           int64                      `json:"missing_transcripts"`
-	RunningSyncRuns              int64                      `json:"running_sync_runs"`
-	ProfileReadiness             sqlite.ProfileReadiness    `json:"profile_readiness"`
-	PublicReadiness              sqlite.PublicReadiness     `json:"public_readiness"`
-	AttributionCoverage          sqlite.AttributionCoverage `json:"attribution_coverage"`
+	MCPServer                    PublicRuntimeInfo                  `json:"mcp_server"`
+	TotalCalls                   int64                              `json:"total_calls"`
+	TotalUsers                   int64                              `json:"total_users"`
+	TotalTranscripts             int64                              `json:"total_transcripts"`
+	TotalTranscriptSegments      int64                              `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64                              `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64                              `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64                              `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64                              `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64                              `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64                              `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64                              `json:"total_gong_settings"`
+	TotalScorecards              int64                              `json:"total_scorecards"`
+	TotalScorecardActivity       int64                              `json:"total_scorecard_activity"`
+	TotalAIHighlights            int64                              `json:"total_ai_highlights"`
+	MissingTranscripts           int64                              `json:"missing_transcripts"`
+	RunningSyncRuns              int64                              `json:"running_sync_runs"`
+	CallFactsAttribution         sqlite.CallFactsAttributionSignals `json:"call_facts_attribution"`
+	ProfileReadiness             sqlite.ProfileReadiness            `json:"profile_readiness"`
+	PublicReadiness              sqlite.PublicReadiness             `json:"public_readiness"`
+	AttributionCoverage          sqlite.AttributionCoverage         `json:"attribution_coverage"`
 }
 
 type toolsCallParams struct {
@@ -226,7 +269,8 @@ type searchCallsArgs struct {
 }
 
 type getCallArgs struct {
-	CallID string `json:"call_id"`
+	CallID  string `json:"call_id"`
+	CallRef string `json:"call_ref"`
 }
 
 type listCRMFieldsArgs struct {
@@ -388,6 +432,8 @@ type searchTranscriptQuotesWithAttributionArgs struct {
 	AccountQuery            string `json:"account_query"`
 	OpportunityStage        string `json:"opportunity_stage"`
 	Limit                   int    `json:"limit"`
+	FieldProfile            string `json:"field_profile"`
+	SpeakerRole             string `json:"speaker_role"`
 	IncludeCallIDs          bool   `json:"include_call_ids"`
 	IncludeCallTitles       bool   `json:"include_call_titles"`
 	IncludeAccountNames     bool   `json:"include_account_names"`
@@ -483,6 +529,7 @@ func NewServerWithOptions(store Store, name, version string, opts ...ServerOptio
 		store:                        store,
 		name:                         name,
 		version:                      version,
+		runtimeInfo:                  RuntimeInfo{StartedAtUTC: time.Now().UTC().Format(time.RFC3339)},
 		limitPolicy:                  DefaultLimitPolicy(),
 		transcriptEvidenceProvenance: TranscriptEvidenceRedacted,
 	}
@@ -506,6 +553,47 @@ func NewServerWithOptions(store Store, name, version string, opts ...ServerOptio
 	return server
 }
 
+func WithRuntimeInfo(info RuntimeInfo) ServerOption {
+	return func(s *Server) {
+		if strings.TrimSpace(info.StartedAtUTC) == "" {
+			info.StartedAtUTC = s.runtimeInfo.StartedAtUTC
+		}
+		s.runtimeInfo = info
+	}
+}
+
+func (s *Server) publicRuntimeInfo() PublicRuntimeInfo {
+	return PublicRuntimeInfo{
+		Name:                         s.name,
+		Version:                      s.version,
+		Commit:                       strings.TrimSpace(s.runtimeInfo.Commit),
+		BuildDate:                    strings.TrimSpace(s.runtimeInfo.BuildDate),
+		ToolPreset:                   strings.TrimSpace(s.runtimeInfo.ToolPreset),
+		DeploymentID:                 strings.TrimSpace(s.runtimeInfo.DeploymentID),
+		StartedAtUTC:                 strings.TrimSpace(s.runtimeInfo.StartedAtUTC),
+		ToolCount:                    len(s.tools),
+		FacadeRoutedToolCount:        s.facadeAvailableOperationCount(),
+		TranscriptEvidenceProvenance: string(s.transcriptEvidenceProvenance),
+		PolicySwitches:               s.policySwitches,
+		PolicySwitchesEnabled:        s.policySwitches.EnabledNames(),
+		PolicySwitchReloadContract:   PolicySwitchReloadContract(),
+	}
+}
+
+func (s *Server) RuntimeInfo() PublicRuntimeInfo {
+	return s.publicRuntimeInfo()
+}
+
+func (s *Server) facadeAvailableOperationCount() int {
+	count := 0
+	for _, op := range FacadeOperations() {
+		if s.facadeRoutedToolAvailable(op) {
+			count++
+		}
+	}
+	return count
+}
+
 func WithToolAllowlist(names []string) ServerOption {
 	allowset := make(map[string]struct{}, len(names))
 	for _, raw := range names {
@@ -523,6 +611,23 @@ func WithToolAllowlist(names []string) ServerOption {
 	}
 }
 
+func WithFacadeRoutedToolAllowlist(names []string) ServerOption {
+	allowset := make(map[string]struct{}, len(names))
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" || isFacadeTool(name) {
+			continue
+		}
+		allowset[name] = struct{}{}
+	}
+	if len(allowset) == 0 {
+		return nil
+	}
+	return func(s *Server) {
+		s.facadeRoutedToolNames = allowset
+	}
+}
+
 func WithLimitPolicy(policy LimitPolicy) ServerOption {
 	return func(s *Server) {
 		s.limitPolicy = policy.Normalize()
@@ -532,6 +637,14 @@ func WithLimitPolicy(policy LimitPolicy) ServerOption {
 func WithTranscriptEvidenceProvenance(provenance TranscriptEvidenceProvenance) ServerOption {
 	return func(s *Server) {
 		s.transcriptEvidenceProvenance = normalizeTranscriptEvidenceProvenance(provenance)
+	}
+}
+
+func WithBusinessAnalysisSmallCellMin(min int) ServerOption {
+	return func(s *Server) {
+		if min > 1 {
+			s.businessAnalysisSmallCellMin = min
+		}
 	}
 }
 
@@ -549,9 +662,46 @@ func WithSuppressedCallIDs(callIDs []string) ServerOption {
 	}
 }
 
+func WithRestrictedAccountQueryTerms(terms []string) ServerOption {
+	return func(s *Server) {
+		if len(terms) == 0 {
+			return
+		}
+		s.restrictedAccountQueries = make(map[string]struct{}, len(terms))
+		for _, term := range terms {
+			if normalized := governance.NormalizeName(term); normalized != "" {
+				s.restrictedAccountQueries[normalized] = struct{}{}
+			}
+		}
+	}
+}
+
 func WithGovernanceCheck(check func(context.Context) error) ServerOption {
 	return func(s *Server) {
 		s.governanceCheck = check
+	}
+}
+
+// WithPolicySwitches installs the customer-deployment policy switch contract
+// for this MCP process. Switches take effect at startup and require a restart
+// to change; see PolicySwitchReloadContract.
+func WithPolicySwitches(switches PolicySwitches) ServerOption {
+	return func(s *Server) {
+		s.policySwitches = switches
+	}
+}
+
+// WithBlocklistGuard installs an emit-time defense-in-depth filter that
+// suppresses MCP tool output rows/fields whenever a blocklisted entity is
+// detected. The guard sits in front of MCP serialization on the highest-risk
+// paths (search_calls, get_call) and is intended to catch missed joins or
+// new columns that bypass the source-to-serving redaction.
+func WithBlocklistGuard(guard *BlocklistGuard) ServerOption {
+	return func(s *Server) {
+		if guard == nil || guard.Empty() {
+			return
+		}
+		s.blocklistGuard = guard
 	}
 }
 
@@ -560,7 +710,7 @@ func defaultTools(policy LimitPolicy) []tool {
 	tools := []tool{
 		{
 			Name:        "get_sync_status",
-			Description: "Return cached sync run metadata and local SQLite record counts.",
+			Description: "Return cached sync run metadata and local store record counts.",
 			InputSchema: emptyObjectSchema(),
 		},
 		{
@@ -584,12 +734,13 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "get_call",
-			Description: "Return minimized cached call detail for one call_id without raw participant, CRM field value, or transcript payloads.",
+			Description: "Return minimized cached call detail for one call_id or redacted call_ref without raw participant, CRM field value, or transcript payloads.",
 			InputSchema: objectSchema(
 				map[string]any{
-					"call_id": map[string]any{"type": "string"},
+					"call_id":  map[string]any{"type": "string"},
+					"call_ref": map[string]any{"type": "string"},
 				},
-				[]string{"call_id"},
+				nil,
 			),
 		},
 		{
@@ -873,7 +1024,7 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "search_transcript_segments",
-			Description: "Search transcript snippets in the local SQLite FTS index. Call/speaker provenance is controlled by server transcript-evidence-provenance config: redacted by default, stable aliases in alias mode, raw IDs only in raw mode.",
+			Description: "Search transcript snippets in the configured local store. Call/speaker provenance is controlled by server transcript-evidence-provenance config: redacted by default, stable aliases in alias mode, raw IDs only in raw mode.",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":               map[string]any{"type": "string"},
@@ -924,6 +1075,8 @@ func defaultTools(policy LimitPolicy) []tool {
 					"account_query":             map[string]any{"type": "string"},
 					"opportunity_stage":         map[string]any{"type": "string"},
 					"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": policy.SearchResults},
+					"field_profile":             fieldProfileSchema(),
+					"speaker_role":              speakerRoleSchema(),
 					"include_call_ids":          map[string]any{"type": "boolean"},
 					"include_call_titles":       map[string]any{"type": "boolean"},
 					"include_account_names":     map[string]any{"type": "boolean"},
@@ -934,7 +1087,7 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "missing_transcripts",
-			Description: "List cached calls that do not yet have transcript segments stored in SQLite.",
+			Description: "List cached calls that do not yet have transcript segments stored in the configured local store.",
 			InputSchema: objectSchema(
 				map[string]any{
 					"from_date":        map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD call date."},
@@ -951,7 +1104,9 @@ func defaultTools(policy LimitPolicy) []tool {
 			),
 		},
 	}
-	return append(tools, businessAnalysisTools(policy)...)
+	tools = append(tools, businessAnalysisTools(policy)...)
+	tools = append(tools, facadeTools(policy)...)
+	return tools
 }
 
 func ToolCatalog() []ToolInfo {
@@ -1157,9 +1312,19 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 			return toolCallResult{}, err
 		}
 	}
+	if isFacadeTool(params.Name) {
+		return s.executeFacadeTool(ctx, params)
+	}
 	if isBusinessAnalysisTool(params.Name) {
 		return s.executeBusinessAnalysisTool(ctx, params)
 	}
+	return s.executeNonFacadeTool(ctx, params)
+}
+
+// executeNonFacadeTool dispatches the original top-level tool catalog. The
+// facade module also calls into this helper so a facade-routed call exercises
+// the same handlers as a direct tools/call against the routed tool.
+func (s *Server) executeNonFacadeTool(ctx context.Context, params toolsCallParams) (toolCallResult, error) {
 	switch params.Name {
 	case "get_sync_status":
 		return s.getSyncStatus(ctx, params.Arguments)
@@ -1240,7 +1405,7 @@ func (s *Server) getSyncStatus(ctx context.Context, raw json.RawMessage) (toolCa
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newToolResult(mcpSyncStatus(summary))
+	return newToolResult(s.mcpSyncStatus(summary))
 }
 
 func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1249,6 +1414,8 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.SearchLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().SearchResults)
 	rows, err := s.store.SearchCallsRaw(ctx, sqlite.CallSearchParams{
 		CRMObjectType:    args.CRMObjectType,
 		CRMObjectID:      args.CRMObjectID,
@@ -1259,7 +1426,7 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 		System:           args.System,
 		Direction:        args.Direction,
 		TranscriptStatus: args.TranscriptStatus,
-		Limit:            s.limitPolicy.SearchLimit(args.Limit),
+		Limit:            queryLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1276,9 +1443,17 @@ func (s *Server) searchCalls(ctx context.Context, raw json.RawMessage) (toolCall
 			filtered++
 			continue
 		}
+		if s.blocklistMatchesCallSummary(summary) {
+			filtered++
+			continue
+		}
+		s.applyPolicySwitchesToSearchSummary(&summary)
 		summaries = append(summaries, summary)
+		if len(summaries) >= limit {
+			break
+		}
 	}
-	return s.newCappedToolResult("search_calls", summaries, len(summaries), s.limitPolicy.SearchLimit(args.Limit), filtered, searchCallRefinements(args))
+	return s.newCappedToolResult("search_calls", summaries, len(summaries), limit, filtered, searchCallRefinements(args))
 }
 
 func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1286,15 +1461,41 @@ func (s *Server) getCall(ctx context.Context, raw json.RawMessage) (toolCallResu
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
-	if s.isSuppressedCall(args.CallID) {
-		return toolCallResult{}, fmt.Errorf("call %q not found", args.CallID)
+	callID := strings.TrimSpace(args.CallID)
+	callRef := strings.TrimSpace(args.CallRef)
+	if callID != "" && callRef != "" {
+		return toolCallResult{}, fmt.Errorf("provide either call_id or call_ref, not both")
+	}
+	resolvedFromRef := false
+	if callRef != "" {
+		resolved, err := s.store.ResolveCallIDByRef(ctx, callRef)
+		if err != nil {
+			return toolCallResult{}, fmt.Errorf("call not found")
+		}
+		callID = resolved
+		resolvedFromRef = true
+	}
+	if s.isSuppressedCall(callID) {
+		return toolCallResult{}, fmt.Errorf("call not found")
 	}
 
-	detail, err := s.store.GetCallDetail(ctx, args.CallID)
+	detail, err := s.store.GetCallDetail(ctx, callID)
 	if err != nil {
 		return toolCallResult{}, err
 	}
+	// Inspect the un-minimized detail so the blocklist guard sees CRM object
+	// names before they are cleared by the minimizer. This is the
+	// defense-in-depth layer and must run on the richest representation
+	// available.
+	if s.blocklistMatchesCallDetail(detail) {
+		return toolCallResult{}, fmt.Errorf("call not found")
+	}
 	minimizeCallDetail(detail)
+	if resolvedFromRef {
+		detail.CallRef, _ = sqlite.NormalizeStableCallRef(callRef)
+		detail.CallID = ""
+	}
+	s.applyPolicySwitchesToCallDetail(detail)
 	return newToolResult(detail)
 }
 
@@ -1418,7 +1619,7 @@ func (s *Server) summarizeScorecardActivity(ctx context.Context, raw json.RawMes
 		return toolCallResult{}, err
 	}
 
-	report, err := s.store.ScorecardActivityOverview(ctx, args.Limit)
+	report, err := s.store.ScorecardActivityOverview(ctx, capLimit(args.Limit, defaultCallFactRequestLimit, s.limitPolicy.Normalize().CallFactGroups))
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -1482,6 +1683,7 @@ func (s *Server) searchCRMFieldValues(ctx context.Context, raw json.RawMessage) 
 		ValueQuery:          args.ValueQuery,
 		Limit:               capLimit(args.Limit, defaultCRMFieldValueRequestLimit, s.limitPolicy.Normalize().SearchResults),
 		IncludeValueSnippet: args.IncludeValueSnippets,
+		IncludeCallIDs:      args.IncludeCallIDs,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1553,11 +1755,13 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.SearchLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().SearchResults)
 	rows, err := s.store.SearchTranscriptSegmentsByCRMContext(ctx, sqlite.TranscriptCRMSearchParams{
 		Query:      args.Query,
 		ObjectType: args.ObjectType,
 		ObjectID:   args.ObjectID,
-		Limit:      s.limitPolicy.SearchLimit(args.Limit),
+		Limit:      queryLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -1572,7 +1776,7 @@ func (s *Server) searchTranscriptsByCRMContext(ctx context.Context, raw json.Raw
 		out = append(out, row)
 	}
 	results := mcpTranscriptCRMSearchResults(out)
-	return s.newCappedToolResult("search_transcripts_by_crm_context", results, len(results), s.limitPolicy.SearchLimit(args.Limit), filtered, crmTranscriptRefinements(args))
+	return s.newCappedToolResult("search_transcripts_by_crm_context", results, len(results), limit, filtered, crmTranscriptRefinements(args))
 }
 
 func mcpOpportunityMissingTranscriptSummaries(rows []sqlite.OpportunityMissingTranscriptSummary) []sqlite.OpportunityMissingTranscriptSummary {
@@ -1594,6 +1798,15 @@ func mcpOpportunityCallSummaries(rows []sqlite.OpportunityCallSummary) []sqlite.
 		row.Amount = ""
 		row.CloseDate = ""
 		row.OwnerID = ""
+		row.LatestCallID = ""
+		out[i] = row
+	}
+	return out
+}
+
+func mcpLifecycleBucketSummaries(rows []sqlite.LifecycleBucketSummary) []sqlite.LifecycleBucketSummary {
+	out := make([]sqlite.LifecycleBucketSummary, len(rows))
+	for i, row := range rows {
 		row.LatestCallID = ""
 		out[i] = row
 	}
@@ -1681,7 +1894,7 @@ func (s *Server) summarizeCallsByLifecycle(ctx context.Context, raw json.RawMess
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	return newLifecycleToolResult(rows, info, args.LifecycleSource)
+	return newLifecycleToolResult(mcpLifecycleBucketSummaries(rows), info, args.LifecycleSource)
 }
 
 func (s *Server) searchCallsByLifecycle(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
@@ -1717,6 +1930,8 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.LifecycleLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().LifecycleResults)
 	rows, info, err := s.store.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{
 		Bucket:          args.Bucket,
 		FromDate:        args.FromDate,
@@ -1724,7 +1939,7 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 		Scope:           args.Scope,
 		System:          args.System,
 		Direction:       args.Direction,
-		Limit:           s.limitPolicy.LifecycleLimit(args.Limit),
+		Limit:           queryLimit,
 		LifecycleSource: args.LifecycleSource,
 	})
 	if err != nil {
@@ -1738,10 +1953,13 @@ func (s *Server) prioritizeTranscriptsByLifecycle(ctx context.Context, raw json.
 			continue
 		}
 		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
 	results := mcpTranscriptPriorities(out)
-	if shouldReturnCapEnvelope(len(results), s.limitPolicy.LifecycleLimit(args.Limit)) {
-		envelope := cappedToolPayload("prioritize_transcripts_by_lifecycle", results, len(results), s.limitPolicy.LifecycleLimit(args.Limit), transcriptBacklogRefinements(args))
+	if shouldReturnCapEnvelope(len(results), limit) {
+		envelope := cappedToolPayload("prioritize_transcripts_by_lifecycle", results, len(results), limit, transcriptBacklogRefinements(args))
 		if info != nil && (info.Profile != nil || strings.TrimSpace(args.LifecycleSource) != "") {
 			envelope["lifecycle_source"] = info.LifecycleSource
 			envelope["profile"] = mcpBusinessProfile(info.Profile)
@@ -1762,11 +1980,12 @@ func mcpTranscriptPriorities(rows []sqlite.LifecycleTranscriptPriority) []sqlite
 	return out
 }
 
-func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
+func (s *Server) mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 	profile := summary.ProfileReadiness
 	profile.Name = ""
 	profile.CanonicalSHA256 = ""
 	return publicSyncStatus{
+		MCPServer:                    s.publicRuntimeInfo(),
 		TotalCalls:                   summary.TotalCalls,
 		TotalUsers:                   summary.TotalUsers,
 		TotalTranscripts:             summary.TotalTranscripts,
@@ -1780,8 +1999,10 @@ func mcpSyncStatus(summary *sqlite.SyncStatusSummary) publicSyncStatus {
 		TotalGongSettings:            summary.TotalGongSettings,
 		TotalScorecards:              summary.TotalScorecards,
 		TotalScorecardActivity:       summary.TotalScorecardActivity,
+		TotalAIHighlights:            summary.TotalAIHighlights,
 		MissingTranscripts:           summary.MissingTranscripts,
 		RunningSyncRuns:              summary.RunningSyncRuns,
+		CallFactsAttribution:         summary.CallFactsAttribution,
 		ProfileReadiness:             profile,
 		PublicReadiness:              summary.PublicReadiness,
 		AttributionCoverage:          summary.AttributionCoverage,
@@ -1867,6 +2088,8 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.LifecycleLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().LifecycleResults)
 	rows, info, err := s.store.PrioritizeTranscriptsByLifecycleWithSource(ctx, sqlite.LifecycleTranscriptPriorityParams{
 		Bucket:          args.Bucket,
 		FromDate:        args.FromDate,
@@ -1874,7 +2097,7 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 		Scope:           args.Scope,
 		System:          args.System,
 		Direction:       args.Direction,
-		Limit:           s.limitPolicy.LifecycleLimit(args.Limit),
+		Limit:           queryLimit,
 		LifecycleSource: args.LifecycleSource,
 	})
 	if err != nil {
@@ -1888,10 +2111,13 @@ func (s *Server) rankTranscriptBacklog(ctx context.Context, raw json.RawMessage)
 			continue
 		}
 		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
 	results := mcpTranscriptPriorities(out)
-	if shouldReturnCapEnvelope(len(results), s.limitPolicy.LifecycleLimit(args.Limit)) {
-		envelope := cappedToolPayload("rank_transcript_backlog", results, len(results), s.limitPolicy.LifecycleLimit(args.Limit), transcriptBacklogRefinements(args))
+	if shouldReturnCapEnvelope(len(results), limit) {
+		envelope := cappedToolPayload("rank_transcript_backlog", results, len(results), limit, transcriptBacklogRefinements(args))
 		if info != nil && (info.Profile != nil || strings.TrimSpace(args.LifecycleSource) != "") {
 			envelope["lifecycle_source"] = info.LifecycleSource
 			envelope["profile"] = mcpBusinessProfile(info.Profile)
@@ -1909,6 +2135,7 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 	}
 
 	limit := s.limitPolicy.SearchLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().SearchResults)
 	var snippets []transcriptSnippet
 	filtered := 0
 	if searchTranscriptSegmentsUsesCallFactFilters(args) {
@@ -1920,7 +2147,7 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 			Scope:           args.Scope,
 			System:          args.System,
 			Direction:       args.Direction,
-			Limit:           limit,
+			Limit:           queryLimit,
 		})
 		if err != nil {
 			return toolCallResult{}, err
@@ -1948,9 +2175,12 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 				EndMS:        row.EndMS,
 				Snippet:      row.Snippet,
 			})
+			if len(snippets) >= limit {
+				break
+			}
 		}
 	} else {
-		results, err := s.store.SearchTranscriptSegments(ctx, args.Query, limit)
+		results, err := s.store.SearchTranscriptSegments(ctx, args.Query, queryLimit)
 		if err != nil {
 			return toolCallResult{}, err
 		}
@@ -1977,6 +2207,9 @@ func (s *Server) searchTranscriptSegments(ctx context.Context, raw json.RawMessa
 				EndMS:        row.EndMS,
 				Snippet:      row.Snippet,
 			})
+			if len(snippets) >= limit {
+				break
+			}
 		}
 	}
 	return s.newCappedToolResult("search_transcript_segments", snippets, len(snippets), limit, filtered, transcriptSearchRefinements(args))
@@ -2058,9 +2291,31 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
+	if s.restrictedAccountQuery(args.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
+	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:           args.IncludeCallIDs,
+		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeAccountNames:     args.IncludeAccountNames,
+		IncludeOpportunityNames: args.IncludeOpportunityNames,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.FieldProfile = profiled.Profile
+	args.IncludeCallIDs = profiled.IncludeRawIDs
+	args.IncludeCallTitles = profiled.IncludeCallTitles
+	args.IncludeAccountNames = profiled.IncludeAccountNames
+	args.IncludeOpportunityNames = profiled.IncludeOpportunityNames
 	if strings.TrimSpace(args.AccountQuery) != "" && !args.IncludeAccountNames {
 		return toolCallResult{}, errors.New("account_query requires include_account_names=true because it can probe customer names")
 	}
+	speakerRoleFilter, err := normalizeSpeakerRoleFilter(args.SpeakerRole)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.SpeakerRole = speakerRoleFilter
 	if strings.EqualFold(strings.TrimSpace(args.TranscriptStatus), "missing") {
 		return toolCallResult{}, errors.New("transcript_status=missing is not valid for quote search because quote tools require cached transcript segments")
 	}
@@ -2085,6 +2340,9 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	filtered := 0
 	out := results[:0]
 	for _, row := range results {
+		if !businessAnalysisSpeakerRoleAllowed(row.SpeakerRole, args.SpeakerRole) {
+			continue
+		}
 		if s.isSuppressedCall(row.CallID) {
 			filtered++
 			continue
@@ -2124,6 +2382,11 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 		return toolCallResult{}, err
 	}
 
+	limit := s.limitPolicy.MissingTranscriptLimit(args.Limit)
+	queryLimit := s.governedQueryLimit(limit, s.limitPolicy.Normalize().MissingTranscripts)
+	if strings.TrimSpace(args.CRMObjectID) != "" && strings.TrimSpace(args.CRMObjectType) == "" {
+		return toolCallResult{}, errors.New("crm_object_type is required when crm_object_id is set")
+	}
 	rows, err := s.store.FindCallsMissingTranscriptsByFilters(ctx, sqlite.MissingTranscriptSearchParams{
 		FromDate:        args.FromDate,
 		ToDate:          args.ToDate,
@@ -2133,7 +2396,7 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 		Direction:       args.Direction,
 		CRMObjectType:   args.CRMObjectType,
 		CRMObjectID:     args.CRMObjectID,
-		Limit:           s.limitPolicy.MissingTranscriptLimit(args.Limit),
+		Limit:           queryLimit,
 	})
 	if err != nil {
 		return toolCallResult{}, err
@@ -2146,8 +2409,11 @@ func (s *Server) missingTranscripts(ctx context.Context, raw json.RawMessage) (t
 			continue
 		}
 		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
 	}
-	return s.newCappedToolResult("missing_transcripts", out, len(out), s.limitPolicy.MissingTranscriptLimit(args.Limit), filtered, missingTranscriptRefinements(args))
+	return s.newCappedToolResult("missing_transcripts", out, len(out), limit, filtered, missingTranscriptRefinements(args))
 }
 
 func (s *Server) ok(id any, result any) *response {
@@ -2465,6 +2731,16 @@ func (s *Server) newGovernedLifecycleToolResult(results any, info *sqlite.Profil
 	return newToolResult(envelope)
 }
 
+func (s *Server) governedQueryLimit(requested int, max int) int {
+	if len(s.suppressedCallIDs) == 0 {
+		return requested
+	}
+	if max <= 0 {
+		return requested
+	}
+	return max
+}
+
 func (s *Server) isSuppressedCall(callID string) bool {
 	if len(s.suppressedCallIDs) == 0 {
 		return false
@@ -2473,8 +2749,124 @@ func (s *Server) isSuppressedCall(callID string) bool {
 	return ok
 }
 
+// blocklistMatchesCallSummary applies the emit-time defense-in-depth filter
+// to a search-result row. Title is the highest-risk surface that escapes
+// scoped-reader column grants, so check it explicitly.
+func (s *Server) blocklistMatchesCallSummary(summary searchCallSummary) bool {
+	if s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	return s.blocklistGuard.MatchValue(summary.Title)
+}
+
+// blocklistMatchesCallDetail checks every customer-identifying field that
+// get_call can return: title and CRM object names.
+func (s *Server) blocklistMatchesCallDetail(detail *sqlite.CallDetail) bool {
+	if detail == nil || s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	if s.blocklistGuard.MatchValue(detail.Title) {
+		return true
+	}
+	for _, obj := range detail.CRMObjects {
+		if s.blocklistGuard.MatchValue(obj.ObjectName) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) blocklistMatchesBusinessAnalysisCall(row sqlite.BusinessAnalysisCallRow) bool {
+	if s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	return s.blocklistGuard.MatchValue(row.Title)
+}
+
+func (s *Server) blocklistMatchesBusinessAnalysisEvidence(row sqlite.BusinessAnalysisEvidenceRow) bool {
+	if s.blocklistGuard == nil || s.blocklistGuard.Empty() {
+		return false
+	}
+	return s.blocklistGuard.MatchAny([]string{row.Title, row.AccountName, row.OpportunityName})
+}
+
+// applyPolicySwitchesToSearchSummary suppresses customer-identifying fields
+// in a search-result row according to the active policy switches. The switch
+// set is intentionally conservative in this slice: only the switches that map
+// directly to existing search summary fields take effect; every other switch
+// is parsed and visible in runtime status but is a no-op at this layer.
+func (s *Server) applyPolicySwitchesToSearchSummary(summary *searchCallSummary) {
+	if summary == nil {
+		return
+	}
+	if s.policySwitches.HideCallTitles {
+		summary.Title = ""
+	}
+	if s.policySwitches.HideRawCallIDs {
+		summary.CallID = ""
+	}
+}
+
+// applyPolicySwitchesToCallDetail applies policy switches to a get_call detail
+// payload before serialization.
+func (s *Server) applyPolicySwitchesToCallDetail(detail *sqlite.CallDetail) {
+	if detail == nil {
+		return
+	}
+	if s.policySwitches.HideCallTitles {
+		detail.Title = ""
+	}
+	if s.policySwitches.HideRawCallIDs {
+		detail.CallID = ""
+	}
+	if s.policySwitches.HideAccountNames {
+		for idx := range detail.CRMObjects {
+			detail.CRMObjects[idx].ObjectName = ""
+		}
+	}
+}
+
+func (s *Server) applyPolicySwitchesToBusinessAnalysisItem(item *businessAnalysisItem) {
+	if item == nil {
+		return
+	}
+	if s.policySwitches.HideCallTitles {
+		item.CallTitle = ""
+	}
+	if s.policySwitches.HideRawCallIDs {
+		item.CallID = ""
+	}
+	if s.policySwitches.HideAccountNames {
+		item.AccountName = ""
+	}
+	if s.policySwitches.HideOpportunityNames {
+		item.OpportunityName = ""
+	}
+}
+
 func (s *Server) governanceActive() bool {
 	return len(s.suppressedCallIDs) > 0
+}
+
+func (s *Server) restrictedAccountQuery(query string) bool {
+	if len(s.restrictedAccountQueries) == 0 {
+		return false
+	}
+	_, ok := s.restrictedAccountQueries[governance.NormalizeName(query)]
+	return ok
+}
+
+func (s *Server) restrictedAccountQueryAny(queries []string) bool {
+	for _, query := range queries {
+		if s.restrictedAccountQuery(query) {
+			return true
+		}
+	}
+	return false
+}
+
+func restrictedAccountQueryError() error {
+	return errors.New("account_query is unavailable for this governed term")
 }
 
 func governanceFilteredAggregateError(toolName string) error {
@@ -2875,6 +3267,9 @@ func emptyObjectSchema() map[string]any {
 }
 
 func objectSchema(properties map[string]any, required []string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
 	schema := map[string]any{
 		"type":                 "object",
 		"properties":           properties,

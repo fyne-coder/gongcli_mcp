@@ -125,6 +125,8 @@ type businessAnalysisArgs struct {
 	SegmentBy               string     `json:"segment_by"`
 	TimeGrain               string     `json:"time_grain"`
 	Limit                   int        `json:"limit"`
+	FieldProfile            string     `json:"field_profile"`
+	SpeakerRole             string     `json:"speaker_role"`
 	IncludeCallIDs          bool       `json:"include_call_ids"`
 	IncludeCallTitles       bool       `json:"include_call_titles"`
 	IncludeAccountNames     bool       `json:"include_account_names"`
@@ -145,6 +147,8 @@ type businessAnalysisResponse struct {
 	Dimension         string                                `json:"dimension,omitempty"`
 	Segment           string                                `json:"segment,omitempty"`
 	TimeGrain         string                                `json:"time_grain,omitempty"`
+	FieldProfile      string                                `json:"field_profile,omitempty"`
+	SpeakerRoleFilter string                                `json:"speaker_role_filter,omitempty"`
 	Limit             int                                   `json:"limit"`
 	Count             int                                   `json:"count"`
 	Coverage          map[string]any                        `json:"coverage_summary,omitempty"`
@@ -169,12 +173,20 @@ type businessAnalysisItem struct {
 	StartedAt         string `json:"started_at,omitempty"`
 	CallDate          string `json:"call_date,omitempty"`
 	CallMonth         string `json:"call_month,omitempty"`
+	DurationSeconds   int64  `json:"duration_seconds,omitempty"`
 	LifecycleBucket   string `json:"lifecycle_bucket,omitempty"`
 	AccountIndustry   string `json:"account_industry,omitempty"`
 	OpportunityStage  string `json:"opportunity_stage,omitempty"`
 	OpportunityType   string `json:"opportunity_type,omitempty"`
 	ParticipantStatus string `json:"participant_status,omitempty"`
 	PersonTitleStatus string `json:"person_title_status,omitempty"`
+	// SpeakerRole and SpeakerRoleStatus expose the safe buyer-vs-rep
+	// signal derived from cached Gong party affiliation. The status names
+	// *why* a role is unknown so quote consumers do not collapse
+	// uncertainty into a guess. Raw IDs/names redaction policy still
+	// applies — these two fields never expose tenant identifiers.
+	SpeakerRole       string `json:"speaker_role"`
+	SpeakerRoleStatus string `json:"speaker_role_status"`
 	SegmentIndex      int    `json:"segment_index,omitempty"`
 	StartMS           int64  `json:"start_ms,omitempty"`
 	EndMS             int64  `json:"end_ms,omitempty"`
@@ -196,6 +208,8 @@ type businessAnalysisQuote struct {
 	OpportunityType   string `json:"opportunity_type,omitempty"`
 	ParticipantStatus string `json:"participant_status,omitempty"`
 	PersonTitleStatus string `json:"person_title_status,omitempty"`
+	SpeakerRole       string `json:"speaker_role"`
+	SpeakerRoleStatus string `json:"speaker_role_status"`
 	SegmentIndex      int    `json:"segment_index,omitempty"`
 	StartMS           int64  `json:"start_ms,omitempty"`
 	EndMS             int64  `json:"end_ms,omitempty"`
@@ -245,6 +259,8 @@ func businessAnalysisInputSchema(policy LimitPolicy) map[string]any {
 		"segment_by":                map[string]any{"type": "string"},
 		"time_grain":                map[string]any{"type": "string", "enum": []string{"", "month", "quarter"}},
 		"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": policy.BusinessAnalysisRows},
+		"field_profile":             fieldProfileSchema(),
+		"speaker_role":              speakerRoleSchema(),
 		"include_call_ids":          map[string]any{"type": "boolean"},
 		"include_call_titles":       map[string]any{"type": "boolean"},
 		"include_account_names":     map[string]any{"type": "boolean"},
@@ -283,8 +299,20 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if s.governanceActive() {
 		return toolCallResult{}, governanceFilteredAggregateError(params.Name)
 	}
-	if strings.TrimSpace(args.AccountQuery()) != "" && !args.IncludeAccountNames {
+	if err := args.ApplyFieldProfile(); err != nil {
+		return toolCallResult{}, err
+	}
+	speakerRoleFilter, err := normalizeSpeakerRoleFilter(args.SpeakerRole)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.SpeakerRole = speakerRoleFilter
+	accountQueries := args.AccountQueries()
+	if len(accountQueries) > 0 && !args.IncludeAccountNames {
 		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true because it can probe customer names")
+	}
+	if s.restrictedAccountQueryAny(accountQueries) {
+		return toolCallResult{}, restrictedAccountQueryError()
 	}
 	normalized, err := normalizeCallFilter(args.Filter)
 	if err != nil {
@@ -327,19 +355,21 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		return toolCallResult{}, fmt.Errorf("%s requires query, theme_query, theme, or filter.query before returning transcript excerpts", params.Name)
 	}
 	response := businessAnalysisResponse{
-		Tool:             params.Name,
-		Status:           "cache_derived",
-		CohortID:         cohortID(normalized, args.CohortID),
-		NormalizedFilter: normalized,
-		Query:            strings.TrimSpace(args.Query),
-		ThemeQuery:       firstNonBlank(args.ThemeQuery, args.Theme),
-		Dimension:        strings.TrimSpace(args.Dimension),
-		Segment:          firstNonBlank(args.SegmentBy, args.Segment),
-		TimeGrain:        strings.TrimSpace(args.TimeGrain),
-		Limit:            limit,
-		Warnings:         businessAnalysisWarnings(params.Name, normalized),
-		Limitations:      businessAnalysisLimitations(params.Name),
-		Refinements:      suggestedFilterRefinements(normalized, query),
+		Tool:              params.Name,
+		Status:            "cache_derived",
+		CohortID:          cohortID(normalized, args.CohortID),
+		NormalizedFilter:  normalized,
+		Query:             strings.TrimSpace(args.Query),
+		ThemeQuery:        firstNonBlank(args.ThemeQuery, args.Theme),
+		Dimension:         strings.TrimSpace(args.Dimension),
+		Segment:           firstNonBlank(args.SegmentBy, args.Segment),
+		TimeGrain:         strings.TrimSpace(args.TimeGrain),
+		FieldProfile:      strings.TrimSpace(args.FieldProfile),
+		SpeakerRoleFilter: args.SpeakerRole,
+		Limit:             limit,
+		Warnings:          businessAnalysisWarnings(params.Name, normalized),
+		Limitations:       businessAnalysisLimitations(params.Name),
+		Refinements:       suggestedFilterRefinements(normalized, query),
 	}
 	if params.Name == "list_call_cohorts" {
 		response.Status = "stateless"
@@ -396,9 +426,9 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 
 	switch params.Name {
 	case "build_call_cohort", "inspect_call_cohort":
-		response.Results = mcpBusinessAnalysisCallRows(cohort.Rows, args)
+		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
 	case "search_calls_by_filters":
-		response.Results = mcpBusinessAnalysisCallRows(cohort.Rows, args)
+		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
 	case "summarize_calls_by_filters":
 		dimension := firstNonBlank(args.Dimension, "lifecycle")
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, dimension, "", limit)
@@ -416,12 +446,18 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Results = items
 		response.Quotes = quotes
 	case "discover_themes_in_cohort":
-		items, _, err := s.businessAnalysisEvidence(ctx, normalized, query, limit, args)
+		seedless := strings.TrimSpace(query) == "" && strings.TrimSpace(themeQuery) == ""
+		items, _, err := s.businessAnalysisEvidenceBroadDiscovery(ctx, normalized, query, limit, args, seedless)
 		if err != nil {
 			return toolCallResult{}, err
 		}
 		response.Results = items
 		response.Themes = discoverBusinessAnalysisThemes(items, limit)
+		if seedless {
+			response.Warnings = append(response.Warnings,
+				"broad_discovery_seedless: returned candidate theme terms from a bounded transcript sample because no theme_query/query was provided. These are suggested seed terms, not synthesized claims; rerun discover_themes_in_cohort or downstream theme tools with a chosen theme_query for stronger evidence.")
+			response.Limitations = append(response.Limitations, "broad_discovery_seedless_sample_only_cache_derived_keywords")
+		}
 	case "summarize_themes_by_dimension":
 		dimension := firstNonBlank(args.Dimension, "industry")
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, dimension, themeQuery, limit)
@@ -474,6 +510,12 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		}
 		response.Dimension = "loss_reason"
 		response.Summaries = summaries
+		if !businessAnalysisHasLossReasonBuckets(summaries) {
+			response.Limitations = append(response.Limitations, "loss_reason_not_populated")
+		}
+		if s.policySwitches.HideLossReasons {
+			response.Warnings = append(response.Warnings, "hide_loss_reasons_enforced: bucket coverage emitted; raw loss-reason text is not exposed by this tool")
+		}
 	case "compare_won_lost_theme_patterns":
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, "won_lost", themeQuery, limit)
 		if err != nil {
@@ -534,6 +576,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if response.Count == 0 {
 		response.Warnings = append(response.Warnings, "empty_cohort: no calls matched the normalized filter")
 	}
+	s.applyBusinessAnalysisSmallCellSuppression(&response)
 	if cohort.Summary.ParticipantTitleCallCount == 0 {
 		response.Warnings = append(response.Warnings, "participant_title_missing_or_unmapped")
 	}
@@ -558,11 +601,48 @@ func (s *Server) businessAnalysisDimension(ctx context.Context, filter callFilte
 	})
 }
 
+func (s *Server) applyBusinessAnalysisSmallCellSuppression(response *businessAnalysisResponse) {
+	min := s.businessAnalysisSmallCellMin
+	if min <= 1 || len(response.Summaries) == 0 {
+		return
+	}
+	kept := response.Summaries[:0]
+	suppressedBuckets := 0
+	var suppressedCalls int64
+	for _, row := range response.Summaries {
+		if row.CallCount > 0 && row.CallCount < int64(min) {
+			suppressedBuckets++
+			suppressedCalls += row.CallCount
+			continue
+		}
+		kept = append(kept, row)
+	}
+	response.Summaries = kept
+	if suppressedBuckets == 0 {
+		return
+	}
+	response.Warnings = append(response.Warnings, fmt.Sprintf("small_cell_suppression_applied: hidden %d dimension bucket(s) below minimum cohort size %d", suppressedBuckets, min))
+	response.Limitations = append(response.Limitations, fmt.Sprintf("small_cell_suppression_min_%d", min))
+	if response.SynthesisInputs == nil {
+		response.SynthesisInputs = make(map[string]any)
+	}
+	response.SynthesisInputs["small_cell_suppression"] = map[string]any{
+		"minimum_call_count":      min,
+		"suppressed_bucket_count": suppressedBuckets,
+		"suppressed_call_count":   suppressedCalls,
+	}
+}
+
 func (s *Server) businessAnalysisEvidence(ctx context.Context, filter callFilter, query string, limit int, args businessAnalysisArgs) ([]businessAnalysisItem, []businessAnalysisQuote, error) {
+	return s.businessAnalysisEvidenceBroadDiscovery(ctx, filter, query, limit, args, false)
+}
+
+func (s *Server) businessAnalysisEvidenceBroadDiscovery(ctx context.Context, filter callFilter, query string, limit int, args businessAnalysisArgs, broadDiscovery bool) ([]businessAnalysisItem, []businessAnalysisQuote, error) {
 	rows, err := s.store.SearchBusinessAnalysisEvidence(ctx, sqlite.BusinessAnalysisEvidenceSearchParams{
-		Filter: sqliteBusinessAnalysisFilter(filter),
-		Query:  query,
-		Limit:  limit,
+		Filter:         sqliteBusinessAnalysisFilter(filter),
+		Query:          query,
+		Limit:          limit,
+		BroadDiscovery: broadDiscovery,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -570,10 +650,17 @@ func (s *Server) businessAnalysisEvidence(ctx context.Context, filter callFilter
 	items := make([]businessAnalysisItem, 0, len(rows))
 	quotes := make([]businessAnalysisQuote, 0, len(rows))
 	for _, row := range rows {
+		if !businessAnalysisSpeakerRoleAllowed(row.SpeakerRole, args.SpeakerRole) {
+			continue
+		}
 		if s.isSuppressedCall(row.CallID) {
 			continue
 		}
+		if s.blocklistMatchesBusinessAnalysisEvidence(row) {
+			continue
+		}
 		item := mcpBusinessAnalysisEvidenceRow(row, args)
+		s.applyPolicySwitchesToBusinessAnalysisItem(&item)
 		items = append(items, item)
 		quotes = append(quotes, businessAnalysisQuote{
 			CallRef:           item.CallRef,
@@ -589,6 +676,8 @@ func (s *Server) businessAnalysisEvidence(ctx context.Context, filter callFilter
 			OpportunityType:   item.OpportunityType,
 			ParticipantStatus: item.ParticipantStatus,
 			PersonTitleStatus: item.PersonTitleStatus,
+			SpeakerRole:       item.SpeakerRole,
+			SpeakerRoleStatus: item.SpeakerRoleStatus,
 			SegmentIndex:      item.SegmentIndex,
 			StartMS:           item.StartMS,
 			EndMS:             item.EndMS,
@@ -599,8 +688,55 @@ func (s *Server) businessAnalysisEvidence(ctx context.Context, filter callFilter
 	return items, quotes, nil
 }
 
+func businessAnalysisSpeakerRoleAllowed(rowRole string, filterRole string) bool {
+	switch strings.TrimSpace(filterRole) {
+	case "":
+		return true
+	case speakerRoleExternalOrUnknown:
+		return rowRole != sqlite.SpeakerRoleInternal
+	default:
+		return rowRole == filterRole
+	}
+}
+
 func (args businessAnalysisArgs) AccountQuery() string {
 	return firstNonBlank(args.Filter.AccountQuery, args.FilterA.AccountQuery, args.FilterB.AccountQuery)
+}
+
+func (args businessAnalysisArgs) AccountQueries() []string {
+	seen := make(map[string]struct{}, 3)
+	var out []string
+	for _, query := range []string{args.Filter.AccountQuery, args.FilterA.AccountQuery, args.FilterB.AccountQuery} {
+		trimmed := strings.TrimSpace(query)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func (args *businessAnalysisArgs) ApplyFieldProfile() error {
+	applied, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:           args.IncludeCallIDs,
+		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeAccountNames:     args.IncludeAccountNames,
+		IncludeOpportunityNames: args.IncludeOpportunityNames,
+	})
+	if err != nil {
+		return err
+	}
+	args.FieldProfile = applied.Profile
+	args.IncludeCallIDs = applied.IncludeRawIDs
+	args.IncludeCallTitles = applied.IncludeCallTitles
+	args.IncludeAccountNames = applied.IncludeAccountNames
+	args.IncludeOpportunityNames = applied.IncludeOpportunityNames
+	return nil
 }
 
 func normalizeCallFilter(filter callFilter) (callFilter, error) {
@@ -731,6 +867,22 @@ func businessAnalysisCoverageFromSummary(summary sqlite.BusinessAnalysisCohortSu
 	}
 }
 
+// businessAnalysisHasLossReasonBuckets reports whether at least one
+// summary row carries a populated, non-blank loss-reason bucket. Rows
+// collapsed to "<blank>" by the dimension query, or to the legacy
+// "loss_reason_present" coverage value emitted only when the materialized
+// flag is true but raw text is missing, are not counted as buckets.
+func businessAnalysisHasLossReasonBuckets(rows []sqlite.BusinessAnalysisDimensionRow) bool {
+	for _, row := range rows {
+		value := strings.TrimSpace(row.Value)
+		if value == "" || value == "<blank>" || value == "loss_reason_present" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func toolNeedsThemeQuery(toolName string) bool {
 	switch toolName {
 	case "summarize_themes_by_dimension", "compare_themes_over_time", "compare_themes_by_segment",
@@ -747,7 +899,11 @@ func toolNeedsThemeQuery(toolName string) bool {
 
 func toolNeedsEvidenceQuery(toolName string) bool {
 	switch toolName {
-	case "search_transcripts_by_filters", "discover_themes_in_cohort",
+	// Phase 13e: discover_themes_in_cohort intentionally accepts a selective
+	// cohort filter without theme_query/query and returns a bounded
+	// candidate-seed sample. Other transcript-evidence and quote tools must
+	// still require a query to avoid raw-transcript dumps.
+	case "search_transcripts_by_filters",
 		"extract_theme_quotes", "search_quotes_in_cohort", "rank_quotes_for_sales_use", "build_quote_pack",
 		"generate_sales_hooks_from_themes", "generate_outreach_sequence_inputs",
 		"recommend_target_personas_and_industries", "build_theme_brief":
@@ -783,14 +939,17 @@ func businessAnalysisWarnings(toolName string, filter callFilter) []string {
 		warnings = append(warnings, "missing transcript cohorts cannot return quote evidence")
 	}
 	if strings.Contains(toolName, "loss_reason") {
-		warnings = append(warnings, "loss_reason depends on cached Opportunity loss-reason fields and may be blank")
+		warnings = append(warnings,
+			"loss_reason depends on cached Opportunity loss-reason fields and may be blank",
+			"loss_reason values are deterministic normalized buckets (price, no_decision, competitor, timing, feature_gap, budget, relationship, unknown_other); raw CRM loss-reason text is not exposed",
+		)
 	}
 	return warnings
 }
 
 func businessAnalysisLimitations(toolName string) []string {
 	limitations := []string{
-		"read_only_sqlite_cache_only",
+		"read_only_cache_only",
 		"no_raw_sql_or_arbitrary_table_access",
 		"bounded_results_and_redacted_identifiers_by_default",
 		"cache_derived_signals_not_llm_conclusions",
@@ -798,6 +957,9 @@ func businessAnalysisLimitations(toolName string) []string {
 	switch toolName {
 	case "compare_theme_outcomes", "summarize_pipeline_progression_by_theme", "summarize_loss_reasons_by_theme", "compare_won_lost_theme_patterns", "diagnose_attribution_coverage":
 		limitations = append(limitations, "outcome_attribution_may_be_missing_or_incomplete", "crm_outcome_fields_may_be_missing_or_sparse")
+		if toolName == "summarize_loss_reasons_by_theme" {
+			limitations = append(limitations, "loss_reason_values_are_normalized_buckets_not_raw_text", "raw_loss_reason_text_is_hidden_by_default_and_suppressed_when_hide_loss_reasons_is_enabled")
+		}
 	case "summarize_themes_by_persona", "rank_personas_by_insight_quality":
 		limitations = append(limitations, "participant_titles_may_be_missing_or_unmapped")
 	case "summarize_themes_by_industry", "recommend_target_personas_and_industries":
@@ -842,14 +1004,18 @@ func sqliteBusinessAnalysisFilter(filter callFilter) sqlite.BusinessAnalysisFilt
 	}
 }
 
-func mcpBusinessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args businessAnalysisArgs) []businessAnalysisItem {
+func (s *Server) businessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args businessAnalysisArgs) []businessAnalysisItem {
 	out := make([]businessAnalysisItem, 0, len(rows))
 	for _, row := range rows {
+		if s.blocklistMatchesBusinessAnalysisCall(row) {
+			continue
+		}
 		item := businessAnalysisItem{
 			CallRef:           callRef(row.CallID),
 			StartedAt:         row.StartedAt,
 			CallDate:          row.CallDate,
 			CallMonth:         row.CallMonth,
+			DurationSeconds:   row.DurationSeconds,
 			LifecycleBucket:   row.LifecycleBucket,
 			AccountIndustry:   row.AccountIndustry,
 			OpportunityStage:  row.OpportunityStage,
@@ -863,12 +1029,21 @@ func mcpBusinessAnalysisCallRows(rows []sqlite.BusinessAnalysisCallRow, args bus
 		if args.IncludeCallTitles {
 			item.CallTitle = row.Title
 		}
+		s.applyPolicySwitchesToBusinessAnalysisItem(&item)
 		out = append(out, item)
 	}
 	return out
 }
 
 func mcpBusinessAnalysisEvidenceRow(row sqlite.BusinessAnalysisEvidenceRow, args businessAnalysisArgs) businessAnalysisItem {
+	speakerRole := strings.TrimSpace(row.SpeakerRole)
+	speakerStatus := strings.TrimSpace(row.SpeakerRoleStatus)
+	if speakerRole == "" {
+		speakerRole = sqlite.SpeakerRoleUnknown
+	}
+	if speakerStatus == "" {
+		speakerStatus = sqlite.SpeakerRoleStatusAffiliationMissing
+	}
 	item := businessAnalysisItem{
 		CallRef:           callRef(row.CallID),
 		StartedAt:         row.StartedAt,
@@ -880,6 +1055,8 @@ func mcpBusinessAnalysisEvidenceRow(row sqlite.BusinessAnalysisEvidenceRow, args
 		OpportunityType:   row.OpportunityType,
 		ParticipantStatus: row.ParticipantStatus,
 		PersonTitleStatus: row.PersonTitleStatus,
+		SpeakerRole:       speakerRole,
+		SpeakerRoleStatus: speakerStatus,
 		SegmentIndex:      row.SegmentIndex,
 		StartMS:           row.StartMS,
 		EndMS:             row.EndMS,
@@ -902,11 +1079,7 @@ func mcpBusinessAnalysisEvidenceRow(row sqlite.BusinessAnalysisEvidenceRow, args
 }
 
 func callRef(callID string) string {
-	if strings.TrimSpace(callID) == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(callID))
-	return "call_ref_" + hex.EncodeToString(sum[:])[:12]
+	return sqlite.StableCallRef(callID)
 }
 
 func discoverBusinessAnalysisThemes(items []businessAnalysisItem, limit int) []businessAnalysisTheme {
@@ -915,13 +1088,27 @@ func discoverBusinessAnalysisThemes(items []businessAnalysisItem, limit int) []b
 	}
 	stop := map[string]struct{}{
 		"able": {}, "about": {}, "after": {}, "again": {}, "also": {}, "because": {}, "been": {}, "being": {}, "call": {},
-		"could": {}, "from": {}, "have": {}, "into": {}, "more": {}, "need": {}, "needs": {}, "only": {}, "process": {},
-		"really": {}, "some": {}, "that": {}, "their": {}, "them": {}, "then": {}, "there": {}, "they": {}, "this": {},
-		"through": {}, "with": {}, "would": {}, "your": {},
+		"came": {}, "could": {}, "currently": {}, "finished": {}, "from": {}, "have": {}, "into": {}, "more": {}, "need": {}, "needs": {}, "only": {}, "process": {},
+		"really": {}, "some": {}, "that": {}, "their": {}, "them": {}, "then": {}, "there": {}, "thank": {}, "thanks": {}, "they": {}, "this": {},
+		"through": {}, "when": {}, "with": {}, "would": {}, "your": {},
+		// Seedless discovery samples transcript snippets broadly. Keep
+		// voicemail/IVR boilerplate and generic routing nouns out of the
+		// candidate seed list so business users see viable topics first.
+		"beep": {}, "callback": {}, "desk": {}, "dial": {}, "extension": {}, "hang": {}, "leave": {}, "mailbox": {},
+		"main": {}, "message": {}, "messages": {}, "option": {}, "options": {}, "operator": {}, "please": {},
+		"press": {}, "recording": {}, "tone": {}, "unavailable": {}, "voicemail": {}, "zero": {},
+		// Common first names are frequent in speaker labels and small talk;
+		// they are not useful candidate business themes.
+		"alex": {}, "amanda": {}, "amy": {}, "andrew": {}, "anna": {}, "ashley": {}, "brian": {}, "chris": {},
+		"christine": {}, "dan": {}, "david": {}, "emily": {}, "eric": {}, "james": {}, "jennifer": {}, "john": {},
+		"josh": {}, "justin": {}, "karen": {}, "kelly": {}, "kevin": {}, "laura": {}, "lisa": {}, "mark": {},
+		"matt": {}, "michael": {}, "michelle": {}, "mike": {}, "paul": {}, "rachel": {}, "sarah": {}, "scott": {},
+		"steve": {}, "tom": {},
 	}
 	counts := map[string]int{}
 	for _, item := range items {
 		text := strings.ToLower(item.Snippet + " " + item.ContextExcerpt)
+		itemTerms := map[string]struct{}{}
 		var token strings.Builder
 		flush := func() {
 			value := token.String()
@@ -932,7 +1119,7 @@ func discoverBusinessAnalysisThemes(items []businessAnalysisItem, limit int) []b
 			if _, ok := stop[value]; ok {
 				return
 			}
-			counts[value]++
+			itemTerms[value] = struct{}{}
 		}
 		for _, r := range text {
 			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
@@ -942,6 +1129,9 @@ func discoverBusinessAnalysisThemes(items []businessAnalysisItem, limit int) []b
 			flush()
 		}
 		flush()
+		for term := range itemTerms {
+			counts[term]++
+		}
 	}
 	type pair struct {
 		term  string

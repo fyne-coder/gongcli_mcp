@@ -10,11 +10,20 @@ import (
 var defaultDateLocation = mustLoadLocation("America/New_York")
 
 type CallListParams struct {
-	From          string
-	To            string
-	Cursor        string
-	Context       string
+	From    string
+	To      string
+	Cursor  string
+	Context string
+	// ExposeParties requests Gong call participant fields (names, emails,
+	// titles) via contentSelector.exposedFields.parties=true.
 	ExposeParties bool
+	// ExposeHighlights requests Gong Spotlight/generated content fields via
+	// contentSelector.exposedFields.content. The fields land under content.brief,
+	// content.highlights, content.keyPoints, content.outline, and sometimes
+	// content.callOutcome in the response payload. Treated as sensitive because
+	// generated summaries and next steps can include customer-facing text.
+	// Replaces the deprecated pointsOfInterest/actionItems contract.
+	ExposeHighlights bool
 }
 
 type TranscriptParams struct {
@@ -49,8 +58,21 @@ func (c *Client) ListCalls(ctx context.Context, params CallListParams) (*Respons
 	if params.Context != "" {
 		contentSelector["context"] = params.Context
 	}
+	exposed := map[string]any{}
 	if params.ExposeParties {
-		contentSelector["exposedFields"] = map[string]any{"parties": true}
+		exposed["parties"] = true
+	}
+	if params.ExposeHighlights {
+		exposed["content"] = map[string]any{
+			"brief":       true,
+			"callOutcome": true,
+			"highlights":  true,
+			"keyPoints":   true,
+			"outline":     true,
+		}
+	}
+	if len(exposed) > 0 {
+		contentSelector["exposedFields"] = exposed
 	}
 	if len(contentSelector) > 0 {
 		body["contentSelector"] = contentSelector

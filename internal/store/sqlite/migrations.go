@@ -850,4 +850,17 @@ CREATE INDEX IF NOT EXISTS idx_scorecard_activity_review_method
 CREATE INDEX IF NOT EXISTS idx_scorecard_activity_reviewed_user
 	ON scorecard_activity(reviewed_user_id);
 `,
+	`
+CREATE TABLE IF NOT EXISTS governance_ingest_skipped_calls (
+	call_id TEXT PRIMARY KEY,
+	config_sha256 TEXT NOT NULL,
+	matched_list TEXT NOT NULL,
+	source_category TEXT NOT NULL,
+	run_id INTEGER,
+	skipped_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_governance_ingest_skipped_calls_config
+	ON governance_ingest_skipped_calls(config_sha256);
+`,
 }

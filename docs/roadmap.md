@@ -2,14 +2,17 @@
 
 `gongctl` should mature through explicit deployment gates instead of treating all
 hardening as one broad "production ready" milestone. The product boundary stays:
-`gongctl` syncs and maintains a local cache; `gongmcp` reads that cache only.
+`gongctl` syncs and maintains a customer-controlled cache; `gongmcp` reads that
+cache only.
 
 ## Current Baseline
 
-- Local CLI for Gong auth, sync, search, analysis, transcript fetch/export, and
-  SQLite-backed status checks.
-- Read-only local stdio MCP server over SQLite, plus private-pilot HTTP `/mcp`
-  mode for customer-managed deployments.
+- Local CLI for Gong auth, sync, search, analysis, transcript fetch/export,
+  SQLite-backed local status checks, and supported Postgres shared-deployment
+  slices.
+- Read-only local stdio MCP server over SQLite by default, supported Postgres
+  shared-deployment MCP slices, plus private-pilot HTTP `/mcp` mode for
+  customer-managed deployments.
 - Docker packaging for local/company-managed CLI and MCP use.
 - Version source in `VERSION`, changelog entries, and SemVer-style tags.
 - Public-safe docs for local data handling, Docker, release flow, and readiness.
@@ -58,10 +61,14 @@ Pilot packet docs:
 Goal: the project is safe to operate repeatedly inside a company with defined
 owners, retention, upgrade, rollback, and security controls.
 
-Status as of 2026-05-01 (v0.3.2): items 1, 2, 4, and 5 have shipped. Items 3
-and 6 are partially shipped: regression tests and the exposure-classification
-table exist, but a written tool-intake checklist is not in the repo, and backup
-guidance is documented while a formal migration-test harness is not.
+Status as of 2026-05-05: items 1, 2, 4, 5, and the backup/rollback portion of
+item 6 have shipped. Item 3 remains partial because regression tests and the
+exposure-classification table exist, but a written tool-intake checklist is not
+in the repo. Item 6 still needs customer-platform restore drills for production
+PITR/replica workflows before broad GA.
+The Postgres client pilot release packet and onboarding checklist now document
+the controlled shared-deployment handoff, but they do not replace a published
+tag, image digest verification, or customer-platform dry run.
 
 Required outcomes:
 
@@ -80,10 +87,10 @@ Required outcomes:
 5. A company can deploy a `gongmcp`-only image or target with no Gong
    credentials, no network, and a read-only SQLite mount. (shipped via the
    `mcp` Docker target documented in [docker.md](docker.md))
-6. Upgrade and rollback procedures protect existing SQLite caches and require
-   migration testing on copies before production use. (partial; backup and
-   restore guidance is in the operator sync runbook, formal migration-test
-   harness still pending)
+6. Upgrade and rollback procedures protect existing SQLite/Postgres caches and
+   require migration testing on copies before production use. (partial;
+   SQLite copy validation and synthetic Postgres backup/restore smoke shipped;
+   customer-platform PITR/replica restore drills still pending)
 
 ## Gate 3: Public 1.0 Ready
 
@@ -119,7 +126,9 @@ Remaining 1.0 backlog:
 
 ## Feature Direction
 
-- Keep MCP read-only over cached SQLite. Do not add live Gong API calls to MCP.
+- Keep MCP read-only over the configured cache store. SQLite remains the
+  default; Postgres supports explicitly listed shared-deployment slices. Do not
+  add live Gong API calls to MCP.
 - Add new MCP tools only after the CLI/cache layer can ingest the required data
   safely.
 - Prefer aggregate and metadata-first tools. Transcript snippets and CRM values

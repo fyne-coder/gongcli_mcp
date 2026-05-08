@@ -3,6 +3,7 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/contextmodel"
 	_ "modernc.org/sqlite"
 )
 
@@ -70,6 +72,14 @@ type FinishSyncRunParams struct {
 	RequestContext string
 }
 
+type GovernanceIngestSkippedCallParams struct {
+	CallID         string
+	ConfigSHA256   string
+	MatchedList    string
+	SourceCategory string
+	RunID          int64
+}
+
 type SyncRun struct {
 	ID             int64
 	Scope          string
@@ -112,6 +122,7 @@ type CallRecord struct {
 
 type CallDetail struct {
 	CallID              string                `json:"call_id"`
+	CallRef             string                `json:"call_ref,omitempty"`
 	Title               string                `json:"title"`
 	StartedAt           string                `json:"started_at"`
 	DurationSeconds     int64                 `json:"duration_seconds"`
@@ -224,6 +235,7 @@ type CRMFieldValueSearchParams struct {
 	ValueQuery          string
 	Limit               int
 	IncludeValueSnippet bool
+	IncludeCallIDs      bool
 }
 
 type CRMFieldValueMatch struct {
@@ -513,6 +525,9 @@ type TranscriptAttributionSearchResult struct {
 	ParticipantStatus      string `json:"participant_status"`
 	PersonTitleStatus      string `json:"person_title_status"`
 	PersonTitleSource      string `json:"person_title_source,omitempty"`
+	SpeakerID              string `json:"-"`
+	SpeakerRole            string `json:"speaker_role,omitempty"`
+	SpeakerRoleStatus      string `json:"speaker_role_status,omitempty"`
 	SegmentIndex           int    `json:"segment_index"`
 	StartMS                int64  `json:"start_ms"`
 	EndMS                  int64  `json:"end_ms"`
@@ -707,27 +722,29 @@ type CallFactsCoverage struct {
 }
 
 type SyncStatusSummary struct {
-	TotalCalls                   int64               `json:"total_calls"`
-	TotalUsers                   int64               `json:"total_users"`
-	TotalTranscripts             int64               `json:"total_transcripts"`
-	TotalTranscriptSegments      int64               `json:"total_transcript_segments"`
-	TotalEmbeddedCRMContextCalls int64               `json:"total_embedded_crm_context_calls"`
-	TotalEmbeddedCRMObjects      int64               `json:"total_embedded_crm_objects"`
-	TotalEmbeddedCRMFields       int64               `json:"total_embedded_crm_fields"`
-	TotalCRMIntegrations         int64               `json:"total_crm_integrations"`
-	TotalCRMSchemaObjects        int64               `json:"total_crm_schema_objects"`
-	TotalCRMSchemaFields         int64               `json:"total_crm_schema_fields"`
-	TotalGongSettings            int64               `json:"total_gong_settings"`
-	TotalScorecards              int64               `json:"total_scorecards"`
-	TotalScorecardActivity       int64               `json:"total_scorecard_activity"`
-	MissingTranscripts           int64               `json:"missing_transcripts"`
-	RunningSyncRuns              int64               `json:"running_sync_runs"`
-	ProfileReadiness             ProfileReadiness    `json:"profile_readiness"`
-	PublicReadiness              PublicReadiness     `json:"public_readiness"`
-	AttributionCoverage          AttributionCoverage `json:"attribution_coverage"`
-	LastRun                      *SyncRun            `json:"last_run,omitempty"`
-	LastSuccessfulRun            *SyncRun            `json:"last_successful_run,omitempty"`
-	States                       []SyncState         `json:"states"`
+	TotalCalls                   int64                       `json:"total_calls"`
+	TotalUsers                   int64                       `json:"total_users"`
+	TotalTranscripts             int64                       `json:"total_transcripts"`
+	TotalTranscriptSegments      int64                       `json:"total_transcript_segments"`
+	TotalEmbeddedCRMContextCalls int64                       `json:"total_embedded_crm_context_calls"`
+	TotalEmbeddedCRMObjects      int64                       `json:"total_embedded_crm_objects"`
+	TotalEmbeddedCRMFields       int64                       `json:"total_embedded_crm_fields"`
+	TotalCRMIntegrations         int64                       `json:"total_crm_integrations"`
+	TotalCRMSchemaObjects        int64                       `json:"total_crm_schema_objects"`
+	TotalCRMSchemaFields         int64                       `json:"total_crm_schema_fields"`
+	TotalGongSettings            int64                       `json:"total_gong_settings"`
+	TotalScorecards              int64                       `json:"total_scorecards"`
+	TotalScorecardActivity       int64                       `json:"total_scorecard_activity"`
+	TotalAIHighlights            int64                       `json:"total_ai_highlights"`
+	MissingTranscripts           int64                       `json:"missing_transcripts"`
+	RunningSyncRuns              int64                       `json:"running_sync_runs"`
+	ProfileReadiness             ProfileReadiness            `json:"profile_readiness"`
+	PublicReadiness              PublicReadiness             `json:"public_readiness"`
+	AttributionCoverage          AttributionCoverage         `json:"attribution_coverage"`
+	CallFactsAttribution         CallFactsAttributionSignals `json:"call_facts_attribution"`
+	LastRun                      *SyncRun                    `json:"last_run,omitempty"`
+	LastSuccessfulRun            *SyncRun                    `json:"last_successful_run,omitempty"`
+	States                       []SyncState                 `json:"states"`
 }
 
 type AttributionCoverage struct {
@@ -746,6 +763,27 @@ type AttributionCoverage struct {
 	RecommendedNextAction string `json:"recommended_next_action,omitempty"`
 }
 
+// CallFactsAttributionSignals reports the call_facts-derived attribution
+// signals that business analysis tools actually rely on (lifecycle, industry,
+// opportunity stage). The Postgres redacted serving DB may have zero rows in
+// the CRM integration inventory tables (`crm_integrations`,
+// `crm_schema_fields`) and zero rows in the `call_context_fields` view while
+// the curated `call_facts` table is fully populated; readiness reporting
+// must derive attribution coverage from these signals instead of from CRM
+// integration inventory counts. The signals are computed from the
+// readonly-grantable `call_facts` columns (`account_industry`,
+// `opportunity_stage`, `lifecycle_bucket`) so the same query shape works for
+// both the SQLite call_facts view and the Postgres call_facts table under
+// EnforceAllowedColumnBoundary.
+type CallFactsAttributionSignals struct {
+	AccountIndustryCallCount     int64 `json:"account_industry_call_count"`
+	OpportunityStageCallCount    int64 `json:"opportunity_stage_call_count"`
+	LifecycleClassifiedCallCount int64 `json:"lifecycle_classified_call_count"`
+	OpportunityCallCount         int64 `json:"opportunity_call_count"`
+	AccountCallCount             int64 `json:"account_call_count"`
+	HasAnyAttributionSignal      bool  `json:"has_any_attribution_signal"`
+}
+
 type CacheInventory struct {
 	TableCounts         []CacheTableCount  `json:"table_counts"`
 	OldestCallStartedAt string             `json:"oldest_call_started_at,omitempty"`
@@ -759,31 +797,71 @@ type CacheTableCount struct {
 }
 
 type CachePurgePlan struct {
-	StartedBefore          string `json:"started_before"`
-	CallCount              int64  `json:"call_count"`
-	TranscriptCount        int64  `json:"transcript_count"`
-	TranscriptSegmentCount int64  `json:"transcript_segment_count"`
-	ContextObjectCount     int64  `json:"context_object_count"`
-	ContextFieldCount      int64  `json:"context_field_count"`
-	ProfileCallFactCount   int64  `json:"profile_call_fact_count"`
+	StartedBefore                 string `json:"started_before"`
+	CallCount                     int64  `json:"call_count"`
+	TranscriptCount               int64  `json:"transcript_count"`
+	TranscriptSegmentCount        int64  `json:"transcript_segment_count"`
+	ContextObjectCount            int64  `json:"context_object_count"`
+	ContextFieldCount             int64  `json:"context_field_count"`
+	CallFactCount                 int64  `json:"call_fact_count,omitempty"`
+	ReadModelDiagnosticCount      int64  `json:"read_model_diagnostic_count,omitempty"`
+	ProfileCallFactCount          int64  `json:"profile_call_fact_count"`
+	ScorecardActivityCount        int64  `json:"scorecard_activity_count,omitempty"`
+	GovernanceSuppressedCallCount int64  `json:"governance_suppressed_call_count,omitempty"`
 }
 
 type ProfileReadiness struct {
-	Active                  bool     `json:"active"`
-	Status                  string   `json:"status"`
-	Detail                  string   `json:"detail"`
-	Name                    string   `json:"name,omitempty"`
-	Version                 int      `json:"version,omitempty"`
-	CanonicalSHA256         string   `json:"canonical_sha256,omitempty"`
-	ObjectConceptCount      int      `json:"object_concept_count,omitempty"`
-	FieldConceptCount       int      `json:"field_concept_count,omitempty"`
-	LifecycleBucketCount    int      `json:"lifecycle_bucket_count,omitempty"`
-	MethodologyConceptCount int      `json:"methodology_concept_count,omitempty"`
-	WarningCount            int      `json:"warning_count,omitempty"`
-	UnavailableConcepts     []string `json:"unavailable_concepts,omitempty"`
-	CacheFresh              bool     `json:"cache_fresh"`
-	CacheStatus             string   `json:"cache_status"`
-	Blocking                []string `json:"blocking,omitempty"`
+	Active                  bool                      `json:"active"`
+	Status                  string                    `json:"status"`
+	Detail                  string                    `json:"detail"`
+	Name                    string                    `json:"name,omitempty"`
+	Version                 int                       `json:"version,omitempty"`
+	CanonicalSHA256         string                    `json:"canonical_sha256,omitempty"`
+	ObjectConceptCount      int                       `json:"object_concept_count,omitempty"`
+	FieldConceptCount       int                       `json:"field_concept_count,omitempty"`
+	LifecycleBucketCount    int                       `json:"lifecycle_bucket_count,omitempty"`
+	MethodologyConceptCount int                       `json:"methodology_concept_count,omitempty"`
+	WarningCount            int                       `json:"warning_count,omitempty"`
+	UnavailableConcepts     []string                  `json:"unavailable_concepts,omitempty"`
+	CacheFresh              bool                      `json:"cache_fresh"`
+	CacheStatus             string                    `json:"cache_status"`
+	Blocking                []string                  `json:"blocking,omitempty"`
+	Checklist               ProfileReadinessChecklist `json:"checklist"`
+}
+
+// ProfileReadinessChecklist surfaces a set of mechanically-checked customer
+// profile readiness flags. The intent is operator-facing: if a discovered
+// YAML imports cleanly but the mappings still look suspect (a concept
+// pointing only at CreatedDate, lifecycle missing the required buckets,
+// methodology unmapped, no loss-reason field), readiness should call those
+// out explicitly so business-analysis answers are not silently shaped by a
+// half-mapped profile. Findings are advisory; they do not block import.
+type ProfileReadinessChecklist struct {
+	// Computed reports whether the checklist could be evaluated against an
+	// active, parsed profile. False when no profile is active.
+	Computed bool `json:"computed"`
+	// CreatedDateOnlyConcepts are field concepts whose only mapped CRM field
+	// names look like CreatedDate (or its common aliases). docs/profiles.md
+	// flags this as a common-but-incorrect mapping pattern.
+	CreatedDateOnlyConcepts []string `json:"created_date_only_concepts,omitempty"`
+	// MissingLifecycleBuckets lists the required lifecycle buckets that the
+	// active profile does not define rules for.
+	MissingLifecycleBuckets []string `json:"missing_lifecycle_buckets,omitempty"`
+	// LifecycleRulesMissing is true when every defined lifecycle bucket has
+	// zero rules and the cohort therefore cannot be partitioned by the
+	// profile.
+	LifecycleRulesMissing bool `json:"lifecycle_rules_missing"`
+	// MethodologyUnmapped is true when the profile's methodology section is
+	// empty. Methodology concepts (pain, next steps, MEDDICC, etc.) are
+	// optional, but their absence is worth surfacing as a coverage gap.
+	MethodologyUnmapped bool `json:"methodology_unmapped"`
+	// LossReasonMappingMissing is true when no field concept references a
+	// loss-reason-shaped field; rank_loss_reasons / loss_reason rollups will
+	// fall back to the legacy loss_reason_present heuristic.
+	LossReasonMappingMissing bool `json:"loss_reason_mapping_missing"`
+	// SuspectFindings is a stable, sorted list of human-readable findings
+	// suitable for operator surfaces.
+	SuspectFindings []string `json:"suspect_findings,omitempty"`
 }
 
 type PublicReadiness struct {
@@ -880,22 +958,9 @@ type scorecardActivityPayload struct {
 	RawSHA256           string
 }
 
-type contextObjectRow struct {
-	ObjectKey  string
-	ObjectType string
-	ObjectID   string
-	ObjectName string
-	RawJSON    []byte
-	Fields     []contextFieldRow
-}
+type contextObjectRow = contextmodel.ObjectRow
 
-type contextFieldRow struct {
-	FieldName  string
-	FieldLabel string
-	FieldType  string
-	ValueText  string
-	RawJSON    []byte
-}
+type contextFieldRow = contextmodel.FieldRow
 
 func Open(ctx context.Context, path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
@@ -1137,6 +1202,9 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*CallRecor
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := ensureSQLiteCallNotGovernanceSkippedTx(ctx, tx, payload.CallID); err != nil {
+		return nil, err
+	}
 
 	query := `INSERT INTO calls(
 				call_id, title, started_at, duration_seconds, parties_count, context_present,
@@ -1215,6 +1283,141 @@ func (s *Store) UpsertCall(ctx context.Context, raw json.RawMessage) (*CallRecor
 		return nil, err
 	}
 	return record, nil
+}
+
+func (s *Store) RecordGovernanceIngestSkippedCall(ctx context.Context, params GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO governance_ingest_skipped_calls(
+		call_id, config_sha256, matched_list, source_category, run_id, skipped_at
+	) VALUES(?, ?, ?, ?, ?, ?)
+	ON CONFLICT(call_id) DO UPDATE SET
+		config_sha256 = excluded.config_sha256,
+		matched_list = excluded.matched_list,
+		source_category = excluded.source_category,
+		run_id = excluded.run_id,
+		skipped_at = excluded.skipped_at`,
+		callID,
+		strings.TrimSpace(params.ConfigSHA256),
+		strings.TrimSpace(params.MatchedList),
+		strings.TrimSpace(params.SourceCategory),
+		params.RunID,
+		nowUTC(),
+	)
+	return err
+}
+
+func (s *Store) RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx context.Context, params GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := recordGovernanceIngestSkippedCallTx(ctx, tx, params); err != nil {
+		return err
+	}
+	if err := deleteGovernanceIngestCachedCallTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ClearGovernanceIngestSkippedCall(ctx context.Context, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM governance_ingest_skipped_calls WHERE call_id = ?`, callID)
+	return err
+}
+
+func (s *Store) DeleteGovernanceIngestCachedCall(ctx context.Context, callID string) error {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return errors.New("governance ingest cached call_id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteGovernanceIngestCachedCallTx(ctx, tx, callID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func recordGovernanceIngestSkippedCallTx(ctx context.Context, tx *sql.Tx, params GovernanceIngestSkippedCallParams) error {
+	callID := strings.TrimSpace(params.CallID)
+	if callID == "" {
+		return errors.New("governance ingest skipped call_id is required")
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO governance_ingest_skipped_calls(
+		call_id, config_sha256, matched_list, source_category, run_id, skipped_at
+	) VALUES(?, ?, ?, ?, ?, ?)
+	ON CONFLICT(call_id) DO UPDATE SET
+		config_sha256 = excluded.config_sha256,
+		matched_list = excluded.matched_list,
+		source_category = excluded.source_category,
+		run_id = excluded.run_id,
+		skipped_at = excluded.skipped_at`,
+		callID,
+		strings.TrimSpace(params.ConfigSHA256),
+		strings.TrimSpace(params.MatchedList),
+		strings.TrimSpace(params.SourceCategory),
+		params.RunID,
+		nowUTC(),
+	)
+	return err
+}
+
+func deleteGovernanceIngestCachedCallTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	for _, query := range []string{
+		`DELETE FROM profile_call_fact_cache WHERE call_id = ?`,
+		`DELETE FROM scorecard_activity WHERE call_id = ?`,
+		`DELETE FROM transcript_segments WHERE call_id = ?`,
+		`DELETE FROM transcripts WHERE call_id = ?`,
+		`DELETE FROM call_context_fields WHERE call_id = ?`,
+		`DELETE FROM call_context_objects WHERE call_id = ?`,
+		`DELETE FROM calls WHERE call_id = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, query, callID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transcript_segments_fts(transcript_segments_fts) VALUES ('rebuild')`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureSQLiteCallNotGovernanceSkippedTx(ctx context.Context, tx *sql.Tx, callID string) error {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM governance_ingest_skipped_calls WHERE call_id = ?`, callID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return fmt.Errorf("call %q was previously skipped by governance ingest", callID)
+	}
+	return nil
+}
+
+func (s *Store) CallRawJSON(ctx context.Context, callID string) (json.RawMessage, error) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return nil, errors.New("call id is required")
+	}
+	var raw []byte
+	if err := s.db.QueryRowContext(ctx, `SELECT raw_json FROM calls WHERE call_id = ?`, callID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }
 
 func (s *Store) UpsertCallContext(ctx context.Context, callID string, raw json.RawMessage) (ContextCounts, error) {
@@ -1628,9 +1831,10 @@ func (s *Store) FindCallsMissingTranscriptsByFilters(ctx context.Context, params
 
 	query := `SELECT c.call_id, c.title, c.started_at
 		   FROM calls c
-		   LEFT JOIN transcripts t ON t.call_id = c.call_id`
+		   LEFT JOIN transcripts t ON t.call_id = c.call_id
+		   LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id`
 	var args []any
-	where := []string{`t.call_id IS NULL`}
+	where := []string{`t.call_id IS NULL`, `gisc.call_id IS NULL`}
 	factWhere, factArgs, err := callFactFilterWhere("cf", callFactFilterParams{
 		FromDate:        params.FromDate,
 		ToDate:          params.ToDate,
@@ -1806,6 +2010,31 @@ SELECT o.object_type,
 		return nil, err
 	}
 	return detail, nil
+}
+
+func (s *Store) ResolveCallIDByRef(ctx context.Context, ref string) (string, error) {
+	normalized, err := NormalizeStableCallRef(ref)
+	if err != nil {
+		return "", err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT call_id FROM calls`)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var callID string
+		if err := rows.Scan(&callID); err != nil {
+			return "", err
+		}
+		if StableCallRefMatchesCallID(normalized, callID) {
+			return callID, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("call_ref not found")
 }
 
 func (s *Store) SearchCallsRaw(ctx context.Context, params CallSearchParams) ([]json.RawMessage, error) {
@@ -2963,6 +3192,7 @@ WITH matched_segments AS (
 	       c.parties_count,
 	       COALESCE(cf.call_date, substr(c.started_at, 1, 10)) AS call_date,
 	       COALESCE(cf.lifecycle_bucket, '') AS lifecycle_bucket,
+	       ts.speaker_id,
 	       ts.segment_index,
 	       ts.start_ms,
 	       ts.end_ms,
@@ -3043,6 +3273,7 @@ SELECT m.call_id,
 	       ELSE ''
        END AS person_title_source,
        m.segment_index,
+       m.speaker_id,
        m.start_ms,
        m.end_ms,
        m.snippet,
@@ -3090,6 +3321,7 @@ SELECT m.call_id,
 			&row.PersonTitleStatus,
 			&row.PersonTitleSource,
 			&row.SegmentIndex,
+			&row.SpeakerID,
 			&row.StartMS,
 			&row.EndMS,
 			&row.Snippet,
@@ -3099,7 +3331,13 @@ SELECT m.call_id,
 		}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.applyTranscriptAttributionSpeakerRoles(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) SummarizeOpportunityCalls(ctx context.Context, params OpportunityCallSummaryParams) ([]OpportunityCallSummary, error) {
@@ -4208,7 +4446,8 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 		`SELECT COUNT(*)
 		   FROM calls c
 		   LEFT JOIN transcripts t ON t.call_id = c.call_id
-		  WHERE t.call_id IS NULL`,
+		   LEFT JOIN governance_ingest_skipped_calls gisc ON gisc.call_id = c.call_id
+		  WHERE t.call_id IS NULL AND gisc.call_id IS NULL`,
 	).Scan(&summary.MissingTranscripts); err != nil {
 		return nil, err
 	}
@@ -4220,6 +4459,12 @@ func (s *Store) SyncStatusSummary(ctx context.Context) (*SyncStatusSummary, erro
 		return nil, err
 	}
 	summary.AttributionCoverage = attributionCoverage
+
+	signals, err := s.callFactsAttributionSignals(ctx)
+	if err != nil {
+		return nil, err
+	}
+	summary.CallFactsAttribution = signals
 
 	lastRun, err := s.latestSyncRun(ctx, `SELECT id, scope, sync_key, cursor, from_value, to_value, request_context, status, started_at, finished_at, records_seen, records_written, error_text FROM sync_runs ORDER BY started_at DESC, id DESC LIMIT 1`)
 	if err != nil {
@@ -4317,6 +4562,38 @@ func (s *Store) attributionCoverage(ctx context.Context) (AttributionCoverage, e
 		coverage.RecommendedNextAction = "Re-sync calls with exposed participant fields enabled; sync users for internal titles and Contact/Lead CRM context for durable external person titles."
 	}
 	return coverage, nil
+}
+
+// callFactsAttributionSignals reports the call_facts-derived attribution
+// signals that business-analysis tools rely on (account industry, opportunity
+// stage, lifecycle classification). These signals reflect the curated
+// read-model rather than the upstream CRM integration inventory; readiness
+// reporting must use them so deployments where call_context_fields or
+// crm_integrations are pruned/redacted but call_facts is fully materialized
+// still report ready instead of falsely zeroed.
+func (s *Store) callFactsAttributionSignals(ctx context.Context) (CallFactsAttributionSignals, error) {
+	var signals CallFactsAttributionSignals
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(SUM(CASE WHEN TRIM(account_industry) <> '' THEN 1 ELSE 0 END), 0) AS account_industry_call_count,
+       COALESCE(SUM(CASE WHEN TRIM(opportunity_stage) <> '' THEN 1 ELSE 0 END), 0) AS opportunity_stage_call_count,
+       COALESCE(SUM(CASE WHEN lifecycle_bucket IS NOT NULL AND lifecycle_bucket NOT IN ('', 'unknown') THEN 1 ELSE 0 END), 0) AS lifecycle_classified_call_count,
+       COALESCE(SUM(CASE WHEN opportunity_count > 0 THEN 1 ELSE 0 END), 0) AS opportunity_call_count,
+       COALESCE(SUM(CASE WHEN account_count > 0 THEN 1 ELSE 0 END), 0) AS account_call_count
+  FROM call_facts`).Scan(
+		&signals.AccountIndustryCallCount,
+		&signals.OpportunityStageCallCount,
+		&signals.LifecycleClassifiedCallCount,
+		&signals.OpportunityCallCount,
+		&signals.AccountCallCount,
+	); err != nil {
+		return CallFactsAttributionSignals{}, err
+	}
+	signals.HasAnyAttributionSignal = signals.AccountIndustryCallCount > 0 ||
+		signals.OpportunityStageCallCount > 0 ||
+		signals.LifecycleClassifiedCallCount > 0 ||
+		signals.OpportunityCallCount > 0 ||
+		signals.AccountCallCount > 0
+	return signals, nil
 }
 
 func (s *Store) CacheInventory(ctx context.Context) (*CacheInventory, error) {
@@ -4500,6 +4777,7 @@ func (s *Store) profileReadiness(ctx context.Context) (ProfileReadiness, error) 
 	readiness.MethodologyConceptCount = len(p.Methodology)
 	readiness.WarningCount = len(warnings)
 	readiness.UnavailableConcepts = profileUnavailableConcepts(p, "")
+	readiness.Checklist = EvaluateProfileReadinessChecklist(p)
 
 	fingerprint, err := s.profileDataFingerprint(ctx)
 	if err != nil {
@@ -4539,33 +4817,51 @@ SELECT canonical_sha256, data_fingerprint
 	return readiness, nil
 }
 
+// BuildPublicReadiness exposes the sqlite-internal readiness derivation so
+// the Postgres backend can reuse it instead of inlining a partial copy.
+// gong_status callers expect the same shape regardless of backend; the only
+// per-backend difference is how the underlying counters are populated.
+func BuildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
+	return buildPublicReadiness(summary)
+}
+
 func buildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
 	out := PublicReadiness{
 		ConversationVolume: readinessFlag(summary.TotalCalls > 0, "ready", "blocked", "Cached call metadata is available for aggregate conversation volume questions.", "Sync calls first with gongctl sync calls --preset business."),
 		TranscriptCoverage: transcriptCoverageReadiness(summary),
 		ScorecardThemes:    readinessFlag(summary.TotalScorecards > 0, "ready", "needs_settings", "Cached scorecards can support coaching-theme and QA inventory questions.", "Run gongctl sync settings to cache scorecard definitions."),
 	}
-	if summary.TotalEmbeddedCRMFields > 0 {
+	// Attribution / segmentation readiness derives from any of:
+	//   - embedded CRM call_context_fields (writer/dev SQLite cache),
+	//   - curated call_facts signals (industry / opportunity_stage /
+	//     lifecycle_classified) — these stay populated in the redacted
+	//     Postgres serving DB even when call_context_fields and CRM
+	//     integration inventory are intentionally pruned/empty.
+	// Falling back to call_facts here is what keeps Postgres gong_status
+	// from misreporting blocked/needs_crm_context when business-analysis
+	// tools can in fact answer attribution questions.
+	hasCRMSegmentationSignal := summary.TotalEmbeddedCRMFields > 0 || summary.CallFactsAttribution.HasAnyAttributionSignal
+	if hasCRMSegmentationSignal {
 		out.CRMSegmentation = ReadinessFlag{
 			Ready:  true,
 			Status: "ready",
-			Detail: "Embedded CRM context from synced calls is available for metadata-only segmentation, even if CRM integration/schema inventory has not been synced.",
+			Detail: "Embedded CRM context or curated call_facts signals are available for metadata-only segmentation, even if CRM integration/schema inventory has not been synced.",
 		}
 		out.AttributionReadiness = ReadinessFlag{
 			Ready:  summary.ProfileReadiness.Active && summary.ProfileReadiness.Status == "ready",
 			Status: "partial",
-			Detail: "Embedded CRM context is available for attribution-readiness checks; tenant-specific field mapping may still be needed for precise attribution concepts.",
+			Detail: "Cached attribution signals (call_facts and/or embedded CRM context) are available; tenant-specific field mapping may still be needed for precise attribution concepts.",
 			Requirements: []string{
 				"review unmapped CRM fields and import a business profile for tenant-specific attribution concepts",
 			},
 		}
 		if out.AttributionReadiness.Ready {
 			out.AttributionReadiness.Status = "ready"
-			out.AttributionReadiness.Detail = "Embedded CRM context and a ready active profile are available for attribution-readiness checks."
+			out.AttributionReadiness.Detail = "Cached attribution signals and a ready active profile are available for attribution-readiness checks."
 			out.AttributionReadiness.Requirements = nil
 		}
 	} else {
-		out.CRMSegmentation = readinessFlag(false, "ready", "needs_crm_context", "Embedded CRM context is available for metadata-only segmentation.", "Run gongctl sync calls --preset business so call CRM context is cached.")
+		out.CRMSegmentation = readinessFlag(false, "ready", "needs_crm_context", "Embedded CRM context or curated call_facts signals are needed for metadata-only segmentation.", "Run gongctl sync calls --preset business so call CRM context is cached.")
 		out.AttributionReadiness = readinessFlag(false, "ready", "needs_crm_context", "Attribution readiness needs cached CRM context before field availability can be assessed.", "Run gongctl sync calls --preset business and then inspect CRM/profile readiness.")
 	}
 
@@ -4575,7 +4871,7 @@ func buildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
 			Status: "ready",
 			Detail: "A reviewed active profile is available for tenant-specific lifecycle separation.",
 		}
-	} else if summary.TotalEmbeddedCRMFields > 0 {
+	} else if hasCRMSegmentationSignal {
 		out.LifecycleSeparation = ReadinessFlag{
 			Ready:  false,
 			Status: "partial",
@@ -4590,7 +4886,10 @@ func buildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
 		out.LifecycleSeparation = readinessFlag(false, "ready", "needs_crm_context", "Lifecycle separation needs CRM context and, for tenant-specific accuracy, an imported profile.", "Sync calls with --preset business and import a reviewed profile.")
 	}
 
-	if summary.TotalEmbeddedCRMFields > 0 && (summary.TotalCRMIntegrations == 0 || summary.TotalCRMSchemaFields == 0) {
+	switch {
+	case summary.TotalEmbeddedCRMFields == 0 && summary.CallFactsAttribution.HasAnyAttributionSignal:
+		out.CRMInventoryNote = "CRM integration/schema inventory and call_context_fields may be empty in the redacted serving DB, but curated call_facts attribution signals (industry, opportunity stage, lifecycle) are populated. Treat zero CRM inventory counts as inventory-only signals, not readiness blockers."
+	case summary.TotalEmbeddedCRMFields > 0 && (summary.TotalCRMIntegrations == 0 || summary.TotalCRMSchemaFields == 0):
 		out.CRMInventoryNote = "Embedded CRM context from call sync is present separately from CRM integration/schema inventory. Zero CRM integrations or schema fields does not mean call CRM context is missing."
 	}
 	out.RecommendedNextAction = recommendedNextAction(summary, out)
@@ -4629,7 +4928,7 @@ func recommendedNextAction(summary *SyncStatusSummary, readiness PublicReadiness
 	switch {
 	case summary.TotalCalls == 0:
 		return "Run gongctl sync calls --preset business to cache call metadata and embedded CRM context."
-	case summary.TotalEmbeddedCRMFields == 0:
+	case summary.TotalEmbeddedCRMFields == 0 && !summary.CallFactsAttribution.HasAnyAttributionSignal:
 		return "Re-run call sync with --preset business so embedded CRM context is available for segmentation and lifecycle readiness."
 	case !readiness.TranscriptCoverage.Ready:
 		return "Use gongctl analyze transcript-backlog to prioritize External/Conference customer conversations before broad transcript sync."
@@ -5253,38 +5552,7 @@ func decodeTranscript(raw json.RawMessage) (*transcriptPayload, error) {
 }
 
 func extractContextObjects(raw json.RawMessage) ([]contextObjectRow, bool, error) {
-	normalized, err := normalizeJSON(raw)
-	if err != nil {
-		return nil, false, err
-	}
-
-	var root map[string]any
-	if err := json.Unmarshal(normalized, &root); err != nil {
-		return nil, false, err
-	}
-
-	type candidate struct {
-		name  string
-		value any
-	}
-
-	var candidates []candidate
-	for _, key := range []string{"context", "crmContext", "crm", "extendedContext", "crmObjects", "objects"} {
-		value, ok := root[key]
-		if !ok {
-			continue
-		}
-		candidates = append(candidates, candidate{name: key, value: value})
-	}
-	if len(candidates) == 0 {
-		return nil, false, nil
-	}
-
-	var objects []contextObjectRow
-	for _, candidate := range candidates {
-		objects = append(objects, collectContextObjects(candidate.name, candidate.value)...)
-	}
-	return objects, true, nil
+	return contextmodel.Extract(raw)
 }
 
 func collectContextObjects(defaultType string, value any) []contextObjectRow {
@@ -5756,6 +6024,44 @@ func normalizeJSONValue(value any) ([]byte, error) {
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func StableCallRef(callID string) string {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(callID))
+	return "call_ref_" + hex.EncodeToString(sum[:])[:12]
+}
+
+func StableCallRefMatchesCallID(normalizedRef, callID string) bool {
+	normalizedRef = strings.TrimSpace(normalizedRef)
+	callID = strings.TrimSpace(callID)
+	if normalizedRef == "" || callID == "" {
+		return false
+	}
+	if StableCallRef(callID) == normalizedRef {
+		return true
+	}
+	md5Sum := md5.Sum([]byte(callID))
+	sanitizedToken := hex.EncodeToString(md5Sum[:])
+	return StableCallRef(sanitizedToken) == normalizedRef
+}
+
+func NormalizeStableCallRef(ref string) (string, error) {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if !strings.HasPrefix(ref, "call_ref_") {
+		return "", errors.New("call_ref must start with call_ref_")
+	}
+	suffix := strings.TrimPrefix(ref, "call_ref_")
+	if len(suffix) != 12 {
+		return "", errors.New("call_ref must include a 12-character hash suffix")
+	}
+	if _, err := hex.DecodeString(suffix); err != nil {
+		return "", errors.New("call_ref suffix must be hexadecimal")
+	}
+	return ref, nil
 }
 
 func nowUTC() string {

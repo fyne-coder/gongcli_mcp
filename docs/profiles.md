@@ -56,11 +56,22 @@ reviewed profile is imported.
 
    ```bash
    gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
+   gongctl profile validate --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml --ga-readiness
    gongctl profile import --db ~/gongctl-data/gong.db --profile ~/gongctl-data/gongctl-profile.yaml
    gongctl profile show --db ~/gongctl-data/gong.db
    ```
 
-6. Use profile-aware CLI or MCP analysis. `auto` uses the active profile when present and falls back to builtin compatibility behavior otherwise.
+   The first validation command preserves the normal backwards-compatible
+   behavior: it emits a JSON report and exits successfully for syntactically
+   valid profiles even when readiness findings are warnings. The
+   `--ga-readiness` flag is the CI/operator gate for customer deployments. It
+   still emits the JSON report, but exits non-zero when the profile is invalid
+   or when the mechanical readiness checklist has blocking findings:
+   CreatedDate-only field concepts, missing required lifecycle buckets,
+   methodology unmapped, or loss-reason mapping missing. `--strict-readiness`
+   is accepted as an alias.
+
+6. Use profile-aware CLI or MCP analysis. `auto` uses the active profile when present and falls back to builtin compatibility behavior otherwise. For Postgres read-only MCP/CLI users, an active profile also requires a fresh profile fact cache; stale or missing cache state fails closed until a writable operator runs `gongctl sync read-model --rebuild` or a writable profile import/activate refreshes it.
 
    ```bash
    gongctl analyze calls --db ~/gongctl-data/gong.db --group-by lifecycle --lifecycle-source auto
@@ -214,9 +225,12 @@ core lifecycle buckets without reviewer evidence.
 `gongctl profile schema` prints a generated JSON Schema for less technical
 RevOps handoff and editor validation. `gongctl profile validate` remains the
 authoritative machine check because it also validates mappings against the
-current tenant cache inventory. It writes a JSON report; automation that needs a
-semantic pass/fail gate should inspect the report's `valid` field before
-importing.
+current tenant cache inventory. It writes a JSON report. Automation that needs a
+basic syntax/mapping check can inspect the report's `valid` field. Automation
+that gates customer-facing Postgres deployments should run
+`gongctl profile validate --ga-readiness` and treat any non-zero exit as a
+deployment blocker until the JSON `findings` or
+`ga_readiness.blocking_findings` are resolved.
 
 Common validation failures:
 
@@ -234,6 +248,11 @@ Review checklist:
 - Confirm the CRM object names match the tenant's actual Gong CRM context.
 - Confirm `deal_stage` points to the real pipeline stage field, not a created
   date, owner, type, or unrelated status field.
+- Confirm loss/close reason, competitor, amount, close date, opportunity type,
+  forecast category, account industry, and participant/contact title mappings
+  when the customer expects outcome, targeting, or persona questions. If those
+  fields are absent or sparsely populated in the source CRM, MCP reports that as
+  a readiness limitation instead of deriving the value from transcript text.
 - Confirm `post_sales` rules identify real customers, renewals, support,
   success, or implementation conversations rather than active new-logo deals.
 - Confirm `closed_won` and `closed_lost` values match the tenant's exact CRM

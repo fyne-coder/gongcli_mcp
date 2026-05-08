@@ -19,6 +19,7 @@ import (
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 	"github.com/fyne-coder/gongcli_mcp/internal/version"
 )
@@ -34,7 +35,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	dbPath := flags.String("db", "", "Path to the local gongctl SQLite cache")
 	transcriptEvidenceProvenance := flags.String("transcript-evidence-provenance", envDefault("GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE", "redacted"), "Transcript evidence provenance mode: redacted, alias, or raw")
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
-	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-pilot, operator-smoke, analyst, governance-search, all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-workbench (recommended client surface; alias of analyst-facade), analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly (internal manual testing only), broad-public-redacted (customer-test broad surface; same fail-closed gates as redacted-all-readonly), all-readonly; defaults to GONGMCP_TOOL_PRESET")
+	policySwitchesFlag := flags.String("policy-switches", "", "Comma-separated customer-policy switches for the broad-public-redacted profile (hide_account_names, hide_call_titles, hide_raw_call_ids, hide_speaker_ids, hide_contact_names, hide_contact_emails, hide_opportunity_names, hide_loss_reasons, hide_crm_value_snippets); reload contract is restart_required; defaults to GONGMCP_POLICY_SWITCHES")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -47,6 +49,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
+	enforceToolScopedDBGrants := flags.Bool("enforce-tool-scoped-db-grants", false, "For Postgres MCP, validate reader function EXECUTE grants against the selected tool preset/allowlist; defaults to GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")
+	printPostgresReaderGrants := flags.Bool("print-postgres-reader-grants", false, "Compatibility helper: print reviewed Postgres reader grant SQL for --tool-preset business-pilot and exit; canonical operator command is gongctl mcp postgres-reader-sql")
+	postgresReaderRole := flags.String("postgres-reader-role", "gongmcp_business_pilot_reader", "Postgres role name used by --print-postgres-reader-grants")
+	postgresDatabase := flags.String("postgres-database", "gongctl", "Postgres database name used by --print-postgres-reader-grants")
 	maxSearchResults := flags.Int("max-search-results", 0, "Maximum rows for MCP search-style tools; defaults to GONGMCP_MAX_SEARCH_RESULTS or 100, hard-capped at 1000")
 	maxCRMFields := flags.Int("max-crm-fields", 0, "Maximum rows for MCP CRM field inventory tools; defaults to GONGMCP_MAX_CRM_FIELDS or 200, hard-capped at 1000")
 	maxLateStageSignals := flags.Int("max-late-stage-signals", 0, "Maximum rows for late-stage signal analysis; defaults to GONGMCP_MAX_LATE_STAGE_SIGNALS or 100, hard-capped at 500")
@@ -81,30 +87,59 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	db := strings.TrimSpace(*dbPath)
-	if db == "" {
-		fmt.Fprintln(stderr, "--db is required")
-		return 2
-	}
-	if _, err := os.Stat(db); err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(stderr, "db file not found: %s\n", filepath.Clean(db))
-			return 2
-		}
-		fmt.Fprintf(stderr, "stat db: %v\n", err)
-		return 1
-	}
+	postgresURL := postgres.URLFromEnv(os.Getenv)
+	postgresMode := db == "" && postgresURL != ""
 
-	allowlist, err := resolveToolAllowlist(toolSelection{
+	toolSelection := toolSelection{
 		AllowlistFlag:    *toolAllowlist,
 		AllowlistFlagSet: flagSet["tool-allowlist"],
 		PresetFlag:       *toolPreset,
 		PresetFlagSet:    flagSet["tool-preset"],
 		AllowlistEnv:     os.Getenv("GONGMCP_TOOL_ALLOWLIST"),
 		PresetEnv:        os.Getenv("GONGMCP_TOOL_PRESET"),
-	})
+	}
+	allowlist, err := resolveToolAllowlist(toolSelection)
 	if err != nil {
 		fmt.Fprintf(stderr, "invalid tool selection: %v\n", err)
 		return 2
+	}
+	selectedPreset := selectedToolPresetName(toolSelection)
+	facadeRoutedAllowlist, err := mcp.ExpandToolPresetFacadeRoutedTools(selectedPreset)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid facade routed tool selection: %v\n", err)
+		return 2
+	}
+	if postgresMode || *printPostgresReaderGrants {
+		postgresHTTPMode := !*forceStdio && firstNonEmpty(*httpAddr, os.Getenv("GONGMCP_HTTP_ADDR")) != ""
+		allowlist, err = postgresToolAllowlist(allowlist, postgresHTTPMode, selectedPreset)
+		if err != nil {
+			fmt.Fprintf(stderr, "invalid postgres tool selection: %v\n", err)
+			return 2
+		}
+	}
+	if *printPostgresReaderGrants {
+		sql, err := buildPostgresReaderGrantSQL(readerGrantAllowlist(allowlist, facadeRoutedAllowlist), *postgresReaderRole, *postgresDatabase)
+		if err != nil {
+			fmt.Fprintf(stderr, "print postgres reader grants: %v\n", err)
+			return 2
+		}
+		if _, err := io.WriteString(stdout, sql); err != nil {
+			fmt.Fprintf(stderr, "print postgres reader grants: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	enforceScopedDBGrants := *enforceToolScopedDBGrants || truthy(os.Getenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"))
+	redactedServingDB := truthy(os.Getenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB"))
+	if postgresMode && postgresRedactedAllReadonlyPreset(selectedPreset) {
+		if !redactedServingDB {
+			fmt.Fprintln(stderr, "invalid postgres tool selection: redacted-all-readonly requires GONGMCP_POSTGRES_REDACTED_SERVING_DB=1")
+			return 2
+		}
+		if !enforceScopedDBGrants {
+			fmt.Fprintln(stderr, "invalid postgres tool selection: redacted-all-readonly requires GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1")
+			return 2
+		}
 	}
 	limitPolicy, err := resolveLimitPolicy(limitSelection{
 		SearchResults:              *maxSearchResults,
@@ -140,58 +175,194 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	policySwitchInput := firstNonEmpty(*policySwitchesFlag, os.Getenv("GONGMCP_POLICY_SWITCHES"))
+	parsedPolicySwitches, err := mcp.ParsePolicySwitches(policySwitchInput)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid policy switches: %v\n", err)
+		return 2
+	}
+	policySwitches := parsedPolicySwitches
+	if postgresBroadPublicRedactedPreset(selectedPreset) {
+		policySwitches = mcp.MergePolicySwitches(mcp.BroadPublicRedactedDefaultPolicySwitches(), parsedPolicySwitches)
+	}
+	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
+	if postgresMode && postgresBroadPublicRedactedPreset(selectedPreset) && governanceConfigPath == "" {
+		fmt.Fprintln(stderr, "invalid postgres tool selection: broad-public-redacted requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so the blocklist is enforced for client deployments")
+		return 2
+	}
+	if redactedServingDB && governanceConfigPath == "" {
+		fmt.Fprintln(stderr, "redacted Postgres serving DB mode requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so account-name probes can be gated by the same restricted-name policy used to build the serving DB")
+		return 2
+	}
 
 	ctx := context.Background()
-	store, err := sqlite.OpenReadOnly(ctx, db)
-	if err != nil {
-		fmt.Fprintf(stderr, "open db: %v\n", err)
-		return 1
-	}
-	defer store.Close()
-
-	serverOptions := []mcp.ServerOption{mcp.WithToolAllowlist(allowlist), mcp.WithLimitPolicy(limitPolicy), mcp.WithTranscriptEvidenceProvenance(provenance)}
-	if configPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG")); configPath != "" {
-		if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
-			fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
+	var store mcp.Store
+	var governanceStore governance.CandidateStore
+	var postgresStore *postgres.Store
+	var closeStore func() error
+	if postgresMode {
+		readOnlyOptions := postgres.ReadOnlyOptions{}
+		if enforceScopedDBGrants {
+			readOnlyOptions = postgresReadOnlyOptionsForAllowlist(readerGrantAllowlist(allowlist, facadeRoutedAllowlist))
+			if governanceConfigPath != "" && !redactedServingDB {
+				readOnlyOptions.RequiredFunctionSignatures = append(readOnlyOptions.RequiredFunctionSignatures, postgresGovernanceFunctionSignatures()...)
+				readOnlyOptions.AllowedFunctionSignatures = append(readOnlyOptions.AllowedFunctionSignatures, postgresGovernanceFunctionSignatures()...)
+			}
+		}
+		readOnlyOptions.AllowAccountQuery = redactedServingDB
+		pgStore, err := postgres.OpenReadOnlyWithOptions(ctx, postgresURL, readOnlyOptions)
+		if err != nil {
+			fmt.Fprintf(stderr, "open postgres db: %v\n", err)
+			return 1
+		}
+		store = pgStore
+		postgresStore = pgStore
+		closeStore = pgStore.Close
+		fmt.Fprintf(stderr, "postgres backend active: read-only MCP exposes %s\n", strings.Join(allowlist, ","))
+	} else {
+		if db == "" {
+			fmt.Fprintln(stderr, "--db is required")
 			return 2
+		}
+		if _, err := os.Stat(db); err != nil {
+			if os.IsNotExist(err) {
+				fmt.Fprintf(stderr, "db file not found: %s\n", filepath.Clean(db))
+				return 2
+			}
+			fmt.Fprintf(stderr, "stat db: %v\n", err)
+			return 1
+		}
+		sqliteStore, err := sqlite.OpenReadOnly(ctx, db)
+		if err != nil {
+			fmt.Fprintf(stderr, "open db: %v\n", err)
+			return 1
+		}
+		store = sqliteStore
+		governanceStore = sqliteStore
+		closeStore = sqliteStore.Close
+	}
+	defer closeStore()
+
+	buildInfo := version.Current()
+	serverOptions := []mcp.ServerOption{
+		mcp.WithToolAllowlist(allowlist),
+		mcp.WithFacadeRoutedToolAllowlist(facadeRoutedAllowlist),
+		mcp.WithLimitPolicy(limitPolicy),
+		mcp.WithTranscriptEvidenceProvenance(provenance),
+		mcp.WithRuntimeInfo(mcp.RuntimeInfo{
+			Commit:       buildInfo.Commit,
+			BuildDate:    buildInfo.Date,
+			ToolPreset:   selectedPreset,
+			DeploymentID: os.Getenv("GONGMCP_DEPLOYMENT_ID"),
+			StartedAtUTC: time.Now().UTC().Format(time.RFC3339),
+		}),
+		mcp.WithPolicySwitches(policySwitches),
+	}
+	if min := postgresAnalystSmallCellMin(postgresMode, selectedPreset, enforceScopedDBGrants); min > 1 {
+		serverOptions = append(serverOptions, mcp.WithBusinessAnalysisSmallCellMin(min))
+	}
+	if governanceConfigPath != "" {
+		configPath := governanceConfigPath
+		if !redactedServingDB {
+			if err := mcp.ValidateGovernanceAllowlist(allowlist); err != nil {
+				fmt.Fprintf(stderr, "invalid AI governance MCP allowlist: %v\n", err)
+				return 2
+			}
 		}
 		cfg, err := governance.LoadFile(configPath)
 		if err != nil {
 			fmt.Fprintln(stderr, "load AI governance config: failed")
 			return 2
 		}
-		snapshot, err := governance.Snapshot(ctx, configPath, store)
-		if err != nil {
-			fmt.Fprintln(stderr, "snapshot AI governance state: failed")
-			return 1
-		}
-		audit, err := governance.BuildAudit(ctx, store, cfg)
-		if err != nil {
-			fmt.Fprintln(stderr, "audit AI governance config: failed")
-			return 1
-		}
-		if len(audit.UnmatchedEntries) > 0 && !(*allowUnmatchedAIGovernance || truthy(os.Getenv("GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE"))) {
-			fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", len(audit.UnmatchedEntries))
-			return 2
-		}
-		serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(audit.SuppressedCallIDs))
-		serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
-			current, err := governance.Snapshot(checkCtx, configPath, store)
+		serverOptions = append(serverOptions, mcp.WithRestrictedAccountQueryTerms(governanceRestrictedAccountTerms(cfg)))
+		serverOptions = append(serverOptions, mcp.WithBlocklistGuard(governance.NewBlocklistGuardFromConfig(cfg)))
+		if postgresMode && redactedServingDB {
+			fmt.Fprintf(stderr, "AI governance active: backend=postgres_redacted_serving restricted_account_terms=%d; source governance state is not read in redacted serving mode\n", len(governanceRestrictedAccountTerms(cfg)))
+		} else if postgresMode {
+			if postgresStore == nil {
+				fmt.Fprintln(stderr, "open postgres governance state: failed")
+				return 1
+			}
+			state, err := postgresStore.LoadGovernancePolicy(ctx, cfg.Fingerprint())
 			if err != nil {
-				return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				fmt.Fprintln(stderr, "load Postgres AI governance policy: failed; run GONG_DATABASE_URL=<writer-url> gongctl governance audit --config <same-ai-governance.yaml> --apply-postgres-policy, then restart gongmcp")
+				return 2
 			}
-			if current != snapshot {
-				return fmt.Errorf("AI governance state changed; restart gongmcp")
+			currentFingerprint, err := postgresStore.GovernanceDataFingerprint(ctx)
+			if err != nil {
+				fmt.Fprintln(stderr, "snapshot Postgres AI governance state: failed")
+				return 1
 			}
-			return nil
-		}))
-		fmt.Fprintf(stderr, "AI governance active: entries=%d aliases=%d matched=%d unmatched=%d suppressed_calls=%d; restart gongmcp after cache or config changes\n",
-			audit.ConfigEntries,
-			audit.ConfigAliases,
-			len(audit.MatchedEntries),
-			len(audit.UnmatchedEntries),
-			audit.SuppressedCallCount,
-		)
+			if currentFingerprint != state.DataFingerprint {
+				fmt.Fprintln(stderr, "Postgres AI governance policy is stale; run GONG_DATABASE_URL=<writer-url> gongctl governance audit --config <same-ai-governance.yaml> --apply-postgres-policy, then restart gongmcp")
+				return 2
+			}
+			if state.UnmatchedEntries > 0 && !(*allowUnmatchedAIGovernance || truthy(os.Getenv("GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE"))) {
+				fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", state.UnmatchedEntries)
+				return 2
+			}
+			if !redactedServingDB {
+				serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(state.SuppressedCallIDs))
+			}
+			serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
+				current, err := postgresStore.GovernanceDataFingerprint(checkCtx)
+				if err != nil {
+					return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				}
+				nextState, err := postgresStore.LoadGovernancePolicy(checkCtx, cfg.Fingerprint())
+				if err != nil {
+					return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				}
+				if current != state.DataFingerprint || nextState.DataFingerprint != state.DataFingerprint || nextState.UpdatedAt != state.UpdatedAt || nextState.SuppressedCallCount != state.SuppressedCallCount {
+					return fmt.Errorf("AI governance state changed; restart gongmcp")
+				}
+				return nil
+			}))
+			fmt.Fprintf(stderr, "AI governance active: backend=postgres entries=%d aliases=%d matched=%d unmatched=%d suppressed_calls=%d; restart gongmcp after cache, policy, or config changes\n",
+				state.ConfigEntries,
+				state.ConfigAliases,
+				state.MatchedEntries,
+				state.UnmatchedEntries,
+				state.SuppressedCallCount,
+			)
+		} else {
+			if governanceStore == nil {
+				fmt.Fprintln(stderr, "AI governance config is not supported without a governance-capable store")
+				return 2
+			}
+			snapshot, err := governance.Snapshot(ctx, configPath, governanceStore)
+			if err != nil {
+				fmt.Fprintln(stderr, "snapshot AI governance state: failed")
+				return 1
+			}
+			audit, err := governance.BuildAudit(ctx, governanceStore, cfg)
+			if err != nil {
+				fmt.Fprintln(stderr, "audit AI governance config: failed")
+				return 1
+			}
+			if len(audit.UnmatchedEntries) > 0 && !(*allowUnmatchedAIGovernance || truthy(os.Getenv("GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE"))) {
+				fmt.Fprintf(stderr, "AI governance config has %d unmatched entries; run gongctl governance audit locally, add aliases, or set --allow-unmatched-ai-governance for this cache\n", len(audit.UnmatchedEntries))
+				return 2
+			}
+			serverOptions = append(serverOptions, mcp.WithSuppressedCallIDs(audit.SuppressedCallIDs))
+			serverOptions = append(serverOptions, mcp.WithGovernanceCheck(func(checkCtx context.Context) error {
+				current, err := governance.Snapshot(checkCtx, configPath, governanceStore)
+				if err != nil {
+					return fmt.Errorf("AI governance state changed or cannot be verified; restart gongmcp")
+				}
+				if current != snapshot {
+					return fmt.Errorf("AI governance state changed; restart gongmcp")
+				}
+				return nil
+			}))
+			fmt.Fprintf(stderr, "AI governance active: entries=%d aliases=%d matched=%d unmatched=%d suppressed_calls=%d; restart gongmcp after cache or config changes\n",
+				audit.ConfigEntries,
+				audit.ConfigAliases,
+				len(audit.MatchedEntries),
+				len(audit.UnmatchedEntries),
+				audit.SuppressedCallCount,
+			)
+		}
 	}
 
 	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), serverOptions...)
@@ -227,6 +398,256 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(presetName)) {
+	case "all-readonly", "all-tools", "all":
+		return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", presetName)
+	case "analyst", "analyst-expansion":
+		reviewed := postgresReviewedAnalystTools()
+		if !sameStringSet(allowlist, reviewed) {
+			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres analyst preset", presetName)
+		}
+		return reviewed, nil
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab":
+		reviewed := mcp.PostgresRedactedAllReadonlyToolNames()
+		if !sameStringSet(allowlist, reviewed) {
+			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres redacted all-readonly preset", presetName)
+		}
+		return reviewed, nil
+	case "broad-public-redacted":
+		reviewed := mcp.PostgresRedactedAllReadonlyToolNames()
+		if !sameStringSet(allowlist, reviewed) {
+			return nil, fmt.Errorf("%s includes tools that have not been reviewed for the postgres broad-public-redacted preset", presetName)
+		}
+		return reviewed, nil
+	case "governance-search":
+		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
+	}
+	if postgresGovernanceSearchPreset(allowlist) {
+		return []string{"search_calls", "get_call", "search_transcript_segments", "rank_transcript_backlog"}, nil
+	}
+	supported := map[string]struct{}{
+		"analyze_late_stage_crm_signals":            {},
+		"gong_analyze":                              {},
+		"gong_discover_capabilities":                {},
+		"gong_explain_limitations":                  {},
+		"gong_get_evidence":                         {},
+		"gong_query":                                {},
+		"gong_status":                               {},
+		"get_sync_status":                           {},
+		"get_business_profile":                      {},
+		"get_scorecard":                             {},
+		"get_call":                                  {},
+		"list_business_concepts":                    {},
+		"list_cached_crm_schema_fields":             {},
+		"list_cached_crm_schema_objects":            {},
+		"list_crm_fields":                           {},
+		"list_crm_integrations":                     {},
+		"list_crm_object_types":                     {},
+		"list_gong_settings":                        {},
+		"list_lifecycle_buckets":                    {},
+		"list_scorecards":                           {},
+		"list_unmapped_crm_fields":                  {},
+		"missing_transcripts":                       {},
+		"crm_field_population_matrix":               {},
+		"compare_lifecycle_crm_fields":              {},
+		"opportunity_call_summary":                  {},
+		"opportunities_missing_transcripts":         {},
+		"prioritize_transcripts_by_lifecycle":       {},
+		"rank_transcript_backlog":                   {},
+		"search_calls":                              {},
+		"search_calls_by_lifecycle":                 {},
+		"search_crm_field_values":                   {},
+		"search_transcript_segments":                {},
+		"search_transcript_quotes_with_attribution": {},
+		"search_transcripts_by_call_facts":          {},
+		"search_transcripts_by_crm_context":         {},
+		"summarize_scorecard_activity":              {},
+		"summarize_call_facts":                      {},
+		"summarize_calls_by_lifecycle":              {},
+		"build_call_cohort":                         {},
+		"inspect_call_cohort":                       {},
+		"list_call_cohorts":                         {},
+		"compare_call_cohorts":                      {},
+		"search_calls_by_filters":                   {},
+		"summarize_calls_by_filters":                {},
+		"search_transcripts_by_filters":             {},
+		"discover_themes_in_cohort":                 {},
+		"summarize_themes_by_dimension":             {},
+		"compare_themes_over_time":                  {},
+		"compare_themes_by_segment":                 {},
+		"extract_theme_quotes":                      {},
+		"search_quotes_in_cohort":                   {},
+		"rank_quotes_for_sales_use":                 {},
+		"build_quote_pack":                          {},
+		"compare_theme_outcomes":                    {},
+		"summarize_pipeline_progression_by_theme":   {},
+		"summarize_loss_reasons_by_theme":           {},
+		"compare_won_lost_theme_patterns":           {},
+		"summarize_themes_by_persona":               {},
+		"summarize_themes_by_industry":              {},
+		"rank_personas_by_insight_quality":          {},
+		"diagnose_attribution_coverage":             {},
+		"generate_sales_hooks_from_themes":          {},
+		"generate_outreach_sequence_inputs":         {},
+		"recommend_target_personas_and_industries":  {},
+		"build_theme_brief":                         {},
+		"score_cohort_evidence_quality":             {},
+		"explain_analysis_limitations":              {},
+		"suggest_filter_refinements":                {},
+	}
+	if len(allowlist) == 0 {
+		if httpMode {
+			return nil, fmt.Errorf("postgres HTTP mode requires explicit --tool-preset, --tool-allowlist, GONGMCP_TOOL_PRESET, or GONGMCP_TOOL_ALLOWLIST")
+		}
+		return []string{"get_sync_status", "search_calls", "search_transcript_segments"}, nil
+	}
+	for _, name := range allowlist {
+		if _, ok := supported[name]; !ok {
+			return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", name)
+		}
+	}
+	return allowlist, nil
+}
+
+func postgresRedactedAllReadonlyPreset(presetName string) bool {
+	switch strings.ToLower(strings.TrimSpace(presetName)) {
+	case "redacted-all-readonly", "redacted-all", "redacted-search-lab",
+		"broad-public-redacted":
+		return true
+	default:
+		return false
+	}
+}
+
+// postgresBroadPublicRedactedPreset reports whether the selected preset is
+// the customer-test broad-public-redacted preset specifically. It shares the
+// fail-closed gates of redacted-all-readonly but additionally locks raw call
+// IDs off by default and accepts customer-policy switches.
+func postgresBroadPublicRedactedPreset(presetName string) bool {
+	return mcp.IsBroadPublicRedactedPreset(presetName)
+}
+
+func postgresReviewedAnalystTools() []string {
+	return []string{
+		"get_sync_status",
+		"list_crm_object_types",
+		"list_crm_fields",
+		"get_business_profile",
+		"list_business_concepts",
+		"list_unmapped_crm_fields",
+		"analyze_late_stage_crm_signals",
+		"opportunities_missing_transcripts",
+		"search_transcripts_by_crm_context",
+		"opportunity_call_summary",
+		"crm_field_population_matrix",
+		"list_lifecycle_buckets",
+		"summarize_calls_by_lifecycle",
+		"prioritize_transcripts_by_lifecycle",
+		"compare_lifecycle_crm_fields",
+		"summarize_call_facts",
+		"rank_transcript_backlog",
+		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
+		"search_transcript_quotes_with_attribution",
+		"list_scorecards",
+		"get_scorecard",
+		"build_call_cohort",
+		"inspect_call_cohort",
+		"list_call_cohorts",
+		"compare_call_cohorts",
+		"search_calls_by_filters",
+		"summarize_calls_by_filters",
+		"search_transcripts_by_filters",
+		"discover_themes_in_cohort",
+		"summarize_themes_by_dimension",
+		"compare_themes_over_time",
+		"compare_themes_by_segment",
+		"extract_theme_quotes",
+		"search_quotes_in_cohort",
+		"rank_quotes_for_sales_use",
+		"build_quote_pack",
+		"compare_theme_outcomes",
+		"summarize_pipeline_progression_by_theme",
+		"summarize_loss_reasons_by_theme",
+		"compare_won_lost_theme_patterns",
+		"summarize_themes_by_persona",
+		"summarize_themes_by_industry",
+		"rank_personas_by_insight_quality",
+		"diagnose_attribution_coverage",
+		"generate_sales_hooks_from_themes",
+		"generate_outreach_sequence_inputs",
+		"recommend_target_personas_and_industries",
+		"build_theme_brief",
+		"score_cohort_evidence_quality",
+		"explain_analysis_limitations",
+		"suggest_filter_refinements",
+	}
+}
+
+func postgresGovernanceSearchPreset(allowlist []string) bool {
+	if len(allowlist) == 0 {
+		return false
+	}
+	governanceTools, err := mcp.ExpandToolPreset("governance-search")
+	if err != nil || len(governanceTools) != len(allowlist) {
+		return false
+	}
+	seen := make(map[string]int, len(governanceTools))
+	for _, name := range governanceTools {
+		seen[name]++
+	}
+	for _, name := range allowlist {
+		seen[name]--
+		if seen[name] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, item := range a {
+		seen[item]++
+	}
+	for _, item := range b {
+		seen[item]--
+		if seen[item] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func postgresReadOnlyOptionsForAllowlist(allowlist []string) postgres.ReadOnlyOptions {
+	return postgres.ReadOnlyOptionsForToolAllowlist(allowlist)
+}
+
+func buildPostgresReaderGrantSQL(allowlist []string, roleName, databaseName string) (string, error) {
+	sql, err := postgres.BuildScopedReaderGrantSQL(postgres.ScopedReaderGrantSQLParams{
+		Allowlist:    allowlist,
+		RoleName:     roleName,
+		DatabaseName: databaseName,
+		Generator:    "gongmcp --print-postgres-reader-grants",
+	})
+	if err != nil {
+		errText := err.Error()
+		errText = strings.Replace(errText, "scoped reader grant SQL", "--print-postgres-reader-grants", 1)
+		errText = strings.Replace(errText, "invalid role name", "invalid --postgres-reader-role", 1)
+		errText = strings.Replace(errText, "invalid database name", "invalid --postgres-database", 1)
+		return "", fmt.Errorf("%s", errText)
+	}
+	return sql, nil
+}
+
+func postgresGovernanceFunctionSignatures() []string {
+	return postgres.GovernanceFunctionSignatures()
 }
 
 type toolSelection struct {
@@ -327,6 +748,38 @@ func resolveToolAllowlist(selection toolSelection) ([]string, error) {
 		return nil, fmt.Errorf("empty tool selection")
 	}
 	return nil, nil
+}
+
+func selectedToolPresetName(selection toolSelection) string {
+	if preset := strings.TrimSpace(selection.PresetFlag); preset != "" {
+		return preset
+	}
+	if strings.TrimSpace(selection.AllowlistFlag) != "" {
+		return ""
+	}
+	if preset := strings.TrimSpace(selection.PresetEnv); preset != "" && strings.TrimSpace(selection.AllowlistEnv) == "" {
+		return preset
+	}
+	return ""
+}
+
+func postgresAnalystSmallCellMin(postgresMode bool, presetName string, enforceScopedDBGrants bool) int {
+	if !postgresMode || !enforceScopedDBGrants {
+		return 0
+	}
+	switch strings.ToLower(strings.TrimSpace(presetName)) {
+	case "analyst", "analyst-expansion", "analyst-facade", "facade-analyst", "business-workbench":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func readerGrantAllowlist(visible []string, facadeRouted []string) []string {
+	if len(facadeRouted) > 0 {
+		return facadeRouted
+	}
+	return visible
 }
 
 type getenvFunc func(string) string
@@ -534,13 +987,15 @@ func httpHandler(server *mcp.Server, cfg httpConfig, accessLog io.Writer) http.H
 			return
 		}
 		_ = json.NewEncoder(w).Encode(struct {
-			Status  string `json:"status"`
-			Service string `json:"service"`
-			Version string `json:"version"`
+			Status    string                `json:"status"`
+			Service   string                `json:"service"`
+			Version   string                `json:"version"`
+			MCPServer mcp.PublicRuntimeInfo `json:"mcp_server"`
 		}{
-			Status:  "ok",
-			Service: "gongmcp",
-			Version: version.DisplayVersion(),
+			Status:    "ok",
+			Service:   "gongmcp",
+			Version:   version.DisplayVersion(),
+			MCPServer: server.RuntimeInfo(),
 		})
 	})
 	return mux
@@ -752,6 +1207,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func governanceRestrictedAccountTerms(cfg *governance.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	targets := cfg.Targets()
+	terms := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if strings.TrimSpace(target.Normalized) != "" {
+			terms = append(terms, target.Normalized)
+		}
+	}
+	return terms
 }
 
 func envDefault(name, fallback string) string {

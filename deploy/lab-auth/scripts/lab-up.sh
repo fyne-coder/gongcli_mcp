@@ -7,7 +7,14 @@ umask 077
 LAB_VM="${LAB_VM:-}"
 LAB_PUBLIC_BASE_URL="${LAB_PUBLIC_BASE_URL:-}"
 LAB_DB="${LAB_DB:-}"
+LAB_GONGMCP_IMAGE="${LAB_GONGMCP_IMAGE:-}"
+LAB_GONG_DATABASE_URL="${LAB_GONG_DATABASE_URL:-${GONG_DATABASE_URL:-}}"
 LAB_TOOL_PRESET="${LAB_TOOL_PRESET:-${GONGMCP_TOOL_PRESET:-business-pilot}}"
+LAB_GONGMCP_DEPLOYMENT_ID="${LAB_GONGMCP_DEPLOYMENT_ID:-${GONGMCP_DEPLOYMENT_ID:-lab-$(date -u +%Y%m%dT%H%M%SZ)}}"
+LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS="${LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS:-${GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS:-}}"
+LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB="${LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB:-${GONGMCP_POSTGRES_REDACTED_SERVING_DB:-}}"
+LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST="${LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-${GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-}}"
+LAB_GONGMCP_POLICY_SWITCHES="${LAB_GONGMCP_POLICY_SWITCHES:-${GONGMCP_POLICY_SWITCHES:-}}"
 LAB_APPROVED_EMAIL="${LAB_APPROVED_EMAIL:-approved-user@example.test}"
 LAB_SECONDARY_EMAIL="${LAB_SECONDARY_EMAIL:-secondary-user@example.test}"
 LAB_BLOCKED_EMAIL="${LAB_BLOCKED_EMAIL:-blocked-user@example.test}"
@@ -53,7 +60,7 @@ set_env_value() {
   local key="$2"
   local value="$3"
   if grep -q "^${key}=" "$file" 2>/dev/null; then
-    awk -F= -v key="$key" -v value="$value" 'BEGIN {OFS = FS} $1 == key {$2 = value} {print}' "$file" >"$file.next"
+    awk -F= -v key="$key" -v value="$value" '$1 == key {print key "=" value; next} {print}' "$file" >"$file.next"
     mv "$file.next" "$file"
   else
     printf '%s=%s\n' "$key" "$value" >>"$file"
@@ -66,7 +73,9 @@ require scp
 require openssl
 require_env LAB_VM
 require_env LAB_PUBLIC_BASE_URL
-require_env LAB_DB
+if [[ -z "$LAB_GONG_DATABASE_URL" ]]; then
+  require_env LAB_DB
+fi
 
 case "$LAB_VM" in
   -*|*[[:space:]]*)
@@ -84,8 +93,28 @@ case "$REMOTE_ROOT" in
     exit 2
     ;;
 esac
+case "$LAB_GONGMCP_IMAGE" in
+	*\'*|*\"*|*[\;\`\$[:space:]]*)
+		echo "LAB_GONGMCP_IMAGE contains unsupported shell metacharacters or whitespace" >&2
+		exit 2
+		;;
+esac
+case "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST" in
+	""|/*) ;;
+	*) echo "LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST must be an absolute remote path" >&2; exit 2 ;;
+esac
+case "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST" in
+	*\'*|*\"*|*[\;\`\$[:space:]]*)
+		echo "LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST contains unsupported shell metacharacters or whitespace" >&2
+		exit 2
+		;;
+esac
+if [[ "$LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB" == "1" && -z "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST" ]]; then
+	echo "LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST is required when LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB=1" >&2
+	exit 1
+fi
 
-if [[ ! -f "$LAB_DB" ]]; then
+if [[ -n "$LAB_DB" && ! -f "$LAB_DB" ]]; then
   echo "lab DB not found: $LAB_DB" >&2
   exit 1
 fi
@@ -95,6 +124,10 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 ssh "$LAB_VM" "set -e; apt-get update >/dev/null; DEBIAN_FRONTEND=noninteractive apt-get install -y rsync curl jq >/dev/null; mkdir -p '$REMOTE_ROOT'/runtime '$REMOTE_ROOT'/secrets '$REMOTE_ROOT'/logs '$REMOTE_ROOT'/compose"
 ssh "$LAB_VM" "ufw allow from 172.16.0.0/12 to any port 80 proto tcp >/dev/null || true"
+
+if ssh "$LAB_VM" "test -f '$REMOTE_LAB/.env'"; then
+  scp "$LAB_VM:$REMOTE_LAB/.env" "$tmpdir/.env" >/dev/null
+fi
 
 COPYFILE_DISABLE=1 tar --no-xattrs -C "$ROOT" \
   --exclude .git \
@@ -107,11 +140,11 @@ COPYFILE_DISABLE=1 tar --no-xattrs -C "$ROOT" \
   -czf - . \
 | ssh "$LAB_VM" "rm -rf '$REMOTE_SOURCE' && mkdir -p '$REMOTE_SOURCE' && tar -xzf - -C '$REMOTE_SOURCE'"
 
-scp "$LAB_DB" "$LAB_VM:$REMOTE_ROOT/runtime/gong-mcp-governed.db" >/dev/null
+if [[ -n "$LAB_DB" ]]; then
+  scp "$LAB_DB" "$LAB_VM:$REMOTE_ROOT/runtime/gong-mcp-governed.db" >/dev/null
+fi
 
-if ssh "$LAB_VM" "test -f '$REMOTE_LAB/.env'"; then
-  scp "$LAB_VM:$REMOTE_LAB/.env" "$tmpdir/.env" >/dev/null
-else
+if [[ ! -f "$tmpdir/.env" ]]; then
   cat >"$tmpdir/.env" <<EOF
 LAB_PUBLIC_BASE_URL=$LAB_PUBLIC_BASE_URL
 REMOTE_ROOT=$REMOTE_ROOT
@@ -128,6 +161,21 @@ LAB_SECONDARY_PASSWORD=$(rand_b64 18)
 EOF
 fi
 set_env_value "$tmpdir/.env" GONGMCP_TOOL_PRESET "$LAB_TOOL_PRESET"
+set_env_value "$tmpdir/.env" GONGMCP_DEPLOYMENT_ID "$LAB_GONGMCP_DEPLOYMENT_ID"
+set_env_value "$tmpdir/.env" GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS "$LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"
+set_env_value "$tmpdir/.env" GONGMCP_POSTGRES_REDACTED_SERVING_DB "$LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB"
+set_env_value "$tmpdir/.env" GONGMCP_POLICY_SWITCHES "$LAB_GONGMCP_POLICY_SWITCHES"
+set_env_value "$tmpdir/.env" LAB_GONGMCP_IMAGE "$LAB_GONGMCP_IMAGE"
+set_env_value "$tmpdir/.env" GONG_DATABASE_URL "$LAB_GONG_DATABASE_URL"
+if [[ -n "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST" ]]; then
+	set_env_value "$tmpdir/.env" GONGMCP_AI_GOVERNANCE_CONFIG "/run/secrets/ai-governance.yaml"
+	set_env_value "$tmpdir/.env" GONGMCP_AI_GOVERNANCE_CONFIG_MOUNT "$REMOTE_ROOT/secrets/ai-governance.yaml"
+	set_env_value "$tmpdir/.env" GONGMCP_AI_GOVERNANCE_CONFIG_HOST "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST"
+else
+	set_env_value "$tmpdir/.env" GONGMCP_AI_GOVERNANCE_CONFIG ""
+	set_env_value "$tmpdir/.env" GONGMCP_AI_GOVERNANCE_CONFIG_MOUNT "$REMOTE_ROOT/secrets/ai-governance-placeholder.yaml"
+	set_env_value "$tmpdir/.env" GONGMCP_AI_GOVERNANCE_CONFIG_HOST ""
+fi
 set_env_value "$tmpdir/.env" LAB_PUBLIC_BASE_URL "$LAB_PUBLIC_BASE_URL"
 set_env_value "$tmpdir/.env" REMOTE_ROOT "$REMOTE_ROOT"
 set_env_value "$tmpdir/.env" LAB_APPROVED_EMAIL "$LAB_APPROVED_EMAIL"
@@ -188,22 +236,60 @@ set -euo pipefail
 if [ ! -f '$REMOTE_ROOT/secrets/gongmcp_token' ]; then
   openssl rand -hex 32 > '$REMOTE_ROOT/secrets/gongmcp_token'
 fi
+governance_source=\$(awk -F= '\$1 == \"GONGMCP_AI_GOVERNANCE_CONFIG_HOST\" {print substr(\$0, length(\$1) + 2)}' '$REMOTE_LAB/.env')
+governance_mount=\$(awk -F= '\$1 == \"GONGMCP_AI_GOVERNANCE_CONFIG_MOUNT\" {print substr(\$0, length(\$1) + 2)}' '$REMOTE_LAB/.env')
+governance_runtime=\$(awk -F= '\$1 == \"GONGMCP_AI_GOVERNANCE_CONFIG\" {print substr(\$0, length(\$1) + 2)}' '$REMOTE_LAB/.env')
+if [ -n \"\$governance_runtime\" ]; then
+  if [ ! -r \"\$governance_source\" ]; then
+    echo \"AI governance config source is not readable: \$governance_source\" >&2
+    exit 1
+  fi
+  install -m 0400 -o 65532 -g 65532 \"\$governance_source\" \"\$governance_mount\"
+  if [ ! -r \"\$governance_mount\" ]; then
+    echo \"AI governance config mount is not readable: \$governance_mount\" >&2
+    exit 1
+  fi
+else
+  : > \"\$governance_mount\"
+fi
 chown 65532:65532 '$REMOTE_ROOT/secrets/gongmcp_token'
 chmod 400 '$REMOTE_ROOT/secrets/gongmcp_token'
-DOCKER_BUILDKIT=1 docker build --target mcp -t gongctl:mcp-local '$REMOTE_SOURCE'
+if [ -n '$LAB_GONGMCP_IMAGE' ]; then
+  docker pull '$LAB_GONGMCP_IMAGE' >/dev/null
+else
+  DOCKER_BUILDKIT=1 docker build --target mcp -t gongctl:mcp-local '$REMOTE_SOURCE'
+fi
 cd '$REMOTE_LAB'
-docker-compose down -v >/dev/null
+for postgres_container in gongctl-lab-postgres-governed gongctl-lab-postgres; do
+  if docker ps --format '{{.Names}}' | grep -qx \"\$postgres_container\"; then
+    docker network disconnect lab-auth_default \"\$postgres_container\" >/dev/null 2>&1 || true
+  fi
+done
+docker-compose down -v >/dev/null || true
 docker-compose up -d --build
+for postgres_container in gongctl-lab-postgres-governed gongctl-lab-postgres; do
+  if docker ps --format '{{.Names}}' | grep -qx \"\$postgres_container\"; then
+    docker network connect lab-auth_default \"\$postgres_container\" >/dev/null 2>&1 || true
+  fi
+done
+docker-compose restart gongmcp >/dev/null
+keycloak_ready=0
 for _ in \$(seq 1 60); do
   if docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh config credentials \
     --server http://127.0.0.1:8080 \
     --realm master \
     --user admin \
     --password \"\$(awk -F= '\$1 == \"KEYCLOAK_ADMIN_PASSWORD\" {print substr(\$0, length(\$1) + 2)}' .env)\" >/dev/null 2>&1; then
+    keycloak_ready=1
     break
   fi
   sleep 2
 done
+if [ \"\$keycloak_ready\" != \"1\" ]; then
+  echo \"Keycloak admin login did not become ready; check preserved keycloak-data volume or KEYCLOAK_ADMIN_PASSWORD\" >&2
+  docker-compose logs --tail=80 keycloak >&2 || true
+  exit 1
+fi
 for name in 'Trusted Hosts' 'Allowed Client Scopes' 'Allowed Protocol Mapper Types' 'Consent Required' 'Full Scope Disabled'; do
   ids=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get components \
     -r gong-lab \

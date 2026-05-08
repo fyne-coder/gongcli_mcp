@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
 
 const (
@@ -29,18 +31,27 @@ type SyncResult struct {
 	Failed     int
 	Requests   int
 	BatchSize  int
+	Skipped    int
 }
 
-func SyncMissing(ctx context.Context, client *gong.Client, store *sqlite.Store, outDir string, limit int) (result SyncResult, err error) {
+func SyncMissing(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, outDir string, limit int) (result SyncResult, err error) {
 	return SyncMissingWithBatch(ctx, client, store, outDir, limit, defaultBatchSize)
 }
 
-func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store *sqlite.Store, outDir string, limit int, batchSize int) (result SyncResult, err error) {
+func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, outDir string, limit int, batchSize int) (result SyncResult, err error) {
+	return syncMissingWithBatch(ctx, client, store, outDir, limit, batchSize, nil)
+}
+
+func SyncMissingWithBatchGoverned(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, outDir string, limit int, batchSize int, cfg *governance.Config) (result SyncResult, err error) {
+	return syncMissingWithBatch(ctx, client, store, outDir, limit, batchSize, cfg)
+}
+
+func syncMissingWithBatch(ctx context.Context, client *gong.Client, store storeiface.TranscriptStore, outDir string, limit int, batchSize int, cfg *governance.Config) (result SyncResult, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	outDir = strings.TrimSpace(outDir)
 	if outDir == "" {
@@ -58,7 +69,7 @@ func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store *sqlit
 	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
 		Scope:          scopeTranscripts,
 		SyncKey:        transcriptSyncKey,
-		RequestContext: fmt.Sprintf("limit=%d,batch_size=%d", limit, batchSize),
+		RequestContext: transcriptRequestContext(limit, batchSize, cfg),
 	})
 	if err != nil {
 		return result, err
@@ -92,6 +103,12 @@ func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store *sqlit
 		return result, err
 	}
 	result.Considered = len(missing)
+	if cfg != nil {
+		missing, result.Skipped, err = filterGovernedTranscriptCandidates(ctx, store, missing, cfg, run.ID)
+		if err != nil {
+			return result, err
+		}
+	}
 
 	for _, batch := range transcriptBatches(missing, batchSize) {
 		callIDs := make([]string, 0, len(batch))
@@ -134,6 +151,44 @@ func SyncMissingWithBatch(ctx context.Context, client *gong.Client, store *sqlit
 		return result, fmt.Errorf("transcript sync completed with %d failures", result.Failed)
 	}
 	return result, nil
+}
+
+func transcriptRequestContext(limit int, batchSize int, cfg *governance.Config) string {
+	context := fmt.Sprintf("limit=%d,batch_size=%d", limit, batchSize)
+	if cfg != nil {
+		context += ",governance_config_sha256=" + cfg.Fingerprint()
+	}
+	return context
+}
+
+func filterGovernedTranscriptCandidates(ctx context.Context, store storeiface.TranscriptStore, calls []sqlite.MissingTranscriptCall, cfg *governance.Config, runID int64) ([]sqlite.MissingTranscriptCall, int, error) {
+	filtered := make([]sqlite.MissingTranscriptCall, 0, len(calls))
+	skipped := 0
+	for _, call := range calls {
+		raw, err := store.CallRawJSON(ctx, call.CallID)
+		if err != nil {
+			return nil, skipped, fmt.Errorf("load call payload for transcript governance %s: %w", call.CallID, err)
+		}
+		decision, err := governance.EvaluateCallPayload(raw, cfg)
+		if err != nil {
+			return nil, skipped, err
+		}
+		if !decision.Skip {
+			filtered = append(filtered, call)
+			continue
+		}
+		if err := store.RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+			CallID:         decision.CallID,
+			ConfigSHA256:   cfg.Fingerprint(),
+			MatchedList:    strings.Join(decision.MatchedLists, ","),
+			SourceCategory: decision.SourceCategory,
+			RunID:          runID,
+		}); err != nil {
+			return nil, skipped, err
+		}
+		skipped++
+	}
+	return filtered, skipped, nil
 }
 
 func normalizeBatchSize(batchSize int) int {

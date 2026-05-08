@@ -93,6 +93,107 @@ func TestListCallsIncludesExtendedContext(t *testing.T) {
 	}
 }
 
+func TestListCallsExposesPartiesAndHighlights(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode returned error: %v", err)
+		}
+		contentSelector, ok := body["contentSelector"].(map[string]any)
+		if !ok {
+			t.Fatalf("contentSelector missing: %#v", body)
+		}
+		exposed, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", contentSelector)
+		}
+		if exposed["parties"] != true {
+			t.Fatalf("exposedFields.parties=%v want true", exposed["parties"])
+		}
+		assertSpotlightContentSelector(t, exposed)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"calls":[],"records":{"currentPageSize":0}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Options{
+		BaseURL: server.URL,
+		Credentials: auth.Credentials{
+			AccessKey:       "key",
+			AccessKeySecret: "secret",
+		},
+		MaxRetries: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.ListCalls(context.Background(), CallListParams{
+		Context:          "Extended",
+		ExposeParties:    true,
+		ExposeHighlights: true,
+	}); err != nil {
+		t.Fatalf("ListCalls returned error: %v", err)
+	}
+}
+
+func TestListCallsExposesHighlightsOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode returned error: %v", err)
+		}
+		contentSelector, ok := body["contentSelector"].(map[string]any)
+		if !ok {
+			t.Fatalf("contentSelector missing: %#v", body)
+		}
+		exposed, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", contentSelector)
+		}
+		assertSpotlightContentSelector(t, exposed)
+		if _, hasParties := exposed["parties"]; hasParties {
+			t.Fatalf("exposedFields.parties unexpectedly present: %#v", exposed)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"calls":[],"records":{"currentPageSize":0}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Options{
+		BaseURL: server.URL,
+		Credentials: auth.Credentials{
+			AccessKey:       "key",
+			AccessKeySecret: "secret",
+		},
+		MaxRetries: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewClient returned error: %v", err)
+	}
+
+	if _, err := client.ListCalls(context.Background(), CallListParams{ExposeHighlights: true}); err != nil {
+		t.Fatalf("ListCalls returned error: %v", err)
+	}
+}
+
+func assertSpotlightContentSelector(t *testing.T, exposed map[string]any) {
+	t.Helper()
+
+	if _, hasLegacyHighlights := exposed["highlights"]; hasLegacyHighlights {
+		t.Fatalf("exposedFields must use content selector, got legacy highlights=true: %#v", exposed)
+	}
+	content, ok := exposed["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("exposedFields.content missing: %#v", exposed)
+	}
+	for _, field := range []string{"brief", "callOutcome", "highlights", "keyPoints", "outline"} {
+		if content[field] != true {
+			t.Fatalf("exposedFields.content.%s=%v want true; content=%#v", field, content[field], content)
+		}
+	}
+}
+
 func TestListAnsweredScorecardsUsesOfficialContractShape(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/stats/activity/scorecards" {

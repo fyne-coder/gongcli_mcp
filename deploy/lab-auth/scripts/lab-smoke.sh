@@ -103,6 +103,7 @@ LAB_BLOCKED_PASSWORD="$(remote_env LAB_BLOCKED_PASSWORD)"
 LAB_SECONDARY_PASSWORD="$(remote_env LAB_SECONDARY_PASSWORD)"
 GONGMCP_TOOL_PRESET="$(remote_env GONGMCP_TOOL_PRESET)"
 GONGMCP_TOOL_PRESET="${GONGMCP_TOOL_PRESET:-business-pilot}"
+GONGMCP_DEPLOYMENT_ID="$(remote_env GONGMCP_DEPLOYMENT_ID)"
 if [[ -z "$OIDC_CLIENT_SECRET" || -z "$LAB_APPROVED_EMAIL" || -z "$LAB_SECONDARY_EMAIL" || -z "$LAB_BLOCKED_EMAIL" || -z "$LAB_APPROVED_PASSWORD" || -z "$LAB_BLOCKED_PASSWORD" || -z "$LAB_SECONDARY_PASSWORD" ]]; then
   echo "remote lab .env is missing required lab auth values; redeploy with lab-up.sh" >&2
   exit 1
@@ -112,7 +113,13 @@ wait_for_url "$LAB_PUBLIC_BASE_URL/healthz"
 wait_for_url "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration"
 
 echo "== healthz =="
-curl -fsS "$LAB_PUBLIC_BASE_URL/healthz" | jq .
+health_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/healthz")"
+echo "$health_response" | jq .
+echo "$health_response" | jq -e '.mcp_server.name == "gongmcp"' >/dev/null
+echo "$health_response" | jq --arg preset "$GONGMCP_TOOL_PRESET" -e '.mcp_server.tool_preset == $preset' >/dev/null
+if [[ -n "$GONGMCP_DEPLOYMENT_ID" ]]; then
+  echo "$health_response" | jq --arg deployment_id "$GONGMCP_DEPLOYMENT_ID" -e '.mcp_server.deployment_id == $deployment_id' >/dev/null
+fi
 
 echo "== OAuth protected resource metadata =="
 metadata_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource")"
@@ -312,17 +319,61 @@ tools_response="$(curl -fsS \
   --data '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
   "$LAB_PUBLIC_BASE_URL/mcp")"
 echo "$tools_response" | jq '.result.tools[].name'
-echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
+status_tool=get_sync_status
 case "$GONGMCP_TOOL_PRESET" in
+  business-workbench|analyst-facade|facade-analyst)
+    status_tool=gong_status
+    for tool in gong_status gong_discover_capabilities gong_query gong_analyze gong_get_evidence gong_explain_limitations; do
+      echo "$tools_response" | jq --arg tool "$tool" -e '.result.tools[].name | select(. == $tool)' >/dev/null
+    done
+    if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status" or . == "search_calls" or . == "get_call")' >/dev/null; then
+      echo "unexpected non-facade tool exposed by $GONGMCP_TOOL_PRESET" >&2
+      exit 1
+    fi
+    ;;
   business-pilot|strict-business-pilot)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
     if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_segments")' >/dev/null; then
       echo "unexpected non-business-pilot tool exposed: search_transcript_segments" >&2
       exit 1
     fi
     ;;
+  analyst-core|postgres-analyst-core)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_crm_object_types")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_crm_fields")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_segments")' >/dev/null
+    if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort" or . == "list_scorecards" or . == "search_crm_field_values")' >/dev/null; then
+      echo "unexpected full analyst/all-readonly tool exposed by analyst-core" >&2
+      exit 1
+    fi
+    ;;
+  analyst-business-core|postgres-analyst-business-core)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcripts_by_call_facts")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcript_quotes_with_attribution")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_transcripts_by_filters")' >/dev/null
+    if echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_scorecards" or . == "search_crm_field_values")' >/dev/null; then
+      echo "unexpected all-readonly tool exposed by analyst-business-core" >&2
+      exit 1
+    fi
+    ;;
   analyst|analyst-expansion|all-readonly|all|all-tools)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls_by_filters")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_theme_brief")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_scorecards")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_scorecard")' >/dev/null
+    ;;
+  redacted-all-readonly|redacted-all|redacted-search-lab|broad-public-redacted)
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_sync_status")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_calls")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "get_call")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "search_crm_field_values")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "list_gong_settings")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "summarize_scorecard_activity")' >/dev/null
+    echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_call_cohort")' >/dev/null
     echo "$tools_response" | jq -e '.result.tools[].name | select(. == "build_theme_brief")' >/dev/null
     ;;
   *)
@@ -331,15 +382,25 @@ case "$GONGMCP_TOOL_PRESET" in
 esac
 
 echo "== ChatGPT-style tools/call _meta is accepted =="
+meta_request="$(jq -n --arg tool "$status_tool" '{
+  jsonrpc: "2.0",
+  id: 3,
+  method: "tools/call",
+  params: {
+    name: $tool,
+    arguments: {_meta: {"openai/userAgent": "chatgpt-connector"}},
+    _meta: {progressToken: "lab-smoke"}
+  }
+}')"
 meta_status_response="$(curl -fsS \
   -H "Authorization: Bearer $approved_token" \
   -H "Origin: $LAB_PUBLIC_BASE_URL" \
   -H "Content-Type: application/json" \
-  --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sync_status","arguments":{"_meta":{"openai/userAgent":"chatgpt-connector"}},"_meta":{"progressToken":"lab-smoke"}}}' \
+  --data "$meta_request" \
   "$LAB_PUBLIC_BASE_URL/mcp")"
-echo "$meta_status_response" | jq '.result.content[0].text | fromjson | {total_calls,total_transcripts,missing_transcripts}'
+echo "$meta_status_response" | jq '.result.content[0].text | fromjson | if has("total_calls") then {total_calls,total_transcripts,missing_transcripts} else .result | {total_calls,total_transcripts,missing_transcripts} end'
 echo "$meta_status_response" | jq -e '.error == null and (.result.isError // false | not)' >/dev/null
-echo "$meta_status_response" | jq -e '.result.content[0].text | fromjson | has("total_calls")' >/dev/null
+echo "$meta_status_response" | jq -e '.result.content[0].text | fromjson | has("total_calls") or (.result | has("total_calls"))' >/dev/null
 
 echo "== MCP container has no Gong credentials =="
 if ssh "$LAB_VM" "cd '$REMOTE_LAB' && docker-compose exec -T gongmcp env" | rg '^GONG_ACCESS_KEY|^GONG_ACCESS_KEY_SECRET|^GONG_BASE_URL'; then

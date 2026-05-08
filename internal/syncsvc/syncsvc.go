@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
 )
 
 const (
@@ -22,13 +24,15 @@ const (
 )
 
 type CallsParams struct {
-	From          string
-	To            string
-	Cursor        string
-	Context       string
-	Preset        string
-	MaxPages      int
-	ExposeParties bool
+	From             string
+	To               string
+	Cursor           string
+	Context          string
+	Preset           string
+	MaxPages         int
+	ExposeParties    bool
+	ExposeHighlights bool
+	Governance       *governance.Config
 }
 
 type UsersParams struct {
@@ -69,14 +73,15 @@ type Result struct {
 	RecordsSeen              int64
 	RecordsWritten           int64
 	ParticipantCaptureStatus string
+	RecordsSkipped           int64
 }
 
-func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store *sqlite.Store, params CRMIntegrationsParams) (result Result, err error) {
+func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store storeiface.CRMIntegrationStore, params CRMIntegrationsParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 
 	result.Scope = scopeCRMIntegrations
@@ -112,12 +117,12 @@ func SyncCRMIntegrations(ctx context.Context, client *gong.Client, store *sqlite
 	return result, nil
 }
 
-func SyncCRMSchema(ctx context.Context, client *gong.Client, store *sqlite.Store, params CRMSchemaParams) (result Result, err error) {
+func SyncCRMSchema(ctx context.Context, client *gong.Client, store storeiface.CRMSchemaStore, params CRMSchemaParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	integrationID := strings.TrimSpace(params.IntegrationID)
 	if integrationID == "" {
@@ -161,12 +166,12 @@ func SyncCRMSchema(ctx context.Context, client *gong.Client, store *sqlite.Store
 	return result, nil
 }
 
-func SyncSettings(ctx context.Context, client *gong.Client, store *sqlite.Store, params SettingsParams) (result Result, err error) {
+func SyncSettings(ctx context.Context, client *gong.Client, store storeiface.SettingsStore, params SettingsParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	kind, endpoint, rootKey, err := settingsEndpoint(params.Kind, params.WorkspaceID)
 	if err != nil {
@@ -210,12 +215,12 @@ func SyncSettings(ctx context.Context, client *gong.Client, store *sqlite.Store,
 	return result, nil
 }
 
-func SyncScorecardActivity(ctx context.Context, client *gong.Client, store *sqlite.Store, params ScorecardActivityParams) (result Result, err error) {
+func SyncScorecardActivity(ctx context.Context, client *gong.Client, store storeiface.ScorecardActivityStore, params ScorecardActivityParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	if strings.TrimSpace(params.CallFrom) == "" {
 		return result, errors.New("call from date is required")
@@ -301,12 +306,12 @@ func SyncScorecardActivity(ctx context.Context, client *gong.Client, store *sqli
 	}
 }
 
-func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, params CallsParams) (result Result, err error) {
+func SyncCalls(ctx context.Context, client *gong.Client, store storeiface.SyncStore, params CallsParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	if params.MaxPages < 0 {
 		return result, errors.New("max pages must be >= 0")
@@ -315,7 +320,12 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 	result.Scope = scopeCalls
 	result.SyncKey = buildSyncKey(scopeCalls, params.Preset, params.Context, params.From, params.To)
 	baseRequestContext := buildRequestContext(params.Preset, params.Context)
-	requestContext := buildCallRequestContext(baseRequestContext, params.ExposeParties, false)
+	governanceFingerprint := ""
+	if params.Governance != nil {
+		governanceFingerprint = params.Governance.Fingerprint()
+		baseRequestContext = appendRequestContextPart(baseRequestContext, "governance_config_sha256="+governanceFingerprint)
+	}
+	requestContext := buildCallRequestContext(baseRequestContext, params.ExposeParties, false, params.ExposeHighlights)
 	if params.ExposeParties {
 		result.ParticipantCaptureStatus = "requested"
 	}
@@ -358,11 +368,12 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 	}()
 
 	request := gong.CallListParams{
-		From:          strings.TrimSpace(params.From),
-		To:            strings.TrimSpace(params.To),
-		Cursor:        strings.TrimSpace(params.Cursor),
-		Context:       strings.TrimSpace(params.Context),
-		ExposeParties: params.ExposeParties,
+		From:             strings.TrimSpace(params.From),
+		To:               strings.TrimSpace(params.To),
+		Cursor:           strings.TrimSpace(params.Cursor),
+		Context:          strings.TrimSpace(params.Context),
+		ExposeParties:    params.ExposeParties,
+		ExposeHighlights: params.ExposeHighlights,
 	}
 
 	seenCursors := map[string]struct{}{}
@@ -375,7 +386,7 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 		if err != nil && request.ExposeParties && result.Pages == 0 && result.RecordsSeen == 0 && canRetryWithoutParties(err) {
 			request.ExposeParties = false
 			result.ParticipantCaptureStatus = "omitted_fallback"
-			requestContext = buildCallRequestContext(baseRequestContext, params.ExposeParties, true)
+			requestContext = buildCallRequestContext(baseRequestContext, params.ExposeParties, true, params.ExposeHighlights)
 			resp, err = client.ListCalls(ctx, request)
 		}
 		if err != nil {
@@ -390,7 +401,32 @@ func SyncCalls(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 		result.Pages++
 		result.RecordsSeen += int64(len(page.Items))
 		for _, raw := range page.Items {
+			if params.Governance != nil {
+				decision, err := governance.EvaluateCallPayload(raw, params.Governance)
+				if err != nil {
+					return result, err
+				}
+				if decision.Skip {
+					if err := store.RecordGovernanceIngestSkippedCallAndDeleteCachedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+						CallID:         decision.CallID,
+						ConfigSHA256:   governanceFingerprint,
+						MatchedList:    strings.Join(decision.MatchedLists, ","),
+						SourceCategory: decision.SourceCategory,
+						RunID:          run.ID,
+					}); err != nil {
+						return result, err
+					}
+					result.RecordsSkipped++
+					continue
+				}
+				if err := store.ClearGovernanceIngestSkippedCall(ctx, decision.CallID); err != nil {
+					return result, err
+				}
+			}
 			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				if params.Governance == nil && strings.Contains(err.Error(), "previously skipped by governance ingest") {
+					return result, fmt.Errorf("%w; rerun sync with --governance-config to re-evaluate or clear the governance ledger explicitly", err)
+				}
 				return result, err
 			}
 			result.RecordsWritten++
@@ -422,12 +458,12 @@ func canRetryWithoutParties(err error) bool {
 	return httpErr.StatusCode == 400 || httpErr.StatusCode == 422
 }
 
-func SyncUsers(ctx context.Context, client *gong.Client, store *sqlite.Store, params UsersParams) (result Result, err error) {
+func SyncUsers(ctx context.Context, client *gong.Client, store storeiface.SyncStore, params UsersParams) (result Result, err error) {
 	if client == nil {
 		return result, errors.New("gong client is required")
 	}
 	if store == nil {
-		return result, errors.New("sqlite store is required")
+		return result, errors.New("store is required")
 	}
 	if params.MaxPages < 0 {
 		return result, errors.New("max pages must be >= 0")
@@ -520,14 +556,14 @@ func SyncUsers(ctx context.Context, client *gong.Client, store *sqlite.Store, pa
 	}
 }
 
-func Status(ctx context.Context, store *sqlite.Store) (*sqlite.SyncStatusSummary, error) {
+func Status(ctx context.Context, store storeiface.SyncStatusReader) (*sqlite.SyncStatusSummary, error) {
 	if store == nil {
-		return nil, errors.New("sqlite store is required")
+		return nil, errors.New("store is required")
 	}
 	return store.SyncStatusSummary(ctx)
 }
 
-func finishRun(ctx context.Context, store *sqlite.Store, runID int64, result *Result, errp *error) {
+func finishRun(ctx context.Context, store storeiface.SyncRunStore, runID int64, result *Result, errp *error) {
 	status := "success"
 	errorText := ""
 	if *errp != nil {
@@ -718,19 +754,34 @@ func buildRequestContext(preset string, requestContext string) string {
 	return strings.Join(parts, ",")
 }
 
-func buildCallRequestContext(base string, includeParties bool, fallbackWithoutParties bool) string {
-	parts := make([]string, 0, 3)
+func appendRequestContextPart(base string, part string) string {
+	part = strings.TrimSpace(part)
+	if part == "" {
+		return strings.TrimSpace(base)
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return part
+	}
+	return base + "," + part
+}
+
+func buildCallRequestContext(base string, includeParties bool, fallbackWithoutParties bool, includeHighlights bool) string {
+	parts := make([]string, 0, 5)
 	if value := strings.TrimSpace(base); value != "" {
 		parts = append(parts, value)
 	}
-	if !includeParties {
-		return strings.Join(parts, ",")
+	if includeParties {
+		parts = append(parts, "include_parties_requested=true")
+		if fallbackWithoutParties {
+			parts = append(parts, "include_parties_result=omitted_fallback")
+		} else {
+			parts = append(parts, "include_parties_result=request_sent")
+		}
 	}
-	parts = append(parts, "include_parties_requested=true")
-	if fallbackWithoutParties {
-		parts = append(parts, "include_parties_result=omitted_fallback")
-	} else {
-		parts = append(parts, "include_parties_result=request_sent")
+	if includeHighlights {
+		parts = append(parts, "include_highlights_requested=true")
+		parts = append(parts, "include_highlights_result=request_sent")
 	}
 	return strings.Join(parts, ",")
 }

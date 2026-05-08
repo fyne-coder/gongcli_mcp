@@ -19,8 +19,9 @@ Use this worksheet before giving business users access to `gongmcp`.
 - Whether remote users receive a physically filtered MCP DB.
 - Sync job owner, schedule, and rollback path.
 - Image reference pinned by tag and, for production, digest.
-- Tool preset: `business-pilot`, `operator-smoke`, `analyst`,
-  `governance-search`, or `all-readonly`.
+- Tool preset: `business-workbench`, `business-pilot`, `operator-smoke`, `analyst-core`,
+  `analyst-business-core`, `analyst`, `governance-search`, or
+  `all-readonly`.
 - Bearer token location and rotation plan. Private bridge deployments can mount
   current and previous token files during rotation.
 - Allowed browser origins.
@@ -47,16 +48,22 @@ gongmcp --list-tool-presets
 
 | Profile | Tools | Use |
 | --- | --- | --- |
-| `business-pilot` | `get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog` | default business-user lane |
+| `business-workbench` | `gong_status,gong_discover_capabilities,gong_query,gong_analyze,gong_get_evidence,gong_explain_limitations` | recommended stable facade-only client MCP surface; use `gong_analyze` / `question.answer` for governed ad-hoc evidence packs |
+| `analyst-facade` | alias for `business-workbench` | backward-compatible wording alias |
+| `facade-analyst` | alias for `business-workbench` | backward-compatible wording alias |
+| `business-pilot` | `get_sync_status,summarize_call_facts,summarize_calls_by_lifecycle,rank_transcript_backlog` | legacy narrow aggregate/status pilot lane |
 | `strict-business-pilot` | alias for `business-pilot` | backward-compatible docs/scripts alias |
-| `operator-smoke` | `get_sync_status,search_calls,search_transcript_segments,rank_transcript_backlog` | operator-only install validation |
-| `analyst` | broader evidence surface excluding admin-only record lookup, CRM value search, Gong settings, scorecards, and schema inventory | trusted analyst sessions after sponsor approval |
+| `operator-smoke` | `get_sync_status,search_calls,search_transcript_segments,get_call,rank_transcript_backlog` | operator-only install validation |
+| `analyst-core` | core Postgres-supported call/profile/lifecycle/CRM-context inventory, cached CRM schema/settings inventory, scorecard inventory, and scorecard activity aggregate tools | reviewed Postgres analyst starter surface |
+| `analyst-business-core` | bounded Postgres transcript-evidence and business-analysis tools plus analyst-core tools | narrower reviewed Postgres analyst business-analysis surface |
+| `analyst` | broader approved evidence surface excluding admin-only record lookup, CRM value search, and unreviewed schema/settings/activity inventory | trusted SQLite or Postgres analyst sessions after sponsor approval |
 | `analyst-expansion` | alias for `analyst` | backward-compatible docs/scripts alias |
 | `governance-search` | governance-compatible search/snippet tools only | raw-DB AI governance fallback when a filtered DB is not available |
-| `all-readonly` | every current read-only MCP tool in `tools/list` | trusted single-user admin/analyst or fully reviewed filtered-DB deployments |
+| `all-readonly` | every current read-only MCP tool in `tools/list` | trusted SQLite single-user admin/analyst or fully reviewed SQLite filtered-DB deployments; Postgres still rejects this preset |
 
-Do not expose `operator-smoke`, `analyst`, `governance-search`, or
-`all-readonly` as the default business-user tool surface.
+Do not expose `operator-smoke`, `analyst-core`, `analyst-business-core`,
+`analyst`, `governance-search`, or `all-readonly` as the default business-user
+tool surface.
 
 ### Analyst Cohort Preset Guidance
 
@@ -94,9 +101,12 @@ Then verify that the selected deployment actually returns the expected tools in
 `tools/list`. If a tool is missing, stop and check the deployed binary version,
 image tag, preset, and allowlist before testing analyst prompts.
 
-Use `all-readonly` only when the analyst also needs every other read-only
-operator/admin tool. For most approved business analysis, prefer `analyst` plus
-safe per-tool defaults over `all-readonly`.
+Use `all-readonly` only when the SQLite analyst also needs every other
+read-only operator/admin tool. For most approved business analysis, prefer
+`analyst` plus safe per-tool defaults over `all-readonly`. For Postgres, use
+the reviewed `analyst` preset, narrower Postgres presets, or explicit
+allowlists; `all-readonly` remains intentionally rejected until full-catalog
+parity is complete.
 
 ## Smoke Tests
 

@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -68,6 +70,46 @@ func TestToolsListOnlyExposesExpectedReadOnlyTools(t *testing.T) {
 			if name == blocked {
 				t.Fatalf("unexpected tool %q exposed", blocked)
 			}
+		}
+	}
+}
+
+func TestToolsListSchemasUseObjectPropertiesRecord(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "init",
+		Method:  "initialize",
+		Params:  mustJSON(t, map[string]any{}),
+	})+requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "tools",
+		Method:  "tools/list",
+	}))
+
+	if len(responses) != 2 {
+		t.Fatalf("response count=%d want 2", len(responses))
+	}
+
+	var listed struct {
+		Result toolsListResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[1], &listed); err != nil {
+		t.Fatalf("unmarshal tools/list response: %v", err)
+	}
+
+	for _, item := range listed.Result.Tools {
+		props, ok := item.InputSchema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s inputSchema.properties=%T want object: %+v", item.Name, item.InputSchema["properties"], item.InputSchema)
+		}
+		if props == nil {
+			t.Fatalf("%s inputSchema.properties is nil", item.Name)
 		}
 	}
 }
@@ -230,6 +272,10 @@ func TestToolPresetCatalogAliasesAndGovernanceCompatibility(t *testing.T) {
 		"business-pilot",
 		"strict-business-pilot",
 		"operator-smoke",
+		"analyst-facade",
+		"facade-analyst",
+		"analyst-core",
+		"postgres-analyst-core",
 		"analyst",
 		"analyst-expansion",
 		"governance-search",
@@ -253,6 +299,20 @@ func TestToolPresetCatalogAliasesAndGovernanceCompatibility(t *testing.T) {
 	}
 	if err := ValidateGovernanceAllowlist([]string{"search_crm_field_values"}); err == nil {
 		t.Fatal("governance validator accepted unsafe tool")
+	}
+	operatorSmoke, err := ExpandToolPreset("operator-smoke")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(operator-smoke) returned error: %v", err)
+	}
+	hasGetCall := false
+	for _, tool := range operatorSmoke {
+		if tool == "get_call" {
+			hasGetCall = true
+			break
+		}
+	}
+	if !hasGetCall {
+		t.Fatalf("operator-smoke tools=%v missing get_call", operatorSmoke)
 	}
 
 	seen := map[string]ToolPresetInfo{}
@@ -436,6 +496,209 @@ func TestBusinessAnalysisToolsRedactDefaultsAndReportLimitations(t *testing.T) {
 	}
 }
 
+func TestSummarizeLossReasonsByThemeReturnsNormalizedBucketsAndHidesRaw(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openSeededStore(t)
+	defer store.Close()
+
+	type lossFixture struct {
+		callID string
+		title  string
+		raw    string
+		bucket string
+	}
+	fixtures := []lossFixture{
+		{callID: "call_loss_price", title: "Loss reason coverage call price", raw: "Price too high", bucket: "price"},
+		{callID: "call_loss_timing", title: "Loss reason coverage call timing", raw: "Timeline uncertainty", bucket: "timing"},
+		{callID: "call_loss_competitor", title: "Loss reason coverage call competitor", raw: "Lost to Competitor", bucket: "competitor"},
+		{callID: "call_loss_no_decision", title: "Loss reason coverage call no decision", raw: "No Decision", bucket: "no_decision"},
+		{callID: "call_loss_unknown", title: "Loss reason coverage call unknown", raw: "Internal build on hadoop cluster", bucket: "unknown_other"},
+	}
+	for _, f := range fixtures {
+		raw := mustJSON(t, map[string]any{
+			"id":       f.callID,
+			"title":    f.title,
+			"started":  "2026-02-20T15:00:00Z",
+			"duration": 1500,
+			"metaData": map[string]any{
+				"system":    "Zoom",
+				"direction": "Conference",
+				"scope":     "External",
+			},
+			"context": []any{
+				map[string]any{
+					"objectType": "Opportunity",
+					"id":         "opp_" + f.callID,
+					"fields": []any{
+						map[string]any{"name": "StageName", "value": "Closed Lost"},
+						map[string]any{"name": "LossReason", "value": f.raw},
+					},
+				},
+			},
+		})
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert loss-reason fixture %s: %v", f.callID, err)
+		}
+		if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+			"callTranscripts": []any{
+				map[string]any{
+					"callId": f.callID,
+					"transcript": []any{
+						map[string]any{
+							"speakerId": "buyer",
+							"sentences": []any{
+								map[string]any{"start": 1000, "end": 2500, "text": "Loss reason coverage discussion in this fixture."},
+							},
+						},
+					},
+				},
+			},
+		})); err != nil {
+			t.Fatalf("upsert loss-reason transcript %s: %v", f.callID, err)
+		}
+	}
+
+	for _, mode := range []struct {
+		name           string
+		hideLossReason bool
+	}{
+		{name: "default", hideLossReason: false},
+		{name: "hide_loss_reasons", hideLossReason: true},
+	} {
+		mode := mode
+		t.Run(mode.name, func(t *testing.T) {
+			opts := []ServerOption{}
+			if mode.hideLossReason {
+				opts = append(opts, WithPolicySwitches(PolicySwitches{HideLossReasons: true}))
+			}
+			server := NewServerWithOptions(store, "gongmcp", "test", opts...)
+			responses := runServer(t, server, requestFrame(Request{
+				JSONRPC: "2.0",
+				ID:      "loss",
+				Method:  "tools/call",
+				Params: mustJSON(t, map[string]any{
+					"name": "summarize_loss_reasons_by_theme",
+					"arguments": map[string]any{
+						"filter": map[string]any{
+							"title_query": "loss reason coverage",
+							"from_date":   "2026-01-01",
+							"to_date":     "2026-04-01",
+						},
+						"theme_query": "loss reason",
+						"limit":       50,
+					},
+				}),
+			}))
+
+			result := decodeBusinessAnalysisResult(t, responses[0])
+			if dim, _ := result["dimension"].(string); dim != "loss_reason" {
+				t.Fatalf("expected dimension=loss_reason, got %q in %+v", dim, result)
+			}
+			summaries := namedOrResultsArrayField(t, result, "summaries")
+			gotBuckets := map[string]int{}
+			rawText := mustJSONText(t, summaries)
+			for _, row := range summaries {
+				m, ok := row.(map[string]any)
+				if !ok {
+					continue
+				}
+				value := stringField(m, "value")
+				gotBuckets[value]++
+			}
+			for _, want := range []string{"price", "timing", "competitor", "no_decision", "unknown_other"} {
+				if gotBuckets[want] == 0 {
+					t.Fatalf("expected bucket %q in loss_reason summaries, got %+v", want, summaries)
+				}
+			}
+			for _, leak := range []string{"Price too high", "Timeline uncertainty", "Lost to Competitor", "No Decision", "Internal build on hadoop cluster"} {
+				if strings.Contains(rawText, leak) {
+					t.Fatalf("loss_reason summaries leaked raw value %q in %s", leak, rawText)
+				}
+			}
+			limitations := strings.ToLower(mustJSONText(t, result["limitations"]))
+			if !strings.Contains(limitations, "loss_reason_values_are_normalized_buckets_not_raw_text") {
+				t.Fatalf("expected normalized-bucket limitation, got %s", limitations)
+			}
+			if !strings.Contains(limitations, "raw_loss_reason_text_is_hidden_by_default_and_suppressed_when_hide_loss_reasons_is_enabled") {
+				t.Fatalf("expected hide-loss-reasons limitation, got %s", limitations)
+			}
+			warnings := strings.ToLower(mustJSONText(t, result["warnings"]))
+			if !strings.Contains(warnings, "deterministic normalized buckets") {
+				t.Fatalf("expected deterministic-buckets warning, got %s", warnings)
+			}
+			if mode.hideLossReason {
+				if !strings.Contains(warnings, "hide_loss_reasons_enforced") {
+					t.Fatalf("expected hide_loss_reasons_enforced warning when policy switch is enabled, got %s", warnings)
+				}
+			} else if strings.Contains(warnings, "hide_loss_reasons_enforced") {
+				t.Fatalf("did not expect hide_loss_reasons_enforced warning when policy switch is disabled, got %s", warnings)
+			}
+		})
+	}
+}
+
+func TestBusinessAnalysisSmallCellSuppressionOmitsLowCountDimensionBuckets(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithBusinessAnalysisSmallCellMin(3))
+	response := businessAnalysisResponse{
+		Tool:        "summarize_themes_by_persona",
+		Status:      "cache_derived",
+		Limitations: []string{"participant_title_coverage_limited"},
+		Summaries: []sqlite.BusinessAnalysisDimensionRow{
+			{Dimension: "persona", Value: "participant_title_present", CallCount: 1},
+			{Dimension: "persona", Value: "larger_segment", CallCount: 3},
+			{Dimension: "persona", Value: "unknown", CallCount: 0},
+		},
+	}
+
+	server.applyBusinessAnalysisSmallCellSuppression(&response)
+
+	if len(response.Summaries) != 2 {
+		t.Fatalf("summary count=%d want 2 after suppression: %+v", len(response.Summaries), response.Summaries)
+	}
+	if response.Summaries[0].Value != "larger_segment" || response.Summaries[1].Value != "unknown" {
+		t.Fatalf("unexpected kept summaries: %+v", response.Summaries)
+	}
+	warnings := mustJSONText(t, response.Warnings)
+	if !strings.Contains(warnings, "small_cell_suppression_applied") {
+		t.Fatalf("missing suppression warning: %+v", response.Warnings)
+	}
+	limitations := mustJSONText(t, response.Limitations)
+	if !strings.Contains(limitations, "small_cell_suppression_min_3") {
+		t.Fatalf("missing suppression limitation: %+v", response.Limitations)
+	}
+	suppression, ok := response.SynthesisInputs["small_cell_suppression"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing machine-readable suppression inputs: %+v", response.SynthesisInputs)
+	}
+	if intField(suppression, "minimum_call_count") != 3 || intField(suppression, "suppressed_bucket_count") != 1 || intField(suppression, "suppressed_call_count") != 1 {
+		t.Fatalf("unexpected suppression inputs: %+v", suppression)
+	}
+}
+
+func TestBusinessAnalysisSmallCellSuppressionDefaultsDisabled(t *testing.T) {
+	t.Parallel()
+
+	server := NewServer(nil, "gongmcp", "test")
+	response := businessAnalysisResponse{
+		Summaries: []sqlite.BusinessAnalysisDimensionRow{
+			{Dimension: "persona", Value: "participant_title_present", CallCount: 1},
+		},
+	}
+
+	server.applyBusinessAnalysisSmallCellSuppression(&response)
+
+	if len(response.Summaries) != 1 || response.Summaries[0].Value != "participant_title_present" {
+		t.Fatalf("default suppression changed summaries: %+v", response.Summaries)
+	}
+	if strings.Contains(mustJSONText(t, response.Warnings), "small_cell_suppression") {
+		t.Fatalf("default suppression emitted warning: %+v", response.Warnings)
+	}
+}
+
 func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
 	t.Parallel()
 
@@ -444,11 +707,16 @@ func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
 	seedBusinessAnalysisMCPFixtures(t, store)
 
 	server := NewServer(store, "gongmcp", "test")
+	// Phase 13e: discover_themes_in_cohort intentionally accepts a selective
+	// cohort filter without theme_query/query and returns broad-discovery
+	// candidate seed terms. The other transcript-evidence and quote tools
+	// must still require a query/theme_query to avoid raw-transcript dumps.
 	for _, toolName := range []string{
 		"search_transcripts_by_filters",
-		"discover_themes_in_cohort",
 		"extract_theme_quotes",
 		"build_theme_brief",
+		"search_quotes_in_cohort",
+		"build_quote_pack",
 	} {
 		responses := runServer(t, server, requestFrame(Request{
 			JSONRPC: "2.0",
@@ -478,6 +746,118 @@ func TestBusinessAnalysisEvidenceToolsRequireSearchTerm(t *testing.T) {
 		if !strings.Contains(envelope.Result.Content[0].Text, "requires") {
 			t.Fatalf("%s error did not explain missing query: %+v", toolName, envelope.Result)
 		}
+	}
+}
+
+func TestBusinessAnalysisDiscoverThemesInCohortSupportsSeedlessBroadDiscovery(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "discover-themes-seedless",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "discover_themes_in_cohort",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query": "business discovery",
+					"from_date":   "2026-01-01",
+					"to_date":     "2026-04-01",
+				},
+				"limit": 10,
+			},
+		}),
+	}))
+
+	result := decodeBusinessAnalysisResult(t, responses[0])
+	themes := arrayField(t, result, "themes")
+	if len(themes) == 0 {
+		t.Fatalf("seedless discover_themes_in_cohort returned no themes in %+v", result)
+	}
+	first := themes[0].(map[string]any)
+	if term := stringField(first, "theme"); term == "" {
+		t.Fatalf("first theme missing term: %+v", first)
+	}
+	warnings := strings.ToLower(mustJSONText(t, result["warnings"]))
+	if !strings.Contains(warnings, "broad_discovery") || !strings.Contains(warnings, "seedless") {
+		t.Fatalf("expected broad-discovery seedless warning, got warnings=%+v", result["warnings"])
+	}
+	if !strings.Contains(warnings, "seed") {
+		t.Fatalf("expected suggested-seed warning text, got warnings=%+v", result["warnings"])
+	}
+	limitations := strings.ToLower(mustJSONText(t, result["limitations"]))
+	if !strings.Contains(limitations, "broad_discovery") {
+		t.Fatalf("expected broad_discovery limitation, got limitations=%+v", result["limitations"])
+	}
+
+	rows := namedOrResultsArrayField(t, result, "results")
+	if len(rows) > 10 {
+		t.Fatalf("seedless discovery returned %d rows; bounded limit was 10", len(rows))
+	}
+	for _, raw := range rows {
+		row, _ := raw.(map[string]any)
+		if account := stringField(row, "account_name"); account != "" {
+			t.Fatalf("seedless discovery surfaced account_name without explicit opt-in: %+v", row)
+		}
+	}
+}
+
+func TestFacadeAnalyzeThemesDiscoverSupportsSeedlessBroadDiscovery(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithToolAllowlist([]string{
+		FacadeToolAnalyze,
+		"discover_themes_in_cohort",
+	}))
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpAnalyzeThemesDiscover,
+		"arguments": map[string]any{
+			"filter": map[string]any{
+				"title_query": "business discovery",
+				"from_date":   "2026-01-01",
+				"to_date":     "2026-04-01",
+			},
+			"limit": 8,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch analyze.themes.discover seedless: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("facade dispatch returned tool error: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	if wrapper["operation"] != OpAnalyzeThemesDiscover {
+		t.Fatalf("operation=%v want %s", wrapper["operation"], OpAnalyzeThemesDiscover)
+	}
+	if wrapper["routed_tool"] != "discover_themes_in_cohort" {
+		t.Fatalf("routed_tool=%v want discover_themes_in_cohort", wrapper["routed_tool"])
+	}
+	inner, _ := wrapper["result"].(map[string]any)
+	if inner == nil {
+		t.Fatalf("missing inner result: %+v", wrapper)
+	}
+	themesAny, ok := inner["themes"].([]any)
+	if !ok || len(themesAny) == 0 {
+		t.Fatalf("expected nonempty themes from seedless facade discovery: %+v", inner)
+	}
+	warnings := strings.ToLower(mustJSONText(t, inner["warnings"]))
+	if !strings.Contains(warnings, "broad_discovery_seedless") {
+		t.Fatalf("expected broad_discovery_seedless warning in facade response: %+v", inner["warnings"])
 	}
 }
 
@@ -896,6 +1276,157 @@ func TestGovernanceSuppressionHidesSearchCallsAndNames(t *testing.T) {
 	}
 }
 
+func TestGovernanceSuppressionSearchCallsOverfetchesBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-limit-blocked",
+		"title":    "Blocked governance limit call",
+		"started":  "2026-05-02T13:00:00Z",
+		"duration": 1200,
+	})); err != nil {
+		t.Fatalf("upsert blocked call: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-governance-limit-allowed",
+		"title":    "Allowed governance limit call",
+		"started":  "2026-05-02T12:00:00Z",
+		"duration": 1200,
+	})); err != nil {
+		t.Fatalf("upsert allowed call: %v", err)
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-governance-limit-blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "search",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_calls",
+			"arguments": map[string]any{
+				"from_date": "2026-05-02",
+				"to_date":   "2026-05-02",
+				"limit":     1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("search_calls returned error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call-governance-limit-blocked") {
+		t.Fatalf("governance response leaked blocked limit row: %s", text)
+	}
+	if !strings.Contains(text, "call-governance-limit-allowed") {
+		t.Fatalf("governance response missed allowed row after filtered limit: %s", text)
+	}
+}
+
+func TestGovernanceSuppressionCRMContextSearchOverfetchesBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	for _, call := range []map[string]any{
+		{
+			"id":      "call-governance-crm-blocked",
+			"title":   "Blocked governance CRM transcript",
+			"started": "2026-05-02T13:00:00Z",
+			"context": map[string]any{"crmObjects": []any{map[string]any{
+				"type": "Opportunity",
+				"id":   "opp-governance-crm",
+				"name": "Suppressed CRM Opportunity",
+				"fields": map[string]any{
+					"StageName": "Proposal",
+				},
+			}}},
+		},
+		{
+			"id":      "call-governance-crm-allowed",
+			"title":   "Allowed governance CRM transcript",
+			"started": "2026-05-02T12:00:00Z",
+			"context": map[string]any{"crmObjects": []any{map[string]any{
+				"type": "Opportunity",
+				"id":   "opp-governance-crm",
+				"name": "Allowed CRM Opportunity",
+				"fields": map[string]any{
+					"StageName": "Proposal",
+				},
+			}}},
+		},
+	} {
+		if _, err := store.UpsertCall(ctx, mustJSON(t, call)); err != nil {
+			t.Fatalf("upsert call: %v", err)
+		}
+	}
+	for _, transcript := range []map[string]any{
+		{
+			"callId": "call-governance-crm-blocked",
+			"transcript": []any{map[string]any{
+				"speakerId": "blocked-speaker",
+				"sentences": []any{map[string]any{"start": 0, "end": 1000, "text": "pricing governance crm limit marker"}},
+			}},
+		},
+		{
+			"callId": "call-governance-crm-allowed",
+			"transcript": []any{map[string]any{
+				"speakerId": "allowed-speaker",
+				"sentences": []any{map[string]any{"start": 0, "end": 1000, "text": "pricing governance crm limit marker"}},
+			}},
+		},
+	} {
+		if _, err := store.UpsertTranscript(ctx, mustJSON(t, transcript)); err != nil {
+			t.Fatalf("upsert transcript: %v", err)
+		}
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-governance-crm-blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "search",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcripts_by_crm_context",
+			"arguments": map[string]any{
+				"query":       "pricing governance crm",
+				"object_type": "Opportunity",
+				"object_id":   "opp-governance-crm",
+				"limit":       1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("search_transcripts_by_crm_context returned error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call-governance-crm-blocked") || strings.Contains(text, "Suppressed CRM Opportunity") {
+		t.Fatalf("governance CRM-context response leaked blocked row: %s", text)
+	}
+	if !strings.Contains(text, "pricing") {
+		t.Fatalf("governance CRM-context response missed allowed snippet after filtered limit: %s", text)
+	}
+}
+
 func TestGovernanceSuppressionFailsClosedForAggregateTool(t *testing.T) {
 	t.Parallel()
 
@@ -924,6 +1455,39 @@ func TestGovernanceSuppressionFailsClosedForAggregateTool(t *testing.T) {
 	}
 	if strings.Contains(envelope.Result.Content[0].Text, "NoAI Synthetic Corp") {
 		t.Fatalf("aggregate error leaked restricted name: %s", envelope.Result.Content[0].Text)
+	}
+}
+
+func TestGovernanceSuppressionGetCallDoesNotEchoSuppressedID(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call-id"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "get-call",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_call",
+			"arguments": map[string]any{
+				"call_id": "call-id",
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal get_call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected get_call to hide suppressed call")
+	}
+	if strings.Contains(envelope.Result.Content[0].Text, "call-id") {
+		t.Fatalf("get_call error leaked suppressed call id: %s", envelope.Result.Content[0].Text)
 	}
 }
 
@@ -1086,6 +1650,48 @@ func TestSummarizeScorecardActivityRedactsIdentifiersByDefault(t *testing.T) {
 	}
 	if report.TotalAnsweredScorecards != 1 || report.ManualCount != 1 {
 		t.Fatalf("unexpected report counts: %+v", report)
+	}
+}
+
+func TestSummarizeScorecardActivityUsesMCPGroupLimitPolicy(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedScorecardActivityMCPFixtures(t, store)
+	seedAdditionalScorecardActivityMCPFixture(t, store)
+
+	policy := DefaultLimitPolicy()
+	policy.CallFactGroups = 1
+	server := NewServerWithOptions(store, "gongmcp", "test", WithLimitPolicy(policy))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "scorecard-activity-limit",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name":      "summarize_scorecard_activity",
+			"arguments": map[string]any{"limit": 100},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var report sqlite.ScorecardActivityOverview
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if len(report.ByScorecard) != 1 || len(report.ByReviewMethod) != 1 || len(report.ByTranscriptStatus) != 1 {
+		t.Fatalf("scorecard activity report did not honor MCP group limit: %+v", report)
+	}
+	if report.TotalAnsweredScorecards != 2 {
+		t.Fatalf("totals were unexpectedly limited: %+v", report)
 	}
 }
 
@@ -1480,6 +2086,9 @@ func TestSearchTranscriptQuotesWithAttributionRedactsNamesByDefault(t *testing.T
 	if rows[0]["participant_status"] == "" || rows[0]["person_title_status"] == "" {
 		t.Fatalf("missing person/title status: %+v", rows[0])
 	}
+	if rows[0]["speaker_role"] != sqlite.SpeakerRoleUnknown || rows[0]["speaker_role_status"] != sqlite.SpeakerRoleStatusSpeakerUnmatched {
+		t.Fatalf("missing safe speaker role/status defaults: %+v", rows[0])
+	}
 	if text, ok := rows[0]["context_excerpt"].(string); !ok || !strings.Contains(text, "Implementation timeline") {
 		t.Fatalf("missing bounded context excerpt: %+v", rows[0])
 	}
@@ -1519,6 +2128,95 @@ func TestSearchTranscriptQuotesRejectsMissingTranscriptStatus(t *testing.T) {
 	}
 }
 
+func TestSearchTranscriptQuotesExternalOrUnknownPreservesUnmatchedSpeakers(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	ctx := context.Background()
+	call := mustJSON(t, map[string]any{
+		"id":      "call_attribution_unknown_role",
+		"title":   "Manufacturing implementation discussion",
+		"started": "2026-02-10T15:00:00Z",
+		"parties": []any{
+			map[string]any{
+				"id":          "buyer",
+				"name":        "Buyer",
+				"affiliation": "",
+				"email":       "buyer@example.com",
+			},
+		},
+		"context": []any{
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-unknown-role",
+				"fields": []any{
+					map[string]any{"name": "StageName", "value": "Discovery"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+		},
+	})
+	if _, err := store.UpsertCall(ctx, call); err != nil {
+		t.Fatalf("upsert attribution call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call_attribution_unknown_role",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": "Implementation timeline is the problem."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert attribution transcript: %v", err)
+	}
+
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "external-or-unknown",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":        "implementation",
+				"speaker_role": "external_or_unknown",
+				"from_date":    "2026-02-01",
+				"to_date":      "2026-02-28",
+				"limit":        5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &rows); err != nil {
+		t.Fatalf("unmarshal attribution payload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("external_or_unknown row count=%d want 1: %+v", len(rows), rows)
+	}
+	if rows[0]["speaker_role"] != sqlite.SpeakerRoleUnknown {
+		t.Fatalf("external_or_unknown should preserve unknown speaker role row: %+v", rows[0])
+	}
+}
+
 func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *testing.T) {
 	t.Parallel()
 
@@ -1551,6 +2249,129 @@ func TestSearchTranscriptQuotesWithAttributionAccountQueryRequiresNameOptIn(t *t
 	}
 	if !strings.Contains(envelope.Result.Content[0].Text, "include_account_names") {
 		t.Fatalf("tool error missing opt-in guidance: %+v", envelope.Result)
+	}
+}
+
+func TestSearchTranscriptQuotesWithAttributionRestrictedAccountQueryDenied(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithRestrictedAccountQueryTerms([]string{"NoAI Synthetic Corp"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "attribution-restricted-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "search_transcript_quotes_with_attribution",
+			"arguments": map[string]any{
+				"query":                 "implementation",
+				"account_query":         "NoAI Synthetic Corp",
+				"include_account_names": true,
+				"limit":                 5,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected restricted account_query tool error, got %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if !strings.Contains(text, "account_query is unavailable") {
+		t.Fatalf("tool error missing restricted account guidance: %s", text)
+	}
+	if strings.Contains(text, "NoAI") || strings.Contains(text, "Synthetic Corp") {
+		t.Fatalf("restricted account_query error leaked configured term: %s", text)
+	}
+}
+
+func TestBusinessAnalysisRestrictedAccountQueryDenied(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithRestrictedAccountQueryTerms([]string{"NoAI Synthetic Corp"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "business-restricted-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "build_call_cohort",
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"account_query": "NoAI Synthetic Corp",
+				},
+				"include_account_names": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected restricted business account_query error, got %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if !strings.Contains(text, "account_query is unavailable") {
+		t.Fatalf("tool error missing restricted account guidance: %s", text)
+	}
+	if strings.Contains(text, "NoAI") || strings.Contains(text, "Synthetic Corp") {
+		t.Fatalf("restricted business account_query error leaked configured term: %s", text)
+	}
+}
+
+func TestBusinessAnalysisRestrictedAccountQueryDeniedInSecondaryFilter(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithRestrictedAccountQueryTerms([]string{"NoAI Synthetic Corp"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "business-restricted-secondary-account-query",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "compare_call_cohorts",
+			"arguments": map[string]any{
+				"filter_a": map[string]any{
+					"title_query": "discovery",
+				},
+				"filter_b": map[string]any{
+					"account_query": "NoAI Synthetic Corp",
+				},
+				"include_account_names": true,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if !envelope.Result.IsError {
+		t.Fatalf("expected restricted secondary account_query error, got %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if !strings.Contains(text, "account_query is unavailable") {
+		t.Fatalf("tool error missing restricted account guidance: %s", text)
+	}
+	if strings.Contains(text, "NoAI") || strings.Contains(text, "Synthetic Corp") {
+		t.Fatalf("restricted secondary account_query error leaked configured term: %s", text)
 	}
 }
 
@@ -1602,6 +2423,75 @@ func TestMissingTranscriptsOmittedLimitHonorsConfiguredCap(t *testing.T) {
 	}
 	if intField(payload, "limit") != 1 || intField(payload, "returned") != 1 {
 		t.Fatalf("missing transcript omitted limit did not honor configured cap: %+v", payload)
+	}
+}
+
+func TestMissingTranscriptsGovernanceOverfetchTrimsToRequestedLimit(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	for _, call := range []struct {
+		id      string
+		title   string
+		started string
+	}{
+		{id: "call_missing_governance_blocked", title: "Blocked missing transcript", started: "2026-02-13T15:00:00Z"},
+		{id: "call_missing_governance_allowed_1", title: "Allowed missing transcript one", started: "2026-02-12T15:00:00Z"},
+		{id: "call_missing_governance_allowed_2", title: "Allowed missing transcript two", started: "2026-02-11T15:00:00Z"},
+	} {
+		if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+			"metaData": map[string]any{
+				"id":      call.id,
+				"title":   call.title,
+				"started": call.started,
+			},
+		})); err != nil {
+			t.Fatalf("upsert missing transcript call: %v", err)
+		}
+	}
+
+	server := NewServerWithOptions(store, "gongmcp", "test", WithSuppressedCallIDs([]string{"call_missing_governance_blocked"}))
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "missing-governance-limit",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "missing_transcripts",
+			"arguments": map[string]any{
+				"from_date": "2026-02-11",
+				"to_date":   "2026-02-13",
+				"limit":     1,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_missing_governance_blocked") {
+		t.Fatalf("missing transcripts leaked suppressed call: %s", text)
+	}
+	if strings.Contains(text, "call_missing_governance_allowed_2") {
+		t.Fatalf("missing transcripts returned more than requested limit: %s", text)
+	}
+	if !strings.Contains(text, "call_missing_governance_allowed_1") {
+		t.Fatalf("missing transcripts missed first allowed call after governance overfetch: %s", text)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		t.Fatalf("unmarshal capped payload: %v", err)
+	}
+	if intField(payload, "limit") != 1 || intField(payload, "returned") != 1 {
+		t.Fatalf("governed missing transcript limit mismatch: %+v", payload)
 	}
 }
 
@@ -1657,6 +2547,102 @@ func TestGetCallReturnsMinimizedDetail(t *testing.T) {
 		if object.FieldCount == 0 || len(object.FieldNames) == 0 {
 			t.Fatalf("object missing field metadata: %+v", object)
 		}
+	}
+}
+
+func TestGetCallAcceptsRedactedCallRef(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	callRef := callRef("call_extended_001")
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "call-detail-ref",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_call",
+			"arguments": map[string]any{
+				"call_ref": callRef,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_extended_001") {
+		t.Fatalf("call_ref lookup echoed raw call_id: %s", text)
+	}
+
+	var detail struct {
+		CallID          string `json:"call_id"`
+		CallRef         string `json:"call_ref"`
+		StartedAt       string `json:"started_at"`
+		DurationSeconds int64  `json:"duration_seconds"`
+	}
+	if err := json.Unmarshal([]byte(text), &detail); err != nil {
+		t.Fatalf("unmarshal call-ref detail: %v", err)
+	}
+	if detail.CallID != "" || detail.CallRef != callRef || detail.DurationSeconds != 2400 || detail.StartedAt == "" {
+		t.Fatalf("unexpected call-ref detail: %+v", detail)
+	}
+}
+
+func TestGetCallAcceptsSanitizedBusinessCallRef(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	sum := md5.Sum([]byte("call_extended_001"))
+	sanitizedToken := hex.EncodeToString(sum[:])
+	callRef := callRef(sanitizedToken)
+	server := NewServer(store, "gongmcp", "test")
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "call-detail-sanitized-ref",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name": "get_call",
+			"arguments": map[string]any{
+				"call_ref": callRef,
+			},
+		}),
+	}))
+
+	var envelope struct {
+		Result toolCallResult `json:"result"`
+	}
+	if err := json.Unmarshal(responses[0], &envelope); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v", err)
+	}
+	if envelope.Result.IsError {
+		t.Fatalf("unexpected tool error: %+v", envelope.Result)
+	}
+	text := envelope.Result.Content[0].Text
+	if strings.Contains(text, "call_extended_001") {
+		t.Fatalf("sanitized call_ref lookup echoed raw call_id: %s", text)
+	}
+	var detail struct {
+		CallID          string `json:"call_id"`
+		CallRef         string `json:"call_ref"`
+		DurationSeconds int64  `json:"duration_seconds"`
+	}
+	if err := json.Unmarshal([]byte(text), &detail); err != nil {
+		t.Fatalf("unmarshal sanitized call-ref detail: %v", err)
+	}
+	if detail.CallID != "" || detail.CallRef != callRef || detail.DurationSeconds != 2400 {
+		t.Fatalf("unexpected sanitized call-ref detail: %+v", detail)
 	}
 }
 
@@ -2323,7 +3309,7 @@ func TestLifecycleMCPTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(summaryEnvelope.Result.Content[0].Text), &summaries); err != nil {
 		t.Fatalf("unmarshal lifecycle summaries: %v", err)
 	}
-	if len(summaries) != 1 || summaries[0].Bucket != "renewal" || summaries[0].CallCount != 1 {
+	if len(summaries) != 1 || summaries[0].Bucket != "renewal" || summaries[0].CallCount != 1 || summaries[0].LatestCallID != "" {
 		t.Fatalf("unexpected lifecycle summary: %+v", summaries)
 	}
 
@@ -3144,6 +4130,42 @@ func seedScorecardActivityMCPFixtures(t *testing.T, store *sqlite.Store) {
 		},
 	})); err != nil {
 		t.Fatalf("upsert scorecard activity: %v", err)
+	}
+}
+
+func seedAdditionalScorecardActivityMCPFixture(t *testing.T, store *sqlite.Store) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := store.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":       "call-activity-002",
+		"title":    "Second raw activity call",
+		"started":  "2026-03-03T15:00:00Z",
+		"duration": 600,
+	})); err != nil {
+		t.Fatalf("upsert second scorecard activity call: %v", err)
+	}
+	if _, err := store.UpsertScorecardActivity(ctx, mustJSON(t, map[string]any{
+		"answeredScorecardId": "answered-activity-002",
+		"scorecardId":         "scorecard-activity-002",
+		"scorecardName":       "Demo QA",
+		"callId":              "call-activity-002",
+		"callStartTime":       "2026-03-03T15:00:00Z",
+		"reviewedUserId":      "user-activity-002",
+		"reviewerUserId":      "reviewer-activity-002",
+		"reviewMethod":        "AUTOMATIC",
+		"reviewTime":          "2026-03-04T15:00:00Z",
+		"answers": []map[string]any{
+			{
+				"questionId":    "question-activity-002",
+				"answerText":    "Confirmed value",
+				"isOverall":     true,
+				"score":         3,
+				"notApplicable": false,
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert second scorecard activity: %v", err)
 	}
 }
 

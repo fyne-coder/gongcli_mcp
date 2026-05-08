@@ -1,8 +1,8 @@
 # Business User Guide
 
 This guide is for the business-user lane of the `Enterprise Pilot Review Packet`.
-It applies only to reviewed pilot use through `gongmcp` over a prebuilt local
-cache.
+It applies only to reviewed pilot use through `gongmcp` over a prebuilt cache
+or shared Postgres reader role.
 
 Business users should not run `gongctl`, should not receive Gong credentials,
 and should not be asked to manage sync jobs, profile imports, raw exports, or
@@ -17,11 +17,13 @@ local database files. Those workflows stay with the pilot operator.
 ## Operating Boundary
 
 - Business users interact with a host application connected to `gongmcp`.
-- `gongmcp` reads a reviewed SQLite cache only; it does not call Gong live.
+- `gongmcp` reads a reviewed cache/store: SQLite by default, or a supported
+  Postgres reader role for shared deployments. It does not call Gong live.
 - `gongmcp` can enforce a reviewed server-side tool subset through
   `--tool-preset business-pilot`, `GONGMCP_TOOL_PRESET=business-pilot`, or a
-  custom allowlist. If no preset or allowlist is set, the full read-only catalog
-  remains visible to stdio hosts.
+  custom allowlist. In SQLite stdio mode, if no preset or allowlist is set,
+  the full read-only catalog remains visible to stdio hosts; Postgres stdio
+  defaults to its supported starter slice.
 - Results reflect the last approved sync and profile state, not current tenant
   state.
 - Outputs must stay aggregate-first, metadata-oriented, and bounded.
@@ -29,8 +31,15 @@ local database files. Those workflows stay with the pilot operator.
   transcript files, raw cached JSON, or direct filesystem/database access.
 - The default business-user tool preset is `business-pilot` from
   [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
-  Wider presets such as `analyst`, `governance-search`, and `all-readonly`
+  Wider analyst/full-catalog presets such as `analyst` and `all-readonly`
   require operator/sponsor approval and are not the business-user default.
+  Postgres expansion uses reviewed Postgres presets such as `analyst`,
+  `analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool allowlists
+  such as `compare_lifecycle_crm_fields` for reviewed Opportunity lifecycle
+  CRM field comparison or `search_transcripts_by_crm_context` for reviewed CRM-constrained snippet
+  investigations. The `compare_lifecycle_crm_fields` and
+  `search_transcripts_by_crm_context` Postgres slices require a tagged
+  `v0.4.0` or later release for customer deployment.
 
 For the first-session handoff, use
 [Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).
@@ -98,6 +107,72 @@ The MCP server does not run an LLM for these tools. Synthesis tools return
 structured inputs for ChatGPT, Claude, or another reviewed host to finish the
 business narrative; they should not be treated as hidden model conclusions from
 inside `gongmcp`.
+
+### Business Workbench Workflow
+
+For broad ad-hoc prompts, prefer the facade workflow instead of asking the host
+model to guess which narrow tool to use:
+
+1. Start with `gong_analyze` operation `theme_intelligence_report` for the
+   chosen date range, lifecycle/stage, title query, industry, or persona
+   filter and a concrete `theme_query` such as `pricing`, `implementation
+   effort`, `manual order entry`, `ERP integration`, `punchout`, `security
+   review`, `timeline`, or `ROI`. Without `theme_query`, the report is
+   candidate-term guidance only.
+2. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
+   the source of truth for drill-down terms.
+3. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
+   operation `evidence.call_drilldown` exactly as returned. This avoids fuzzy
+   synonym misses and gives both Gong-generated brief/key-point evidence and
+   bounded transcript excerpts for the same call.
+4. Use `gong_analyze` operation `question.answer` for a final governed
+   evidence pack after the report has identified the strongest terms.
+5. For business-user objection and question discovery, prefer
+   `gong_analyze` operations `extract.objection_signals` and
+   `extract.buyer_questions`. They run seeded, external-speaker-first evidence
+   searches over familiar topics such as pricing, implementation, security
+   review, and timeline so a sales or marketing user does not need to know the
+   lower-level quote tools.
+
+For synonym work, do not assume the server expands meanings semantically. Run
+separate explicit seeds such as `manual order entry`, `double entry`,
+`hand keying`, and `manually enter`, then compare the resulting
+`top_quotes_by_theme`, `support_count`, and drilldown inputs. The GA-supported
+path is deterministic and bounded: exact seeded reports first, exact drilldown
+terms second, and host-model synthesis last. `gongmcp` does not run fuzzy
+LLM-based synonym expansion inside the MCP server.
+
+Treat `question.answer` as an evidence-pack generator, not a hidden analyst. It
+derives bounded search terms from the free-form question and may fall back to a
+matching high-signal term when the full derived phrase returns no quotes. Generic
+business words such as "main", "themes", "concerns", and "business discovery"
+are not used as literal fallback searches; if only generic words remain, the
+payload returns `status: needs_theme_seed`, reports no evidence, and includes
+`suggested_seed_topics` plus `recommended_operations` for the host to continue.
+The payload reports the actual `evidence_query`, `speaker_role_filter`, and
+derivation metadata so the host's final answer can disclose what was searched.
+Explicit `query` or `theme_query` inputs are authoritative and are not retried
+or rewritten by this fallback path.
+
+### Field Exposure Profiles
+
+Use `field_profile` when a business-user prompt should switch between a narrow
+client-safe view and richer internal attribution without remembering every
+individual include flag:
+
+| Profile | Effect |
+| --- | --- |
+| `limited` | Hides raw IDs, call titles, account names, opportunity names, and speaker refs. Use for broad client-safe exploration. |
+| `attribution` | Enables call titles, account names, opportunity names, and speaker refs, but not raw IDs. Use when the client profile permits named account/opportunity attribution. |
+| `full` | Enables every opt-in field, including raw IDs, subject to active server policy switches. Use only for approved internal/operator sessions. |
+| `custom` or omitted | Keeps the explicit `include_*` flags supplied by the caller. |
+
+Policy switches still win. For example, `field_profile=full` cannot expose raw
+call IDs when `hide_raw_call_ids` is enabled.
+
+For a concise supported/caveated/blocked mapping of the SQLite-era question set
+to the reviewed Postgres pilot surface, see the
+[Postgres question-parity matrix](postgres-question-parity.md).
 
 ### ChatGPT Usage
 
@@ -242,6 +317,12 @@ progression. Separate closed-won, closed-lost, open, and unknown only when the
 cache has those fields. If opportunity outcome or loss reason is missing, say
 so directly and avoid causal claims.
 ```
+
+Customer configuration note: loss reasons and close reasons are tenant-specific
+CRM fields. The operator must map and validate them in the customer profile
+before the MCP can answer "why did these close lost?" questions reliably. When
+the profile or source data is missing, use the empty/limitation status as a
+readiness finding rather than inferring a loss reason from transcript text.
 
 Expected tool sequence:
 
@@ -421,11 +502,28 @@ Prompt:
 > needing operator refresh and name the specific sync command the operator
 > should run.
 
+Postgres shared-deployment note: `opportunity_call_summary` only supplies
+redacted stage, call-count, transcript-count, duration, and latest-call timing
+metadata. Opportunity/account names, amount, close date, and other deal fields
+require SQLite/full-catalog mode or a separately reviewed attribution surface.
+
 Tools required: `analyze_late_stage_crm_signals`,
 `opportunities_missing_transcripts`, `opportunity_call_summary`,
 `search_transcript_quotes_with_attribution` (with Opportunity attribution
 opt-ins), `rank_transcript_backlog`, `get_sync_status`. The operator must have
-enabled the wider analyst posture for these tools to be available.
+enabled the wider analyst posture for these tools to be available. In Postgres
+shared deployments, `analyze_late_stage_crm_signals`,
+`opportunities_missing_transcripts`, `opportunity_call_summary`,
+`search_transcript_quotes_with_attribution`, `rank_transcript_backlog`, and
+`get_sync_status` are available through the approved `analyst` preset for
+approved analyst sessions, or explicit allowlists for narrower operator
+sessions.
+
+Optional operator diagnostic: `crm_field_population_matrix` is available in
+Postgres through the approved `analyst` preset for approved analyst sessions,
+or through an explicit allowlist for reviewed field-population diagnostics.
+Keep `missing_transcripts` explicit/admin-only, and keep CRM matrix use scoped
+until small-cell privacy and customer-scale performance hardening are complete.
 
 Output discipline: do not turn missing transcript coverage into a forecast
 recommendation by itself; treat it as a refresh request to the operator and a
@@ -549,6 +647,12 @@ Do not expose these tools to business users during the pilot:
 These tools are operator-only or expansion-candidate tools because they can
 reveal tenant structure, allow directed value lookup, or move too close to
 exact-call review for an initial business pilot.
+For Postgres deployments, `crm_field_population_matrix` and
+`compare_lifecycle_crm_fields` are available through approved `analyst`
+sessions or reviewed explicit operator allowlists. `missing_transcripts`
+remains explicit/admin-only and should stay out of business-user presets until
+record-reference safety and customer-scale performance are hardened. The
+current Postgres lifecycle comparison slice is limited to Opportunity fields.
 
 `search_transcript_quotes_with_attribution` is the right tool for marketing
 asks like “top quotes by Q1 theme, industry, and opportunity stage.” It returns

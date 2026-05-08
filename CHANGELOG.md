@@ -2,6 +2,171 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-05-07
+
+- Added the customer-hosted Postgres `business-workbench` GA acceptance
+  package. Operators can run `gongctl mcp ga-acceptance` or
+  `scripts/postgres-ga-acceptance-smoke.sh` to produce a non-secret
+  pass/degraded/fail report covering runtime identity, the six-tool facade
+  surface, routed evidence operations, profile/data readiness,
+  governance/redaction, `question.answer` -> `evidence.call_drilldown`
+  workflow, and scoped-reader read-only posture.
+- Added GA profile/readiness gates for customer deployments. `gongctl profile
+  validate --ga-readiness` fails when a reviewed profile is missing lifecycle
+  buckets, maps concepts only to `CreatedDate`, leaves methodology unmapped, or
+  lacks loss-reason mapping; `gong_status` now exposes profile and
+  call-facts-attribution readiness signals so data/config gaps are reported as
+  setup limitations instead of hidden failures.
+- Added a runtime provenance gate for GA acceptance. `version=dev`,
+  `commit=unknown`, missing `build_date`, or equivalent non-release metadata
+  now fails the `runtime_identity` acceptance check even when the MCP tool
+  workflow itself works.
+- Added redacted serving database acceptance evidence. The Postgres GA smoke
+  accepts `REDACTION_AUDIT_JSON` or compact `REDACTION_AUDIT_*` fields so
+  operators can record source-vs-serving redaction proof without including
+  database URLs, raw call IDs, customer names, or transcript text.
+- Added the six-tool `business-workbench` MCP preset for customer business
+  users. The visible surface is `gong_status`,
+  `gong_discover_capabilities`, `gong_query`, `gong_analyze`,
+  `gong_get_evidence`, and `gong_explain_limitations`, with reviewed routed
+  operations underneath for ad-hoc business questions, theme intelligence,
+  quotes, Gong AI highlights, and call drilldown.
+- Improved the TC sales/marketing business-workbench prompt path for GA:
+  broad `question.answer` theme prompts now return `status=needs_theme_seed`
+  with suggested seeded workflows instead of weak literal-word evidence;
+  `theme_intelligence_report` and quote evidence support limited,
+  attribution, and full `field_profile` presets plus buyer/seller
+  `speaker_role` filtering; and `extract.buyer_questions` /
+  `extract.objection_signals` provide seeded external-speaker evidence paths
+  for sales enablement and marketing users.
+- Added `question.answer`, `theme_intelligence_report`, and
+  `evidence.call_drilldown` workflow improvements for business-user prompts,
+  including deterministic fallback metadata, explicit synonym guidance,
+  Gong AI brief/key-point/highlight source paths, per-call duration/title
+  metadata where permitted, and speaker-role/title attribution that never
+  infers missing titles from transcript text.
+- Made the persona business-analysis dimension role-aware (Phase 13f). The
+  `summarize_themes_by_persona`, `rank_personas_by_insight_quality`,
+  `summarize_themes_by_dimension(dimension="persona")` and
+  `analyze.themes.discover` paths now group calls into deterministic
+  coarse role buckets: `procurement`, `supplier_enablement`,
+  `it_security_integration`, `finance`, `operations`, `sales_revenue`,
+  `executive`, and `other_title_present`, derived from cached party
+  metadata (`parties` / `metaData.parties` `title`/`jobTitle`/`job_title`)
+  and CRM Contact/Lead Title fields (`Title`, `JobTitle`, `Job_Title__c`,
+  `JobTitle__c`). Raw participant titles are never returned as dimension
+  values; calls with participants but no resolvable title fall back to
+  `<blank>` (or `participant_title_present` when only the materialized
+  `call_facts` flag survives), and the existing
+  `participant_title_missing_or_unmapped` cohort warning continues to
+  fire when no titles are present. SQLite and Postgres agree on the
+  bucket assignment for synthetic representative fixtures. No new
+  top-level MCP tool was added; small-cell suppression and existing
+  redaction/governance gates remain in force. The Postgres
+  `gongmcp_business_analysis_dimension` function now delegates persona
+  classification to a SECURITY DEFINER helper
+  `gongmcp_business_analysis_persona_bucket(text, boolean)` that is
+  REVOKED from PUBLIC and only callable through the existing dimension
+  function.
+- Made broad cohort theme discovery less seed-fragile (Phase 13e). The
+  `discover_themes_in_cohort` business-analysis tool and the
+  `analyze.themes.discover` facade operation routed through `gong_analyze`
+  now accept a selective cohort filter without `theme_query`/`query`. In
+  that seedless mode they return deterministic candidate theme terms from
+  a bounded transcript sample within the cohort, plus a
+  `broad_discovery_seedless` warning, a
+  `broad_discovery_seedless_sample_only_cache_derived_keywords`
+  limitation, and the existing limit-policy / runtime-suppression
+  filters. Evidence and quote tools (`search_quotes_in_cohort`,
+  `build_quote_pack`, `extract_theme_quotes`, `build_theme_brief`,
+  `search_transcripts_by_filters`, etc.) keep their query-required gates
+  so seedless mode does not escalate into raw transcript dumps.
+- Added a reviewed `evidence.highlights.list` facade operation routed through
+  `gong_get_evidence` that exposes bounded, redacted Gong AI highlight rows
+  from the Postgres `call_ai_highlights` read model. The operation is an
+  internal facade-routed handler (not a new top-level MCP tool); it requires
+  explicit `call_ids`, caps inputs and rows, never returns raw highlight
+  JSON, performs no raw account or customer enumeration, and filters
+  runtime-suppressed call IDs before rows leave the server. Restricted calls
+  remain absent because the redacted serving DB has no rows for them. The
+  result envelope includes caveats stating that highlights are Gong
+  AI-generated accelerators and that transcript quotes remain primary
+  evidence.
+- Added a Postgres `call_ai_highlights` read model for opt-in Gong AI
+  Highlights captured under `content.highlights`. The table is rebuilt from
+  raw call payloads, excluded from generic read-only grants, purged with
+  call-scoped cache cleanup, and rebuilt on the redacted serving database only
+  for allowed calls. The reviewed `evidence.highlights.list` facade operation
+  is the only path that exposes typed highlight rows from this table.
+- Added environment defaults for
+  `gongctl governance refresh-serving-db`: source URL from
+  `GONGCTL_SOURCE_DATABASE_URL`, target URL from `GONGCTL_MCP_DATABASE_URL`,
+  and private governance config from `GONGCTL_AI_GOVERNANCE_CONFIG` or
+  `GONGMCP_AI_GOVERNANCE_CONFIG`. Docs now clarify that redacted serving DB
+  blocklist refreshes do not require recreating `gongmcp` when the serving DB
+  URL, reader grants, auth, binary, and preset are unchanged.
+- Added Phase 13k opt-in capture of Gong AI Highlights / brief /
+  next-step content via `gongctl sync calls --include-highlights`. The
+  flag mirrors `--include-parties`: it requires `--allow-sensitive-export`
+  in restricted mode, sends `contentSelector.exposedFields.highlights=true`
+  on `POST /v2/calls/extensive`, and adds
+  `include_highlights_requested=true` /
+  `include_highlights_result=request_sent` markers to the sync-run
+  request context. Highlights land in raw call payloads only; no new MCP
+  tool, schema, or aggregate. Endpoint review and follow-up plan live in
+  `docs/gong-native-enrichment-review.md`.
+- Added a stable MCP facade vertical slice with `analyst-facade`,
+  `gong_discover_capabilities`, and routed `gong_query` /
+  `gong_analyze` / `gong_get_evidence` operations so approved clients can use
+  a smaller durable tool surface while existing analyst tools remain available
+  for operator testing.
+- Added a Postgres question-parity matrix that maps SQLite-era business
+  questions to the reviewed Postgres pilot status: supported, supported with
+  caveats, or blocked.
+- Added a Postgres client manual-test checklist with first-session prompts,
+  expected tool sequences, pass/fail criteria, restricted-customer negative
+  probes, transcript-summary caveats, scorecard preset checks, and rollback
+  guidance for controlled client pilots.
+- Added a Postgres client deployment runbook for the two-database
+  source/serving layout, scoped analyst reader grants, auth gateway checks,
+  smoke tests, backup/restore, and rollback.
+
+## 0.3.4 - 2026-05-05
+
+- Added Postgres client pilot release packet and onboarding
+  checklist for controlled shared deployments, including scoped-role,
+  synthetic-evidence, customer-platform dry-run, digest-pinning, and rollback
+  requirements.
+- Added scoped Postgres analyst reader support for reviewed
+  `analyst` and `analyst-expansion` sessions under
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`, while keeping Postgres
+  `all-readonly`, `all-tools`, and `all` rejected.
+- Added MCP-layer small-cell suppression for enforced scoped Postgres analyst
+  dimension outputs, omitting buckets below 3 calls with explicit
+  `small_cell_suppression_applied` metadata while leaving SQLite defaults
+  unchanged.
+- Added Postgres explicit allowlist support for filtered
+  `missing_transcripts`, matching SQLite date, lifecycle, scope, system,
+  direction, and CRM object filters for admin transcript-backfill workflows.
+- Added Postgres explicit allowlist support for
+  `compare_lifecycle_crm_fields`, returning aggregate lifecycle-vs-CRM field
+  population comparisons for the reviewed `Opportunity` object type without
+  exposing call IDs, CRM object identifiers, raw CRM values, raw JSON, raw
+  hashes, or transcript content.
+- Added Postgres explicit allowlist support for
+  `search_transcripts_by_crm_context`, returning CRM-constrained transcript
+  snippets through a reader-executable function while redacting CRM object
+  IDs/names, call titles, raw CRM values, raw JSON, raw hashes, and full
+  transcript text from the SQL result shape.
+- Added Postgres explicit allowlist support for
+  `opportunity_call_summary`, returning redacted Opportunity call coverage
+  aggregates through a reader-executable function without exposing Opportunity
+  IDs/names, owner IDs, amount, close date, latest call IDs, or raw CRM values.
+- Added Postgres explicit allowlist support for
+  `crm_field_population_matrix`, returning aggregate field-population cells by
+  approved categorical group fields without exposing object IDs/names, call IDs,
+  raw CRM values, raw JSON, or raw hashes.
+
 ## 0.3.3 - 2026-05-04
 
 - Hardened lab-auth trusted proxy identity handling so client-supplied

@@ -77,23 +77,33 @@ services:
       - gongmcp
 
   gongmcp:
-    image: gongctl:mcp-local
+    image: ${LAB_GONGMCP_IMAGE:-gongctl:mcp-local}
     restart: unless-stopped
     environment:
+      GONG_DATABASE_URL: ${GONG_DATABASE_URL:-}
       GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
       GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-pilot}
+      GONGMCP_DEPLOYMENT_ID: ${GONGMCP_DEPLOYMENT_ID:-}
+      GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE: ${GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE:-redacted}
+      GONGMCP_POLICY_SWITCHES: ${GONGMCP_POLICY_SWITCHES:-}
+      GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS: ${GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS:-}
+      GONGMCP_POSTGRES_REDACTED_SERVING_DB: ${GONGMCP_POSTGRES_REDACTED_SERVING_DB:-}
+      GONGMCP_AI_GOVERNANCE_CONFIG: ${GONGMCP_AI_GOVERNANCE_CONFIG:-}
       GONGMCP_ALLOWED_ORIGINS: ${LAB_PUBLIC_BASE_URL}
+    entrypoint:
+      - /bin/sh
     command:
-      - --http
-      - 0.0.0.0:8080
-      - --auth-mode
-      - bearer
-      - --allow-open-network
-      - --db
-      - /data/gong.db
+      - -ec
+      - |
+        if [ -n "$${GONG_DATABASE_URL:-}" ]; then
+          exec /usr/local/bin/gongmcp --http 0.0.0.0:8080 --auth-mode bearer --allow-open-network
+        else
+          exec /usr/local/bin/gongmcp --http 0.0.0.0:8080 --auth-mode bearer --allow-open-network --db /data/gong.db
+        fi
     volumes:
       - ${REMOTE_ROOT:?set REMOTE_ROOT}/runtime/gong-mcp-governed.db:/data/gong.db:ro
       - ${REMOTE_ROOT:?set REMOTE_ROOT}/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro
+      - ${GONGMCP_AI_GOVERNANCE_CONFIG_MOUNT:?set GONGMCP_AI_GOVERNANCE_CONFIG_MOUNT}:/run/secrets/ai-governance.yaml:ro
 
 volumes:
   keycloak-data:

@@ -28,6 +28,10 @@ of the package supports deployment, security review, support, and operations.
 | Upgrade and rollback instructions | [Release versioning](release.md), [Enterprise deployment](enterprise-deployment.md#backup-retention-and-decommissioning) |
 | Smoke-test scripts | `scripts/docker-smoke.sh`, `scripts/smoke-http-mcp.sh`, [Docker deployment](docker.md), [Customer implementation checklist](implementation-checklist.md#smoke-tests) |
 | Example security questionnaire answers | [Security questionnaire](security-questionnaire.md) |
+| Postgres shared-deployment pilot packet | [Postgres client pilot release packet](postgres-client-pilot-release-packet.md) |
+| Postgres operator onboarding checklist | [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md) |
+| Postgres manual-test checklist | [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md) |
+| Postgres deployment runbook | [Postgres client deployment runbook](runbooks/postgres-client-deployment.md) |
 
 ## Data-Flow Diagram
 
@@ -60,17 +64,36 @@ Default enterprise posture:
 ## Quick Customer Sequence
 
 1. Review the Data Boundary Statement.
-2. Decide local stdio, private HTTP bearer pilot, or remote HTTPS/OAuth.
-3. Create a protected customer data root outside the source checkout.
-4. Configure Gong credentials for the operator sync job only.
-5. Run a bounded sync and validate readiness.
-6. Optional: export a physically filtered MCP database for AI-governed use.
-7. Start `gongmcp` with a read-only cache mount and approved tool preset or
-   allowlist.
-8. Connect Claude Desktop locally, or expose HTTPS `/mcp` through the customer
-   OAuth broker for ChatGPT/remote clients.
-9. Run `get_sync_status` and one bounded search smoke.
-10. Generate a sanitized support bundle if deployment evidence is needed.
+2. For shared/containerized deployments, use the Postgres two-database path in
+   the [Postgres deployment runbook](runbooks/postgres-client-deployment.md):
+   a writable source DB for sync plus a governed/redacted serving DB for MCP.
+3. Pin the image tag/digest from a tagged release. If an operator deliberately
+   uses an untagged branch build, record it as customer-ready pilot code, not a
+   versioned GA release.
+4. Create a protected customer data root and secret-manager entries outside the
+   source checkout. Gong credentials belong only to the operator sync job.
+5. Sync the approved date window, build the read model, and import only a
+   reviewed customer profile that passes
+   `gongctl profile validate --ga-readiness`.
+6. Refresh the redacted serving DB from the source DB and retain a
+   source-vs-serving redaction audit artifact. Store only non-secret evidence
+   paths and counts in acceptance artifacts.
+7. Start `gongmcp` against the scoped Postgres reader with the
+   `business-workbench` preset. New business users should see six public MCP
+   tools; analyst operations remain routed behind the facade.
+8. Expose HTTPS `/mcp` through the customer gateway/OAuth broker, or connect a
+   local approved MCP host.
+9. Run `scripts/postgres-ga-acceptance-smoke.sh` with `READER_DB_URL` and
+   `REDACTION_AUDIT_JSON` or compact `REDACTION_AUDIT_*` fields. Save the JSON
+   report and Markdown summary.
+10. Connect the first business user only after `fail` checks are clear and any
+    `degraded` checks have an owner, caveat, and remediation path.
+
+Current customer-ready boundary: tagged releases at `v0.4.0` or later are
+suitable for customer-hosted Postgres business-workbench usage when the profile
+gate, redacted serving refresh, scoped reader grants, digest-pinned images, and
+GA acceptance smoke are all run and recorded. Untagged branch builds remain
+pilot-only even if the same checks pass locally.
 
 ## Audience Start Points
 

@@ -36,23 +36,16 @@ func (a *app) support(ctx context.Context, args []string) error {
 func (a *app) supportBundle(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("support bundle", flag.ContinueOnError)
 	fs.SetOutput(a.err)
-	dbPath := fs.String("db", "", "SQLite database path")
+	dbPath := fs.String("db", "", "SQLite database path; omit when using GONG_DATABASE_URL or DATABASE_URL for Postgres")
 	outDir := fs.String("out", "", "output directory for sanitized diagnostic bundle")
 	includeEnv := fs.Bool("include-env", false, "include presence booleans for known environment variables")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
-	if strings.TrimSpace(*dbPath) == "" {
-		return fmt.Errorf("--db is required")
-	}
 	if strings.TrimSpace(*outDir) == "" {
 		return fmt.Errorf("--out is required")
 	}
 
-	absDBPath, err := filepath.Abs(*dbPath)
-	if err != nil {
-		return err
-	}
 	absOutDir, err := filepath.Abs(*outDir)
 	if err != nil {
 		return err
@@ -60,8 +53,11 @@ func (a *app) supportBundle(ctx context.Context, args []string) error {
 	if err := os.MkdirAll(absOutDir, 0o700); err != nil {
 		return err
 	}
+	if err := requireEmptySupportBundleDir(absOutDir); err != nil {
+		return err
+	}
 
-	store, err := sqlite.OpenReadOnly(ctx, absDBPath)
+	store, backend, dbPathForManifest, err := openCacheInventoryStore(ctx, *dbPath)
 	if err != nil {
 		return err
 	}
@@ -71,13 +67,26 @@ func (a *app) supportBundle(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	var diagnostics *supportDiagnosticsFile
+	if diagnosticsStore, ok := store.(cacheDiagnosticsStore); ok {
+		cacheDiagnostics, err := diagnosticsStore.CacheDiagnostics(ctx)
+		if err != nil {
+			return err
+		}
+		diagnostics = &supportDiagnosticsFile{CacheDiagnostics: cacheDiagnostics}
+	}
 
-	manifest := newSupportBundleManifest(absDBPath, inventory)
+	manifest := newSupportBundleManifest(backend, dbPathForManifest, inventory)
 	if err := writeSupportBundleJSON(filepath.Join(absOutDir, "manifest.json"), manifest); err != nil {
 		return err
 	}
 	if err := writeSupportBundleJSON(filepath.Join(absOutDir, "cache-summary.json"), newSupportCacheSummary(inventory)); err != nil {
 		return err
+	}
+	if diagnostics != nil {
+		if err := writeSupportBundleJSON(filepath.Join(absOutDir, "diagnostics.json"), diagnostics); err != nil {
+			return err
+		}
 	}
 	if err := writeSupportBundleJSON(filepath.Join(absOutDir, "mcp-tools.json"), newSupportMCPTools()); err != nil {
 		return err
@@ -96,7 +105,7 @@ func (a *app) supportBundle(ctx context.Context, args []string) error {
 			PathPolicy: "local_path_not_exported",
 		},
 		SchemaVersion:                       supportBundleSchemaVersion,
-		Files:                               supportBundleFiles(*includeEnv),
+		Files:                               supportBundleFiles(*includeEnv, diagnostics != nil),
 		ContainsRawCustomerData:             false,
 		ContainsCustomerOperationalMetadata: true,
 		Sensitivity:                         "customer_operational_metadata",
@@ -117,12 +126,26 @@ func writeSupportBundleJSON(path string, value any) error {
 	return encoder.Encode(value)
 }
 
-func supportBundleFiles(includeEnv bool) []string {
+func requireEmptySupportBundleDir(path string) error {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("--out must be an empty directory to avoid bundling stale files")
+	}
+	return nil
+}
+
+func supportBundleFiles(includeEnv bool, includeDiagnostics bool) []string {
 	files := []string{
 		"manifest.json",
 		"cache-summary.json",
 		"mcp-tools.json",
 		"redaction-policy.json",
+	}
+	if includeDiagnostics {
+		files = append(files, "diagnostics.json")
 	}
 	if includeEnv {
 		files = append(files, "environment.json")
@@ -130,12 +153,15 @@ func supportBundleFiles(includeEnv bool) []string {
 	return files
 }
 
-func newSupportBundleManifest(dbPath string, inventory *sqlite.CacheInventory) supportBundleManifest {
+func newSupportBundleManifest(backend string, dbPath string, inventory *sqlite.CacheInventory) supportBundleManifest {
 	info := version.Current()
-	dbSize, walSize, shmSize := statSQLiteFiles(dbPath)
+	var dbSize, walSize, shmSize int64
 	var dbModTime string
-	if stat, err := os.Stat(dbPath); err == nil {
-		dbModTime = stat.ModTime().UTC().Format(time.RFC3339)
+	if backend == "sqlite" {
+		dbSize, walSize, shmSize = statSQLiteFiles(dbPath)
+		if stat, err := os.Stat(dbPath); err == nil {
+			dbModTime = stat.ModTime().UTC().Format(time.RFC3339)
+		}
 	}
 	return supportBundleManifest{
 		SchemaVersion: supportBundleSchemaVersion,
@@ -152,8 +178,9 @@ func newSupportBundleManifest(dbPath string, inventory *sqlite.CacheInventory) s
 			GoVersion: runtime.Version(),
 		},
 		Database: supportDatabaseInfo{
-			PathClass:        "customer_sqlite_cache",
-			PathPolicy:       "no_path_or_filename_exported",
+			Backend:          backend,
+			PathClass:        supportDatabasePathClass(backend),
+			PathPolicy:       supportDatabasePathPolicy(backend),
 			SizeBytes:        dbSize,
 			WALSizeBytes:     walSize,
 			SHMSizeBytes:     shmSize,
@@ -161,9 +188,30 @@ func newSupportBundleManifest(dbPath string, inventory *sqlite.CacheInventory) s
 			OldestCallTime:   inventory.OldestCallStartedAt,
 			NewestCallTime:   inventory.NewestCallStartedAt,
 			OpenMode:         "read_only",
-			CustomerDataNote: "SQLite cache remains customer data; bundle exports metadata only.",
+			CustomerDataNote: supportDatabaseCustomerDataNote(backend),
 		},
 	}
+}
+
+func supportDatabasePathClass(backend string) string {
+	if backend == "postgres" {
+		return "customer_postgres_database"
+	}
+	return "customer_sqlite_cache"
+}
+
+func supportDatabasePathPolicy(backend string) string {
+	if backend == "postgres" {
+		return "database_url_not_exported"
+	}
+	return "no_path_or_filename_exported"
+}
+
+func supportDatabaseCustomerDataNote(backend string) string {
+	if backend == "postgres" {
+		return "Postgres cache remains customer data; bundle exports metadata only."
+	}
+	return "SQLite cache remains customer data; bundle exports metadata only."
 }
 
 func newSupportCacheSummary(inventory *sqlite.CacheInventory) supportCacheSummary {
@@ -316,6 +364,10 @@ type supportBundleManifest struct {
 	Database      supportDatabaseInfo `json:"database"`
 }
 
+type supportDiagnosticsFile struct {
+	CacheDiagnostics any `json:"cache_diagnostics"`
+}
+
 type supportProductInfo struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -330,6 +382,7 @@ type supportRuntimeInfo struct {
 }
 
 type supportDatabaseInfo struct {
+	Backend          string `json:"backend"`
 	PathClass        string `json:"path_class"`
 	PathPolicy       string `json:"path_policy"`
 	SizeBytes        int64  `json:"size_bytes"`

@@ -7,8 +7,12 @@ This document defines the current enterprise pilot deployment shape for
 
 - `gongctl` is the writable operator tool that authenticates to Gong and
   refreshes local cache state.
-- `gongmcp` is a read-only MCP server over an existing SQLite cache. It supports
-  local stdio and a minimal HTTP `/mcp` private-pilot mode.
+- `gongmcp` is a read-only MCP server over the configured cache store. SQLite
+  is complete/default; Postgres supports the explicitly listed
+  shared-deployment slices, including reviewed `analyst` sessions.
+  Postgres `all-readonly` parity remains a follow-up. It supports local stdio
+  and a minimal HTTP `/mcp`
+  private-pilot mode.
 - Business users should consume only the approved MCP tool set through host or
   wrapper policy. They do not run live syncs, handle Gong credentials, or write
   to SQLite.
@@ -16,6 +20,8 @@ This document defines the current enterprise pilot deployment shape for
 This is a pilot-candidate operating model, not a hosted service design.
 Customer identity, raw transcripts, secrets, and tenant-specific filesystem
 details should stay outside shared docs and outside the source repo.
+For controlled multi-container Postgres sharing, pair this document with the
+[Postgres client pilot release packet](postgres-client-pilot-release-packet.md).
 
 Security-review readers should also use
 [Data Boundary Statement](data-boundary-statement.md) for the customer-hosted
@@ -103,6 +109,96 @@ flowchart LR
 - Keep Gong credentials in approved secret storage, not in the image.
 - Run `gongmcp` as a separate read-only process or container against the same
   mounted cache.
+
+### 2b. Postgres shared container deployment
+
+Use when the sync/runtime containers cannot share a protected filesystem.
+
+```mermaid
+flowchart LR
+  Gong["Gong API"] -->|"HTTPS with sync credentials"| Sync["gongctl sync job\nwriter role"]
+  Secrets["Customer secret store\nGong credentials + DB URLs"] --> Sync
+  Sync -->|"writes"| PG["Customer Postgres\nshared cache tables"]
+  PG -->|"read-only SELECT/EXECUTE grants"| MCP["gongmcp\nreader role"]
+  Host["Approved MCP host"] -->|"stdio or private HTTP"| MCP
+  Ops["IT / platform owner"] --> PG
+  Ops --> Sync
+  Ops --> MCP
+```
+
+- SQLite remains supported for local/single-host installs.
+- Postgres is the shared deployment path for separate sync and MCP containers.
+- `gongctl` uses a writer database URL through `GONG_DATABASE_URL` or
+  `DATABASE_URL`.
+- `gongmcp` uses a read-only database URL and must not receive Gong
+  credentials.
+- The compatibility `gongmcp_reader` role is still supported as a service
+  secret. For business-user deployments that need a narrower SQL credential,
+  provision a function-scoped reader role and set
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`; `gongmcp` will reject missing
+  selected-surface function grants and reject extra `gongmcp_*` function grants
+  outside the selected preset or allowlist. The `business-pilot` preset also
+  has a first reviewed table/column grant boundary; other presets still need
+  per-surface maps or governed views/RLS before broad customer role automation.
+  Generate the reviewed business-pilot grant block with the canonical operator
+  command `gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE
+  --database DB`. To operationalize that reviewed block, create the LOGIN role
+  and password through the customer secret manager, then run `gongctl mcp
+  postgres-reader-apply --preset business-pilot --role ROLE --database DB
+  --dry-run` for review and `--apply` with a writable `GONG_DATABASE_URL` /
+  `DATABASE_URL` to reconcile grants for the existing role. `gongmcp
+  --print-postgres-reader-grants --tool-preset business-pilot
+  --postgres-reader-role ROLE --postgres-database DB` is a compatibility path
+  for MCP-only images. Treat the scoped URL as a `gongmcp` service credential,
+  not an analyst SQL login. The scoped
+  active-profile and profile-cache helpers redact source metadata and call
+  IDs/titles, and the direct profile-cache helper is capped at 1,000 rows per direct helper call, but selected
+  functions still expose minimized operational metadata, timings, counts, and
+  tenant terminology.
+  This first scoped business-pilot role is profile-backed; explicit
+  `lifecycle_source=builtin` still requires the broader compatibility reader
+  until a sanitized builtin SQL surface exists.
+- For approved Postgres `analyst` and `analyst-expansion` sessions, run
+  `gongmcp` with the scoped analyst reader and
+  `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1`. That mode applies MCP-layer
+  small-cell suppression to business-analysis dimension summaries: buckets
+  below 3 calls are omitted and the response includes
+  `small_cell_suppression_applied` / `small_cell_suppression_min_3` metadata.
+  This is a conservative pilot guard, not a substitute for database-enforced
+  RLS, materialized governed snapshots, or customer-specific privacy review.
+- Operators can check or repair Postgres builtin fact readiness with
+  `gongctl sync read-model` and `gongctl sync read-model --rebuild` using a
+  writable database URL. MCP remains read-only and will not rebuild stale facts.
+- Operators should verify Postgres backups by restoring into an isolated
+  database, rebuilding readiness with the writable role, and running a
+  read-only MCP smoke against the restored database. The repo provides a
+  synthetic version of that drill through `scripts/postgres-backup-restore-smoke.sh`.
+- The Postgres slice supports the explicit `business-pilot` preset through MCP
+  (`get_sync_status`, `summarize_call_facts`,
+  `summarize_calls_by_lifecycle`, and `rank_transcript_backlog`) plus narrow
+  operator smoke/search allowlists for `search_calls`, `get_call`, and
+  `search_transcript_segments`. `analyst-core` is the reviewed Postgres
+  starter analyst surface for core call/profile/lifecycle/CRM-context
+  inventory queries, cached CRM schema/settings inventory, scorecard inventory,
+  and aggregate scorecard activity. `analyst-business-core` adds bounded
+  transcript-evidence and business-analysis workflows. Directed CRM
+  `list_unmapped_crm_fields`, `search_crm_field_values`,
+  `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`, and
+  `opportunity_call_summary`, plus aggregate CRM field-population diagnostics
+  through `crm_field_population_matrix`, reviewed Opportunity lifecycle CRM
+  field comparison through `compare_lifecycle_crm_fields`, admin
+  transcript-backfill call references through `missing_transcripts`, and
+  CRM-constrained transcript snippets
+  through `search_transcripts_by_crm_context`, are available through explicit
+  allowlists. The `compare_lifecycle_crm_fields`, `missing_transcripts`, and
+  `search_transcripts_by_crm_context` Postgres slices require a tagged
+  `v0.4.0` or later release for customer deployment. The reviewed
+  Postgres `analyst` preset combines the supported analyst tools for approved
+  analyst sessions; `all-readonly` parity remains a follow-up tracked in the
+  [Postgres parity matrix](postgres-parity.md).
+- AI governance filtered DB export remains SQLite-only. Postgres supports a
+  prepared governance policy for the narrowed `governance-search` MCP slice;
+  database-enforced governed views/RLS/snapshots remain a follow-up.
 
 ### 3. MCP-only consumer host
 
@@ -195,16 +291,19 @@ Storage-specific guidance:
 
 - `gongctl` needs network access to Gong and valid credentials for `auth check`
   and `sync ...` commands.
-- `gongmcp` reads SQLite only and should not receive Gong credentials.
+- `gongmcp` reads the configured cache store only and should not receive Gong
+  credentials. For Postgres deployments, give it a read-only database URL.
 - For containerized stdio MCP, prefer `docker run --network none` with a
   read-only data mount.
 - For HTTP MCP, require bearer auth, an explicit tool preset or allowlist, and TLS
   termination at a trusted proxy/gateway for shared access.
 - For customer-specific AI-use restrictions, mount a private AI governance
   config, run `gongctl governance audit`, and start `gongmcp` with
-  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`.
-  Restart is mandatory after cache/config changes because `gongmcp`
-  fingerprints both and fails closed if either changes while running.
+  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`. For Postgres,
+  run `gongctl governance audit --apply-postgres-policy` with the writable URL
+  before starting the read-only MCP container. Restart is mandatory after
+  cache/config/policy changes because `gongmcp` fingerprints governance state
+  and fails closed if it changes while running.
 - For shared environments, separate the writable sync runtime from the
   business-user MCP runtime even if both read the same protected data root.
 
@@ -293,7 +392,9 @@ In restricted mode, these commands require an explicit override
 
 - `api raw`
 - `calls list --context extended`
-- `calls show --json`
+- SQLite `calls show --db PATH --json` for raw cached call JSON; Postgres
+  `calls show --json` through `GONG_DATABASE_URL` returns minimized read-model
+  detail instead
 - `calls export`
 - `calls transcript`
 - `calls transcript-batch`
@@ -320,18 +421,36 @@ dry-run mode before enabling the scheduler:
 bin/gongctl sync run --config /srv/gongctl/company-sync.yaml --dry-run
 bin/gongctl sync run --config /srv/gongctl/company-sync.yaml
 bin/gongctl cache inventory --db /srv/gongctl/cache/gong.db
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache inventory
 bin/gongctl cache purge --db /srv/gongctl/cache/gong.db --older-than 2026-04-01 --dry-run
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl cache purge --older-than 2026-04-01
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" bin/gongctl cache purge --older-than 2026-04-01 --confirm
 ```
 
 The config runner resolves relative `db` and transcript `out_dir` paths from
 the config location, so one reviewed file can travel with the operator-managed
-job definition. `cache inventory` is the companion read-only governance check
-for DB size, primary table counts, date range, transcript/CRM-context presence,
-profile status, and last sync metadata.
+job definition. `cache inventory` is the companion read-only storage and
+operations check for DB size, primary table counts, date range,
+transcript/CRM-context presence, profile status, and last sync metadata. For
+Postgres shared deployments, omit `--db` and set `GONG_DATABASE_URL` or
+`DATABASE_URL`; the inventory reports schema/readiness/reader-role diagnostics
+without exporting the database URL.
 
-`cache purge` is dry-run by default. Use it to preview retention cleanup, then
-run the same command with `--confirm` only after backup, legal-hold, and owner
-approval checks are complete.
+`cache purge` is dry-run by default. For Postgres shared deployments, use the
+reader URL for the metadata-only plan and a writable URL only for the approved
+`--confirm` run. Use it to preview retention cleanup, then run the same command
+with `--confirm` only after backup, legal-hold, and owner approval checks are
+complete.
+
+For scheduled retention, prefer `gongctl cache purge --config
+/srv/gongctl/retention-policy.yaml` over one-off flags. The YAML policy records
+the cutoff plus approval reference, approver, approval date, data owner, backup
+reference, and legal-hold review. Confirmed config-driven purge fails closed
+when any required approval field is absent, and command output includes a
+policy SHA-256 so the retained dry-run plan can be tied back to the reviewed
+policy file. Path-like approval metadata and URLs are redacted in command output;
+use stable ticket, owner, and backup labels rather than secrets or customer
+locations in the policy.
 
 ## Admin-Run Sync Contract
 
@@ -375,10 +494,35 @@ Backup policy should be owned by the company operating the pilot:
 - back up the SQLite cache before upgrades, major sync-scope changes, and
   profile changes
 - include transcript and profile storage in the same backup plan
+- for Postgres shared deployments, back up the database with the customer's
+  approved Postgres backup mechanism and keep DB dumps, WAL/PITR archives,
+  snapshots, and replicas under the same protected data class as the live cache
 - review `cache inventory` output alongside backup logs so unusual DB growth or
   missing sync metadata is caught early
+- for Postgres deployments, generate metadata-only support diagnostics with the
+  read-only database URL:
+  `GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" bin/gongctl support bundle --out /srv/gongctl/support-bundle`
 - verify that restores can be mounted back into a read-only MCP runtime before
   treating the backup as valid
+
+Postgres restore validation should prove:
+
+1. the restored database schema version is current
+2. `gongctl sync read-model --rebuild` succeeds with the writable role
+3. source and restored table counts match for the approved validation scope
+4. `gongmcp` starts with the read-only role and can run `get_sync_status`,
+   `search_calls`, and `search_transcript_segments`
+5. the read-only role cannot write and cannot directly read raw payload columns
+
+The local synthetic release drill is:
+
+```bash
+scripts/postgres-backup-restore-smoke.sh
+```
+
+Customer production restore drills should use customer-owned backup tooling and
+synthetic or approved non-production data. Do not copy production transcript
+text, raw payloads, or database URLs into shared evidence files.
 
 Retention policy should define:
 
@@ -390,12 +534,65 @@ Retention policy should define:
 For approved retention cleanup, run `cache purge --older-than YYYY-MM-DD`
 without `--confirm` first and keep the JSON plan with the change record. The
 confirmed purge deletes matching calls plus dependent transcripts, transcript
-segments, embedded CRM context, and profile call-fact cache rows. It enables
-SQLite `secure_delete`, checkpoints/truncates WAL state, and runs `VACUUM` to
-reduce retained bytes in the active database file. It does not delete sync-run
-history, profile definitions, CRM schema inventory, settings inventory,
-transcript JSON files outside SQLite, snapshots, or backups; handle those
-through the company retention workflow.
+segments, embedded CRM context, read-model rows, profile call-fact cache rows,
+scorecard activity rows, and governance-suppression rows. SQLite confirmed
+purges enable `secure_delete`, checkpoint/truncate WAL state, and run `VACUUM`
+to reduce retained bytes in the active database file. Postgres confirmed purges
+remove rows from the shared database but do not physically erase WAL, replicas,
+snapshots, dumps, or backups. The command does not delete sync-run history,
+profile definitions, CRM schema inventory, settings inventory, transcript JSON
+files outside SQLite/Postgres, snapshots, or backups; handle those through the
+company retention workflow. Postgres keeps call-ID tombstones as operational
+metadata to block accidental rehydration of purged call-scoped rows by later
+sync steps.
+For Postgres, run the confirmed cleanup in a maintenance window with scheduled
+sync/write jobs stopped. The command takes the same database advisory writer
+lock as supported Postgres write paths and deletes only the call IDs
+materialized for that confirmed run.
+The repo includes `scripts/postgres-contention-smoke.sh` to exercise the
+shipped writer-lock behavior with a larger synthetic dataset, active profile
+cache, concurrent read-model rebuild, purge, reader status, and post-contention
+MCP smoke. Treat it as local release evidence at the configured synthetic size,
+not as production capacity proof. Archive its `summary.json`,
+`operation-results.jsonl`, counts, lock samples, reader denial, and MCP
+artifacts with the change record, and run a customer-platform benchmark before
+high-volume rollout.
+
+For profile-backed backlog and transcript-search pre-rollout checks, run
+`scripts/postgres-capacity-drill.sh` in the repo before moving a client pilot
+onto real tenant data. The drill uses synthetic fixtures only, runs the
+Postgres load smoke at a bounded configured size, validates the generated
+profile-cache, scoped `business-pilot` MCP, profile helper-call EXPLAIN,
+profile-cache index-probe EXPLAIN, and transcript-search EXPLAIN artifacts
+directly, and writes `capacity-summary.json`. Keep `capacity-summary.json` plus
+only the files named in its `evidence` map after the leak scans pass; do not
+archive whole artifact directories or stdout/stderr unless separately reviewed
+for the customer record. Do not treat the drill as a production capacity claim;
+customer-owned platform benchmarks still need the target Postgres class,
+concurrency, retention, backup/PITR, and monitoring settings.
+
+```bash
+# Default bounded synthetic drill: 5,000 calls and 5,000 profile-cache rows.
+./scripts/postgres-capacity-drill.sh
+
+# Smaller local review run.
+GONGCTL_POSTGRES_CAPACITY_COMPOSE_PROJECT=gongctl-postgres-capacity-review \
+GONGCTL_POSTGRES_CAPACITY_PORT=55545 \
+GONGCTL_POSTGRES_CAPACITY_CALLS=1200 \
+GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS=1200 \
+./scripts/postgres-capacity-drill.sh
+```
+
+The supported knobs are `GONGCTL_POSTGRES_CAPACITY_COMPOSE_PROJECT`,
+`GONGCTL_POSTGRES_CAPACITY_PORT`, `GONGCTL_POSTGRES_CAPACITY_CALLS`,
+`GONGCTL_POSTGRES_CAPACITY_PROFILE_ROWS`, and
+`GONGCTL_POSTGRES_CAPACITY_ARTIFACT_DIR`; call/profile sizes are bounded to
+1,200-5,000 rows and explicit artifact directories must be under
+`/tmp/gongctl-postgres-capacity.*`.
+Use `cache purge --config retention-policy.yaml` for scheduled retention jobs
+so approval and backup metadata travel with the purge plan. The repo does not
+install the scheduler; cron, launchd, systemd, Kubernetes CronJob, or customer
+workflow automation remains deployment-owned.
 
 Decommissioning should include:
 
@@ -445,10 +642,14 @@ centralized transcript review workflows, those belong in a separate application
 layer around or in front of `gongmcp`, not in the read-only cache adapter itself.
 
 The conservative defaults documented here are not the only supported posture.
-A trusted single-user analyst workstation using stdio can skip the tool
+A trusted single-user SQLite analyst workstation using stdio can skip the tool
 allowlist and enable per-tool opt-ins to surface exact identifiers, bounded
 snippets, and attribution joined to Account/Opportunity context for deeper
-questions. See
+questions. Postgres deployments should expand through reviewed presets such as
+`analyst`, `analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool
+allowlists such as `crm_field_population_matrix`,
+`compare_lifecycle_crm_fields`, or `search_transcripts_by_crm_context`;
+Postgres `all-readonly` remains gated until the parity matrix says otherwise. See
 [mcp-data-exposure.md](mcp-data-exposure.md) for the trade-off framing and
 [mcp-data-exposure.md#mcp-call-volume-and-limits](mcp-data-exposure.md#mcp-call-volume-and-limits)
 for the per-call cost model and recommended limits.
