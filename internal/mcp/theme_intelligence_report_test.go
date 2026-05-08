@@ -1268,6 +1268,26 @@ func TestBusinessBriefCandidatePhrasesExtractsNonSeedBusinessThemes(t *testing.T
 	}
 }
 
+func TestAIBusinessBriefSummaryResolvesStableCallRefs(t *testing.T) {
+	t.Parallel()
+
+	store := newSeededThemeIntelReportStore(t)
+	server := NewServerWithOptions(store, "gongmcp", "test")
+
+	summary, err := server.aiBusinessBriefThemeSummary(t.Context(), []sqlite.BusinessAnalysisCallRow{
+		{CallID: sqlite.StableCallRef("call_theme_q1_won_001")},
+	}, false, 5)
+	if err != nil {
+		t.Fatalf("aiBusinessBriefThemeSummary: %v", err)
+	}
+	if summary.SourceRowCount == 0 {
+		t.Fatalf("expected AI brief rows for stable call_ref input; summary=%+v", summary)
+	}
+	if got := mustJSONText(t, summary.Candidates); !strings.Contains(strings.ToLower(got), "manual order entry") {
+		t.Fatalf("expected resolved call_ref to produce manual order entry candidate: %s", got)
+	}
+}
+
 func TestFacadeAnalyzeThemeIntelReportSeededIncludesAIBriefEvidence(t *testing.T) {
 	t.Parallel()
 

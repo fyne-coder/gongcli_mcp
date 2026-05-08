@@ -685,11 +685,31 @@ func (s *Server) aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx context.Co
 		return aiBusinessBriefThemeSummary{EvidenceByTheme: map[string][]themeIntelReportAIRow{}}, nil
 	}
 	callIDs := make([]string, 0, len(rows))
+	seenCallIDs := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
-		if strings.TrimSpace(row.CallID) == "" || s.isSuppressedCall(row.CallID) {
+		callID := strings.TrimSpace(row.CallID)
+		if callID == "" {
 			continue
 		}
-		callIDs = append(callIDs, row.CallID)
+		if strings.HasPrefix(strings.ToLower(callID), "call_ref_") {
+			normalized, err := sqlite.NormalizeStableCallRef(callID)
+			if err != nil {
+				continue
+			}
+			resolved, err := s.store.ResolveCallIDByRef(ctx, normalized)
+			if err != nil {
+				continue
+			}
+			callID = resolved
+		}
+		if callID == "" || s.isSuppressedCall(callID) {
+			continue
+		}
+		if _, ok := seenCallIDs[callID]; ok {
+			continue
+		}
+		seenCallIDs[callID] = struct{}{}
+		callIDs = append(callIDs, callID)
 		if len(callIDs) >= maxThemeIntelReportBootstrapCallIDs {
 			break
 		}
@@ -697,9 +717,14 @@ func (s *Server) aiBusinessBriefThemeSummaryForSeedsWithBootstrap(ctx context.Co
 	if len(callIDs) == 0 {
 		return aiBusinessBriefThemeSummary{EvidenceByTheme: map[string][]themeIntelReportAIRow{}}, nil
 	}
-	highlights, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: callIDs, Limit: maxThemeIntelReportAICondensedRows * len(callIDs)})
-	if err != nil {
-		return aiBusinessBriefThemeSummary{}, err
+	highlights := make([]sqlite.AIHighlightRow, 0, min(maxAIHighlightLimit, maxThemeIntelReportAICondensedRows*len(callIDs)))
+	for start := 0; start < len(callIDs); start += maxAIHighlightCallIDs {
+		end := min(start+maxAIHighlightCallIDs, len(callIDs))
+		batch, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: callIDs[start:end], Limit: maxThemeIntelReportAICondensedRows * (end - start)})
+		if err != nil {
+			return aiBusinessBriefThemeSummary{}, err
+		}
+		highlights = append(highlights, batch...)
 	}
 	callSupport := make(map[string]map[string]struct{}, len(seedTopics))
 	evidence := make(map[string][]themeIntelReportAIRow, len(seedTopics))
