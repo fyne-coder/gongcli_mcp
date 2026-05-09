@@ -132,6 +132,93 @@ func TestFacadeQuestionAnswerGenericThemeQuestionNeedsSeed(t *testing.T) {
 	}
 }
 
+func TestBusinessWorkbenchRoutesSurfaceDataReadinessCaveats(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{
+			internalRoutedToolThemeIntelReport,
+			internalRoutedToolBuyerQuestions,
+			internalRoutedToolObjectionSignals,
+		}),
+	)
+	tests := []struct {
+		name      string
+		operation string
+		args      map[string]any
+	}{
+		{
+			name:      "theme report",
+			operation: OpThemeIntelReport,
+			args: map[string]any{
+				"theme_query": "pricing",
+				"filter": map[string]any{
+					"from_date":         "2026-04-01",
+					"to_date":           "2026-04-30",
+					"transcript_status": "present",
+				},
+				"limit": 5,
+			},
+		},
+		{
+			name:      "buyer questions",
+			operation: OpExtractBuyerQuestions,
+			args: map[string]any{
+				"topics": []string{"pricing"},
+				"filter": map[string]any{
+					"from_date":         "2026-04-01",
+					"to_date":           "2026-04-30",
+					"transcript_status": "present",
+				},
+				"limit": 5,
+			},
+		},
+		{
+			name:      "objection signals",
+			operation: OpExtractObjectionSignals,
+			args: map[string]any{
+				"topics": []string{"pricing"},
+				"filter": map[string]any{
+					"from_date":         "2026-04-01",
+					"to_date":           "2026-04-30",
+					"transcript_status": "present",
+				},
+				"limit": 5,
+			},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, tt.operation, tt.args))
+			if err != nil {
+				t.Fatalf("%s dispatch: %v", tt.operation, err)
+			}
+			if result.IsError {
+				t.Fatalf("%s returned isError: %+v", tt.operation, result)
+			}
+			wrapper := decodeFacadeWrapper(t, result)
+			inner, _ := wrapper["result"].(map[string]any)
+			if _, ok := inner["data_readiness_caveats"]; !ok {
+				t.Fatalf("%s missing data_readiness_caveats: %+v", tt.operation, inner)
+			}
+			readiness, _ := inner["dimension_readiness"].(map[string]any)
+			if readiness["loss_reason"] != "unavailable_unmapped" || readiness["methodology"] != "unavailable_unmapped" {
+				t.Fatalf("%s missing unmapped dimension readiness: %v", tt.operation, readiness)
+			}
+			rendered := mustJSONText(t, inner)
+			if !strings.Contains(rendered, "loss_reason_profile_dependent") || !strings.Contains(rendered, "methodology_profile_dependent") {
+				t.Fatalf("%s should surface profile-dependent caveats in payload/warnings: %s", tt.operation, rendered)
+			}
+		})
+	}
+}
+
 func TestFacadeQuestionAnswerEmptyCohortPrecedesSeedGuidance(t *testing.T) {
 	t.Parallel()
 

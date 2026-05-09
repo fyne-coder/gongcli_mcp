@@ -163,9 +163,24 @@ fingerprints, removed-call counts, and skipped-table notes. It must not contain
 database URLs, customer names, blocklist values, call IDs, call titles, or raw
 transcript text.
 
-The current refresh rebuilds the target in place. For larger deployments, queue
-or implement a later blue/green flow with `gongctl_mcp_next` and a controlled
-reader cutover.
+The current refresh rebuilds the target in place. For larger deployments that
+need near-zero-downtime serving database refreshes, use a blue/green serving DB
+pattern:
+
+1. Keep `gongctl_mcp` as the active serving database.
+2. Refresh `gongctl_mcp_next` from the operator/source database using the same
+   governance config.
+3. Apply the same scoped reader grants and policy checks to `gongctl_mcp_next`.
+4. Run `gongmcp` smoke and the business-workbench GA harness against a staging
+   MCP instance pointed at `gongctl_mcp_next`.
+5. Cut over by changing the MCP reader URL or service secret to
+   `gongctl_mcp_next`, then restart only `gongmcp`.
+6. Keep the previous `gongctl_mcp` intact for rollback until the post-cutover
+   smoke passes.
+
+This is distinct from app-only deploys. App-only deploys refresh code/payloads
+without rebuilding Keycloak/Caddy/oauth2-proxy. Blue/green serving DB refreshes
+minimize downtime and rollback risk when the data plane changes.
 
 When the same `gongctl_mcp` database, reader role/grants, auth settings,
 binary/image, and tool preset remain in place, `gongmcp` does not need to be

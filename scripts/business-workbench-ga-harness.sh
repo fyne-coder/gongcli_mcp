@@ -8,6 +8,9 @@
 # Optional env:
 #   MCP_BEARER_TOKEN   bearer token for the MCP gateway
 #   MCP_ORIGIN         Origin header for hosted MCP gateways
+#   GA_HARNESS_PROSPECT_ACCOUNT_QUERY
+#                      optional user-approved account/prospect query for a
+#                      live positive prospect.question.answer smoke
 #   ARTIFACT_DIR       output directory; defaults to a private temp dir
 #   KEEP_ARTIFACTS=1   keep ARTIFACT_DIR on success
 #
@@ -216,6 +219,20 @@ save_tool prospect-question-no-optin.json gong_analyze "$(jq -n '{
   }
 }')"
 
+if [[ -n "${GA_HARNESS_PROSPECT_ACCOUNT_QUERY:-}" ]]; then
+  save_tool prospect-question-positive.json gong_analyze "$(jq -n --arg account_query "$GA_HARNESS_PROSPECT_ACCOUNT_QUERY" '{
+    operation:"prospect.question.answer",
+    arguments:{
+      question:"What has this named prospect or account said across calls about pricing, implementation, punchout, or manual process?",
+      query:"implementation",
+      filter:{account_query:$account_query,from_date:"2026-01-01",to_date:"2026-05-08",transcript_status:"present"},
+      include_account_names:true,
+      field_profile:"limited",
+      limit:10
+    }
+  }')"
+fi
+
 save_tool adversarial-transcript.json gong_query "$(jq -n '{
   operation:"query.transcript_segments",
   arguments:{
@@ -373,6 +390,34 @@ elif "include_account_names=true" not in prospect_text:
     prospect_grade = "FAIL"
     prospect_problems.append("prospect.question.answer opt-in error did not explain required account-name authorization")
 cases.append({"name": "prospect_question_requires_account_opt_in", "grade": prospect_grade, "status": prospect_no_optin.get("status") if isinstance(prospect_no_optin, dict) else None, "problems": prospect_problems})
+
+positive_path = root / "prospect-question-positive.json"
+if positive_path.exists():
+    prospect_positive = load("prospect-question-positive.json")
+    positive_grade = "PASS"
+    positive_problems = []
+    if not isinstance(prospect_positive, dict):
+        positive_grade = "FAIL"
+        positive_problems.append("expected object payload")
+    elif prospect_positive.get("_tool_error"):
+        positive_grade = "FAIL"
+        positive_problems.append("positive prospect.question.answer returned tool error")
+    else:
+        status = prospect_positive.get("status")
+        if status not in ("prospect_evidence_ready", "ai_brief_prospect_context_ready", "transcript_evidence_ready"):
+            positive_grade = "FAIL"
+            positive_problems.append(f"unexpected prospect.question.answer status {status!r}")
+        if prospect_positive.get("ai_condensed_evidence_count", 0) == 0 and prospect_positive.get("transcript_evidence_count", 0) == 0:
+            positive_grade = "FAIL"
+            positive_problems.append("positive prospect.question.answer returned no AI or transcript evidence")
+        for required in ("evidence_policy", "answer_contract", "data_readiness_caveats", "dimension_readiness"):
+            if required not in prospect_positive:
+                positive_grade = "FAIL"
+                positive_problems.append(f"missing {required}")
+        if re.search(r'"call_id"\s*:\s*"[^"]+', text(prospect_positive)):
+            positive_grade = "FAIL"
+            positive_problems.append("positive prospect.question.answer exposed raw call_id")
+    cases.append({"name": "prospect_question_positive_live_opt_in", "grade": positive_grade, "status": prospect_positive.get("status") if isinstance(prospect_positive, dict) else None, "problems": positive_problems})
 
 adv = load("adversarial-transcript.json")
 adv_text = text(adv)
