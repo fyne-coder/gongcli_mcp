@@ -205,6 +205,17 @@ save_tool quote-pack-limited.json gong_get_evidence "$(jq -n '{
   }
 }')"
 
+save_tool prospect-question-no-optin.json gong_analyze "$(jq -n '{
+  operation:"prospect.question.answer",
+  arguments:{
+    question:"What has this prospect said about implementation timeline?",
+    query:"implementation timeline",
+    filter:{account_query:"Example Prospect",from_date:"2026-04-01",to_date:"2026-05-08",transcript_status:"present"},
+    field_profile:"limited",
+    limit:5
+  }
+}')"
+
 save_tool adversarial-transcript.json gong_query "$(jq -n '{
   operation:"query.transcript_segments",
   arguments:{
@@ -347,6 +358,21 @@ cases.append(case("demand_gen_dimensions", load("demand-gen.json"),
 cases.append(case("field_profile_quote_pack", load("quote-pack-limited.json"),
     required_paths=("evidence_policy","field_profile","warnings"),
     allowed_status=("cache_derived","ready","ok")))
+
+prospect_no_optin = load("prospect-question-no-optin.json")
+prospect_grade = "PASS"
+prospect_problems = []
+prospect_text = text(prospect_no_optin)
+if not isinstance(prospect_no_optin, dict):
+    prospect_grade = "FAIL"
+    prospect_problems.append("expected object payload")
+elif not prospect_no_optin.get("_tool_error"):
+    prospect_grade = "FAIL"
+    prospect_problems.append("prospect.question.answer allowed account_query without include_account_names=true")
+elif "include_account_names=true" not in prospect_text:
+    prospect_grade = "FAIL"
+    prospect_problems.append("prospect.question.answer opt-in error did not explain required account-name authorization")
+cases.append({"name": "prospect_question_requires_account_opt_in", "grade": prospect_grade, "status": prospect_no_optin.get("status") if isinstance(prospect_no_optin, dict) else None, "problems": prospect_problems})
 
 adv = load("adversarial-transcript.json")
 adv_text = text(adv)

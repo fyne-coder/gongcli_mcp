@@ -93,6 +93,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpEvidenceQuotesSearch,
 		OpExtractBuyerQuestions,
 		OpExtractObjectionSignals,
+		OpProspectQuestionAnswer,
 		OpQueryCalls,
 		OpQueryScorecardDetail,
 		OpQueryScorecards,
@@ -126,6 +127,51 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		if got[i] != expected[i] {
 			t.Fatalf("operations not sorted: got %v want %v", got, expected)
 		}
+	}
+}
+
+func TestFacadeProspectQuestionAnswerOperationRegistered(t *testing.T) {
+	t.Parallel()
+
+	op, ok := FacadeOperationByName(OpProspectQuestionAnswer)
+	if !ok {
+		t.Fatalf("FacadeOperationByName(%q) not registered", OpProspectQuestionAnswer)
+	}
+	if op.FacadeTool != FacadeToolAnalyze {
+		t.Fatalf("prospect question facade_tool=%q want %s", op.FacadeTool, FacadeToolAnalyze)
+	}
+	if op.RoutedTool != internalRoutedToolProspectQuestionAnswer {
+		t.Fatalf("prospect question routed_tool=%q want %s", op.RoutedTool, internalRoutedToolProspectQuestionAnswer)
+	}
+	props, _ := op.InputSchema["properties"].(map[string]any)
+	for _, want := range []string{"question", "filter", "include_account_names"} {
+		if _, ok := props[want]; !ok {
+			t.Fatalf("prospect question schema missing %q in %+v", want, props)
+		}
+	}
+	tools := facadeTools(LimitPolicy{})
+	var analyze tool
+	for _, tl := range tools {
+		if tl.Name == FacadeToolAnalyze {
+			analyze = tl
+			break
+		}
+	}
+	if analyze.Name == "" {
+		t.Fatalf("facade tools missing %s", FacadeToolAnalyze)
+	}
+	enumProps, _ := analyze.InputSchema["properties"].(map[string]any)
+	opSchema, _ := enumProps["operation"].(map[string]any)
+	enum, _ := opSchema["enum"].([]string)
+	have := false
+	for _, name := range enum {
+		if name == OpProspectQuestionAnswer {
+			have = true
+			break
+		}
+	}
+	if !have {
+		t.Fatalf("gong_analyze operation enum missing %q: %v", OpProspectQuestionAnswer, enum)
 	}
 }
 
@@ -950,6 +996,146 @@ func (f *fakeDrilldownStore) ResolveCallIDByRef(ctx context.Context, ref string)
 		return id, nil
 	}
 	return f.Store.ResolveCallIDByRef(ctx, ref)
+}
+
+func TestFacadeProspectQuestionAnswerBriefsFirstThenTranscriptEvidence(t *testing.T) {
+	t.Parallel()
+
+	base := openSeededStore(t)
+	defer base.Close()
+	ctx := context.Background()
+
+	const callID = "call_prospect_question_001"
+	if _, err := base.UpsertCall(ctx, mustJSON(t, map[string]any{
+		"id":        callID,
+		"title":     "Business Discovery prospect question",
+		"started":   "2026-02-18T15:00:00Z",
+		"duration":  1800,
+		"system":    "Zoom",
+		"direction": "Conference",
+		"scope":     "External",
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct_prospect_question",
+				"name":       "Prospect Question Account",
+				"fields": []any{
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp_prospect_question",
+				"name":       "Prospect Question Opportunity",
+				"fields": []any{
+					map[string]any{"name": "StageName", "value": "Discovery"},
+					map[string]any{"name": "Type", "value": "New Business"},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert prospect call: %v", err)
+	}
+	if _, err := base.UpsertTranscript(ctx, mustJSON(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": callID,
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "The manual process creates implementation risk for this prospect."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert prospect transcript: %v", err)
+	}
+	callRef := sqlite.StableCallRef(callID)
+	store := &fakeDrilldownStore{
+		Store: base,
+		refs:  map[string]string{callRef: callID},
+		highlights: map[string][]sqlite.AIHighlightRow{
+			callID: {
+				{CallID: callID, HighlightIndex: 0, HighlightType: "brief", HighlightText: "Gong AI brief: manual process and implementation effort were central.", SourcePath: "content.brief", UpdatedAt: "2026-02-18T16:00:00Z"},
+			},
+		},
+	}
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolProspectQuestionAnswer}),
+		WithPolicySwitches(PolicySwitches{HideRawCallIDs: true}),
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"operation": OpProspectQuestionAnswer,
+		"arguments": map[string]any{
+			"question":              "What is this prospect saying about manual process and implementation?",
+			"query":                 "manual process",
+			"filter":                map[string]any{"account_query": "Prospect Question Account", "quarter": "2026-Q1", "transcript_status": "present"},
+			"include_account_names": true,
+			"field_profile":         "limited",
+			"limit":                 5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result, err := server.executeFacadeDispatch(ctx, FacadeToolAnalyze, args)
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, _ := wrapper["result"].(map[string]any)
+	if inner["status"] != "prospect_evidence_ready" {
+		t.Fatalf("status=%v inner=%+v", inner["status"], inner)
+	}
+	if got, _ := inner["ai_condensed_evidence_count"].(float64); got != 1 {
+		t.Fatalf("ai_condensed_evidence_count=%v want 1 inner=%+v", got, inner)
+	}
+	if got, _ := inner["transcript_evidence_count"].(float64); got != 1 {
+		t.Fatalf("transcript_evidence_count=%v want 1 inner=%+v", got, inner)
+	}
+	rendered := mustJSONText(t, inner)
+	if strings.Contains(rendered, callID) {
+		t.Fatalf("prospect question leaked raw call id under HideRawCallIDs: %s", rendered)
+	}
+	for _, want := range []string{"prospect_question_briefs_first", "account_query_explicit_opt_in", "limited_field_profile_does_not_redact_ai_condensed_evidence_text"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("prospect question missing warning %q: %s", want, rendered)
+		}
+	}
+}
+
+func TestFacadeProspectQuestionAnswerRequiresAccountOptIn(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist(FacadeToolNames()),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolProspectQuestionAnswer}),
+	)
+	args, err := json.Marshal(map[string]any{
+		"operation": OpProspectQuestionAnswer,
+		"arguments": map[string]any{
+			"question": "What is this prospect asking about?",
+			"filter":   map[string]any{"account_query": "Prospect Question Account", "quarter": "2026-Q1"},
+			"limit":    5,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, args)
+	if err == nil || !strings.Contains(err.Error(), "include_account_names=true") {
+		t.Fatalf("expected include_account_names account_query error, got %v", err)
+	}
 }
 
 func TestFacadeEvidenceCallDrilldownOperationRegistered(t *testing.T) {

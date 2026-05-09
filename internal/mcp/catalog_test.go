@@ -88,7 +88,7 @@ func TestToolCatalogInvariants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	wantFacadeRoutedTools := append(copyStrings(analystTools), internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals)
+	wantFacadeRoutedTools := append(copyStrings(analystTools), internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals)
 	assertStringSlicesEqual(t, facadeRoutedTools, wantFacadeRoutedTools, "analyst-facade hidden routed tools")
 
 	for _, preset := range []string{"analyst-business-core", "analyst", "redacted-all-readonly", "all-readonly"} {
@@ -100,7 +100,7 @@ func TestToolCatalogInvariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ExpandToolPresetFacadeRoutedTools(%q) returned error: %v", preset, err)
 		}
-		want := append(copyStrings(visibleTools), internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals)
+		want := append(copyStrings(visibleTools), internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals)
 		assertStringSlicesEqual(t, routedTools, want, preset+" hidden facade routed tools")
 	}
 }
@@ -124,7 +124,7 @@ func TestBusinessWorkbenchPresetExposesOnlyFacadeTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
 	}
-	wantRouted := append(copyStrings(analyst), internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals)
+	wantRouted := append(copyStrings(analyst), internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals)
 	assertStringSlicesEqual(t, routed, wantRouted, "business-workbench hidden facade routed tools")
 
 	grants, err := ExpandToolPresetReaderGrantTools("business-workbench")

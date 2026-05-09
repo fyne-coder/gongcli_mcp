@@ -254,13 +254,13 @@ func ExpandToolPresetFacadeRoutedTools(name string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals), nil
+		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals), nil
 	case "analyst-business-core", "analyst", "analyst-expansion", "redacted-all-readonly", "redacted-all", "redacted-search-lab", "broad-public-redacted", "all-readonly", "all-tools", "all":
 		tools, err := ExpandToolPreset(name)
 		if err != nil {
 			return nil, err
 		}
-		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals), nil
+		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals), nil
 	default:
 		if strings.TrimSpace(name) == "" {
 			return nil, nil

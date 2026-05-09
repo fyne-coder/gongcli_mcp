@@ -60,6 +60,7 @@ const (
 	OpEvidenceHighlightsList    = "evidence.highlights.list"
 	OpEvidenceCallDrilldown     = "evidence.call_drilldown"
 	OpQuestionAnswer            = "question.answer"
+	OpProspectQuestionAnswer    = "prospect.question.answer"
 	OpThemeIntelReport          = "theme_intelligence_report"
 	OpExtractBuyerQuestions     = "extract.buyer_questions"
 	OpExtractObjectionSignals   = "extract.objection_signals"
@@ -71,6 +72,7 @@ const (
 // store is the only backend that can return rows.
 const internalRoutedToolListAIHighlights = "list_call_ai_highlights"
 const internalRoutedToolQuestionAnswer = "question_answer"
+const internalRoutedToolProspectQuestionAnswer = "prospect_question_answer"
 const internalRoutedToolCallDrilldown = "call_drilldown"
 const internalRoutedToolThemeIntelReport = "theme_intelligence_report"
 const internalRoutedToolBuyerQuestions = "extract_buyer_questions"
@@ -432,6 +434,50 @@ func FacadeOperations() []FacadeOperation {
 			},
 		},
 		{
+			Name:          OpProspectQuestionAnswer,
+			Version:       "v1",
+			Description:   "Answer a question for one explicitly selected prospect/account across calls by searching Gong AI brief/keyPoint/highlight rows first, then bounded transcript quote evidence. Requires filter.account_query plus include_account_names=true; it is not a customer-enumeration path.",
+			FacadeTool:    FacadeToolAnalyze,
+			RoutedTool:    internalRoutedToolProspectQuestionAnswer,
+			ExposureLevel: "business-workbench",
+			AllowedPresets: []string{
+				"business-workbench",
+				"analyst-facade",
+				"analyst-business-core",
+				"analyst",
+				"all-readonly",
+				"redacted-all-readonly",
+			},
+			InputSchema: objectSchema(map[string]any{
+				"question":              map[string]any{"type": "string", "maxLength": maxQuestionAnswerQuestionLength},
+				"filter":                map[string]any{"type": "object", "description": "Must include account_query and a selective date/title/lifecycle/stage constraint when possible."},
+				"query":                 map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional transcript quote search seed. Defaults to a bounded derivation from question."},
+				"theme_query":           map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for query."},
+				"role_context":          map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
+				"output_intent":         map[string]any{"type": "string", "enum": []string{"", "brief", "quotes", "risks", "themes", "next_steps"}},
+				"field_profile":         fieldProfileSchema(),
+				"speaker_role":          speakerRoleSchema(),
+				"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
+				"include_call_ids":      map[string]any{"type": "boolean"},
+				"include_call_titles":   map[string]any{"type": "boolean"},
+				"include_account_names": map[string]any{"type": "boolean", "description": "Required to authorize account_query. field_profile may still suppress structured account-name output."},
+			}, []string{"question", "filter", "include_account_names"}),
+			Examples: []any{
+				map[string]any{
+					"question": "What is this prospect asking about implementation and punchout across calls?",
+					"filter": map[string]any{
+						"account_query":     "Example Prospect",
+						"quarter":           "2026-Q2",
+						"transcript_status": "present",
+					},
+					"include_account_names": true,
+					"role_context":          "sales-enablement",
+					"output_intent":         "brief",
+					"limit":                 10,
+				},
+			},
+		},
+		{
 			Name:          OpQuestionAnswer,
 			Version:       "v1",
 			Description:   "Prepare a governed evidence pack for an ad-hoc business question after the user or host has a specific topic seed. Broad prompts such as 'main themes this quarter' return status=needs_theme_seed with suggested seeds and operations instead of weak literal-word evidence. The host model should synthesize final prose from returned coverage, evidence, warnings, and limitations; gongmcp does not invent unsupported conclusions.",
@@ -525,7 +571,7 @@ func facadeTools(_ LimitPolicy) []tool {
 		{
 			Name:        FacadeToolAnalyze,
 			Description: "Stable facade for bounded analysis operations: cohort build/inspect, theme discovery, ad-hoc question evidence preparation, and limitations explanation.",
-			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain, OpQuestionAnswer, OpThemeIntelReport}),
+			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain, OpQuestionAnswer, OpProspectQuestionAnswer, OpThemeIntelReport}),
 		},
 		{
 			Name:        FacadeToolGetEvidence,
@@ -798,6 +844,9 @@ func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json
 	if name == internalRoutedToolQuestionAnswer {
 		return s.executeQuestionAnswer(ctx, args)
 	}
+	if name == internalRoutedToolProspectQuestionAnswer {
+		return s.executeProspectQuestionAnswer(ctx, args)
+	}
 	if name == internalRoutedToolCallDrilldown {
 		return s.executeCallDrilldown(ctx, args)
 	}
@@ -1038,6 +1087,271 @@ type questionAnswerArgs struct {
 	IncludeCallIDs      bool       `json:"include_call_ids"`
 	IncludeCallTitles   bool       `json:"include_call_titles"`
 	IncludeAccountNames bool       `json:"include_account_names"`
+}
+
+type prospectQuestionAnswerArgs struct {
+	Question            string     `json:"question"`
+	Filter              callFilter `json:"filter"`
+	RoleContext         string     `json:"role_context"`
+	OutputIntent        string     `json:"output_intent"`
+	Query               string     `json:"query"`
+	ThemeQuery          string     `json:"theme_query"`
+	Limit               int        `json:"limit"`
+	FieldProfile        string     `json:"field_profile"`
+	SpeakerRole         string     `json:"speaker_role"`
+	IncludeCallIDs      bool       `json:"include_call_ids"`
+	IncludeCallTitles   bool       `json:"include_call_titles"`
+	IncludeAccountNames bool       `json:"include_account_names"`
+}
+
+func (s *Server) executeProspectQuestionAnswer(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args prospectQuestionAnswerArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+	question := strings.TrimSpace(args.Question)
+	if question == "" {
+		return toolCallResult{}, fmt.Errorf("%s requires question", OpProspectQuestionAnswer)
+	}
+	if len(question) > maxQuestionAnswerQuestionLength {
+		return toolCallResult{}, fmt.Errorf("%s question exceeds %d characters", OpProspectQuestionAnswer, maxQuestionAnswerQuestionLength)
+	}
+	if strings.TrimSpace(args.Filter.AccountQuery) == "" {
+		return toolCallResult{}, fmt.Errorf("%s requires filter.account_query", OpProspectQuestionAnswer)
+	}
+	accountQueryAuthorized := args.IncludeAccountNames
+	if !accountQueryAuthorized {
+		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true because it can probe customer names")
+	}
+	if s.restrictedAccountQuery(args.Filter.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
+	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
+		IncludeRawIDs:       args.IncludeCallIDs,
+		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeAccountNames: args.IncludeAccountNames,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	args.FieldProfile = profiled.Profile
+	args.IncludeCallIDs = profiled.IncludeRawIDs
+	args.IncludeCallTitles = profiled.IncludeCallTitles
+	args.IncludeAccountNames = profiled.IncludeAccountNames
+	speakerRoleFilter, err := normalizeSpeakerRoleFilter(firstNonBlank(args.SpeakerRole, speakerRoleExternalOrUnknown))
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	normalized, err := normalizeCallFilter(args.Filter)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	normalized = applyDefaultBroadThemeQualityFilters(normalized)
+	limit := s.limitPolicy.BusinessAnalysisLimit(args.Limit)
+	if normalized.Limit > 0 {
+		limit = s.limitPolicy.BusinessAnalysisLimit(normalized.Limit)
+		normalized.Limit = limit
+	}
+	evidenceQuery := strings.TrimSpace(firstNonBlank(args.Query, args.ThemeQuery, normalized.Query))
+	derivedQuery, dropped := deriveBoundedThemeQuery(question)
+	derivationSource := "explicit"
+	if evidenceQuery == "" {
+		evidenceQuery = derivedQuery
+		derivationSource = "derived_from_question"
+	}
+	derivationMeta := map[string]any{
+		"source":            derivationSource,
+		"term_count":        len(strings.Fields(evidenceQuery)),
+		"dropped_count":     dropped,
+		"max_terms":         themeQueryDerivationCap,
+		"max_chars":         maxBusinessAnalysisFTSQueryLength,
+		"stop_words_pruned": true,
+	}
+	if s.store == nil {
+		return newToolResult(map[string]any{
+			"operation": OpProspectQuestionAnswer,
+			"status":    "store_unavailable",
+			"question":  question,
+			"warnings":  []string{"store_unavailable"},
+		})
+	}
+	cohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
+		Filter: sqliteBusinessAnalysisFilter(normalized),
+		Limit:  limit,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	baArgs := businessAnalysisArgs{
+		Filter:              normalized,
+		Query:               evidenceQuery,
+		Limit:               limit,
+		IncludeCallIDs:      args.IncludeCallIDs,
+		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeAccountNames: args.IncludeAccountNames,
+		FieldProfile:        args.FieldProfile,
+		SpeakerRole:         speakerRoleFilter,
+	}
+	warnings := businessAnalysisWarnings(OpProspectQuestionAnswer, normalized)
+	warnings = append(warnings,
+		"prospect_question_briefs_first: Gong AI brief/keyPoint/highlight rows are searched before transcript quote evidence.",
+		"account_query_explicit_opt_in: include_account_names=true authorized this account-scoped lookup; this operation does not enumerate accounts.")
+	callRows := s.businessAnalysisCallRows(cohort.Rows, baArgs)
+	aiRows, missingAIRefs, aiSuppressed, err := s.prospectQuestionAIHighlights(ctx, cohort.Rows, args.IncludeCallIDs, limit)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	if aiSuppressed > 0 {
+		warnings = append(warnings, "suppressed_call_ai_highlights_filtered")
+	}
+	if len(aiRows) == 0 {
+		warnings = append(warnings, "no_ai_business_brief_rows_for_prospect_filter")
+	}
+	items := []businessAnalysisItem{}
+	quotes := []businessAnalysisQuote{}
+	if evidenceQuery != "" {
+		items, quotes, err = s.businessAnalysisEvidence(ctx, normalized, evidenceQuery, limit, baArgs)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		if len(items) == 0 {
+			warnings = append(warnings, "no_transcript_quote_evidence_for_question_terms")
+		}
+	} else {
+		warnings = append(warnings, "no_transcript_query_derived_from_question")
+	}
+	status := "prospect_evidence_ready"
+	switch {
+	case cohort.Summary.CallCount == 0:
+		status = "empty_prospect_cohort"
+	case len(aiRows) > 0 && len(items) == 0:
+		status = "ai_brief_prospect_context_ready"
+	case len(aiRows) == 0 && len(items) > 0:
+		status = "transcript_evidence_ready"
+	case len(aiRows) == 0 && len(items) == 0:
+		status = "no_evidence_for_prospect_question"
+	}
+	payload := map[string]any{
+		"operation":                   OpProspectQuestionAnswer,
+		"status":                      status,
+		"question":                    question,
+		"role_context":                strings.TrimSpace(args.RoleContext),
+		"output_intent":               strings.TrimSpace(args.OutputIntent),
+		"searched_scope":              normalized,
+		"field_profile":               args.FieldProfile,
+		"speaker_role_filter":         speakerRoleFilter,
+		"account_query_authorized":    accountQueryAuthorized,
+		"evidence_query":              evidenceQuery,
+		"derived_theme_query":         evidenceQuery,
+		"theme_query_derivation":      derivationMeta,
+		"limit":                       limit,
+		"coverage_summary":            businessAnalysisCoverageFromSummary(cohort.Summary),
+		"cohort_summary":              cohort.Summary,
+		"reviewed_calls":              callRows,
+		"reviewed_call_count":         len(callRows),
+		"ai_condensed_evidence":       aiRows,
+		"ai_condensed_evidence_count": len(aiRows),
+		"call_refs_without_ai_rows":   missingAIRefs,
+		"transcript_evidence":         items,
+		"quotes":                      quotes,
+		"transcript_evidence_count":   len(items),
+		"evidence_flow":               []string{evidenceTypeGongAICondensedCandidate, evidenceTypeTranscriptQuote},
+		"warnings":                    warnings,
+		"limitations": append(businessAnalysisLimitations(OpProspectQuestionAnswer),
+			"ai_business_brief_candidates_are_not_verbatim_buyer_quotes",
+			"account_query_is_explicit_opt_in_and_not_customer_enumeration"),
+		"answer_contract": []string{
+			"Use ai_condensed_evidence for directional account/prospect context only.",
+			"Use transcript_evidence or quotes for customer-facing claims.",
+			"Unknown or affiliation_missing speaker evidence is unattributed; do not phrase it as buyer speech.",
+			"Do not infer missing CRM dimensions, loss reasons, or methodology concepts.",
+		},
+		"suggested_followups": []string{
+			"Run theme_intelligence_report with the strongest transcript evidence_query for quote-backed rollups.",
+			"Use evidence.call_drilldown with a returned call_ref and exact evidence_query for call-level context.",
+			"Refine the account filter with date range, title_query, lifecycle bucket, opportunity stage, or participant title when the cohort is broad.",
+		},
+	}
+	evidenceType := evidenceTypeTranscriptQuote
+	if len(items) == 0 {
+		evidenceType = evidenceTypeGongAICondensedCandidate
+	}
+	addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceType, &cohort.Summary, args.FieldProfile, len(aiRows) > 0, speakerAttributionSummaryFromItems(items))
+	return newToolResult(payload)
+}
+
+func (s *Server) prospectQuestionAIHighlights(ctx context.Context, rows []sqlite.BusinessAnalysisCallRow, includeRawIDs bool, limit int) ([]sqlite.AIHighlightRow, []string, int, error) {
+	if limit <= 0 {
+		limit = defaultAIHighlightLimit
+	}
+	if limit > maxAIHighlightLimit {
+		limit = maxAIHighlightLimit
+	}
+	callIDs := make([]string, 0, min(maxAIHighlightCallIDs, len(rows)))
+	refByCallID := make(map[string]string, min(maxAIHighlightCallIDs, len(rows)))
+	for _, row := range rows {
+		if row.CallID == "" {
+			continue
+		}
+		if s.isSuppressedCall(row.CallID) {
+			continue
+		}
+		if len(callIDs) >= maxAIHighlightCallIDs {
+			break
+		}
+		callIDs = append(callIDs, row.CallID)
+		refByCallID[row.CallID] = callRef(row.CallID)
+	}
+	if len(callIDs) == 0 {
+		return nil, nil, 0, nil
+	}
+	highlightLimit := limit
+	if highlightLimit < len(callIDs) {
+		highlightLimit = len(callIDs)
+	}
+	if highlightLimit > maxAIHighlightLimit {
+		highlightLimit = maxAIHighlightLimit
+	}
+	rowsOut, err := s.store.ListAIHighlights(ctx, sqlite.AIHighlightListParams{CallIDs: callIDs, Limit: highlightLimit})
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	suppressed := 0
+	cleaned := make([]sqlite.AIHighlightRow, 0, len(rowsOut))
+	for _, row := range rowsOut {
+		if s.isSuppressedCall(row.CallID) {
+			suppressed++
+			continue
+		}
+		ref := refByCallID[row.CallID]
+		if ref != "" {
+			row.CallRef = ref
+		}
+		if !includeRawIDs || s.policySwitches.HideRawCallIDs {
+			row.CallID = ""
+		}
+		cleaned = append(cleaned, row)
+		if len(cleaned) >= limit {
+			break
+		}
+	}
+	withRows := make(map[string]struct{}, len(cleaned))
+	for _, row := range cleaned {
+		if row.CallRef != "" {
+			withRows[row.CallRef] = struct{}{}
+		}
+	}
+	missing := make([]string, 0)
+	for _, id := range callIDs {
+		ref := refByCallID[id]
+		if ref == "" {
+			continue
+		}
+		if _, ok := withRows[ref]; !ok {
+			missing = append(missing, ref)
+		}
+	}
+	return cleaned, missing, suppressed, nil
 }
 
 func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {

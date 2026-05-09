@@ -17,6 +17,10 @@ users.
   Use transcript quote evidence for customer-facing claims.
 - For Sales coaching, use `extract.objection_signals` with seeded topics.
 - For Marketing content gaps, use `extract.buyer_questions` with seeded topics.
+- For a question about one named prospect or account across calls, use
+  `prospect.question.answer` only when the user supplied the prospect/account
+  name. Set `filter.account_query` and `include_account_names=true`; do not use
+  this path to discover or enumerate customers.
 - For drilldowns, pass the exact `drilldown_term` returned by
   `theme_intelligence_report`.
 
@@ -60,6 +64,9 @@ evidence" or "external-or-unknown evidence" instead.
 - Do not expose raw seedless `analyze.themes.discover` as a final answer path.
 - Do not use raw transcript search for broad theme prompts.
 - Do not probe account/customer names unless explicitly permitted.
+- Do not turn account-scoped analysis into customer enumeration. A named
+  account query is allowed only when the user supplied the account/prospect name
+  or the workflow has explicit account-name authorization.
 - Do not hide sparse coverage behind confident prose.
 
 ## Release Harness

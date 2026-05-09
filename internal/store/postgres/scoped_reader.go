@@ -553,6 +553,7 @@ func facadeOnlyScopedReaderTools() map[string]struct{} {
 	return map[string]struct{}{
 		"list_call_ai_highlights":   {},
 		"question_answer":           {},
+		"prospect_question_answer":  {},
 		"call_drilldown":            {},
 		"theme_intelligence_report": {},
 		"extract_buyer_questions":   {},

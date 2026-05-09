@@ -142,6 +142,12 @@ host-assistant contract is documented in
    searches over familiar topics such as pricing, implementation, security
    review, and timeline so a sales or marketing user does not need to know the
    lower-level quote tools.
+6. For a question about one named prospect or account across calls, use
+   `gong_analyze` operation `prospect.question.answer`. The caller must provide
+   `filter.account_query` and explicitly set `include_account_names: true`.
+   This is an opt-in account-scoped evidence workflow, not a customer
+   enumeration path. It searches Gong AI brief/keyPoint/highlight rows first,
+   then bounded transcript quote evidence for the same account-scoped cohort.
 
 Use this evidence hierarchy in host answers:
 
@@ -185,6 +191,20 @@ The payload reports the actual `evidence_query`, `speaker_role_filter`, and
 derivation metadata so the host's final answer can disclose what was searched.
 Explicit `query` or `theme_query` inputs are authoritative and are not retried
 or rewritten by this fallback path.
+
+For named-account ad hoc questions, keep the account name user-supplied. Do not
+ask the MCP to list possible customers and then choose one. Use
+`prospect.question.answer` when the business user already names the account or
+prospect and asks a bounded question such as:
+
+> For ProspectCo, what have they said across calls about manual order entry,
+> punchout, and implementation timeline?
+
+The operation returns `ai_condensed_evidence` from Gong brief/keyPoint/highlight
+rows and `transcript_evidence`/`quotes` when a bounded transcript query is
+available. Host answers should describe AI condensed evidence as directional
+context and use transcript quote evidence for stronger customer-facing claims.
+Unknown speaker rows remain unattributed evidence, not buyer quotes.
 
 Business-workbench release validation is deterministic. Operators should run
 the scripted GA harness before broad business rollout:
