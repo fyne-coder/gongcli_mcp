@@ -36,6 +36,19 @@ LAB_PUBLIC_BASE_URL=https://lab.example.com \
   deploy/lab-auth/scripts/lab-smoke.sh
 ```
 
+Use the right deploy mode before asking a user to reconnect:
+
+- `LAB_DEPLOY_MODE=app-only` preserves Keycloak, dynamic OAuth clients, Caddy,
+  oauth2-proxy, and the auth shim. Use it for normal MCP binary, payload, or
+  tool-behavior updates when the public issuer/origin and auth settings are
+  unchanged. Existing ChatGPT/Claude custom MCP connectors should remain
+  authorized, though schema/description changes may still require a tool
+  refresh.
+- `LAB_DEPLOY_MODE=full` resets the disposable Keycloak volume. Use it for
+  first deploys, issuer/origin changes, Keycloak/user/group/policy changes, or
+  proxy/auth-stack changes. Existing dynamic clients are deleted, so users must
+  recreate or reconnect custom MCP connectors afterward.
+
 Inspect payload-free logs:
 
 ```bash
@@ -60,6 +73,8 @@ LAB_PUBLIC_BASE_URL=https://lab.example.com \
 | Authenticated `/mcp` gets 401 | token does not match gateway validation | issuer, audience/resource, expiry, signature, groups, email allowlist |
 | Tools import but `get_sync_status` fails | MCP JSON/tool-call compatibility issue | server logs for `_meta`, unknown fields, result size, or tool allowlist |
 | A tool is missing | preset or allowlist is narrower than expected | `tools/list`, `GONGMCP_TOOL_PRESET`, `GONGMCP_TOOL_ALLOWLIST` |
+| Connector worked before a deploy and now needs OAuth setup again | full lab deploy reset the disposable Keycloak volume and dynamic clients | reconnect once, then use `LAB_DEPLOY_MODE=app-only` for normal MCP changes |
+| App-only deploy refused to run | no existing running lab stack, or requested auth/issuer settings changed | use `LAB_DEPLOY_MODE=full` for auth/issuer changes |
 | Connector error is generic | client hid the underlying step | inspect IdP, gateway/shim, and `gongmcp` logs by timestamp |
 
 ## Provider-Agnostic Checks

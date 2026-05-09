@@ -15,6 +15,10 @@ LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS="${LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_
 LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB="${LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB:-${GONGMCP_POSTGRES_REDACTED_SERVING_DB:-}}"
 LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST="${LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-${GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-}}"
 LAB_GONGMCP_POLICY_SWITCHES="${LAB_GONGMCP_POLICY_SWITCHES:-${GONGMCP_POLICY_SWITCHES:-}}"
+LAB_DEPLOY_MODE="${LAB_DEPLOY_MODE:-full}"
+LAB_APPROVED_EMAIL_WAS_SET="${LAB_APPROVED_EMAIL+x}"
+LAB_SECONDARY_EMAIL_WAS_SET="${LAB_SECONDARY_EMAIL+x}"
+LAB_BLOCKED_EMAIL_WAS_SET="${LAB_BLOCKED_EMAIL+x}"
 LAB_APPROVED_EMAIL="${LAB_APPROVED_EMAIL:-approved-user@example.test}"
 LAB_SECONDARY_EMAIL="${LAB_SECONDARY_EMAIL:-secondary-user@example.test}"
 LAB_BLOCKED_EMAIL="${LAB_BLOCKED_EMAIL:-blocked-user@example.test}"
@@ -93,6 +97,10 @@ case "$REMOTE_ROOT" in
     exit 2
     ;;
 esac
+case "$LAB_DEPLOY_MODE" in
+  full|app-only) ;;
+  *) echo "LAB_DEPLOY_MODE must be 'full' or 'app-only'" >&2; exit 2 ;;
+esac
 case "$LAB_GONGMCP_IMAGE" in
 	*\'*|*\"*|*[\;\`\$[:space:]]*)
 		echo "LAB_GONGMCP_IMAGE contains unsupported shell metacharacters or whitespace" >&2
@@ -127,6 +135,35 @@ ssh "$LAB_VM" "ufw allow from 172.16.0.0/12 to any port 80 proto tcp >/dev/null 
 
 if ssh "$LAB_VM" "test -f '$REMOTE_LAB/.env'"; then
   scp "$LAB_VM:$REMOTE_LAB/.env" "$tmpdir/.env" >/dev/null
+fi
+
+if [[ "$LAB_DEPLOY_MODE" == "app-only" ]]; then
+  if [[ ! -f "$tmpdir/.env" ]]; then
+    echo "LAB_DEPLOY_MODE=app-only requires an existing lab .env; run LAB_DEPLOY_MODE=full first" >&2
+    exit 1
+  fi
+  if [[ -z "$LAB_APPROVED_EMAIL_WAS_SET" ]]; then
+    LAB_APPROVED_EMAIL="$(read_remote_env "$tmpdir/.env" LAB_APPROVED_EMAIL)"
+  fi
+  if [[ -z "$LAB_SECONDARY_EMAIL_WAS_SET" ]]; then
+    LAB_SECONDARY_EMAIL="$(read_remote_env "$tmpdir/.env" LAB_SECONDARY_EMAIL)"
+  fi
+  if [[ -z "$LAB_BLOCKED_EMAIL_WAS_SET" ]]; then
+    LAB_BLOCKED_EMAIL="$(read_remote_env "$tmpdir/.env" LAB_BLOCKED_EMAIL)"
+  fi
+  existing_public_base_url="$(read_remote_env "$tmpdir/.env" LAB_PUBLIC_BASE_URL)"
+  if [[ "$existing_public_base_url" != "$LAB_PUBLIC_BASE_URL" ]]; then
+    echo "LAB_DEPLOY_MODE=app-only cannot change LAB_PUBLIC_BASE_URL; use LAB_DEPLOY_MODE=full for issuer/origin changes" >&2
+    exit 1
+  fi
+  for auth_key in LAB_APPROVED_EMAIL LAB_SECONDARY_EMAIL LAB_BLOCKED_EMAIL; do
+    existing_auth_value="$(read_remote_env "$tmpdir/.env" "$auth_key")"
+    requested_auth_value="${!auth_key}"
+    if [[ -n "$existing_auth_value" && "$existing_auth_value" != "$requested_auth_value" ]]; then
+      echo "LAB_DEPLOY_MODE=app-only cannot change $auth_key; use LAB_DEPLOY_MODE=full for Keycloak user/group changes" >&2
+      exit 1
+    fi
+  done
 fi
 
 COPYFILE_DISABLE=1 tar --no-xattrs -C "$ROOT" \
@@ -165,6 +202,7 @@ set_env_value "$tmpdir/.env" GONGMCP_DEPLOYMENT_ID "$LAB_GONGMCP_DEPLOYMENT_ID"
 set_env_value "$tmpdir/.env" GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS "$LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS"
 set_env_value "$tmpdir/.env" GONGMCP_POSTGRES_REDACTED_SERVING_DB "$LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB"
 set_env_value "$tmpdir/.env" GONGMCP_POLICY_SWITCHES "$LAB_GONGMCP_POLICY_SWITCHES"
+set_env_value "$tmpdir/.env" LAB_DEPLOY_MODE "$LAB_DEPLOY_MODE"
 set_env_value "$tmpdir/.env" LAB_GONGMCP_IMAGE "$LAB_GONGMCP_IMAGE"
 set_env_value "$tmpdir/.env" GONG_DATABASE_URL "$LAB_GONG_DATABASE_URL"
 if [[ -n "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST" ]]; then
@@ -260,6 +298,22 @@ else
   DOCKER_BUILDKIT=1 docker build --target mcp -t gongctl:mcp-local '$REMOTE_SOURCE'
 fi
 cd '$REMOTE_LAB'
+if [ '$LAB_DEPLOY_MODE' = 'app-only' ]; then
+  keycloak_container=\$(docker-compose ps -q keycloak 2>/dev/null || true)
+  gongmcp_container=\$(docker-compose ps -q gongmcp 2>/dev/null || true)
+  if [ -z \"\$keycloak_container\" ] || [ -z \"\$gongmcp_container\" ]; then
+    echo \"LAB_DEPLOY_MODE=app-only requires an existing running lab stack; run LAB_DEPLOY_MODE=full first\" >&2
+    exit 1
+  fi
+  if [ \"\$(docker inspect -f '{{.State.Running}}' \"\$keycloak_container\" 2>/dev/null || true)\" != \"true\" ]; then
+    echo \"LAB_DEPLOY_MODE=app-only found Keycloak but it is not running; use LAB_DEPLOY_MODE=full or repair the lab stack first\" >&2
+    exit 1
+  fi
+  docker-compose rm -sf gongmcp >/dev/null || true
+  docker-compose up -d --no-deps gongmcp
+  echo \"lab app-only deploy restarted gongmcp and preserved Keycloak/Caddy/oauth2-proxy\" >&2
+  exit 0
+fi
 for postgres_container in gongctl-lab-postgres-governed gongctl-lab-postgres; do
   if docker ps --format '{{.Names}}' | grep -qx \"\$postgres_container\"; then
     docker network disconnect lab-auth_default \"\$postgres_container\" >/dev/null 2>&1 || true
@@ -389,5 +443,5 @@ docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get clients \
 docker-compose restart caddy >/dev/null
 "
 
-echo "lab deployed to $LAB_VM ($LAB_PUBLIC_BASE_URL)"
+echo "lab deployed to $LAB_VM ($LAB_PUBLIC_BASE_URL) with LAB_DEPLOY_MODE=$LAB_DEPLOY_MODE"
 echo "run: deploy/lab-auth/scripts/lab-smoke.sh"

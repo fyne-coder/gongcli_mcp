@@ -100,10 +100,23 @@ copies the synthetic public SQLite DB to
 `$REMOTE_ROOT/runtime/gong-mcp-governed.db`, renders the Keycloak realm import,
 builds the MCP image, and starts the compose stack.
 
-Because this is a disposable lab, each deploy recreates the Keycloak volume so
-the imported realm, public issuer URL, and generated client secret stay in sync.
-The deploy also relaxes Keycloak's anonymous dynamic-client-registration lab
-policies that block ChatGPT connector setup. Specifically, it removes the
+`lab-up.sh` has two deploy modes:
+
+- `LAB_DEPLOY_MODE=full` (default): rebuilds the image, recreates the compose
+  stack, and resets the disposable Keycloak volume. Use this for first deploys,
+  issuer/origin changes, Keycloak realm changes, proxy/Caddy/oauth2-proxy
+  changes, lab user/group changes, or DCR policy changes. A full deploy
+  invalidates dynamic OAuth clients, so ChatGPT/Claude custom MCP connectors
+  need to be recreated or reconnected afterward.
+- `LAB_DEPLOY_MODE=app-only`: copies the current working tree, rebuilds/pulls
+  only the MCP image, updates the lab `.env`, and recreates only the `gongmcp`
+  container. It preserves Keycloak data, dynamic OAuth clients, Caddy,
+  oauth2-proxy, and the auth shim. Use this for normal binary/payload/tool
+  behavior changes when the public issuer/origin and auth settings are
+  unchanged.
+
+The full deploy also relaxes Keycloak's anonymous dynamic-client-registration
+lab policies that block ChatGPT connector setup. Specifically, it removes the
 default anonymous `Trusted Hosts`, `Allowed Client Scopes`, `Allowed Protocol
 Mapper Types`, `Consent Required`, and `Full Scope Disabled` registration
 policies after import. This is intentionally lab-only; production should use a
@@ -171,6 +184,23 @@ LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/srv/gongctl-governed/private/ai-governanc
   deploy/lab-auth/scripts/lab-up.sh
 ```
 
+For a normal MCP-code update against an existing lab, preserve connected MCP
+clients by using app-only mode:
+
+```bash
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+LAB_GONG_DATABASE_URL='postgres://...' \
+LAB_TOOL_PRESET=business-workbench \
+LAB_DEPLOY_MODE=app-only \
+LAB_GONGMCP_DEPLOYMENT_ID=lab-business-workbench-$(date -u +%Y%m%dT%H%M%SZ) \
+  deploy/lab-auth/scripts/lab-up.sh
+```
+
+Use a full deploy instead when changing `LAB_PUBLIC_BASE_URL`, approved lab
+users, Keycloak policies, proxy settings, or the auth stack. App-only mode
+fails closed if the existing lab stack is missing.
+
 ## Stable Cloudflare Tunnel
 
 For a stable lab route, create a named Cloudflare Tunnel and route a hostname to
@@ -236,10 +266,27 @@ The smoke verifies:
 - `gongmcp` has no Gong credential environment variables.
 - the SQLite cache is mounted read-only.
 
+To prove an app-only deploy preserves existing dynamic OAuth clients, run:
+
+```bash
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+  deploy/lab-auth/scripts/lab-app-only-smoke.sh
+```
+
+The app-only smoke registers a temporary dynamic client, confirms it can obtain
+a token, performs `LAB_DEPLOY_MODE=app-only` with a fresh deployment id, checks
+`/healthz` for that deployment id, then confirms the same dynamic client can
+still obtain a token.
+
 ## Manual ChatGPT Test
 
-Create a fresh ChatGPT custom MCP connector after every lab redeploy because the
-Keycloak volume and dynamic clients are disposable.
+Create a fresh ChatGPT custom MCP connector after a full lab deploy because the
+Keycloak volume and dynamic clients are disposable. App-only deploys preserve
+dynamic clients; if only the MCP binary or response payload changed, refresh or
+retry the existing connector first. If tool schemas or descriptions changed,
+the host may still need a tool refresh/reconnect even though OAuth remains
+valid.
 
 - MCP server URL: `$LAB_PUBLIC_BASE_URL/mcp`
 - authentication: OAuth
@@ -287,6 +334,9 @@ Common lab failures:
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
+| Existing custom MCP connector lost authorization after deploy | A full lab deploy reset Keycloak and deleted the dynamic client | recreate/reconnect the connector, or use `LAB_DEPLOY_MODE=app-only` for future binary/payload-only deploys |
+| `LAB_DEPLOY_MODE=app-only requires an existing running lab stack` | app-only was used before a full deploy or after the stack was stopped/reset | run one `LAB_DEPLOY_MODE=full` deploy, then use app-only for normal MCP changes |
+| `LAB_DEPLOY_MODE=app-only cannot change LAB_PUBLIC_BASE_URL` | app-only would preserve a Keycloak issuer that no longer matches the requested public URL | use `LAB_DEPLOY_MODE=full` for issuer/origin changes |
 | `Trusted Hosts` rejected request | Keycloak anonymous dynamic-client-registration policy blocked ChatGPT | rerun `lab-up.sh`; it removes lab-blocking anonymous DCR policies |
 | `Offline tokens not allowed for the user or client` | approved user or dynamic client lacks offline-token permission | verify allowed users have `offline_access` and DCR allows the requested scope |
 | `token audience/client mismatch` | dynamic-client access token lacks the MCP resource audience | verify Keycloak's `basic` client scope has the `gong-lab-proxy` audience mapper |
