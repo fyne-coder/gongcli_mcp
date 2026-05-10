@@ -10,7 +10,7 @@ The current product shape is customer-hosted and local-first:
 - `gongctl` is the writable operator tool that authenticates to Gong and
   refreshes customer-controlled cache state.
 - `gongmcp` is a read-only MCP server over an existing customer-controlled
-  SQLite cache.
+  cache: SQLite by default, or customer-owned Postgres for shared deployments.
 - The vendor does not need a vendor-operated SaaS control plane, shared tenant
   database, or always-on remote access path to operate the package.
 
@@ -28,10 +28,12 @@ Default boundary expectations:
 
 - Gong credentials stay in customer-controlled secret storage and runtime
   environments.
-- Raw Gong API responses, transcript text, transcript files, CRM context, and
-  local SQLite cache files stay in customer-controlled storage.
-- `gongmcp` reads the customer-controlled SQLite cache read-only and should not
-  receive Gong credentials.
+- Raw Gong API responses, transcript text, transcript files, CRM context,
+  SQLite cache files, and Postgres databases stay in customer-controlled
+  storage.
+- `gongmcp` reads the customer-controlled cache read-only and should not receive
+  Gong credentials. SQLite uses `--db PATH`; Postgres uses `GONG_DATABASE_URL`
+  or `DATABASE_URL`.
 - The source repository, tracked docs, examples, and fixtures must remain
   tenant-free and secret-free.
 
@@ -40,8 +42,8 @@ Default boundary expectations:
 | Data class | Examples | Default location | Boundary expectation |
 | --- | --- | --- | --- |
 | Credentials and access secrets | Gong access keys, bearer tokens, future OAuth secrets | Customer secret manager, customer environment, mounted secret file | Never commit, never include in support artifacts, never provide to `gongmcp` unless the secret is specifically for MCP access |
-| Restricted tenant content | Transcript text, transcript JSON, raw call payloads, embedded CRM values, failing request/response payloads | Customer-controlled data root, protected local or mounted storage | Do not send to vendor support by default |
-| Sensitive tenant metadata | Call titles, call IDs, workspace IDs, tracker names, scorecard question text, profile mappings | Customer-controlled SQLite cache, operator reports | Treat as customer data even when not full transcript text |
+| Restricted tenant content | Transcript text, transcript JSON, raw call payloads, embedded CRM values, failing request/response payloads | Customer-controlled data root, protected local or mounted storage, or customer-owned Postgres | Do not send to vendor support by default |
+| Sensitive tenant metadata | Call titles, call IDs, workspace IDs, tracker names, scorecard question text, profile mappings | Customer-controlled SQLite cache or Postgres database, operator reports | Treat as customer data even when not full transcript text |
 | Reduced operational metadata | Row counts, cache freshness timestamps, version info, enabled commands, table inventory, redacted error codes | Customer-run support bundle or audit logs | Preferred default for troubleshooting and support |
 | Public repo content | Code, sanitized docs, synthetic fixtures | Source repo | Must not contain real customer content or secrets |
 
@@ -55,7 +57,7 @@ Default expectations:
 - no automatic vendor collection of raw transcripts
 - no automatic vendor collection of raw Gong payloads
 - no automatic vendor collection of failing customer request/response bodies
-- no automatic vendor collection of customer SQLite contents
+- no automatic vendor collection of customer SQLite contents or Postgres data
 - no automatic vendor collection of prompt text, tool outputs, or model traces
   that contain customer transcript or CRM content
 - no requirement to grant the vendor standing access to the customer's cloud,
@@ -83,7 +85,7 @@ Support should avoid by default:
 - raw Gong API payloads
 - failing payload bodies copied from customer systems
 - shell or console access to customer cloud resources
-- direct access to customer SQLite or transcript directories
+- direct access to customer SQLite, Postgres, or transcript storage
 
 When sanitized evidence is insufficient, direct access can be granted only as a
 time-bound logged exception under the customer support-access policy described
@@ -94,8 +96,8 @@ in [Support](support.md).
 An enterprise customer-hosted deployment should provide:
 
 - a customer-owned runtime for `gongctl`
-- a protected customer-owned data root for SQLite, transcript files, profile
-  files, and backups
+- a protected customer-owned data root or database platform for SQLite/Postgres,
+  transcript files, profile files, and backups
 - customer-managed secrets for Gong and any MCP bearer token
 - operator ownership for refresh cadence, retention, and incident handling
 - customer-managed audit logging for support exceptions and administrative

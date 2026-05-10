@@ -8,7 +8,9 @@ service.
 
 Current boundary:
 
-- `gongmcp` serves read-only MCP over an existing SQLite cache.
+- `gongmcp` serves read-only MCP over an existing customer-controlled cache:
+  SQLite via `--db PATH`, or Postgres via `GONG_DATABASE_URL` / `DATABASE_URL`
+  with no `--db`.
 - `gongmcp` can enforce bearer auth itself for private pilots.
 - Production SSO/OAuth should normally sit in a customer-managed gateway,
   broker, or application layer in front of `gongmcp`.
@@ -25,7 +27,8 @@ Current boundary:
 - static bearer-token validation for HTTP mode
 - required HTTP tool preset or allowlist
 - Origin validation for HTTP requests
-- read-only SQLite access
+- read-only SQLite access, plus reviewed read-only Postgres presets and
+  allowlists
 - non-local bind guardrails
 
 Allowed browser origins also receive narrow CORS headers for `/mcp`: allowed
@@ -141,6 +144,11 @@ GONGMCP_TOOL_PRESET=business-pilot \
     --db /srv/gongctl/gong-mcp-governed.db
 ```
 
+For Postgres, omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` to the
+read-only MCP role. Customer-exclusion deployments should point that URL at the
+physically redacted serving database produced by
+`gongctl governance refresh-serving-db`.
+
 During token rotation, `gongmcp` can accept both the current and previous
 mounted token files:
 
@@ -170,7 +178,7 @@ Remote MCP client
   -> OAuth/MCP broker or gateway
   -> bearer-authenticated internal HTTP
   -> gongmcp --http 127.0.0.1:8080 --auth-mode bearer
-  -> read-only SQLite cache
+  -> read-only SQLite cache or Postgres reader
 ```
 
 The broker owns:
@@ -188,7 +196,7 @@ The broker owns:
 
 - MCP tool catalog
 - tool preset/allowlist enforcement
-- read-only SQLite queries
+- read-only cache queries over SQLite or reviewed Postgres reader surfaces
 - result-size limits
 
 ## OAuth Broker Options
@@ -220,7 +228,8 @@ own human login, but the broker should own the MCP-specific work:
 - forwarding approved requests to `gongmcp` with an internal bearer token
 
 This keeps `gongmcp` simple and customer-controlled: it remains a read-only MCP
-server over SQLite, with no Gong credentials and no native OAuth dependency.
+server over SQLite or reviewed Postgres reader surfaces, with no Gong
+credentials and no native OAuth dependency.
 
 ## Docker Compose Reference
 
@@ -271,7 +280,7 @@ Remote MCP client
   -> gateway/broker
   -> internal bearer auth
   -> gongmcp --http 0.0.0.0:8080 --auth-mode bearer
-  -> read-only SQLite cache
+  -> read-only SQLite cache or Postgres reader
 ```
 
 Minimum configuration values to replace in a customer pilot:
@@ -279,7 +288,8 @@ Minimum configuration values to replace in a customer pilot:
 | Setting | Purpose |
 | --- | --- |
 | `PUBLIC_BASE_URL` / `LAB_PUBLIC_BASE_URL` | Public HTTPS MCP base URL, for example `https://gong-mcp.example.com` |
-| `GONGMCP_DB` / `LAB_DB` / mounted DB path | Read-only governed SQLite cache for MCP |
+| `GONGMCP_DB` / `LAB_DB` / mounted DB path | SQLite starter cache path for MCP |
+| `GONG_DATABASE_URL` / `DATABASE_URL` | Postgres reader URL for reviewed Postgres MCP deployments |
 | `GONGMCP_TOOL_PRESET` | Initial tool surface, usually `business-pilot` |
 | `GONGMCP_ALLOWED_ORIGINS` | Browser/client origins accepted by `gongmcp` |
 | provider-specific OIDC client settings | Broker application credentials for the chosen IdP, such as `JUMPCLOUD_OIDC_CLIENT_ID` or `COGNITO_OIDC_CLIENT_ID` |
@@ -291,7 +301,8 @@ configurations. They are runnable shapes to copy when explaining the moving
 pieces or validating direct bearer-token/JWT handling. For a production
 Cloudflare Workers pilot, replace the Keycloak/oauth2-proxy/shim pieces with a
 Worker using the Cloudflare OAuth Provider Library, and keep the same internal
-`gongmcp` bearer-auth service and read-only SQLite mount.
+`gongmcp` bearer-auth service. Use a read-only SQLite mount for SQLite starters
+or `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres reader deployments.
 
 ## JumpCloud Pattern
 

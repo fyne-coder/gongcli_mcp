@@ -10,9 +10,11 @@ the same read-only tool layer.
 Current fixed boundaries:
 
 - MCP reads a local cache/store only. SQLite is the complete default backend.
-  Postgres shared-deployment slices support `business-pilot`, `analyst-core`,
-  `analyst-business-core`, approved `analyst` sessions, `governance-search`,
-  and narrow operator smoke/search allowlists over a read-only database role.
+  Postgres shared-deployment surfaces support `business-workbench`,
+  `business-pilot`, `analyst-core`, `analyst-business-core`, approved
+  `analyst` sessions, `governance-search`, redacted-serving broad-search test
+  presets, and narrow operator smoke/search allowlists over a read-only database
+  role.
 - Postgres `get_call` remains a record-reference tool and should be enabled
   only through an explicit allowlist for reviewed operator use, not through
   `business-pilot`. Raw/source Postgres governance mode supports a prepared

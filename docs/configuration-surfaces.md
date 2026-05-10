@@ -9,7 +9,7 @@ flag/env surfaces should probably move to optional YAML next.
 | --- | --- | --- | --- |
 | Sync run plan | `gongctl sync run --config PATH` | Repeatable call/user/transcript/schema/settings/scorecard-activity refresh steps | Implemented |
 | Business profile | `gongctl profile discover --out PATH`, then `profile validate/import --profile PATH` | Tenant CRM object, field, lifecycle, and methodology mappings | Implemented |
-| AI governance exclusions | `gongctl governance audit --config PATH`, SQLite `export-filtered-db --config PATH`, and Postgres `refresh-serving-db --config PATH` | Customer/account names and aliases that should be excluded before MCP/AI use | Implemented |
+| AI governance exclusions | `gongctl governance audit --config PATH`, SQLite `export-filtered-db --config PATH`, Postgres `audit --apply-postgres-policy`, and Postgres `refresh-serving-db --config PATH` | Customer/account names and aliases that should be excluded before MCP/AI use | Implemented |
 | Docker Compose | `compose.yaml` | Local container wiring for CLI and MCP services | Implemented |
 | Release/CI automation | `.goreleaser.yml`, `.github/workflows/*.yml` | Build, release, and publish automation | Implemented |
 

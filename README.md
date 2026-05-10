@@ -608,7 +608,7 @@ aggregate/config tools are refused.
 
 ## Local MCP (stdio)
 
-`gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache. For the Postgres shared-deployment slice, omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` to a read-only database role.
+`gongmcp --db PATH` serves a read-only stdio MCP adapter over the local SQLite cache. For reviewed Postgres shared-deployment surfaces, omit `--db` and set `GONG_DATABASE_URL` or `DATABASE_URL` to a read-only database role.
 Use `gongctl mcp tools` or `gongctl mcp tool-info NAME` to inspect the local MCP tool catalog without starting a host app.
 
 For SQLite stdio, `gongmcp` exposes the full read-only MCP catalog by default

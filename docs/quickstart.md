@@ -247,7 +247,8 @@ docker run --rm -i \
 ```
 
 This is stdio MCP. It is local to the MCP host process and does not require
-Gong credentials because it only reads the SQLite cache.
+Gong credentials because it only reads the SQLite cache. For shared Postgres
+deployments, use the Postgres deployment runbook instead of passing `--db`.
 
 For local development and trusted admin analysis, omitting `--tool-preset` on
 stdio serves the full read-only catalog. Business-user deployments should start

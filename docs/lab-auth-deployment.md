@@ -23,7 +23,7 @@ OIDC user token from Keycloak
   -> lab auth shim
   -> internal bearer token
   -> gongmcp HTTP /mcp
-  -> read-only SQLite cache
+  -> read-only SQLite cache by default, or a Postgres reader when wired
 ```
 
 The lab keeps the same important product boundary as the customer-hosted pilot:
@@ -274,7 +274,8 @@ The smoke verifies:
 - `tools/list` exposes `business-pilot` tools only.
 - ChatGPT-style `tools/call` payloads with MCP `_meta` extension fields work.
 - `gongmcp` has no Gong credential environment variables.
-- the SQLite cache is mounted read-only.
+- the SQLite cache is mounted read-only, or Postgres mode uses a read-only
+  `GONG_DATABASE_URL` / `DATABASE_URL`.
 
 To prove an app-only deploy preserves existing dynamic OAuth clients, run:
 

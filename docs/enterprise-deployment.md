@@ -196,7 +196,7 @@ flowchart LR
   Postgres `analyst` preset combines the supported analyst tools for approved
   analyst sessions; `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).
-- AI governance filtered DB export remains SQLite-only. For raw/source
+- AI governance filtered DB export is the SQLite file-copy path. For raw/source
   Postgres, prepare governance policy state for the narrowed
   `governance-search` MCP slice with
   `gongctl governance audit --apply-postgres-policy`. For client-facing

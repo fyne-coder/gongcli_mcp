@@ -20,13 +20,14 @@ For a faster source-first onboarding path, start with
 - `internal/redact`: helpers for safe diagnostics/logging.
 - `internal/profile`: tenant profile parsing, canonicalization, discovery, validation, and closed rule evaluation.
 - `internal/store/sqlite`: local cache for calls, users, transcripts, CRM schema/settings inventory, search indexes, and sync state.
-- `internal/store/postgres`: first shared-deployment vertical slice for sync
+- `internal/store/postgres`: reviewed shared-deployment backend for sync
   status, calls, users, transcripts, transcript segments, metadata-only support
   diagnostics, cache inventory, retention purge planning/cleanup, and read-only
-  MCP `business-pilot`, approved `analyst`, and core operator search/detail
-  tools. It is not full query parity with SQLite yet: database-enforced
-  governance snapshots/RLS, backup/restore, and `all-readonly` remain
-  follow-ups.
+  MCP `business-workbench`, `business-pilot`, `analyst-core`,
+  `analyst-business-core`, approved `analyst`, `governance-search`,
+  redacted-serving broad-search test presets, and core operator search/detail
+  allowlists. It is not full query parity with SQLite yet: source-DB RLS and
+  normal Postgres `all-readonly` remain follow-ups.
   [Postgres parity matrix](postgres-parity.md) tracks the full parity contract.
 - `internal/syncsvc`: call/user/inventory sync orchestration on top of the Gong client plus the configured cache store.
 - `internal/transcripts`: transcript sync/search helpers on top of the store interface plus the Gong client.
@@ -84,12 +85,21 @@ Behavioral rules:
   party capture, or highlight capture. This runner currently opens SQLite via
   the configured `db` path; it is not the Postgres sync runner.
 - CRM-context call search only works for rows that were synced with stored context.
-- Business profiles are YAML source imported into SQLite runtime state. The rule grammar is closed and evaluated in Go; profiles cannot inject SQL or expressions.
-- Profile import is transactional and idempotent by canonical hash. Identical re-imports are no-ops; source-only changes update source metadata without changing profile meaning. MCP reads only the imported SQLite state.
+- Business profiles are YAML source imported into SQLite or Postgres runtime
+  state. The rule grammar is closed and evaluated in Go; profiles cannot inject
+  SQL or expressions.
+- Profile import is transactional and idempotent by canonical hash. Identical
+  re-imports are no-ops; source-only changes update source metadata without
+  changing profile meaning. MCP reads only imported profile state from the
+  configured cache store.
 
 ## MCP Boundary
 
-The CLI remains the first integration contract because it is easy to inspect, script, and run in customer-controlled environments. MCP reads from the configured cache store instead of calling Gong directly; SQLite is the complete/default store, and Postgres currently supports the narrower shared-deployment slice.
+The CLI remains the first integration contract because it is easy to inspect,
+script, and run in customer-controlled environments. MCP reads from the
+configured cache store instead of calling Gong directly; SQLite is the
+complete/default store, while Postgres supports the reviewed shared-deployment
+surfaces tracked in `docs/postgres-parity.md`.
 
 Runtime details that matter when debugging MCP:
 
@@ -155,14 +165,14 @@ Ad-hoc business rollups read metadata-only facts. The builtin path uses the SQLi
 
 Unmapped CRM field surfaces are redacted by default. They return field names, types, cardinality, population/null rates, and length distribution, not raw example values.
 
-Local SQLite state remains the complete proving ground and source of truth for
-MCP query tools. The Postgres backend now covers bounded reviewed slices for the
-shared store path, `business-pilot`, `analyst-core`, `analyst-business-core`,
-governance-search, `analyst`, backup/restore and retention smoke, and explicit
-operator/admin allowlists such as CRM field diagnostics, lifecycle CRM
-comparison, CRM-context transcript snippets, and transcript-backfill call
-references. `all-readonly`, broad catalog parity, database-enforced
-governance/RLS, and customer-scale hardening remain follow-up work.
+Local SQLite state remains the complete proving ground for MCP query tools. The
+Postgres backend now covers the shared store path, `business-workbench`,
+`business-pilot`, `analyst-core`, `analyst-business-core`, governance-search,
+approved `analyst`, redacted-serving broad-search test presets, backup/restore
+and retention smoke, and explicit operator/admin allowlists such as CRM field
+diagnostics, lifecycle CRM comparison, CRM-context transcript snippets, and
+transcript-backfill call references. Normal Postgres `all-readonly`, source-DB
+RLS, broad catalog parity, and customer-scale hardening remain follow-up work.
 
 Postgres materializes builtin call/context facts because it cannot lean on
 SQLite views at read time. The writable CLI owns read-model refresh and repair;

@@ -164,7 +164,7 @@ Configuration contract:
   `GONGCTL_POSTGRES_PASSWORD` and `GONGMCP_READER_PASSWORD` from an approved
   secret manager and should not publish the database port directly.
 
-The current Postgres development branch supports:
+The current Postgres shared-deployment path supports:
 
 - `gongctl sync synthetic`
 - `gongctl sync calls`
