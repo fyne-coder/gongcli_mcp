@@ -113,8 +113,8 @@
   `include_highlights_requested=true` /
   `include_highlights_result=request_sent` markers to the sync-run
   request context. Highlights land in raw call payloads only; no new MCP
-  tool, schema, or aggregate. Endpoint review and follow-up plan live in
-  `docs/gong-native-enrichment-review.md`.
+  tool, schema, or aggregate. Current public exposure notes live in
+  `docs/postgres-question-parity.md` and `docs/mcp-data-exposure.md`.
 - Added a stable MCP facade vertical slice with `analyst-facade`,
   `gong_discover_capabilities`, and routed `gong_query` /
   `gong_analyze` / `gong_get_evidence` operations so approved clients can use
@@ -252,14 +252,15 @@
   `docs/mcp-data-exposure.md` so single-user analyst workflows have a
   documented path to widen the catalog and turn on per-tool opt-ins, and so
   operators see the per-call cost model and server-enforced ceilings.
-- Added four evidence-backed sample prompt templates to
-  `docs/business-user-guide.md` covering content-gap discovery from prospect
-  questions, recurring objection mining, renewal/expansion vs. churn risk, and
-  late-stage pipeline risk; each lists required tools, opt-in flags, and an
-  evidence-discipline rule.
+- Added evidence-backed sample prompt templates now covered by
+  `docs/business-user-quickstart.md`,
+  `docs/pilot-sponsor-and-operator-guide.md`, and
+  `docs/analyst-tool-reference.md`, including content-gap discovery from
+  prospect questions, recurring objection mining, renewal/expansion vs. churn
+  risk, and late-stage pipeline risk.
 - Caught up the canonical MCP catalog lists in `docs/architecture.md` and
-  `docs/mcp-phase.md` to include `search_transcripts_by_call_facts` and
-  `search_transcript_quotes_with_attribution`.
+  `docs/mcp-data-exposure.md` to include `search_transcripts_by_call_facts`
+  and `search_transcript_quotes_with_attribution`.
 - Tagged Gate 1 (all six outcomes shipped) and Gate 2 (items 1, 2, 4, 5
   shipped; 3 and 6 partial) status in `docs/roadmap.md`.
 - Cross-linked the new posture and volume sections from `README.md` and

@@ -1,8 +1,19 @@
-# Business User Guide
+# Pilot Sponsor and Operator Guide
 
-This guide is for the business-user lane of the `Enterprise Pilot Review Packet`.
-It applies only to reviewed pilot use through `gongmcp` over a prebuilt cache
-or shared Postgres reader role.
+> **Are you a business end-user?** This is not the right doc. Open
+> [Business User Quickstart](business-user-quickstart.md) — copy/paste
+> prompts for sales, marketing, enablement, and RevOps users.
+>
+> **Are you a power analyst designing cohorts and tool sequences?** Start
+> with [Analyst orientation](analyst-orientation.md).
+>
+> This file is the fuller pilot boundary for **sponsors, operators, RevOps,
+> and security reviewers** who own the deployment, the profile, and the
+> tool-preset decisions on behalf of business users.
+
+This guide is for the sponsor/operator lane of the `Enterprise Pilot Review
+Packet`. It applies to reviewed pilot use through `gongmcp` over a prebuilt
+cache or shared Postgres reader role.
 
 Business users should not run `gongctl`, should not receive Gong credentials,
 and should not be asked to manage sync jobs, profile imports, raw exports, or
@@ -10,8 +21,8 @@ local database files. Those workflows stay with the pilot operator.
 
 ## Who This Guide Is For
 
-- Business users who need read-only answers from approved MCP tools.
 - Pilot sponsors who need to understand what business users may ask.
+- Operators who configure sync, profiles, cache freshness, and MCP tool scope.
 - Security, RevOps, or IT reviewers who need the business boundary in one place.
 
 ## Operating Boundary

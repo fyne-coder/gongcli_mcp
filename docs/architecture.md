@@ -2,7 +2,9 @@
 
 ## Goal
 
-`gongctl` is a conservative API wrapper. It should make Gong exports repeatable without becoming an analysis product or a data warehouse.
+`gongctl` is a conservative, local-first Gong API wrapper and evidence
+workbench. It should make Gong sync, cache inspection, and bounded MCP analysis
+repeatable without becoming a hosted data product or a raw data warehouse.
 
 For a faster source-first onboarding path, start with
 [Developer orientation](developer-orientation.md).
@@ -32,7 +34,7 @@ For a faster source-first onboarding path, start with
   built-in presets and governance-compatible tool lists; `server.go` owns MCP
   request handling and tool execution.
 
-## Agent E CLI Surface
+## CLI Surface
 
 Current public SQLite-backed commands:
 
@@ -78,8 +80,9 @@ Behavioral rules:
 - `sync run --config` resolves relative paths from the YAML file location and
   can stage calls, users, transcripts, CRM integrations/schema, settings, and
   scorecard activity; sensitive steps still require runtime authorization. The
-  YAML file cannot self-approve transcript download, business/all call sync, or
-  party capture.
+  YAML file cannot self-approve transcript download, business/all call sync,
+  party capture, or highlight capture. This runner currently opens SQLite via
+  the configured `db` path; it is not the Postgres sync runner.
 - CRM-context call search only works for rows that were synced with stored context.
 - Business profiles are YAML source imported into SQLite runtime state. The rule grammar is closed and evaluated in Go; profiles cannot inject SQL or expressions.
 - Profile import is transactional and idempotent by canonical hash. Identical re-imports are no-ops; source-only changes update source metadata without changing profile meaning. MCP reads only the imported SQLite state.

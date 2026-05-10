@@ -51,7 +51,7 @@ cleaner, but the data still needs the same minimization and retention controls.
 
 Default raw export locations should be outside the source repo. If local testing needs files inside the checkout, use ignored directories such as `exports/` or `transcripts/`.
 
-For the SQLite-backed Agent E flow:
+For the SQLite-backed local CLI flow:
 
 - keep the SQLite `--db` path outside the repo for real customer data
 - keep transcript `--out-dir` outside the repo for real customer data
