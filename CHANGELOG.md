@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-05-10
+
+- Closed the business-workbench GA follow-up slice with deterministic wrapper
+  regression coverage, policy/readiness caveats, positive-prospect harness
+  support, and app-only lab deploy documentation for preserving the auth stack
+  while refreshing MCP code.
+- Added public developer orientation and facade routing metadata so operators
+  and downstream MCP hosts can inspect routed operations, deployment posture,
+  and support boundaries without exposing raw tenant data.
+- Tolerated in-place governance config during lab deploys, allowing app-only
+  updates to reuse existing VM-side governance policy files instead of
+  requiring a full auth-stack reset.
+
 ## 0.4.0 - 2026-05-07
 
 - Added the customer-hosted Postgres `business-workbench` GA acceptance
