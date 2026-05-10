@@ -282,7 +282,12 @@ if [ -n \"\$governance_runtime\" ]; then
     echo \"AI governance config source is not readable: \$governance_source\" >&2
     exit 1
   fi
-  install -m 0400 -o 65532 -g 65532 \"\$governance_source\" \"\$governance_mount\"
+  if [ \"\$governance_source\" = \"\$governance_mount\" ]; then
+    chown 65532:65532 \"\$governance_mount\"
+    chmod 0400 \"\$governance_mount\"
+  else
+    install -m 0400 -o 65532 -g 65532 \"\$governance_source\" \"\$governance_mount\"
+  fi
   if [ ! -r \"\$governance_mount\" ]; then
     echo \"AI governance config mount is not readable: \$governance_mount\" >&2
     exit 1
