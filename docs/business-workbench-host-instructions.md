@@ -84,9 +84,3 @@ scripts/business-workbench-ga-harness.sh
 The harness writes `business-workbench-ga-report.json` and scores each workflow
 as `PASS`, `DEGRADED`, or `FAIL`. Manual Claude/ChatGPT testing remains useful
 for exploration, but this deterministic harness is the release gate.
-
-After the harness is green, run the prompt pack in
-[Business Workbench Wrapper Regression](business-workbench-wrapper-regression.md)
-against the actual host project/wrapper. That pass validates response style,
-tool-trace suppression, account-query boundaries, and wording around
-unattributed evidence.

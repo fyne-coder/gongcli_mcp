@@ -247,20 +247,50 @@ func FacadeToolNames() []string {
 	}
 }
 
+func facadeHiddenRoutedToolNames() []string {
+	catalog := make(map[string]struct{}, len(ToolCatalogNames()))
+	for _, name := range ToolCatalogNames() {
+		catalog[name] = struct{}{}
+	}
+	seen := map[string]struct{}{}
+	names := []string{}
+	for _, op := range FacadeOperations() {
+		for _, name := range []string{op.RoutedTool, op.RoutedFallback} {
+			if name == "" {
+				continue
+			}
+			if _, ok := catalog[name]; ok {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func FacadeHiddenRoutedToolNames() []string {
+	return copyStrings(facadeHiddenRoutedToolNames())
+}
+
 func ExpandToolPresetFacadeRoutedTools(name string) ([]string, error) {
+	hiddenRouted := facadeHiddenRoutedToolNames()
 	switch normalizedToolPresetName(name) {
 	case "business-workbench", "analyst-facade", "facade-analyst":
 		tools, err := ExpandToolPreset("analyst")
 		if err != nil {
 			return nil, err
 		}
-		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals), nil
+		return append(tools, hiddenRouted...), nil
 	case "analyst-business-core", "analyst", "analyst-expansion", "redacted-all-readonly", "redacted-all", "redacted-search-lab", "broad-public-redacted", "all-readonly", "all-tools", "all":
 		tools, err := ExpandToolPreset(name)
 		if err != nil {
 			return nil, err
 		}
-		return append(tools, internalRoutedToolListAIHighlights, internalRoutedToolQuestionAnswer, internalRoutedToolProspectQuestionAnswer, internalRoutedToolCallDrilldown, internalRoutedToolThemeIntelReport, internalRoutedToolBuyerQuestions, internalRoutedToolObjectionSignals), nil
+		return append(tools, hiddenRouted...), nil
 	default:
 		if strings.TrimSpace(name) == "" {
 			return nil, nil

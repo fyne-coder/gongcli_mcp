@@ -102,7 +102,8 @@ pilot-only even if the same checks pass locally.
 | IT/security installer | [Customer implementation checklist](implementation-checklist.md), [Docker deployment](docker.md), [Remote MCP auth](remote-mcp-auth.md) | Gong business-profile decisions |
 | Sync operator | [Quickstart](quickstart.md), [Operator sync runbook](runbooks/operator-sync.md) | end-user OAuth or model workspace policy |
 | RevOps/admin | [Business profiles](profiles.md), [Customer implementation checklist](implementation-checklist.md#revops-profile-signoff) | container secrets or TLS |
-| Business user | [Business user guide](business-user-guide.md), [Customer implementation checklist](implementation-checklist.md#business-user-first-10-minutes) | `gongctl`, credentials, profile import, raw data |
+| Business user | [Business-user quickstart](business-user-quickstart.md), [Customer implementation checklist](implementation-checklist.md#business-user-first-10-minutes) | `gongctl`, credentials, profile import, raw data |
+| Pilot sponsor / analyst | [Pilot sponsor and operator guide](pilot-sponsor-and-operator-guide.md), [Analyst orientation](analyst-orientation.md) | live Gong API or writable cache |
 | Security reviewer | [Data Boundary Statement](data-boundary-statement.md), [Security model](security-model.md), [Support](support.md) | day-to-day prompt writing |
 
 ## What Is Intentionally Out Of Scope

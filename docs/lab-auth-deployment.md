@@ -6,6 +6,14 @@ paid identity provider or hosted Cloudflare/JumpCloud setup.
 It is intentionally a rehearsal harness, not a production reference
 architecture.
 
+Use this document for disposable lab validation of the gateway/OAuth boundary.
+For customer-facing deployment planning, start with
+[Enterprise Deployment](enterprise-deployment.md) and
+[Remote MCP auth and connector setup](remote-mcp-auth.md). Those docs cover the
+current Postgres shared-deployment and `business-workbench` paths; this lab
+still defaults to a synthetic SQLite cache unless the operator explicitly wires
+another reviewed cache/store.
+
 ## Shape
 
 ```text
@@ -21,10 +29,12 @@ OIDC user token from Keycloak
 The lab keeps the same important product boundary as the customer-hosted pilot:
 
 - `gongmcp` receives no Gong credentials.
-- `gongmcp` reads a mounted SQLite DB.
+- `gongmcp` reads a mounted synthetic cache/store.
 - `gongmcp` still requires its own internal bearer token.
 - browser/client `Origin` is validated by `gongmcp`.
-- only `business-pilot` MCP tools are exposed.
+- expose the narrow preset under test, usually `business-workbench` for current
+  client-facing facade validation or `business-pilot` for older aggregate-only
+  smoke tests.
 
 The shim is the stand-in for a customer gateway/broker. It validates a lab
 Keycloak JWT, checks the approved group/email, and injects the internal bearer

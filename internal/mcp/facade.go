@@ -551,6 +551,18 @@ func facadeOperationsForTool(facadeTool string) []FacadeOperation {
 	return out
 }
 
+func facadeOperationNamesForTool(facadeTool string) []string {
+	if facadeTool == FacadeToolExplainLimitations {
+		return []string{OpAnalyzeLimitationsExplain}
+	}
+	ops := facadeOperationsForTool(facadeTool)
+	names := make([]string, 0, len(ops))
+	for _, op := range ops {
+		names = append(names, op.Name)
+	}
+	return names
+}
+
 func facadeTools(_ LimitPolicy) []tool {
 	return []tool{
 		{
@@ -566,22 +578,22 @@ func facadeTools(_ LimitPolicy) []tool {
 		{
 			Name:        FacadeToolQuery,
 			Description: "Stable facade for bounded query operations. Pass {\"operation\": \"query.calls\" | \"query.transcript_segments\" | \"query.scorecards\" | \"query.scorecard_detail\", \"arguments\": {...}}.",
-			InputSchema: facadeDispatchSchema([]string{OpQueryCalls, OpQueryTranscriptSegments, OpQueryScorecards, OpQueryScorecardDetail}),
+			InputSchema: facadeDispatchSchema(facadeOperationNamesForTool(FacadeToolQuery)),
 		},
 		{
 			Name:        FacadeToolAnalyze,
-			Description: "Stable facade for bounded analysis operations: cohort build/inspect, theme discovery, ad-hoc question evidence preparation, and limitations explanation.",
-			InputSchema: facadeDispatchSchema([]string{OpAnalyzeCohortBuild, OpAnalyzeCohortInspect, OpAnalyzeThemesDiscover, OpAnalyzeLimitationsExplain, OpQuestionAnswer, OpProspectQuestionAnswer, OpThemeIntelReport}),
+			Description: "Stable facade for bounded analysis operations. Pass an operation registered by gong_discover_capabilities with arguments matching that operation's input schema.",
+			InputSchema: facadeDispatchSchema(facadeOperationNamesForTool(FacadeToolAnalyze)),
 		},
 		{
 			Name:        FacadeToolGetEvidence,
 			Description: "Stable facade for bounded evidence operations: quote search inside a cohort, quote-pack assembly, and typed AI highlights lookup.",
-			InputSchema: facadeDispatchSchema([]string{OpEvidenceQuotesSearch, OpEvidenceQuotePackBuild, OpEvidenceHighlightsList, OpEvidenceCallDrilldown}),
+			InputSchema: facadeDispatchSchema(facadeOperationNamesForTool(FacadeToolGetEvidence)),
 		},
 		{
 			Name:        FacadeToolExplainLimitations,
 			Description: "Stable facade for explaining cache, governance, and facade limitations. Pass an explicit operation to route to a tool, or call with no operation to get a high-level facade limitations summary.",
-			InputSchema: facadeDispatchSchema([]string{OpAnalyzeLimitationsExplain}),
+			InputSchema: facadeDispatchSchema(facadeOperationNamesForTool(FacadeToolExplainLimitations)),
 		},
 	}
 }

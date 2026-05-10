@@ -130,6 +130,30 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 	}
 }
 
+func TestFacadeDispatchSchemasAdvertiseRegisteredOperations(t *testing.T) {
+	t.Parallel()
+
+	dispatchEnums := map[string][]string{}
+	for _, tl := range facadeTools(LimitPolicy{}) {
+		props, _ := tl.InputSchema["properties"].(map[string]any)
+		opSchema, _ := props["operation"].(map[string]any)
+		enum, _ := opSchema["enum"].([]string)
+		if len(enum) > 0 {
+			dispatchEnums[tl.Name] = enum
+		}
+	}
+
+	for _, op := range FacadeOperations() {
+		enum, ok := dispatchEnums[op.FacadeTool]
+		if !ok {
+			continue
+		}
+		if !containsString(enum, op.Name) {
+			t.Fatalf("%s schema enum missing registered operation %q: %v", op.FacadeTool, op.Name, enum)
+		}
+	}
+}
+
 func TestFacadeProspectQuestionAnswerOperationRegistered(t *testing.T) {
 	t.Parallel()
 

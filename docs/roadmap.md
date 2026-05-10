@@ -22,10 +22,10 @@ cache only.
 Goal: a company can run a limited, reviewed pilot with admin-only sync and
 business-user MCP access over a read-only cache.
 
-Status as of 2026-05-01 (v0.3.2): all six required outcomes have shipped. The
-list is kept here as the contract for what "Gate 1" means; new pilots should
-verify each item against the current binary and docs rather than treating the
-status line as a guarantee.
+Status: all six required outcomes have shipped. The list is kept here as the
+contract for what "Gate 1" means; new pilots should verify each item against
+the current binary and docs rather than treating this status line as a
+deployment guarantee.
 
 Required outcomes:
 
@@ -53,7 +53,7 @@ Pilot packet docs:
 - [Security model](security-model.md)
 - [MCP data exposure](mcp-data-exposure.md)
 - [Operator sync runbook](runbooks/operator-sync.md)
-- [Business-user guide](business-user-guide.md)
+- [Pilot sponsor and operator guide](pilot-sponsor-and-operator-guide.md)
 - [Pilot plan](pilot-plan.md)
 
 ## Gate 2: Company Production Ready
