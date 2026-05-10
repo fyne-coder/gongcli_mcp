@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-05-10
+
+- Clarified AI governance documentation across SQLite and Postgres deployment
+  modes. The docs now distinguish SQLite filtered DB export, raw/source
+  Postgres prepared-policy governance for the narrowed `governance-search`
+  preset, and physically redacted Postgres serving DB refresh for client-facing
+  governed MCP deployments.
+
 ## 0.4.1 - 2026-05-10
 
 - Closed the business-workbench GA follow-up slice with deterministic wrapper

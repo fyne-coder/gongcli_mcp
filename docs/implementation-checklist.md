@@ -58,7 +58,7 @@ gongmcp --list-tool-presets
 | `analyst-business-core` | bounded Postgres transcript-evidence and business-analysis tools plus analyst-core tools | narrower reviewed Postgres analyst business-analysis surface |
 | `analyst` | broader approved evidence surface excluding admin-only record lookup, CRM value search, and unreviewed schema/settings/activity inventory | trusted SQLite or Postgres analyst sessions after sponsor approval |
 | `analyst-expansion` | alias for `analyst` | backward-compatible docs/scripts alias |
-| `governance-search` | governance-compatible search/snippet tools only | raw-DB AI governance fallback when a filtered DB is not available |
+| `governance-search` | governance-compatible search/snippet tools only | raw-DB AI governance fallback when a SQLite filtered DB or Postgres redacted serving DB is not available |
 | `all-readonly` | every current read-only MCP tool in `tools/list` | trusted SQLite single-user admin/analyst or fully reviewed SQLite filtered-DB deployments; Postgres still rejects this preset |
 
 Do not expose `operator-smoke`, `analyst-core`, `analyst-business-core`,

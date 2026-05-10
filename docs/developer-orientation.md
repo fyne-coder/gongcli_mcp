@@ -188,8 +188,11 @@ These are easy to miss if you only read the high-level docs.
   sync, business/all call sync, party capture, and highlight capture still
   require the runtime sensitive-export gate.
 - `governance export-filtered-db` creates a physical filtered SQLite copy for
-  MCP use. Raw-DB governance mode exists, but the preferred path for blocklists
-  is a filtered DB regenerated after each sync or governance-config change.
+  MCP use. Postgres has two separate governance paths: `governance audit
+  --apply-postgres-policy` for the narrowed raw/source `governance-search`
+  fallback, and `governance refresh-serving-db` for rebuilding a physically
+  redacted MCP serving database. Regenerate the SQLite filtered DB or refresh
+  the Postgres serving DB after each sync or governance-config change.
 - The support bundle opens the configured cache/store read-only and writes
   metadata-only JSON files.
   It intentionally excludes raw Gong payloads, transcript text, CRM values,

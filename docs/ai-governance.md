@@ -1,8 +1,18 @@
 # Deterministic AI Exclusion Filtering
 
-`gongctl` can apply a private YAML file to produce an MCP-facing SQLite copy
-that excludes calls linked to configured customer names, aliases, domains, or
-email fragments before results reach an MCP host or LLM.
+`gongctl` can apply a private YAML file before MCP/AI use, but the storage
+path matters:
+
+- SQLite: `governance export-filtered-db` produces an MCP-facing SQLite copy
+  that excludes calls linked to configured customer names, aliases, domains, or
+  email fragments before results reach an MCP host or LLM.
+- Postgres raw/source DB: `governance audit --apply-postgres-policy` persists a
+  prepared policy that the narrowed `governance-search` MCP preset validates
+  before each governed search call.
+- Postgres redacted serving DB: `governance refresh-serving-db` rebuilds a
+  physically redacted MCP serving database from the full operator/source
+  database, then `gongmcp` connects only to the redacted database with a
+  read-only role.
 
 This is a deterministic name-based exclusion filter. It is not legal consent
 management, contractual AI-restriction management, DPA enforcement, or a
@@ -130,9 +140,10 @@ call-list payload. Keep runtime governance and, for SQLite, filtered MCP DB
 exports as defense in depth. If a later sync adds aliases or richer metadata,
 rerun the governed sync or audit/export flow before MCP use.
 
-## Filtered MCP Database
+## SQLite Filtered MCP Database
 
-For MCP/LLM use, the preferred deployment is a physically filtered SQLite copy:
+For SQLite MCP/LLM use, the preferred deployment is a physically filtered
+SQLite copy:
 
 ```bash
 gongctl governance export-filtered-db \
@@ -155,6 +166,8 @@ gongmcp --db /srv/gongctl/gong-mcp-governed.db
 This recovers more MCP tool capability because the server is not reading the raw
 restricted call rows. Recreate the filtered DB after every sync or governance
 config change. Keep the filtered DB outside Git and treat it as customer data.
+This command is SQLite-specific; for Postgres, use either the prepared-policy
+raw/source DB flow or the redacted serving DB flow below.
 
 The filtered export is call-record filtering. It does not delete unrelated
 global configuration rows such as scorecards, trackers, workspaces, CRM schema
@@ -311,10 +324,11 @@ names. The artifact directory adds `broad-analyst-mcp.jsonl`,
 `all-readonly-rejected.txt`, `target-restricted-text-counts.txt`, and
 `broad-analyst-summary.json` alongside the Phase 13h artifacts.
 
-## Raw-DB MCP Enforcement
+## Raw-DB MCP Enforcement (SQLite or Prepared-Policy Postgres)
 
-Raw-DB governance is a fallback when a filtered DB has not been generated. Start
-`gongmcp` with the same private config:
+Raw-DB governance is a fallback when a physically filtered SQLite DB or
+physically redacted Postgres serving DB has not been generated. Start `gongmcp`
+with the same private config:
 
 AI governance mode requires an explicit governance-compatible `--tool-preset`,
 `GONGMCP_TOOL_PRESET`, `--tool-allowlist`, or `GONGMCP_TOOL_ALLOWLIST`. Use
@@ -343,8 +357,10 @@ GONGMCP_TOOL_PRESET=governance-search \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
 
-For Postgres, omit `--db` and use the read-only database URL after the policy has
-been prepared:
+For raw/source Postgres, omit `--db` and use the read-only database URL after
+the policy has been prepared by
+`gongctl governance audit --apply-postgres-policy` with a writable operator
+URL:
 
 ```bash
 GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" \
@@ -354,8 +370,10 @@ GONGMCP_TOOL_PRESET=governance-search \
 ```
 
 The Postgres `governance-search` preset is narrowed to the supported search
-slice. Broader database-enforced RLS/materialized governed snapshots remain a
-follow-up before analyst/all-readonly Postgres governance.
+slice. This prepared-policy raw/source DB mode is not the same as the redacted
+serving DB flow above: it validates config/data fingerprints and suppresses
+governed MCP search output, but the source database still contains restricted
+rows.
 
 Treat the Postgres reader URL as a `gongmcp` service secret, not a general
 analyst SQL credential. The current Postgres slice enforces governance at the
@@ -382,10 +400,13 @@ unmatched entries are expected for the current cache.
 
 ## Current Boundary
 
-Filtered export physically removes matched call-dependent rows from the MCP copy
-only; it does not delete data from the source operator SQLite cache. Ingest-time
-exclusion is the deployment path for environments that cannot store restricted
-customer data in the source cache. Raw-DB governance remains query/output-time
-suppression and does not prevent local operators from running raw CLI cache
-inspection commands. Postgres governance in this slice is a prepared-policy MCP
-search boundary, not database-enforced RLS.
+Filtered SQLite export physically removes matched call-dependent rows from the
+MCP copy only; it does not delete data from the source operator SQLite cache.
+The redacted Postgres serving DB similarly removes restricted call rows from
+the MCP-facing database while preserving the full operator/source database.
+Ingest-time exclusion is the deployment path for environments that cannot store
+restricted customer data in the source cache at all. Raw-DB governance remains
+query/output-time suppression and does not prevent local operators from running
+raw CLI cache inspection commands or direct SQL against source Postgres. Source
+Postgres prepared-policy governance is an MCP search boundary, not
+database-enforced RLS.

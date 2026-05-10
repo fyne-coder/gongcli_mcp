@@ -20,7 +20,7 @@ with customer-specific deployment facts before submitting to a security team.
 | Where is customer data stored? | In a customer-owned data root outside the source checkout, typically SQLite plus optional transcript/profile files, or in customer-owned Postgres for shared multi-container deployments. |
 | Does the vendor receive transcript data by default? | No. There is no default outbound vendor telemetry or support upload path. |
 | Are support bundles safe to send? | Support bundles are designed to exclude raw transcripts, raw payloads, customer-content identifiers, secrets, and local paths. They still contain customer operational metadata and should not be posted publicly. |
-| Can restricted customer data be excluded from MCP use? | Yes. For SQLite, operators can maintain a private AI governance YAML and export a physically filtered MCP database before starting `gongmcp`. For Postgres, operators can prepare a policy-backed `governance-search` slice; database-enforced governed views/RLS/snapshots remain a follow-up. |
+| Can restricted customer data be excluded from MCP use? | Yes. For SQLite, operators can maintain a private AI governance YAML and export a physically filtered MCP database before starting `gongmcp`. For raw/source Postgres, operators can prepare a policy-backed `governance-search` slice. For client-facing Postgres deployments, use a physically redacted MCP serving database rebuilt with `gongctl governance refresh-serving-db`, then connect `gongmcp` only to that serving DB with a scoped reader role. Database-enforced RLS on the source DB remains a follow-up. |
 
 ## Credentials And Secrets
 

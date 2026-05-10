@@ -196,9 +196,13 @@ flowchart LR
   Postgres `analyst` preset combines the supported analyst tools for approved
   analyst sessions; `all-readonly` parity remains a follow-up tracked in the
   [Postgres parity matrix](postgres-parity.md).
-- AI governance filtered DB export remains SQLite-only. Postgres supports a
-  prepared governance policy for the narrowed `governance-search` MCP slice;
-  database-enforced governed views/RLS/snapshots remain a follow-up.
+- AI governance filtered DB export remains SQLite-only. For raw/source
+  Postgres, prepare governance policy state for the narrowed
+  `governance-search` MCP slice with
+  `gongctl governance audit --apply-postgres-policy`. For client-facing
+  Postgres, use `gongctl governance refresh-serving-db` to rebuild a physically
+  redacted MCP serving database and connect `gongmcp` only to that database
+  with a scoped reader role. Source-DB RLS remains a follow-up.
 
 ### 3. MCP-only consumer host
 
@@ -299,11 +303,14 @@ Storage-specific guidance:
   termination at a trusted proxy/gateway for shared access.
 - For customer-specific AI-use restrictions, mount a private AI governance
   config, run `gongctl governance audit`, and start `gongmcp` with
-  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`. For Postgres,
-  run `gongctl governance audit --apply-postgres-policy` with the writable URL
-  before starting the read-only MCP container. Restart is mandatory after
-  cache/config/policy changes because `gongmcp` fingerprints governance state
-  and fails closed if it changes while running.
+  `--ai-governance-config` or `GONGMCP_AI_GOVERNANCE_CONFIG`. For raw/source
+  Postgres, run `gongctl governance audit --apply-postgres-policy` with the
+  writable URL before starting the read-only MCP container. For client-facing
+  Postgres, refresh the redacted serving DB with
+  `gongctl governance refresh-serving-db` and point `gongmcp` at the serving DB
+  reader URL. Restart is mandatory after raw SQLite/Postgres cache/config/policy
+  changes because `gongmcp` fingerprints governance state and fails closed if it
+  changes while running; a same-URL serving DB refresh does not require restart.
 - For shared environments, separate the writable sync runtime from the
   business-user MCP runtime even if both read the same protected data root.
 
