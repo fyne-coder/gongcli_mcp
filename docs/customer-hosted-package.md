@@ -12,6 +12,7 @@ of the package supports deployment, security review, support, and operations.
 | --- | --- |
 | Developer/agent source map | [Developer orientation](developer-orientation.md) |
 | Docker image or source-deployable package | [Docker deployment](docker.md), [Release versioning](release.md), `Dockerfile`, `.github/workflows/publish-images.yml` |
+| Simple single-VM Postgres setup | [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md), [Docker deployment](docker.md#single-vm-postgres-starter) |
 | Terraform examples | Non-production starters in [`deploy/terraform`](../deploy/terraform/README.md) |
 | Environment-variable config | [Configuration surfaces](configuration-surfaces.md), `.env.example`, [Docker deployment](docker.md) |
 | Read-only mode by default | [Security model](security-model.md), [Enterprise deployment](enterprise-deployment.md) |
@@ -67,6 +68,9 @@ Default enterprise posture:
 2. For shared/containerized deployments, use the Postgres two-database path in
    the [Postgres deployment runbook](runbooks/postgres-client-deployment.md):
    a writable source DB for sync plus a governed/redacted serving DB for MCP.
+   For the simplest one-host customer-managed install, use
+   [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md) as
+   the Compose scaffold for that same boundary.
 3. Pin the image tag/digest from a tagged release. If an operator deliberately
    uses an untagged branch build, record it as customer-ready pilot code, not a
    versioned GA release.

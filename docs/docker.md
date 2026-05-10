@@ -288,6 +288,37 @@ The Compose example separates:
 - `gongctl`: writer/sync container
 - `gongmcp`: read-only MCP container using a Postgres reader role
 
+## Single-VM Postgres Starter
+
+For a small company setup where IT wants one hardened Linux VM before adopting
+ECS, Kubernetes, or managed container apps, use the single-VM starter:
+
+- [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md)
+
+That starter keeps everything on one host while preserving the important
+boundary:
+
+- Postgres runs locally on the VM and binds to loopback by default.
+- `gongctl` operator jobs write to a source database.
+- `governance refresh-serving-db` rebuilds a separate MCP serving database.
+- `gongmcp` reads only from the serving database through a scoped reader role.
+- `gongmcp` does not receive Gong API credentials or the source DB URL.
+- the HTTP MCP service binds to loopback by default and should sit behind a
+  customer-managed HTTPS/OAuth/SSO gateway before user access.
+
+Render the starter config before use:
+
+```bash
+docker compose \
+  --env-file /srv/gongctl/single-vm.env \
+  -f deploy/single-vm-postgres/docker-compose.yml \
+  config --quiet
+```
+
+Use this path when the customer wants a simple VM install but still needs the
+Postgres source/serving split. Use the older root `docker-compose.postgres.yml`
+for local synthetic smoke and developer checks.
+
 ## MCP Over Docker
 
 Point an MCP host at `docker run` with stdin kept open:

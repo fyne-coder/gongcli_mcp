@@ -18,7 +18,10 @@ For client-facing question scope, use the
 
 SQLite remains the default local workflow with the broadest coverage. Postgres is the shared
 deployment path for multi-container pilots that cannot rely on a shared
-filesystem.
+filesystem. For small company installs that want one hardened VM first, use
+[`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md) as the
+Compose scaffold for the same source DB, serving DB, scoped reader, and
+read-only MCP boundary.
 
 ## Shareable Pilot Surface
 
@@ -73,6 +76,8 @@ go test -count=1 ./...
 go vet ./...
 make secret-scan
 docker compose -f docker-compose.postgres.yml config --quiet
+docker compose --env-file deploy/single-vm-postgres/single-vm.env.example \
+  -f deploy/single-vm-postgres/docker-compose.yml config --quiet
 GONGCTL_POSTGRES_COMPOSE_PROJECT=gongctl-postgres-smoke-client \
 GONGCTL_POSTGRES_PORT=55630 \
 ./scripts/postgres-smoke.sh

@@ -12,6 +12,10 @@ Use the
 [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
 for the two-database source/serving setup, scoped reader grant sequence,
 gateway smoke, backup/restore, and rollback.
+For a small IT setup on one Linux host, use
+[`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md) as the
+Compose scaffold; it still follows the same source DB, serving DB, scoped
+reader, and read-only `gongmcp` boundary.
 
 ## 1. Choose The Pilot Surface
 
@@ -105,6 +109,8 @@ go test -count=1 ./...
 go vet ./...
 make secret-scan
 docker compose -f docker-compose.postgres.yml config --quiet
+docker compose --env-file deploy/single-vm-postgres/single-vm.env.example \
+  -f deploy/single-vm-postgres/docker-compose.yml config --quiet
 ./scripts/postgres-smoke.sh
 GONGCTL_POSTGRES_LOAD_CALLS=1200 \
 GONGCTL_POSTGRES_LOAD_PROFILE_CACHE_ROWS=1200 \

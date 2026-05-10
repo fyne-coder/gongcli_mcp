@@ -203,6 +203,10 @@ flowchart LR
   Postgres, use `gongctl governance refresh-serving-db` to rebuild a physically
   redacted MCP serving database and connect `gongmcp` only to that database
   with a scoped reader role. Source-DB RLS remains a follow-up.
+- For AWS customers that want Terraform for the read-only MCP runtime, use the
+  starter in `deploy/terraform/aws-ecs-postgres` after the source DB, serving
+  DB, scoped reader role, grant reconciliation, and governance refresh flow are
+  already owned by the customer platform/DBA process.
 
 ### 3. MCP-only consumer host
 
@@ -233,15 +237,19 @@ each workstation.
 flowchart LR
   Client["Approved remote MCP client\nChatGPT, Claude URL flow, or internal client"] -->|"HTTPS /mcp"| Edge["Customer HTTPS/auth boundary\nSSO/OAuth broker, gateway, proxy, WAF"]
   Edge -->|"internal HTTP + bearer token"| MCP["gongmcp private HTTP\n/mcp and /healthz"]
-  Data["Read-only SQLite cache\ngong.db or governed DB"] -->|"read-only mount"| MCP
-  Sync["Separate gongctl sync job"] -->|"refreshes / promotes cache"| Data
+  Data["Read-only store\nSQLite gong.db or Postgres serving DB"] -->|"mount or scoped reader URL"| MCP
+  Sync["Separate gongctl sync / refresh job"] -->|"refreshes / promotes cache"| Data
   Secrets["Customer secret store\nbearer current/previous token"] --> Edge
   Secrets --> MCP
   MCP --> Logs["Payload-free access logs"]
 ```
 
-- Run `gongmcp --http ADDR --auth-mode bearer --tool-preset business-pilot --db PATH`
+- For SQLite, run
+  `gongmcp --http ADDR --auth-mode bearer --tool-preset business-pilot --db PATH`
   or use a reviewed custom `--tool-allowlist`.
+- For Postgres, omit `--db`, set `GONG_DATABASE_URL` or `DATABASE_URL` to a
+  scoped reader URL, and use an approved Postgres preset such as
+  `business-workbench` with scoped grant enforcement where applicable.
 - Expose `/mcp` to approved clients through TLS termination at a trusted
   company proxy/gateway or equivalent private-network boundary. Use `/healthz`
   for infrastructure health checks; do not use MCP JSON-RPC as the health

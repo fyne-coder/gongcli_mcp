@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.4.4 - 2026-05-10
+
+- Added customer-hosted Postgres deployment starters for AWS ECS runtime and
+  simple single-VM Compose installs. The AWS starter runs `gongmcp` against an
+  existing scoped Postgres serving DB with Secrets Manager-backed reader URL,
+  bearer token, and AI governance YAML; the single-VM starter keeps source DB,
+  redacted serving DB, scoped reader grants, operator jobs, and read-only HTTP
+  `gongmcp` on one host while preserving credential boundaries.
+- Updated deployment docs, customer-hosted package docs, onboarding, pilot,
+  quickstart, and security checklists so IT/dev teams can choose between
+  SQLite starters, single-VM Postgres, AWS ECS Postgres runtime, and the
+  Postgres runbook without relying on the synthetic dev Compose file.
+
 ## 0.4.3 - 2026-05-10
 
 - Cleaned up the remaining SQLite/Postgres documentation wording after the

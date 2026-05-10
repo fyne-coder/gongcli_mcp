@@ -43,7 +43,7 @@ changed.
 | Business profiles | `internal/profile/`, `internal/cli/profile.go` | YAML schema, validation, staged import, diff, activation |
 | AI governance exclusions | `internal/governance/`, `internal/cli/governance.go` | audit, suppressed calls, filtered DB export |
 | Support bundle | `internal/cli/support.go` | metadata-only support artifact contents |
-| Deployment examples | `compose.yaml`, `deploy/`, `scripts/` | Docker, lab auth, smoke tests, Terraform starters |
+| Deployment examples | `compose.yaml`, `deploy/`, `scripts/` | Docker, lab auth, single-VM Postgres, smoke tests, Terraform starters |
 | Container contents | `Dockerfile` | current image builds only `gongctl` and `gongmcp` |
 | CI/release gates | `.github/workflows/ci.yml`, `.github/workflows/publish-images.yml`, `Makefile` | test, vet, secret scan, SBOM/checksum, Docker build, Postgres smoke gates |
 

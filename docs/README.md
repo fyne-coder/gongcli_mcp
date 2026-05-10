@@ -34,11 +34,13 @@ You install, secure, schedule, and maintain it.
 - [Enterprise deployment](enterprise-deployment.md) — deployment modes,
   storage classes, restricted CLI mode
 - [Docker deployment](docker.md) — build, GHCR images, Postgres shared,
-  HTTP MCP
+  HTTP MCP, single-VM Postgres starter
 - [Operator sync runbook](runbooks/operator-sync.md) — preflight, refresh,
   backup, restore, decommissioning
 - [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
   — Postgres-specific bootstrap, scoped reader grants, smoke
+- [Single-VM Postgres starter](../deploy/single-vm-postgres/README.md) —
+  practical all-on-one-VM Compose shape for small company setups
 - [Scheduling cache refreshes](scheduling.md) — cron / systemd / launchd /
   K8s CronJob templates
 - [Configuration surfaces](configuration-surfaces.md) — what is YAML, what
@@ -88,6 +90,8 @@ You decide pilot scope, approve profiles, and own the business outcome.
   — synthetic profile shape
 - [docs/examples/ai-governance.example.yaml](examples/ai-governance.example.yaml)
   — AI governance config shape
+- [deploy/single-vm-postgres/](../deploy/single-vm-postgres/README.md) —
+  simple one-VM Postgres deployment scaffold
 - [docs/examples/medical-device-saas/](examples/medical-device-saas/) —
   end-to-end synthetic example dataset
 

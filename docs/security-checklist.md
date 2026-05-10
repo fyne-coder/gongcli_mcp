@@ -118,6 +118,10 @@ been read.
   config — see [docs/examples/sync-run.example.yaml](examples/sync-run.example.yaml)
 - [ ] Postgres deployments: `scripts/postgres-smoke.sh` passes — see
   [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
+- [ ] Single-VM Postgres deployments: rendered
+  `deploy/single-vm-postgres/docker-compose.yml`, verified Postgres and
+  `gongmcp` bind to loopback or an approved private boundary, and confirmed
+  `gongmcp` has only the scoped reader URL plus AI governance config
 - [ ] Read-only MCP responds to `tools/list` and `get_sync_status` from the
   configured host
 - [ ] One end-to-end question answered through the approved AI host with the
