@@ -1,4 +1,5 @@
 services:
+  # Local SQLite compose path. For shared Postgres, use docker-compose.postgres.yml.
   gongctl:
     build:
       context: .

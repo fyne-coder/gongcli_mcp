@@ -11,7 +11,7 @@ Remote MCP client
   -> OAuth/MCP broker or gateway
   -> internal bearer-authenticated HTTP
   -> gongmcp --http 0.0.0.0:8080 --auth-mode bearer
-  -> read-only governed SQLite cache
+  -> read-only governed SQLite cache in these examples
 ```
 
 Use these examples as implementation starters, not production identity-provider
@@ -56,7 +56,8 @@ Registration or MCP-specific token issuance.
 
 ## Internal `gongmcp` Contract
 
-All examples keep the same internal `gongmcp` service contract:
+All examples in this directory keep the same SQLite/file-mounted internal
+`gongmcp` service contract:
 
 - `gongmcp` receives no Gong API credentials.
 - `gongmcp` reads a mounted SQLite DB at `/data/gong.db`.
@@ -64,3 +65,8 @@ All examples keep the same internal `gongmcp` service contract:
 - `GONGMCP_TOOL_PRESET` starts narrow, usually `business-pilot`.
 - `GONGMCP_ALLOWED_ORIGINS` must match the browser/client Origin used in the
   pilot.
+
+For a Postgres-backed remote MCP deployment, keep the same auth boundary but run
+`gongmcp` with `GONG_DATABASE_URL` or `DATABASE_URL` instead of `--db` and do not
+mount `GONGMCP_DB`. Use the Postgres client deployment runbook for the source
+database, redacted serving database, and scoped reader grants.

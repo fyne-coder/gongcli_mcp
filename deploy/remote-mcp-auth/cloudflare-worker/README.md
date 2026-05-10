@@ -14,8 +14,12 @@ Remote MCP client
   -> Cloudflare Worker OAuth Provider
   -> internal bearer-authenticated HTTP
   -> gongmcp --http 0.0.0.0:8080 --auth-mode bearer
-  -> read-only governed SQLite cache
+  -> read-only governed SQLite cache, or a Postgres reader configured on gongmcp
 ```
+
+This Worker is database-agnostic. The upstream `gongmcp` can be the SQLite
+file-mounted shape or the Postgres reader shape; Postgres uses
+`GONG_DATABASE_URL` or `DATABASE_URL` on `gongmcp` and no `--db` flag.
 
 ## Cloudflare Resources
 

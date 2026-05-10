@@ -1,5 +1,8 @@
 #cloud-config
 
+# SQLite file-mounted starter only. Postgres deployments use GONG_DATABASE_URL
+# and should not pass --db or mount a SQLite data disk.
+
 write_files:
   - path: /etc/systemd/system/gongmcp.service
     permissions: "0644"

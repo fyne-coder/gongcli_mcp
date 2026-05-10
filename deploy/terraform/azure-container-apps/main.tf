@@ -2,6 +2,8 @@ terraform {
   # Starter example only. Not production-ready as-is; add customer gateway/SSO,
   # WAF or equivalent controls, access logs, rate limits, token rotation,
   # least-privilege egress, release approvals, and audited operations before use.
+  # This starter is the SQLite file-mounted shape. Postgres deployments use
+  # GONG_DATABASE_URL and omit the --db flag and file mounts.
   required_version = ">= 1.6.0"
 
   required_providers {

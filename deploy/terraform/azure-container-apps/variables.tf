@@ -17,7 +17,7 @@ variable "container_app_environment_id" {
 variable "gongmcp_image" {
   type        = string
   description = "Digest-pinned MCP-only image."
-  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0"
+  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.2"
 }
 
 variable "storage_account_name" {
@@ -33,7 +33,7 @@ variable "storage_account_access_key" {
 
 variable "file_share_name" {
   type        = string
-  description = "Azure Files share containing gong.db."
+  description = "Azure Files share containing the SQLite gong.db file for this SQLite starter."
 }
 
 variable "bearer_token" {

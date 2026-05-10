@@ -22,12 +22,12 @@ variable "name" {
 variable "gongmcp_image" {
   type        = string
   description = "Digest-pinned MCP-only image."
-  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0"
+  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.2"
 }
 
 variable "gong_data_disk_self_link" {
   type        = string
-  description = "Self-link of an existing persistent disk that already contains /gong.db. This starter does not create, sync, or promote the cache."
+  description = "Self-link of an existing persistent disk that already contains the SQLite /gong.db file. This starter does not create, sync, or promote the cache."
 }
 
 variable "network" {

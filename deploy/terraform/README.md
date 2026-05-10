@@ -1,8 +1,9 @@
 # Terraform Examples
 
 These are non-production starter examples for customer-hosted `gongmcp` HTTP
-pilots. They are lab-bridge snippets, not reusable production modules or
-enterprise gateway reference architectures.
+pilots that use the SQLite/file-mounted deployment shape. They are lab-bridge
+snippets, not reusable production modules or enterprise gateway reference
+architectures.
 Copy the closest example into the customer's infrastructure repo, wire it to
 existing networking, storage, DNS, TLS, secret management, logging,
 identity-aware gateway/SSO, WAF or equivalent controls, rate limits, token
@@ -13,9 +14,11 @@ The examples assume:
 
 - the writable `gongctl` sync job is handled separately
 - the MCP runtime uses the MCP-only image
-- the SQLite cache is mounted read-only at `/data/gong.db`
+- for these starters, the SQLite cache is mounted read-only at `/data/gong.db`
 - GCP VM deployments attach an existing promoted data disk that already contains
   `gong.db`; the starter does not create, sync, or promote that cache
+- Postgres deployments are out of scope for these Terraform starters; use the
+  Postgres runbooks instead of only swapping storage variables here
 - `gongmcp` receives no Gong API credentials
 - HTTP mode uses bearer auth and an explicit tool allowlist
 - public or cross-user access terminates TLS at customer-managed infrastructure
@@ -29,9 +32,22 @@ internal hop from that boundary to `gongmcp`; it is not the end-user auth model.
 
 | Path | Shape | Use when |
 | --- | --- | --- |
-| `aws-ecs` | ECS Fargate service behind an HTTPS ALB with EFS-mounted cache | AWS customer wants container scheduling and managed TLS/load balancing |
-| `azure-container-apps` | Azure Container App with Azure Files-mounted cache | Azure customer already uses Container Apps and Azure Files |
-| `gcp-compute-engine` | Compute Engine VM running the MCP-only container with a mounted disk | GCP customer wants the simplest POSIX filesystem path for SQLite |
+| `aws-ecs` | ECS Fargate service behind an HTTPS ALB with EFS-mounted SQLite cache | AWS customer wants container scheduling and managed TLS/load balancing for a file-backed MCP cache |
+| `azure-container-apps` | Azure Container App with Azure Files-mounted SQLite cache | Azure customer already uses Container Apps and Azure Files for a file-backed MCP cache |
+| `gcp-compute-engine` | Compute Engine VM running the MCP-only container with a mounted SQLite disk | GCP customer wants the simplest POSIX filesystem path for SQLite |
+
+## Postgres Deployments
+
+These Terraform examples do not configure the Postgres deployment shape.
+Postgres MCP readers use `GONG_DATABASE_URL` or `DATABASE_URL`, omit the `--db`
+flag and SQLite file mounts, and should run against a scoped reader user on a
+redacted serving database when governance filtering is required.
+
+Use these docs for Postgres:
+
+- [Postgres client deployment runbook](../../docs/runbooks/postgres-client-deployment.md)
+- [Docker Postgres shared deployment](../../docs/docker.md#postgres-shared-deployment)
+- [Enterprise Postgres shared container deployment](../../docs/enterprise-deployment.md#2b-postgres-shared-container-deployment)
 
 ## Starter Diagrams
 
@@ -82,8 +98,11 @@ flowchart LR
 Before applying any example, decide:
 
 - who owns the writable sync job
-- how the SQLite cache is refreshed and promoted to the read-only MCP runtime
-- whether the MCP DB is a physically filtered governance copy
+- for these SQLite starters, how the SQLite cache is refreshed and promoted to
+  the read-only MCP runtime
+- whether the SQLite MCP DB is a physically filtered governance copy; for
+  Postgres, decide the source/serving database split and redaction flow from the
+  Postgres runbook
 - which tools are allowlisted
 - which browser/client origins are allowed to call the MCP endpoint
 - where the bearer token or OAuth broker secret lives

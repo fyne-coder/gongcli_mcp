@@ -12,7 +12,7 @@ variable "name" {
 variable "gongmcp_image" {
   type        = string
   description = "Digest-pinned MCP-only image."
-  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.2.0"
+  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.2"
 }
 
 variable "vpc_id" {
@@ -59,12 +59,12 @@ variable "acm_certificate_arn" {
 
 variable "efs_file_system_id" {
   type        = string
-  description = "EFS file system containing the read-only MCP SQLite cache."
+  description = "EFS file system containing the read-only MCP SQLite cache for this SQLite starter."
 }
 
 variable "efs_access_point_id" {
   type        = string
-  description = "EFS access point that exposes gong.db under /data."
+  description = "EFS access point that exposes the SQLite gong.db file under /data."
 }
 
 variable "bearer_token_secret_arn" {

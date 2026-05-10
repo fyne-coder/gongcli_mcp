@@ -56,8 +56,10 @@ services:
       - gongmcp
 
   gongmcp:
-    image: ${GONGMCP_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.3.2}
+    image: ${GONGMCP_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.2}
     restart: unless-stopped
+    # SQLite file-mounted starter. For Postgres, remove --db and GONGMCP_DB,
+    # then set GONG_DATABASE_URL or DATABASE_URL on this service.
     environment:
       GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
       GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-pilot}
