@@ -5,12 +5,12 @@
 - one-shot CLI sync, search, and analysis commands
 - read-only stdio MCP over a mounted SQLite cache
 - read-only HTTP MCP private pilots over a mounted SQLite cache
-- first-slice shared Postgres deployments where sync and MCP containers use one
+- shared Postgres deployments where sync and MCP containers use one
   Postgres database instead of a shared SQLite filesystem
 
 HTTP mode is explicit via `gongmcp --http ...`; the default MCP path remains
-stdio. SQLite remains the complete/default cache, while the Postgres
-shared-deployment slice lets separate sync and MCP containers share one
+stdio. SQLite remains the default local cache with the broadest coverage, while
+the Postgres shared-deployment backend lets separate sync and MCP containers share one
 database for approved presets such as `business-pilot`, narrower analyst
 presets, and `analyst`; `all-readonly` remains excluded. Keep credentials and
 customer data outside the image.

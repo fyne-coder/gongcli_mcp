@@ -403,7 +403,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string) ([]string, error) {
 	switch strings.ToLower(strings.TrimSpace(presetName)) {
 	case "all-readonly", "all-tools", "all":
-		return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", presetName)
+		return nil, fmt.Errorf("%s is not supported by the postgres backend", presetName)
 	case "analyst", "analyst-expansion":
 		reviewed := postgresReviewedAnalystTools()
 		if !sameStringSet(allowlist, reviewed) {
@@ -506,7 +506,7 @@ func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string)
 	}
 	for _, name := range allowlist {
 		if _, ok := supported[name]; !ok {
-			return nil, fmt.Errorf("%s is not supported by the postgres vertical slice", name)
+			return nil, fmt.Errorf("%s is not supported by the postgres backend", name)
 		}
 	}
 	return allowlist, nil

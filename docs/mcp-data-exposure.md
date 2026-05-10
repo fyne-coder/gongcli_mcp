@@ -43,7 +43,7 @@ Current fixed boundaries:
   `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST` can reduce the exposed tool
   surface; HTTP mode requires an explicit preset or allowlist. When neither is
   set, the full read-only catalog remains available only for SQLite stdio;
-  Postgres stdio defaults to the bounded vertical-slice surface.
+  Postgres stdio defaults to the bounded shared-deployment surface.
 - `gongmcp --ai-governance-config` and `GONGMCP_AI_GOVERNANCE_CONFIG` can
   suppress calls linked to private restricted-customer name/alias matches before
   MCP output reaches an LLM. The preferred SQLite blocklist path is
@@ -93,7 +93,7 @@ Current fixed boundaries:
 | `get_call` | Admin-only | Record reference | Accepts either `call_id` or stable `call_ref`; when called with `call_ref`, response echoes `call_ref` and blanks raw `call_id`. Omits raw participant payloads, transcript payloads, CRM field values, and CRM object names; Postgres read-only also redacts CRM object IDs | Raw `call_id` mode still exposes call ID/title plus CRM object/field shape for one call; SQLite/full-catalog mode can include CRM object IDs |
 | `search_crm_field_values` | Admin-only | Config + Snippet | Object ID/name always blanked; call ID blank unless `include_call_ids=true`; title/value snippet returned only when `include_value_snippets=true` | Explicit opt-in can reveal bounded CRM value excerpts, call titles, and call IDs for targeted lookups |
 
-## Stable MCP Facade Tools (Phase 13e2 vertical slice)
+## Stable MCP Facade Tools
 
 In addition to the top-level individual tools above, `gongmcp` now exposes a
 small, stable facade that lets MCP clients depend on a few names while
@@ -297,9 +297,9 @@ What the conservative defaults give you:
 - In SQLite stdio mode, `gongmcp` exposes the full read-only catalog when no
   preset or allowlist is set, but most identifier-bearing fields are blanked,
   snippet tools redact call IDs and speaker IDs, and CRM-value lookups require
-  explicit opt-in flags. Postgres stdio defaults to the narrower vertical-slice
-  allowlist; the reviewed `analyst` preset is available for approved analyst
-  sessions, while `all-readonly` remains rejected.
+  explicit opt-in flags. Postgres stdio defaults to the narrower
+  shared-deployment allowlist; the reviewed `analyst` preset is available for
+  approved analyst sessions, while `all-readonly` remains rejected.
 - Pilot deployments are expected to layer `--tool-preset business-pilot` or a
   custom allowlist on top so business users see only the approved subset rather
   than the full catalog.

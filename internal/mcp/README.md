@@ -1,8 +1,8 @@
 # MCP Adapter Boundary
 
 `internal/mcp` implements the read-only MCP request handling over the store
-interface in `server.go`. SQLite is the complete/default backend; Postgres
-provides reviewed shared-deployment presets and allowlists wired through
+interface in `server.go`. SQLite is the default local backend with the broadest
+coverage; Postgres provides reviewed shared-deployment presets and allowlists wired through
 `cmd/gongmcp/main.go` and `internal/store/postgres`. Stdio is the default
 transport; HTTP mode is a minimal private-pilot transport wrapper around the
 same request handler.

@@ -16,7 +16,7 @@ For the customer-hosted deployment sequence, use the
 For client-facing question scope, use the
 [Postgres question-parity matrix](postgres-question-parity.md).
 
-SQLite remains the complete/default local workflow. Postgres is the shared
+SQLite remains the default local workflow with the broadest coverage. Postgres is the shared
 deployment path for multi-container pilots that cannot rely on a shared
 filesystem.
 

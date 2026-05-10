@@ -1,8 +1,8 @@
 # Postgres Parity Matrix
 
 This matrix is the working contract for making Postgres a full peer to the
-current SQLite backend. SQLite remains the complete/default implementation.
-Postgres parity should be added deliberately, with each surface classified as
+current SQLite backend. SQLite remains the default local implementation with
+the broadest coverage. Postgres parity should be added deliberately, with each surface classified as
 `must match`, `postgres-native equivalent`, or `sqlite-only by design`.
 
 For client-demo question scope, use
@@ -25,7 +25,7 @@ currently supported, caveated, or blocked in Postgres pilots.
 | --- | --- | --- | --- | --- | --- | --- |
 | Backend selection | `--db PATH` opens SQLite | `GONG_DATABASE_URL` / `DATABASE_URL` opens Postgres when `--db` is omitted | Preserve both contracts exactly | must match | Phase 0 | `go test -count=1 ./internal/cli ./cmd/gongmcp` |
 | Schema versioning | `PRAGMA user_version` migrations | `gongctl_schema_migrations` | Postgres-native migration table with read-only startup validation | postgres-native equivalent | Phase 0 | `GONGCTL_TEST_POSTGRES_URL=... go test -count=1 ./internal/store/postgres` |
-| Core sync tables | `sync_runs`, `sync_state`, `calls`, `users`, `transcripts`, `transcript_segments` | complete for first slice | Same record counts and durable sync state for shared deployments | must match | Phase 1 | `./scripts/postgres-smoke.sh` |
+| Core sync tables | `sync_runs`, `sync_state`, `calls`, `users`, `transcripts`, `transcript_segments` | complete for shared deployments | Same record counts and durable sync state for shared deployments | must match | Phase 1 | `./scripts/postgres-smoke.sh` |
 | CRM context objects | `call_context_objects` | foundation table added | Populated on call writes, queryable by object type/id/call | must match | Phase 1 | `TestPostgresUpsertRefreshesNormalizedReadModel` |
 | CRM context fields | `call_context_fields` | foundation table added | Populated on call writes, queryable by field name/value/call | must match | Phase 1 | `TestPostgresUpsertRefreshesNormalizedReadModel` |
 | Context normalization semantics | Go extraction in SQLite write path | complete in Phase 2 via shared-compatible Go extractor | Match object key/name fallback, field fallback, and value stringification at normalized-row layer | must match | Phase 2 | `TestPostgresNormalizedRowsMatchSQLiteForRepresentativeContextShapes` |

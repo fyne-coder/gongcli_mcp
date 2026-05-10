@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-05-10
+
+- Cleaned up the remaining SQLite/Postgres documentation wording after the
+  `v0.4.2` backend audit. Remote-auth env examples now label their
+  `GONGMCP_DB` mounts as SQLite starter configuration, Postgres docs use
+  shared-deployment/backend wording instead of stale "vertical slice" language,
+  and release-facing image examples now point at `v0.4.3`.
+- Updated user-facing Postgres unsupported-tool errors to refer to the
+  reviewed Postgres backend instead of the older vertical-slice label.
+
 ## 0.4.2 - 2026-05-10
 
 - Clarified AI governance documentation across SQLite and Postgres deployment

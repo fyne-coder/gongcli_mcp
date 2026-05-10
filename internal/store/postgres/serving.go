@@ -61,7 +61,7 @@ type ServingDBRefreshResult struct {
 	SkippedTables            []string `json:"skipped_tables,omitempty"`
 }
 
-// servingSkippedTables enumerates tables that the first vertical slice does
+// servingSkippedTables enumerates tables that the redacted serving database does
 // not copy. They are listed in sanitized output so reviewers can see exactly
 // what is intentionally absent from the redacted serving database.
 //
@@ -103,7 +103,7 @@ func servingSkippedTables() []string {
 //   - Re-runs the Postgres read model rebuild and re-applies the governance
 //     policy on the target so MCP can serve sanitized outputs immediately.
 //
-// The first slice intentionally does not copy several operator/global metadata
+// The serving refresh intentionally does not copy several operator/global metadata
 // tables; see servingSkippedTables for the full list. Skipped tables are
 // surfaced in the sanitized output so reviewers can confirm the boundary.
 func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*ServingDBRefreshResult, error) {

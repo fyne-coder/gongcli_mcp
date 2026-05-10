@@ -47,7 +47,8 @@ Current public SQLite-backed commands:
 - `gongctl sync settings --db PATH --kind trackers|scorecards|workspaces [--workspace-id ID]`
 - `gongctl sync scorecard-activity --db PATH --call-from DATE --call-to DATE [--review-method AUTOMATIC|MANUAL|BOTH]`
 - `gongctl sync status --db PATH` for SQLite, or omit `--db` and set
-  `GONG_DATABASE_URL` / `DATABASE_URL` for the Postgres vertical slice
+  `GONG_DATABASE_URL` / `DATABASE_URL` for the Postgres shared-deployment
+  backend
 - `gongctl profile discover --db PATH --out PATH`
 - `gongctl profile validate --db PATH --profile PATH`
 - `gongctl profile import --db PATH --profile PATH`
@@ -98,8 +99,8 @@ Behavioral rules:
 The CLI remains the first integration contract because it is easy to inspect,
 script, and run in customer-controlled environments. MCP reads from the
 configured cache store instead of calling Gong directly; SQLite is the
-complete/default store, while Postgres supports the reviewed shared-deployment
-surfaces tracked in `docs/postgres-parity.md`.
+default local store with the broadest coverage, while Postgres supports the
+reviewed shared-deployment surfaces tracked in `docs/postgres-parity.md`.
 
 Runtime details that matter when debugging MCP:
 
@@ -182,7 +183,7 @@ facts instead of mutating the database.
 
 Postgres maps SQLite FTS5 transcript search to PostgreSQL full-text search with
 a `tsvector`/GIN index and `ts_headline`. Exact FTS5 ranking/snippet parity is
-not guaranteed in this first slice.
+not guaranteed in the reviewed Postgres backend.
 
 ## Endpoint Drift Strategy
 

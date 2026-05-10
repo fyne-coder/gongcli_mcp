@@ -5,7 +5,7 @@ shared-deployment surface. It is written for controlled client pilots using a
 redacted Postgres serving database, scoped reader grants, and a reviewed MCP
 preset such as `analyst` / `analyst-expansion`.
 
-SQLite remains the complete/default local workflow. Postgres is the preferred
+SQLite remains the default local workflow with the broadest coverage. Postgres is the preferred
 shared deployment path for multi-container pilots, but `all-readonly` parity is
 still gated.
 

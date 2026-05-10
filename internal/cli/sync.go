@@ -592,7 +592,7 @@ func (a *app) syncSynthetic(ctx context.Context, args []string) error {
 
 	run, err := store.StartSyncRun(ctx, sqlite.StartSyncRunParams{
 		Scope:          "synthetic",
-		SyncKey:        "synthetic:postgres-vertical-slice",
+		SyncKey:        "synthetic:postgres-shared-deployment",
 		RequestContext: "synthetic_fixture=true",
 	})
 	if err != nil {

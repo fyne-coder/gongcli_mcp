@@ -8,7 +8,7 @@ This document defines the current enterprise pilot deployment shape for
 - `gongctl` is the writable operator tool that authenticates to Gong and
   refreshes local cache state.
 - `gongmcp` is a read-only MCP server over the configured cache store. SQLite
-  is complete/default; Postgres supports the explicitly listed
+  has the broadest local coverage; Postgres supports the explicitly listed
   shared-deployment slices, including reviewed `analyst` sessions.
   Postgres `all-readonly` parity remains a follow-up. It supports local stdio
   and a minimal HTTP `/mcp`

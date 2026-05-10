@@ -175,7 +175,7 @@ metadata, or internal user rows unless they are tied to a suppressed call. If
 the policy is "no occurrence anywhere in any configuration metadata," add a
 separate settings/schema/profile metadata scan before MCP use.
 
-## Redacted Postgres Serving Database (Phase 13e4 vertical slice)
+## Redacted Postgres Serving Database
 
 For Postgres deployments where the strongest requirement is that the MCP/LLM
 path cannot see blocklisted companies, the recommended layout is one Postgres
@@ -203,7 +203,7 @@ gongctl governance refresh-serving-db \
   --config /run/secrets/ai-governance.yaml
 ```
 
-The first slice rebuilds the target database in place: it determines suppressed
+The serving refresh rebuilds the target database in place: it determines suppressed
 call IDs from the source via the existing governance audit logic, truncates the
 target call-scoped tables, copies allowed `calls`, `users`, `transcripts`,
 `transcript_segments`, `call_context_objects`, and `call_context_fields` rows,
@@ -228,7 +228,7 @@ database should already be physically redacted, but the runtime config lets MCP
 deny configured restricted names and aliases before query execution so row
 counts or broad cohort metadata cannot become a membership-inference signal.
 
-The first slice intentionally skips several global metadata tables on the
+The serving refresh intentionally skips several global metadata tables on the
 target. The skipped list is included in the sanitized refresh output so a
 reviewer can confirm the boundary; it currently covers `sync_runs`,
 `sync_state`, `gong_settings`, the `crm_*` schema metadata tables, profile

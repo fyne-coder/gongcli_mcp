@@ -626,7 +626,7 @@ func TestPostgresToolAllowlistRejectsUnsupportedPostgresPresets(t *testing.T) {
 			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
 		}
 		_, err = postgresToolAllowlist(expanded, true, preset)
-		if err == nil || !strings.Contains(err.Error(), "not supported by the postgres vertical slice") {
+		if err == nil || !strings.Contains(err.Error(), "not supported by the postgres backend") {
 			t.Fatalf("postgresToolAllowlist(%q) error=%v, want unsupported postgres error", preset, err)
 		}
 	}

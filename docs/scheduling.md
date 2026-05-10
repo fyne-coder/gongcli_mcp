@@ -258,7 +258,7 @@ spec:
           serviceAccountName: gongctl
           containers:
             - name: gongctl
-              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.2
+              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.3
               args:
                 - "--restricted"
                 - "sync"
