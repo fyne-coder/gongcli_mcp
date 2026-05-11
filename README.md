@@ -1,26 +1,29 @@
 # gongctl
 
-`gongctl` is an unofficial Gong API command-line client and read-only MCP
-server. Source code is open; every user brings their own Gong credentials
-and is responsible for consent, data handling, and Gong terms. Not
-affiliated with or endorsed by Gong.
+`gongctl` turns approved Gong data into a local, queryable evidence workbench
+for RevOps, sales, marketing, product, and governance teams. It helps teams
+answer questions that are awkward to answer directly in Gong while keeping
+credentials, cached data, and tenant-specific configuration under operator
+control.
 
-Two binaries:
+Use it to:
 
-- **`gongctl`** — the CLI. Reads from Gong, writes to a local SQLite cache
-  or a shared Postgres database. The only surface that handles Gong API
-  credentials.
-- **`gongmcp`** — read-only MCP server over that cache. Serves stdio
-  (Claude Desktop, Cursor, …) or HTTP (private pilots). Never calls Gong
-  directly.
+- ask governed business questions over bounded transcript evidence instead of
+  pasting calls into a hosted assistant
+- join call and transcript evidence with lifecycle buckets, scorecard
+  configuration, selected CRM context, and local profile rules
+- inspect coverage gaps before trusting AI summaries, coaching conclusions, or
+  executive readouts
+- expose a read-only MCP workbench to Claude Desktop, Cursor, Codex, or private
+  HTTP pilots without giving those hosts Gong API credentials
+- prototype ad-hoc analyses before converting useful patterns into Gong-native
+  trackers, scorecards, themes, Gong AI prompts, or governed refresh jobs
+- keep an open-source/local-first path where every company brings its own Gong
+  credentials and controls where cached data lives
 
-Two cache backends:
-
-- **SQLite** — default for local / single-host use. Full feature parity.
-- **Postgres** — for shared multi-container deployments. Reviewed analyst,
-  business, and governance surfaces; see
-  [docs/postgres-parity.md](docs/postgres-parity.md) and
-  [docs/postgres-question-parity.md](docs/postgres-question-parity.md).
+`gongctl` is unofficial, not affiliated with or endorsed by Gong. Source code is
+open; every user brings their own Gong credentials and is responsible for
+consent, data handling, and Gong terms.
 
 **Start here:**
 
@@ -43,20 +46,30 @@ the templates under `docs/` and `docs/examples/`. Do not paste real Gong
 credentials, real customer profile YAML, or real transcript output into a
 hosted agent unless your company has approved that data path.
 
-## Positioning
+## How It Is Packaged
+
+Two binaries:
+
+- **`gongctl`** — the CLI. Reads from Gong, writes to a local SQLite cache
+  or a shared Postgres database. The only surface that handles Gong API
+  credentials.
+- **`gongmcp`** — read-only MCP server over that cache. Serves stdio
+  (Claude Desktop, Cursor, …) or HTTP (private pilots). Never calls Gong
+  directly.
+
+Two cache backends:
+
+- **SQLite** — default for local / single-host use. Full feature parity.
+- **Postgres** — for shared multi-container deployments. Reviewed analyst,
+  business, and governance surfaces; see
+  [docs/postgres-parity.md](docs/postgres-parity.md) and
+  [docs/postgres-question-parity.md](docs/postgres-question-parity.md).
+
+## How It Fits With Gong
 
 `gongctl` complements Gong rather than replacing it. Gong remains the system of
 record for calls, transcripts, trackers, scorecards, and Gong-native AI
-workflows. `gongctl` gives operators and analysts a local, queryable evidence
-workbench for questions that are awkward to answer directly in Gong:
-
-- prototype ad-hoc analyses before turning them into durable Gong trackers,
-  scorecards, themes, or Gong AI prompts
-- join cached transcript evidence to call facts, lifecycle buckets, scorecard
-  configuration, and selected CRM context under operator control
-- inspect coverage gaps before trusting AI summaries or coaching conclusions
-- keep an open-source/local-first path where every company uses its own Gong
-  credentials and controls where cached data lives
+workflows.
 
 The intended flow is: sync an approved local cache, test the business question
 with bounded evidence, convert the useful pattern into Gong-native
@@ -223,18 +236,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#2b-postgres-shared-con
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.4 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.4 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 sync status --db /data/gong.db
 ```
 
-The `v0.4.4` image references require the `v0.4.4` tag workflow to have
+The `v0.4.5` image references require the `v0.4.5` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.4 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.4.5 - 2026-05-10
+
+- Reworked the top-level README to put the product benefits first: governed
+  business questions over bounded Gong evidence, local/customer-controlled
+  data handling, read-only MCP access without sharing Gong API credentials,
+  and a clearer path from ad-hoc analysis to Gong-native or governed workflows.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.4.5`.
+
 ## 0.4.4 - 2026-05-10
 
 - Added customer-hosted Postgres deployment starters for AWS ECS runtime and
