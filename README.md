@@ -142,9 +142,14 @@ For ad-hoc business questions, prefer `business-workbench` and call
 `gong_analyze` operation `question.answer`. It returns a governed evidence
 pack (interpreted question, scope, coverage, bounded evidence/quotes,
 limitations, follow-ups, per-call duration); the host model synthesizes the
-final answer. Call titles are blanked in client surfaces because they may
-contain customer names — use `call_ref`, Gong brief/highlight rows, and
-transcript quotes as the stable client path.
+final answer. Call titles are controlled by MCP launch policy, selected
+Postgres reader surface, and per-tool request fields, not by a YAML toggle.
+Default client-safe scoped surfaces blank call titles because they may contain
+customer names; use `call_ref`, Gong brief/highlight rows, and transcript
+quotes as the stable client path. Internal title-bearing sessions must use a
+title-bearing preset/reader and request `include_call_titles=true` or
+`field_profile=attribution|full`; see
+[MCP data exposure](docs/mcp-data-exposure.md#call-title-exposure).
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer
 deployment): `list_unmapped_crm_fields`, `search_crm_field_values`,

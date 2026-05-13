@@ -157,6 +157,63 @@ a physically redacted Postgres serving database, scoped reader grants use the
 reviewed raw business-analysis helper functions so `include_call_titles=true`
 can return remaining call titles from the redacted DB for manual testing.
 
+### Call Title Exposure
+
+Call-title exposure is not controlled by the AI governance YAML. The governance
+YAML supplies the blocklist/governance policy for redacted serving DBs; it does
+not turn titles on or off.
+
+There are three gates:
+
+1. The caller must request titles with `include_call_titles=true` or use
+   `field_profile=attribution` / `field_profile=full`.
+2. The MCP runtime must not enable `hide_call_titles` in `--policy-switches`
+   or `GONGMCP_POLICY_SWITCHES`.
+3. For Postgres scoped readers, the selected preset and role grants must use a
+   title-bearing surface. The default `business-workbench` / analyst scoped
+   business-analysis readers call sanitized SQL wrappers that return
+   `'' AS title`; include flags cannot override that SQL boundary.
+
+For trusted SQLite analyst sessions, use `all-readonly` and request titles per
+tool:
+
+```json
+{
+  "filter": {"title_query": "qbr", "transcript_status": "present"},
+  "include_call_titles": true
+}
+```
+
+For Postgres sessions where call titles should be visible, use the internal
+title-bearing redacted surface against a physically redacted serving DB:
+
+```bash
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" \
+  gongctl mcp postgres-reader-apply \
+    --preset redacted-all-readonly \
+    --role gongmcp_redacted_reader \
+    --database gongctl_mcp \
+    --apply
+
+GONG_DATABASE_URL="$GONGMCP_REDACTED_READER_DATABASE_URL" \
+GONGMCP_TOOL_PRESET=redacted-all-readonly \
+GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
+GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
+GONGMCP_AI_GOVERNANCE_CONFIG=/path/to/ai-governance.yaml \
+GONGMCP_POLICY_SWITCHES="" \
+  gongmcp
+```
+
+Then request titles with `include_call_titles=true` or
+`field_profile=attribution`. Do not include `hide_call_titles` in
+`GONGMCP_POLICY_SWITCHES`.
+
+For customer-pilot broad deployments, `broad-public-redacted` uses the same
+title-bearing reviewed surface as `redacted-all-readonly`, but with stricter
+startup gates and `hide_raw_call_ids` enabled by default. Keep titles visible
+only when the deployment policy allows named call attribution; otherwise add
+`hide_call_titles` to `GONGMCP_POLICY_SWITCHES` and restart `gongmcp`.
+
 The broader 68-tool surfaces (`analyst`, `analyst-business-core`,
 `redacted-all-readonly`, `broad-public-redacted`, `all-readonly`) remain
 available for operator, analyst, and internal-testing use. For client pilots

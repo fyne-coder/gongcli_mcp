@@ -245,6 +245,16 @@ individual include flag:
 Policy switches still win. For example, `field_profile=full` cannot expose raw
 call IDs when `hide_raw_call_ids` is enabled.
 
+Call titles also depend on the launch surface. There is no YAML switch that
+enables them. For trusted SQLite analyst sessions, request
+`include_call_titles=true` or `field_profile=attribution|full` and make sure
+`hide_call_titles` is not set. For Postgres, `business-workbench` and analyst
+scoped readers use sanitized business-analysis wrappers that blank titles even
+when requested. To show titles from a physically redacted Postgres serving DB,
+run a title-bearing preset such as `redacted-all-readonly` or
+`broad-public-redacted`, apply the matching scoped reader grants, omit
+`hide_call_titles`, and request titles per tool.
+
 Field profiles control structured metadata fields. They do not redact names
 embedded inside transcript snippets or Gong AI brief/keyPoint/highlight text.
 When `field_profile=limited` returns AI condensed evidence, the host should
