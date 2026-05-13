@@ -831,7 +831,7 @@ func (args businessAnalysisArgs) AccountQueries() []string {
 func (args *businessAnalysisArgs) ApplyFieldProfile() error {
 	applied, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
 		IncludeRawIDs:           args.IncludeCallIDs,
-		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeCallTitles:       true,
 		IncludeAccountNames:     args.IncludeAccountNames,
 		IncludeOpportunityNames: args.IncludeOpportunityNames,
 	})

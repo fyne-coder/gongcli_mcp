@@ -1700,7 +1700,7 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 		len(pgServingAccountCalls.Rows) != 1 ||
 		pgServingAccountCalls.Rows[0].CallID == "" ||
 		pgServingAccountCalls.Rows[0].CallID == "pg-ba-001" ||
-		pgServingAccountCalls.Rows[0].Title != "" {
+		pgServingAccountCalls.Rows[0].Title != "Implementation evidence call" {
 		t.Fatalf("redacted serving Postgres account_query calls not sanitized: summary=%+v rows=%+v", pgServingAccountCalls.Summary, pgServingAccountCalls.Rows)
 	}
 	pgRedactedAllView := &Store{db: pgStore.DB(), readOnly: true, readOnlyOptions: ReadOnlyOptions{EnforceAllowedColumnBoundary: true, AllowAccountQuery: true, AllowBusinessAnalysisRawIDs: true}}

@@ -361,6 +361,7 @@ docker run --rm \
   -p 127.0.0.1:8080:8080 \
   -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
   -e GONGMCP_TOOL_PRESET=business-pilot \
+  -e GONGMCP_POLICY_SWITCHES=hide_call_titles \
   -e GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted \
   -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
   -v /srv/gongctl/gong.db:/data/gong.db:ro \
@@ -390,6 +391,11 @@ Use the named tool profiles in
 [Customer implementation checklist](implementation-checklist.md#named-tool-profiles)
 when deciding `GONGMCP_TOOL_PRESET` or `GONGMCP_TOOL_ALLOWLIST`. The example
 above uses `business-pilot`.
+
+`GONGMCP_POLICY_SWITCHES` is launch-time configuration. For example,
+`hide_call_titles` suppresses call titles that are otherwise visible by
+default in title-bearing MCP surfaces. Change policy switches by restarting or
+redeploying `gongmcp`; there is no hot reload for this setting today.
 
 The example binds the host port to `127.0.0.1` so only a local customer proxy,
 gateway, or tunnel can reach it. Do not change this to `-p 8080:8080` unless

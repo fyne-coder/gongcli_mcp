@@ -459,8 +459,8 @@ func TestFacadeQuestionAnswerReturnsEvidencePackAndCallDurations(t *testing.T) {
 	if _, ok := first["duration_seconds"]; !ok {
 		t.Fatalf("reviewed call missing per-call duration: %v", first)
 	}
-	if _, ok := first["call_title"]; ok {
-		t.Fatalf("question.answer exposed call title without include_call_titles: %v", first)
+	if got, _ := first["call_title"].(string); got == "" {
+		t.Fatalf("question.answer should expose call title by default: %v", first)
 	}
 	if _, ok := inner["answer_contract"].([]any); !ok {
 		t.Fatalf("missing answer contract: %v", inner["answer_contract"])

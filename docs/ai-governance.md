@@ -219,7 +219,10 @@ updates are applied by editing the private YAML and rerunning
 `GONG_DATABASE_URL`, reader role/grants, auth settings, binary/image, and
 `GONGMCP_TOOL_PRESET` are unchanged; subsequent MCP calls read the refreshed
 serving database. Restart or redeploy `gongmcp` when those deployment knobs
-change, or when cutting over to a different serving database URL.
+change, when policy switches such as `GONGMCP_POLICY_SWITCHES=hide_call_titles`
+change, or when cutting over to a different serving database URL. The MCP
+process does not hot-reload AI governance YAML or launch/env configuration;
+only the refreshed serving database contents are picked up by subsequent reads.
 
 When `gongmcp` serves a redacted Postgres database with account-name search
 enabled, pass the same private governance config with
