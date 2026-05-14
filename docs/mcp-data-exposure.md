@@ -7,6 +7,13 @@ server as implemented in `internal/mcp/server.go`. Stdio remains the default
 local transport; HTTP `/mcp` is a private-pilot request/response transport over
 the same read-only tool layer.
 
+Before adding a new top-level tool, facade operation, preset membership, or
+Postgres allowlist entry, use the
+[MCP Tool Intake Checklist](mcp-tool-intake-checklist.md). That checklist is
+the required review gate for business-question framing, cache mapping, exposure
+classification, preset/default decisions, Postgres reader grants, governance
+behavior, and synthetic regression coverage.
+
 Current fixed boundaries:
 
 - MCP reads a local cache/store only. SQLite is the complete default backend.
