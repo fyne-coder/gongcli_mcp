@@ -67,8 +67,19 @@ func main() {
 	mux.HandleFunc("/.well-known/oauth-authorization-server", a.oauthAuthorizationServer)
 	mux.HandleFunc("/mcp", a.mcp)
 	log.Printf("lab auth shim listening addr=%s upstream=%s issuer=%s", cfg.addr, cfg.upstream, cfg.issuer)
-	if err := http.ListenAndServe(cfg.addr, mux); err != nil {
+	if err := newHTTPServer(cfg.addr, mux).ListenAndServe(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      90 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
 
@@ -177,18 +188,20 @@ func (a *app) mcp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	proxy := httputil.NewSingleHostReverseProxy(a.cfg.upstream)
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("upstream error principal=%s err=%v", principal, err)
-		http.Error(w, "upstream failed", http.StatusBadGateway)
-	}
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.URL.Path = "/mcp"
-		req.Host = a.cfg.upstream.Host
-		req.Header.Set("Authorization", "Bearer "+a.cfg.internalToken)
-		req.Header.Set("X-Gongctl-Lab-Principal", principal)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			req.SetURL(a.cfg.upstream)
+			req.Out.URL.Path = "/mcp"
+			req.Out.URL.RawQuery = req.In.URL.RawQuery
+			req.Out.Host = a.cfg.upstream.Host
+			req.Out.Header.Set("Authorization", "Bearer "+a.cfg.internalToken)
+			req.Out.Header.Set("X-Gongctl-Lab-Principal", principal)
+			req.SetXForwarded()
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("upstream error principal=%s err=%v", principal, err)
+			http.Error(w, "upstream failed", http.StatusBadGateway)
+		},
 	}
 	log.Printf("auth ok principal=%s method=%s", principal, r.Method)
 	proxy.ServeHTTP(w, r)

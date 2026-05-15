@@ -1060,7 +1060,7 @@ func defaultTools(policy LimitPolicy) []tool {
 		},
 		{
 			Name:        "search_transcript_quotes_with_attribution",
-			Description: "Search bounded transcript quote snippets and join available call, Account, Opportunity, industry, and attribution-readiness metadata; identifiers and names require explicit opt-in flags.",
+			Description: "Search bounded transcript quote snippets and join available call, Account, Opportunity, industry, and attribution-readiness metadata; call titles are included by default where policy permits, while raw IDs and names require explicit opt-in flags.",
 			InputSchema: objectSchema(
 				map[string]any{
 					"query":                     map[string]any{"type": "string"},
@@ -2296,7 +2296,7 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 	}
 	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
 		IncludeRawIDs:           args.IncludeCallIDs,
-		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeCallTitles:       true,
 		IncludeAccountNames:     args.IncludeAccountNames,
 		IncludeOpportunityNames: args.IncludeOpportunityNames,
 	})
@@ -2350,6 +2350,23 @@ func (s *Server) searchTranscriptQuotesWithAttribution(ctx context.Context, raw 
 		out = append(out, row)
 	}
 	attributed := mcpTranscriptAttributionResults(out, args)
+	for idx := range attributed {
+		if s.policySwitches.HideCallTitles {
+			attributed[idx].Title = ""
+		}
+		if s.policySwitches.HideRawCallIDs {
+			attributed[idx].CallID = ""
+		}
+		if s.policySwitches.HideAccountNames {
+			attributed[idx].AccountName = ""
+			attributed[idx].AccountWebsite = ""
+		}
+		if s.policySwitches.HideOpportunityNames {
+			attributed[idx].OpportunityName = ""
+			attributed[idx].OpportunityCloseDate = ""
+			attributed[idx].OpportunityProbability = ""
+		}
+	}
 	return s.newCappedToolResult("search_transcript_quotes_with_attribution", attributed, len(attributed), s.limitPolicy.SearchLimit(args.Limit), filtered, attributionRefinements(args))
 }
 

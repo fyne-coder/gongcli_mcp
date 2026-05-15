@@ -459,8 +459,8 @@ func TestFacadeQuestionAnswerReturnsEvidencePackAndCallDurations(t *testing.T) {
 	if _, ok := first["duration_seconds"]; !ok {
 		t.Fatalf("reviewed call missing per-call duration: %v", first)
 	}
-	if _, ok := first["call_title"]; ok {
-		t.Fatalf("question.answer exposed call title without include_call_titles: %v", first)
+	if got, _ := first["call_title"].(string); got == "" {
+		t.Fatalf("question.answer should expose call title by default: %v", first)
 	}
 	if _, ok := inner["answer_contract"].([]any); !ok {
 		t.Fatalf("missing answer contract: %v", inner["answer_contract"])
@@ -1820,6 +1820,110 @@ func TestFacadeEvidenceCallDrilldownLimitedProfileSuppressesSpeakerRef(t *testin
 	}
 	if summary, _ := inner["speaker_attribution_summary"].(map[string]any); summary["external"] == nil {
 		t.Fatalf("call drilldown should include speaker_attribution_summary: %v", summary)
+	}
+}
+
+func TestFacadeEvidenceCallDrilldownFieldProfileSpeakerIDPolicyMatrix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		fieldProfile     string
+		hideSpeakerIDs   bool
+		wantSpeakerRef   bool
+		wantRawSpeakerID bool
+	}{
+		{name: "limited policy allows raw speaker id", fieldProfile: "limited", wantRawSpeakerID: true},
+		{name: "limited policy hides raw speaker id", fieldProfile: "limited", hideSpeakerIDs: true},
+		{name: "attribution policy allows ref and raw speaker id", fieldProfile: "attribution", wantSpeakerRef: true, wantRawSpeakerID: true},
+		{name: "attribution policy hides raw speaker id but keeps ref", fieldProfile: "attribution", hideSpeakerIDs: true, wantSpeakerRef: true},
+		{name: "full policy allows ref and raw speaker id", fieldProfile: "full", wantSpeakerRef: true, wantRawSpeakerID: true},
+		{name: "full policy hides raw speaker id but keeps ref", fieldProfile: "full", hideSpeakerIDs: true, wantSpeakerRef: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			base := openSeededStore(t)
+			defer base.Close()
+
+			const callID = "call_sanitized_001"
+			callRef := sqlite.StableCallRef(callID)
+			store := &fakeDrilldownStore{
+				Store: base,
+				refs:  map[string]string{callRef: callID},
+				transcriptByCallID: map[string][]sqlite.CallDrilldownEvidenceRow{
+					callID: {
+						{
+							CallID:                callID,
+							SegmentIndex:          0,
+							SpeakerID:             "speaker_policy_001",
+							StartMS:               1000,
+							EndMS:                 3500,
+							Snippet:               "Synthetic external speaker policy sentence.",
+							ContextExcerpt:        "Synthetic external speaker policy sentence.",
+							SpeakerRole:           sqlite.SpeakerRoleExternal,
+							SpeakerRoleStatus:     sqlite.SpeakerRoleStatusAvailable,
+							PersonTitleStatus:     "available",
+							PersonTitleSource:     "call_parties",
+							AttributionSource:     "gong_party",
+							AttributionConfidence: "exact_speaker_id",
+						},
+					},
+				},
+			}
+
+			server := NewServerWithOptions(store, "gongmcp", "test",
+				WithToolAllowlist(FacadeToolNames()),
+				WithFacadeRoutedToolAllowlist([]string{"call_drilldown"}),
+				WithPolicySwitches(PolicySwitches{HideSpeakerIDs: tc.hideSpeakerIDs}),
+			)
+
+			args, err := json.Marshal(map[string]any{
+				"operation": OpEvidenceCallDrilldown,
+				"arguments": map[string]any{
+					"call_ref":      callRef,
+					"theme_query":   "Synthetic",
+					"field_profile": tc.fieldProfile,
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			result, err := server.executeFacadeDispatch(t.Context(), FacadeToolGetEvidence, args)
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("unexpected isError: %+v", result)
+			}
+
+			wrapper := decodeFacadeWrapper(t, result)
+			inner, _ := wrapper["result"].(map[string]any)
+			verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
+			if len(verbatim) != 1 {
+				t.Fatalf("verbatim len=%d want 1: %v", len(verbatim), inner)
+			}
+			row, _ := verbatim[0].(map[string]any)
+
+			speakerRef, _ := row["speaker_ref"].(string)
+			if tc.wantSpeakerRef && !strings.HasPrefix(speakerRef, "speaker_") {
+				t.Fatalf("speaker_ref=%q want stable ref for profile %s row=%v", speakerRef, tc.fieldProfile, row)
+			}
+			if !tc.wantSpeakerRef && speakerRef != "" {
+				t.Fatalf("speaker_ref=%q should be suppressed for profile %s row=%v", speakerRef, tc.fieldProfile, row)
+			}
+
+			speakerID, _ := row["speaker_id"].(string)
+			if tc.wantRawSpeakerID && speakerID != "speaker_policy_001" {
+				t.Fatalf("speaker_id=%q want raw speaker id when policy allows it row=%v", speakerID, row)
+			}
+			if !tc.wantRawSpeakerID && speakerID != "" {
+				t.Fatalf("speaker_id=%q should be hidden by policy row=%v", speakerID, row)
+			}
+		})
 	}
 }
 

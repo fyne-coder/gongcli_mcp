@@ -1,6 +1,11 @@
 package mcp
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestToolCatalogInvariants(t *testing.T) {
 	t.Parallel()
@@ -118,6 +123,58 @@ func TestFacadeHiddenRoutedToolsDerivedFromRegistry(t *testing.T) {
 		internalRoutedToolThemeIntelReport,
 	}
 	assertStringSlicesEqual(t, facadeHiddenRoutedToolNames(), want, "hidden facade routed tools")
+}
+
+func TestMCPToolIntakeDocumentationCoversCatalog(t *testing.T) {
+	t.Parallel()
+
+	exposureDoc := readRepoDoc(t, "docs/mcp-data-exposure.md")
+	intakeDoc := readRepoDoc(t, "docs/mcp-tool-intake-checklist.md")
+	roadmapDoc := readRepoDoc(t, "docs/roadmap.md")
+
+	lowerIntake := strings.ToLower(intakeDoc)
+	for _, required := range []string{
+		"business question",
+		"cache source",
+		"backend scope",
+		"exposure level",
+		"default preset decision",
+		"postgres decision",
+		"governance decision",
+		"output contract",
+		"tests and smoke",
+		"postgres `all-readonly` remains rejected",
+	} {
+		if !strings.Contains(lowerIntake, required) {
+			t.Fatalf("MCP tool intake checklist missing required gate %q", required)
+		}
+	}
+
+	var missingTools []string
+	for _, name := range ToolCatalogNames() {
+		if !strings.Contains(exposureDoc, "`"+name+"`") {
+			missingTools = append(missingTools, name)
+		}
+	}
+	if len(missingTools) > 0 {
+		t.Fatalf("docs/mcp-data-exposure.md missing tool exposure entries for: %v", missingTools)
+	}
+
+	for _, preset := range ToolPresetCatalog() {
+		if !strings.Contains(intakeDoc, "`"+preset.Name+"`") {
+			t.Fatalf("docs/mcp-tool-intake-checklist.md missing preset rule for %q", preset.Name)
+		}
+	}
+
+	if !strings.Contains(exposureDoc, "MCP Tool Intake Checklist") {
+		t.Fatal("docs/mcp-data-exposure.md must link the MCP tool intake checklist")
+	}
+	if strings.Contains(roadmapDoc, "written checklist still pending") {
+		t.Fatal("docs/roadmap.md still says the written MCP tool-intake checklist is pending")
+	}
+	if !strings.Contains(roadmapDoc, "mcp-tool-intake-checklist.md") {
+		t.Fatal("docs/roadmap.md must cite the MCP tool-intake checklist for Gate 2 item 3")
+	}
 }
 
 func TestBusinessWorkbenchPresetExposesOnlyFacadeTools(t *testing.T) {
@@ -303,4 +360,14 @@ func assertStringSlicesEqual(t *testing.T, got, want []string, label string) {
 			t.Fatalf("%s[%d]=%q want %q\ngot:  %v\nwant: %v", label, idx, got[idx], want[idx], got, want)
 		}
 	}
+}
+
+func readRepoDoc(t *testing.T, path string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", path))
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(body)
 }

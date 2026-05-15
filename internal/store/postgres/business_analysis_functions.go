@@ -911,7 +911,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 SELECT md5(raw.call_id) AS call_id,
-       ''::text AS title,
+       raw.title,
        raw.started_at,
        raw.call_date,
        raw.lifecycle_bucket,
@@ -944,7 +944,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 SELECT md5(raw.call_id) AS call_id,
-       ''::text AS title,
+       raw.title,
        raw.started_at,
        raw.call_date,
        raw.call_month,
@@ -975,7 +975,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 SELECT md5(raw.call_id) AS call_id,
-       ''::text AS title,
+       raw.title,
        raw.started_at,
        raw.call_date,
        raw.call_month,
@@ -1008,7 +1008,7 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 SELECT md5(raw.call_id) AS call_id,
-       ''::text AS title,
+       raw.title,
        raw.started_at,
        raw.call_date,
        raw.call_month,

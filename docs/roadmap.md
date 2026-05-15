@@ -61,11 +61,9 @@ Pilot packet docs:
 Goal: the project is safe to operate repeatedly inside a company with defined
 owners, retention, upgrade, rollback, and security controls.
 
-Status as of 2026-05-05: items 1, 2, 4, 5, and the backup/rollback portion of
-item 6 have shipped. Item 3 remains partial because regression tests and the
-exposure-classification table exist, but a written tool-intake checklist is not
-in the repo. Item 6 still needs customer-platform restore drills for production
-PITR/replica workflows before broad GA.
+Status as of 2026-05-14: items 1, 2, 3, 4, 5, and the backup/rollback portion
+of item 6 have shipped. Item 6 still needs customer-platform restore drills for
+production PITR/replica workflows before broad GA.
 The Postgres client pilot release packet and onboarding checklist now document
 the controlled shared-deployment handoff, but they do not replace a published
 tag, image digest verification, or customer-platform dry run.
@@ -79,8 +77,10 @@ Required outcomes:
    `gongctl cache inventory` and dry-run-first `gongctl cache purge`)
 3. MCP tool intake is formal: every new tool starts from a business question,
    maps to cached data, gets an exposure classification, ships behind allowlists,
-   and has regression tests. (partial; classification table exists in
-   [mcp-data-exposure.md](mcp-data-exposure.md), written checklist still pending)
+   and has regression tests. (shipped via
+   [mcp-tool-intake-checklist.md](mcp-tool-intake-checklist.md),
+   [mcp-data-exposure.md](mcp-data-exposure.md), and catalog/doc regression
+   tests)
 4. Supply-chain checks cover Go tests, `go vet`, static analysis, vulnerability
    scanning, secret scanning, Docker scanning, SBOM/checksums, and pinned release
    artifacts. (shipped; see [release.md](release.md))
