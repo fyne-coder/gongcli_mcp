@@ -21,8 +21,8 @@ Record the decision in the PR description, release notes, or local checkpoint:
   future all-readonly candidate
 - governance decision: whether AI governance suppression, blocklist checks,
   redacted serving DB refresh, or small-cell suppression applies
-- output contract: bounded result shape, redaction defaults, opt-in fields, and
-  cap-hit feedback
+- output contract: bounded result shape, redaction defaults, title/sensitive
+  metadata defaults, opt-in fields, and cap-hit feedback
 - tests and smoke: synthetic fixtures only, read-only negative tests where
   applicable, and direct coverage for every new preset/allowlist path
 
@@ -36,8 +36,10 @@ Do not merge a new MCP surface until all applicable items are true:
       default protections, and residual risk.
 - [ ] The tool has explicit limit/filter behavior and cannot return unbounded
       transcripts, raw JSON payloads, or full CRM value dumps.
-- [ ] Sensitive identifiers are blanked by default, or the tool documents the
-      opt-in flag and tests the default-redacted path.
+- [ ] Sensitive identifiers and metadata are blanked by default, or the tool
+      documents why specific metadata such as call titles is visible by default,
+      names the policy/profile switch that suppresses it, and tests the default
+      and suppressed paths.
 - [ ] Business-user access goes through `business-workbench` facade operations
       unless the broader top-level tool list is intentionally approved.
 - [ ] Postgres access is explicit: either rejected, narrow allowlist, reviewed

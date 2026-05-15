@@ -237,13 +237,23 @@ individual include flag:
 
 | Profile | Effect |
 | --- | --- |
-| `limited` | Hides raw IDs, call titles, account names, opportunity names, and speaker refs. Use for broad client-safe exploration. |
-| `attribution` | Enables call titles, account names, opportunity names, and speaker refs, but not raw IDs. Use when the client profile permits named account/opportunity attribution. |
-| `full` | Enables every opt-in field, including raw IDs, subject to active server policy switches. Use only for approved internal/operator sessions. |
-| `custom` or omitted | Keeps the explicit `include_*` flags supplied by the caller. |
+| `limited` | Hides raw IDs, call titles, account names, opportunity names, and stable speaker refs. Raw `speaker_id` is controlled separately by `hide_speaker_ids`. Use for broad client-safe exploration with the matching policy switches enabled. |
+| `attribution` | Enables account names, opportunity names, and stable speaker refs, but not raw call IDs. Call titles are already on by default where policy allows. Raw `speaker_id` is controlled separately by `hide_speaker_ids`. Use when the client profile permits named account/opportunity attribution. |
+| `full` | Enables every governed field, including raw call IDs and stable speaker refs, subject to active server policy switches. Call titles are already on by default where policy allows, and raw `speaker_id` is still hidden when `hide_speaker_ids` is enabled. Use only for approved internal/operator sessions. |
+| `custom` or omitted | Keeps the explicit `include_*` flags supplied by the caller; call titles remain on by default unless policy suppresses them. |
 
 Policy switches still win. For example, `field_profile=full` cannot expose raw
-call IDs when `hide_raw_call_ids` is enabled.
+call IDs when `hide_raw_call_ids` is enabled, and none of the profiles can
+expose raw `speaker_id` when `hide_speaker_ids` is enabled. Operators should
+set `hide_speaker_ids` as a client-level policy decision before business-user
+testing, rather than relying on `field_profile` alone.
+
+Call titles also depend on the launch surface. There is no YAML switch that
+enables them. Trusted SQLite and reviewed Postgres analyst/business-workbench
+surfaces return call titles by default when the backend has a title. To hide
+titles for one request, use `field_profile=limited`; to hide them for the
+whole MCP process, add `hide_call_titles` to `--policy-switches` or
+`GONGMCP_POLICY_SWITCHES` and restart `gongmcp`.
 
 Field profiles control structured metadata fields. They do not redact names
 embedded inside transcript snippets or Gong AI brief/keyPoint/highlight text.
@@ -518,8 +528,8 @@ Prompt:
 > "possible" when the evidence only suggests a direction.
 
 Tools required: `search_transcript_quotes_with_attribution` (with
-`include_call_ids=true`, `include_call_titles=true`, and the matching
-account/opportunity opt-ins when attribution is needed),
+`include_call_ids=true` and the matching account/opportunity opt-ins when
+attribution is needed; call titles are returned by default when policy allows),
 `search_transcript_segments`, `summarize_call_facts`, `get_sync_status`.
 
 Output discipline: reject any "asset is missing" claim that does not list at
