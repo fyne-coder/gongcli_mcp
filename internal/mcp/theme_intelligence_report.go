@@ -146,7 +146,7 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 	}
 	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
 		IncludeRawIDs:       args.IncludeRawIDs,
-		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeCallTitles:   true,
 		IncludeAccountNames: args.IncludeAccountNames,
 		IncludeSpeakerRefs:  args.IncludeSpeakerRefs,
 	})

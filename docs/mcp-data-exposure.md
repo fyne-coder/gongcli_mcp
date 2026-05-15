@@ -85,7 +85,7 @@ Current fixed boundaries:
 | `opportunity_call_summary` | Restricted | Aggregate + Config | Server blanks opportunity IDs, opportunity names, owner IDs, amount, close date, and latest call IDs; Postgres reader function never returns those fields or raw values | Still reveals stage, coverage, duration totals, and latest-call timing at an opportunity-summary level |
 | `crm_field_population_matrix` | Restricted | Aggregate + Config | Only approved categorical object/field pairs are accepted; approved group values are intentionally exposed as aggregate labels; function output excludes object IDs/names, object keys, call IDs, non-group raw CRM values, raw JSON, and raw hashes | Group labels can still reveal tenant-specific CRM structure and small-cell population patterns |
 | `search_transcripts_by_call_facts` | Restricted | Snippet | No call IDs, titles, or speaker IDs in the result shape | Still returns bounded transcript/context excerpts plus lifecycle/scope/system/direction metadata |
-| `search_transcript_quotes_with_attribution` | Restricted | Snippet + Opt-in elevation | Call IDs, call titles, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled, and configured restricted governance names/aliases are denied before query execution; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
+| `search_transcript_quotes_with_attribution` | Restricted | Snippet + governed attribution | Call titles are included by default where policy permits; call IDs, Account names/websites, and Opportunity names/close dates/probabilities are blank unless explicitly requested; `account_query` is rejected unless Account-name output is explicitly enabled, and configured restricted governance names/aliases are denied before query execution; returns participant/person-title readiness status | Still exposes bounded quote/context excerpts plus industry, stage, and other attribution metadata when present |
 | `search_transcript_segments` | Restricted | Snippet | Call IDs and speaker IDs are blank unless explicitly requested | Default output still includes snippet text and time offsets |
 | `search_transcripts_by_crm_context` | Restricted | Snippet | Server blanks call ID, title, object ID, object name, and speaker ID; the Postgres reader function filters governance-suppressed calls in SQL and does not return call IDs, speaker IDs, CRM object IDs/names, object keys, raw CRM values, raw JSON, raw hashes, or full transcript text | Still returns transcript-derived snippets tied to an object type and call time |
 | `compare_lifecycle_crm_fields` | Restricted | Aggregate | Postgres reader function is limited to reviewed `Opportunity` comparisons, excludes governance-suppressed calls in SQL, and returns object type, field name/label, bucket call counts, bucket populated counts, rates, and rate delta only | Field names and lifecycle bucket rates can reveal tenant-specific CRM structure |
@@ -146,16 +146,65 @@ per-call duration, bounded evidence/quotes, warnings, limitations, and an
 answer contract for the host model. It does not generate unsupported prose
 inside `gongmcp`; the host model must synthesize from returned evidence.
 
-Call titles remain deliberately constrained for client/default scoped surfaces.
-They can contain customer names or sensitive account terms, so
-`business-workbench` and approved analyst scoped Postgres business-analysis
-functions blank titles even when `include_call_titles=true`. Use `call_ref`,
-date/start time, duration, Gong generated brief/highlight rows, and transcript
-quote evidence as the stable client path. The internal
-`redacted-all-readonly` preset is the explicit exception: when it is pointed at
-a physically redacted Postgres serving database, scoped reader grants use the
-reviewed raw business-analysis helper functions so `include_call_titles=true`
-can return remaining call titles from the redacted DB for manual testing.
+Call titles are treated as customer metadata, but they are visible by default
+in title-bearing MCP surfaces when the backend has a title and policy allows
+it. Use `field_profile=limited` for request-level suppression, or add
+`hide_call_titles` to `--policy-switches` /
+`GONGMCP_POLICY_SWITCHES` for process-level suppression. Keep using
+`call_ref`, date/start time, duration, Gong generated brief/highlight rows,
+and transcript quote evidence as the stable client path when titles are
+hidden.
+
+### Call Title Exposure
+
+Call-title exposure is not controlled by the AI governance YAML. The governance
+YAML supplies the blocklist/governance policy for redacted serving DBs; it does
+not turn titles on or off.
+
+There are three gates:
+
+1. The selected MCP operation and store surface must be title-bearing.
+2. The request must not use `field_profile=limited`.
+3. The MCP runtime must not enable `hide_call_titles` in `--policy-switches`
+   or `GONGMCP_POLICY_SWITCHES`.
+
+For trusted SQLite analyst sessions, use a title-bearing preset such as
+`all-readonly`; titles are returned by default:
+
+```json
+{
+  "filter": {"title_query": "qbr", "transcript_status": "present"}
+}
+```
+
+For Postgres sessions where call titles should be visible, use a reviewed
+title-bearing surface against a physically redacted serving DB:
+
+```bash
+GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" \
+  gongctl mcp postgres-reader-apply \
+    --preset redacted-all-readonly \
+    --role gongmcp_redacted_reader \
+    --database gongctl_mcp \
+    --apply
+
+GONG_DATABASE_URL="$GONGMCP_REDACTED_READER_DATABASE_URL" \
+GONGMCP_TOOL_PRESET=redacted-all-readonly \
+GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
+GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
+GONGMCP_AI_GOVERNANCE_CONFIG=/path/to/ai-governance.yaml \
+GONGMCP_POLICY_SWITCHES="" \
+  gongmcp
+```
+
+Do not include `hide_call_titles` in `GONGMCP_POLICY_SWITCHES`. Use
+`field_profile=limited` only for requests where call titles should be hidden.
+
+For customer-pilot broad deployments, `broad-public-redacted` uses the same
+title-bearing reviewed surface as `redacted-all-readonly`, but with stricter
+startup gates and `hide_raw_call_ids` enabled by default. Keep titles visible
+only when the deployment policy allows named call attribution; otherwise add
+`hide_call_titles` to `GONGMCP_POLICY_SWITCHES` and restart `gongmcp`.
 
 The broader 68-tool surfaces (`analyst`, `analyst-business-core`,
 `redacted-all-readonly`, `broad-public-redacted`, `all-readonly`) remain
@@ -167,8 +216,9 @@ while internal operations evolve underneath.
 
 `redacted-all-readonly` is internal manual-testing only and requires the
 physically redacted Postgres serving DB plus scoped reader grants. In this
-internal mode, explicit include flags can expose raw call IDs and call titles
-that remain in the physically redacted serving DB.
+internal mode, call titles are visible by default unless policy suppresses
+them; explicit include flags can expose raw call IDs that remain in the
+physically redacted serving DB.
 
 `broad-public-redacted` is the customer-test alias of the redacted broad lab
 surface. It exposes the same reviewed Postgres tool set as
@@ -246,7 +296,7 @@ Required filter contract:
 | `search_calls_by_filters`, `summarize_calls_by_filters` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate or bounded record summaries | Bounded `limit`, no raw SQL, default identifier redaction unless a reviewed policy says otherwise | Call metadata can reveal business process or tenant terminology |
 | `search_transcripts_by_filters` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Snippet | Requires a search term, bounded excerpts, transcript-status filtering, no full transcript text, redacted provenance by default | Snippets are still customer data and can be identifying |
 | `discover_themes_in_cohort`, `summarize_themes_by_dimension`, `compare_themes_over_time`, `compare_themes_by_segment` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + deterministic theme signals | Label outputs as cache-derived heuristic signals, include support counts and coverage, avoid LLM-style unsupported conclusions. `discover_themes_in_cohort` (and the `analyze.themes.discover` facade operation routed to it) accepts a selective cohort filter without `theme_query`/`query`; in that seedless mode it returns deterministic candidate seed terms from a bounded transcript sample with a `broad_discovery_seedless` warning. Other theme summary tools and all quote/evidence tools (`search_quotes_in_cohort`, `build_quote_pack`, `extract_theme_quotes`, `build_theme_brief`, etc.) keep their query-required gates so seedless mode never escalates into raw transcript dumps. | Low-coverage themes can be overinterpreted by the host model |
-| `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Snippet + optional evidence packaging | Requires a theme/search term, bounded quote count and length, safe attribution defaults, explicit opt-ins for names/titles/ids where policy supports them | Quote packs can carry sensitive customer language into the host model |
+| `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Snippet + optional evidence packaging | Requires a theme/search term, bounded quote count and length, safe attribution defaults, default call titles where policy supports them, and explicit opt-ins for names/raw IDs | Quote packs can carry sensitive customer language into the host model |
 | `compare_theme_outcomes`, `summarize_pipeline_progression_by_theme`, `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + CRM outcome coverage | Graceful degradation when stage, close status, loss reason, or opportunity linkage is absent; no causal claims from correlation alone | Pipeline labels and outcome rates can expose sensitive revenue context |
 | `summarize_themes_by_persona`, `summarize_themes_by_industry`, `rank_personas_by_insight_quality`, `diagnose_attribution_coverage` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Aggregate + attribution coverage | Report missing-title and missing-industry rates; never infer titles or industries from call names or snippets. The persona dimension returns coarse role buckets (`procurement`, `supplier_enablement`, `it_security_integration`, `finance`, `operations`, `sales_revenue`, `executive`, `other_title_present`) computed deterministically from cached party metadata and CRM Contact/Lead Title fields; raw participant title strings are not returned as dimension values. Calls with no resolvable title surface as `<blank>`; Postgres can also return `participant_title_present` when only the materialized `call_facts` flag survives. Existing missing-title coverage warnings remain in force. | Persona and industry slices may reveal go-to-market strategy |
 | `generate_sales_hooks_from_themes`, `generate_outreach_sequence_inputs`, `recommend_target_personas_and_industries`, `build_theme_brief` | Postgres approved sessions: `analyst`, `analyst-expansion`; SQLite trusted sessions: `analyst`, `all-readonly` | Structured synthesis inputs | Return evidence-backed inputs for the host model; label hypotheses; include evidence counts and limitations | Host-generated copy can overstate cache-derived evidence if limitations are dropped |
