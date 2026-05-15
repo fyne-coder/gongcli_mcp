@@ -105,7 +105,7 @@ func FacadeOperations() []FacadeOperation {
 			InputSchema: objectSchema(map[string]any{
 				"filter":              map[string]any{"type": "object"},
 				"limit":               map[string]any{"type": "integer"},
-				"include_call_titles": map[string]any{"type": "boolean", "description": "Best-effort opt-in. Scoped Postgres reader functions may still blank call titles; use call_ref plus evidence/brief rows as the stable client path."},
+				"include_call_titles": map[string]any{"type": "boolean", "description": "Legacy compatibility flag. Call titles are included by default where backend and policy permit; field_profile=limited or hide_call_titles suppresses them."},
 				"include_account_names": map[string]any{
 					"type":        "boolean",
 					"description": "Required with account_query because direct account-name probes are otherwise denied.",
@@ -1140,7 +1140,7 @@ func (s *Server) executeProspectQuestionAnswer(ctx context.Context, raw json.Raw
 	}
 	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
 		IncludeRawIDs:       args.IncludeCallIDs,
-		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeCallTitles:   true,
 		IncludeAccountNames: args.IncludeAccountNames,
 	})
 	if err != nil {
@@ -1392,7 +1392,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	}
 	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
 		IncludeRawIDs:       args.IncludeCallIDs,
-		IncludeCallTitles:   args.IncludeCallTitles,
+		IncludeCallTitles:   true,
 		IncludeAccountNames: args.IncludeAccountNames,
 	})
 	if err != nil {
@@ -1974,7 +1974,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	}
 	profiled, err := applyFieldProfile(args.FieldProfile, fieldProfileApplication{
 		IncludeRawIDs:           args.IncludeRawIDs,
-		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeCallTitles:       true,
 		IncludeAccountNames:     args.IncludeAccountNames,
 		IncludeOpportunityNames: args.IncludeOpportunityNames,
 		// Drilldown historically emits stable speaker refs by default for

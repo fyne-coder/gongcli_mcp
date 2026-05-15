@@ -135,16 +135,19 @@ gongctl profile schema
 | `analyst` (Postgres) | Full reviewed analyst catalog | Approved analyst sessions over the reviewed Postgres surface. |
 | `governance-search` (Postgres) | Narrowed governance-search slice | AI governance prepared private policy. |
 | `all-readonly` (SQLite) | Full read-only catalog | Trusted SQLite admin / analyst sessions. |
-| `redacted-all-readonly` (Postgres) | Broad surface over a **physically redacted** serving DB with scoped reader grants | Internal manual testing only. Explicit include flags can expose remaining call titles / raw call IDs from the redacted DB. |
+| `redacted-all-readonly` (Postgres) | Broad surface over a **physically redacted** serving DB with scoped reader grants | Internal manual testing only. Call titles are visible by default unless policy suppresses them; explicit include flags can expose raw call IDs from the redacted DB. |
 | `broad-public-redacted` (Postgres) | Same surface as `redacted-all-readonly` with a hardened customer-deployment startup contract | Customer-test broad surface over a redacted serving DB. |
 
 For ad-hoc business questions, prefer `business-workbench` and call
 `gong_analyze` operation `question.answer`. It returns a governed evidence
 pack (interpreted question, scope, coverage, bounded evidence/quotes,
 limitations, follow-ups, per-call duration); the host model synthesizes the
-final answer. Call titles are blanked in client surfaces because they may
-contain customer names — use `call_ref`, Gong brief/highlight rows, and
-transcript quotes as the stable client path.
+final answer. Call titles are shown by default in title-bearing MCP surfaces
+when the backend has a title and policy allows it. Suppress them with
+`field_profile=limited` for a request or `hide_call_titles` in
+`GONGMCP_POLICY_SWITCHES` / `--policy-switches` at launch. This is a
+launch/runtime policy, not an AI governance YAML toggle; see
+[MCP data exposure](docs/mcp-data-exposure.md#call-title-exposure).
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer
 deployment): `list_unmapped_crm_fields`, `search_crm_field_values`,
@@ -833,7 +836,7 @@ boundary and rejects direct `calls.call_id`, `calls.title`,
 remains a service secret because selected functions and sanitized views can
 still expose minimized call metadata, timings, counts, and tenant terminology.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
-`search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
+`search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call titles are returned by default where policy permits; raw call IDs, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags. The tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 When serving a physically redacted Postgres MCP database with account-name search enabled, run `gongmcp` with `GONGMCP_AI_GOVERNANCE_CONFIG` or `--ai-governance-config` pointing at the same private policy used to build the serving DB. This lets MCP deny configured restricted names and aliases before query execution instead of returning row counts for restricted-name probes.
 
 ## Data Handling Rules

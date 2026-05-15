@@ -74,7 +74,7 @@ Every cohort, search, and analysis tool accepts only these filter fields:
 
 | Field | Type | Notes |
 |---|---|---|
-| `title_query` | string | Substring match on call title (titles are blanked in client-facing surfaces; useful for filtering only) |
+| `title_query` | string | Substring match on call title. Title-bearing surfaces return call titles by default unless `field_profile=limited` or `hide_call_titles` suppresses them. |
 | `query` | string | Free-text query against searchable fields |
 | `from_date` | `YYYY-MM-DD` | Inclusive lower bound |
 | `to_date` | `YYYY-MM-DD` | Inclusive upper bound |

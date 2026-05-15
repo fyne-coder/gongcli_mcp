@@ -477,10 +477,13 @@ func TestBusinessAnalysisToolsRedactDefaultsAndReportLimitations(t *testing.T) {
 		t.Fatalf("quote row count=%d exceeded requested limit", len(rows))
 	}
 	firstQuote := rows[0].(map[string]any)
-	for _, leaked := range []string{"call_id", "call_title", "title", "account_name", "opportunity_name", "speaker_id"} {
+	for _, leaked := range []string{"call_id", "account_name", "opportunity_name", "speaker_id"} {
 		if value, ok := firstQuote[leaked]; ok && value != "" {
 			t.Fatalf("quote result leaked %s by default: %+v", leaked, firstQuote)
 		}
+	}
+	if got, _ := firstQuote["call_title"].(string); got == "" {
+		t.Fatalf("quote result should include call_title by default: %+v", firstQuote)
 	}
 	if excerpt := stringField(firstQuote, "excerpt"); excerpt == "" || strings.Contains(excerpt, "raw transcript") {
 		t.Fatalf("missing bounded safe quote excerpt: %+v", firstQuote)
@@ -2075,10 +2078,13 @@ func TestSearchTranscriptQuotesWithAttributionRedactsNamesByDefault(t *testing.T
 	if len(rows) != 1 {
 		t.Fatalf("row count=%d want 1: %+v", len(rows), rows)
 	}
-	for _, leaked := range []string{"call_id", "title", "account_name", "account_website", "opportunity_name", "opportunity_close_date", "opportunity_probability"} {
+	for _, leaked := range []string{"call_id", "account_name", "account_website", "opportunity_name", "opportunity_close_date", "opportunity_probability"} {
 		if _, ok := rows[0][leaked]; ok {
 			t.Fatalf("attribution result leaked %s by default: %+v", leaked, rows[0])
 		}
+	}
+	if got, _ := rows[0]["title"].(string); got == "" {
+		t.Fatalf("attribution result should include title by default: %+v", rows[0])
 	}
 	if rows[0]["account_industry"] != "Manufacturing" || rows[0]["opportunity_stage"] != "Discovery" {
 		t.Fatalf("missing safe attribution metadata: %+v", rows[0])

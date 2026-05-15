@@ -63,9 +63,10 @@ instead of asking the model to manually compose several lower-level
 operations. The response is an evidence pack for synthesis: searched scope,
 coverage, reviewed calls, per-call duration, bounded quotes/evidence,
 warnings, limitations, and suggested follow-ups. It intentionally does not
-return unrestricted call titles in scoped Postgres mode; titles can contain
-customer names. Use `call_ref` plus Gong brief/highlight rows and transcript
-quotes as the stable identifier path.
+return call titles by default in title-bearing surfaces unless the deployment
+sets `hide_call_titles` or the request uses `field_profile=limited`. Titles can
+contain customer names, so use `call_ref` plus Gong brief/highlight rows and
+transcript quotes as the stable identifier path when titles are suppressed.
 
 For trained analyst manual testing over the broader 68-tool surface, the
 `analyst-expansion` preset (an alias for `analyst`) remains available. Prefer
@@ -86,8 +87,9 @@ For internal redacted-DB broad testing, `redacted-all-readonly` exposes every
 reviewed Postgres-readable MCP tool, including `search_calls`, `get_call`,
 `search_crm_field_values`, CRM/settings inventory, scorecard activity
 aggregates, facade tools, and the business-analysis catalog. With this preset
-only, business-analysis calls may return remaining redacted-DB call titles and
-raw call IDs when the caller sets the explicit include flags. This preset is
+only, business-analysis calls return remaining redacted-DB call titles by
+default unless policy suppresses them; raw call IDs still require explicit
+include flags. This preset is
 internal manual-testing only — not a client-facing default — and should not be
 used against a raw unredacted database.
 
