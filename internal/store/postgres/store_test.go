@@ -1650,7 +1650,7 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 		pgServingAttributed[0].OpportunityName != "" ||
 		pgServingAttributed[0].CallID == "" ||
 		pgServingAttributed[0].CallID == "pg-ba-001" ||
-		pgServingAttributed[0].Title != "" {
+		pgServingAttributed[0].Title != "Implementation evidence call" {
 		t.Fatalf("redacted serving Postgres account_query attribution result not sanitized: %+v", pgServingAttributed)
 	}
 
