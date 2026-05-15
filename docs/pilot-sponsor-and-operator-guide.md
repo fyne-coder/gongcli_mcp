@@ -237,13 +237,16 @@ individual include flag:
 
 | Profile | Effect |
 | --- | --- |
-| `limited` | Hides raw IDs, call titles, account names, opportunity names, and speaker refs. Use for broad client-safe exploration. |
-| `attribution` | Enables account names, opportunity names, and speaker refs, but not raw IDs. Call titles are already on by default where policy allows. Use when the client profile permits named account/opportunity attribution. |
-| `full` | Enables every governed field, including raw IDs, subject to active server policy switches. Use only for approved internal/operator sessions. |
-| `custom` or omitted | Keeps explicit `include_*` flags for raw IDs and names; call titles remain on by default unless policy suppresses them. |
+| `limited` | Hides raw IDs, call titles, account names, opportunity names, and stable speaker refs. Raw `speaker_id` is controlled separately by `hide_speaker_ids`. Use for broad client-safe exploration with the matching policy switches enabled. |
+| `attribution` | Enables account names, opportunity names, and stable speaker refs, but not raw call IDs. Call titles are already on by default where policy allows. Raw `speaker_id` is controlled separately by `hide_speaker_ids`. Use when the client profile permits named account/opportunity attribution. |
+| `full` | Enables every governed field, including raw call IDs and stable speaker refs, subject to active server policy switches. Call titles are already on by default where policy allows, and raw `speaker_id` is still hidden when `hide_speaker_ids` is enabled. Use only for approved internal/operator sessions. |
+| `custom` or omitted | Keeps the explicit `include_*` flags supplied by the caller; call titles remain on by default unless policy suppresses them. |
 
 Policy switches still win. For example, `field_profile=full` cannot expose raw
-call IDs when `hide_raw_call_ids` is enabled.
+call IDs when `hide_raw_call_ids` is enabled, and none of the profiles can
+expose raw `speaker_id` when `hide_speaker_ids` is enabled. Operators should
+set `hide_speaker_ids` as a client-level policy decision before business-user
+testing, rather than relying on `field_profile` alone.
 
 Call titles also depend on the launch surface. There is no YAML switch that
 enables them. Trusted SQLite and reviewed Postgres analyst/business-workbench

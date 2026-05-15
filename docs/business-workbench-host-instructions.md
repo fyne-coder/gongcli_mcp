@@ -53,9 +53,11 @@ evidence" or "external-or-unknown evidence" instead.
 
 - Show `data_readiness_caveats` when using industry, persona, stage, won/lost,
   loss reason, or methodology-style claims.
-- If `field_profile=limited`, structured metadata is limited, but names embedded
-  inside Gong AI brief/keyPoint/highlight text or transcript snippets are not
-  automatically redacted.
+- Treat `field_profile` as a structured metadata preset, not a complete
+  redaction layer. `limited` suppresses stable speaker refs; raw `speaker_id`
+  visibility is controlled by the server policy switch `hide_speaker_ids`.
+  Names embedded inside Gong AI brief/keyPoint/highlight text or transcript
+  snippets are not automatically redacted.
 - Do not infer loss reasons, MEDDICC, pain, champions, buying committees, or next
   steps unless the customer profile maps and populates those fields.
 

@@ -7,6 +7,13 @@ server as implemented in `internal/mcp/server.go`. Stdio remains the default
 local transport; HTTP `/mcp` is a private-pilot request/response transport over
 the same read-only tool layer.
 
+Before adding a new top-level tool, facade operation, preset membership, or
+Postgres allowlist entry, use the
+[MCP Tool Intake Checklist](mcp-tool-intake-checklist.md). That checklist is
+the required review gate for business-question framing, cache mapping, exposure
+classification, preset/default decisions, Postgres reader grants, governance
+behavior, and synthetic regression coverage.
+
 Current fixed boundaries:
 
 - MCP reads a local cache/store only. SQLite is the complete default backend.
@@ -418,7 +425,8 @@ How to open up the surface intentionally:
     `include_speaker_ids=true` returns exact identifiers alongside snippets.
   - `search_transcript_quotes_with_attribution` with the matching attribution
     flags returns Account/Opportunity context joined to the quote, plus
-    `account_query` lookups.
+    `account_query` lookups. Call titles are returned by default where policy
+    allows; use `field_profile=limited` or `hide_call_titles` to suppress them.
   - `search_crm_field_values` with `include_call_ids=true` and
     `include_value_snippets=true` returns bounded value excerpts and call IDs
     for a specific object/field/value query.
