@@ -2,11 +2,73 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNewHTTPServerSetsTimeouts(t *testing.T) {
+	server := newHTTPServer("127.0.0.1:0", http.NewServeMux())
+	if server.ReadHeaderTimeout != 10*time.Second {
+		t.Fatalf("ReadHeaderTimeout=%s want 10s", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout != 20*time.Second {
+		t.Fatalf("ReadTimeout=%s want 20s", server.ReadTimeout)
+	}
+	if server.WriteTimeout != 90*time.Second {
+		t.Fatalf("WriteTimeout=%s want 90s", server.WriteTimeout)
+	}
+	if server.IdleTimeout != 120*time.Second {
+		t.Fatalf("IdleTimeout=%s want 120s", server.IdleTimeout)
+	}
+}
+
+func TestMCPRewritePreservesInternalBearerAgainstHopByHopHeader(t *testing.T) {
+	var gotAuth, gotPrincipal, gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPrincipal = r.Header.Get("X-Gongctl-Lab-Principal")
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(upstream.Close)
+	upstreamURL, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &app{cfg: config{
+		upstream:          upstreamURL,
+		internalToken:     "internal-token-0123456789abcdef",
+		allowedEmails:     csvSet("approved@example.test"),
+		trustProxyHeaders: true,
+		trustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+	}}
+	req := httptest.NewRequest(http.MethodPost, "http://example.test/mcp", strings.NewReader("{}"))
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("X-Auth-Request-Email", "approved@example.test")
+	req.Header.Set("Connection", "Authorization")
+	req.Header.Set("Authorization", "Bearer attacker-controlled")
+	recorder := httptest.NewRecorder()
+
+	app.mcp(recorder, req)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d want %d body=%q", recorder.Code, http.StatusNoContent, recorder.Body.String())
+	}
+	if gotPath != "/mcp" {
+		t.Fatalf("upstream path=%q want /mcp", gotPath)
+	}
+	if gotAuth != "Bearer internal-token-0123456789abcdef" {
+		t.Fatalf("upstream auth=%q", gotAuth)
+	}
+	if gotPrincipal != "approved@example.test" {
+		t.Fatalf("upstream principal=%q", gotPrincipal)
+	}
+}
 
 func TestAuthenticateRejectsForgedProxyHeaderFromUntrustedRemote(t *testing.T) {
 	app := &app{cfg: config{

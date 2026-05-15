@@ -24,9 +24,9 @@ Claude Desktop JSON, and wrapper scripts:
 | Transport | `--http` | `GONGMCP_HTTP_ADDR` | HTTP `/mcp` listener. |
 | Transport | `--stdio` | none | Forces stdio and ignores `GONGMCP_HTTP_ADDR`. |
 | HTTP auth | `--auth-mode` | `GONGMCP_AUTH_MODE` | `none` or `bearer`; shared HTTP should use bearer. |
-| HTTP auth | `--bearer-token` | `GONGMCP_BEARER_TOKEN` | Direct token; prefer token files or secret manager. |
-| HTTP auth | `--bearer-token-file` | `GONGMCP_BEARER_TOKEN_FILE` | Preferred current-token file. |
-| HTTP auth | `--bearer-token-previous-file` | `GONGMCP_BEARER_TOKEN_PREVIOUS_FILE` | Optional previous-token file for rotation. |
+| HTTP auth | `--bearer-token` | `GONGMCP_BEARER_TOKEN` | Direct token; prefer token files or secret manager. Token must be at least 32 characters with no whitespace/control characters. |
+| HTTP auth | `--bearer-token-file` | `GONGMCP_BEARER_TOKEN_FILE` | Preferred current-token file. Token must be at least 32 characters with no whitespace/control characters. |
+| HTTP auth | `--bearer-token-previous-file` | `GONGMCP_BEARER_TOKEN_PREVIOUS_FILE` | Optional previous-token file for rotation. Token must be at least 32 characters with no whitespace/control characters. |
 | HTTP network | `--allow-open-network` | `GONGMCP_ALLOW_OPEN_NETWORK=1` | Required for non-local binds. |
 | HTTP network | `--dev-allow-no-auth-localhost` | none | Local development only. |
 | HTTP network | `--allowed-origins` | `GONGMCP_ALLOWED_ORIGINS` | Required for non-local HTTP. |

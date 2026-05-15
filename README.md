@@ -207,7 +207,7 @@ Primary references:
 
 ## Install From Source
 
-This repo requires Go 1.22+.
+This repo requires Go 1.26.3 or newer for local builds and release artifacts.
 
 ```bash
 go test -count=1 ./...
@@ -767,7 +767,9 @@ address requires bearer auth plus `--allow-open-network`; use that override
 only behind an approved TLS/private-network boundary. Bearer tokens
 are owned by the customer/operator and should come from an environment
 variable, secret file, systemd environment file, Docker secret, Kubernetes
-Secret, or company secret manager. Do not commit MCP bearer tokens to Git,
+Secret, or company secret manager. Tokens must be at least 32 characters and
+must not contain whitespace or control characters; generate a random token, for
+example with `openssl rand -base64 32`. Do not commit MCP bearer tokens to Git,
 SQLite, docs, images, or shared logs.
 Non-local HTTP also requires `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`
 so the server can reject unexpected browser `Origin` headers.
