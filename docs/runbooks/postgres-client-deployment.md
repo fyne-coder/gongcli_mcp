@@ -139,7 +139,17 @@ require explicit runtime approval as described in
 [Operator sync runbook](operator-sync.md).
 
 For repeatable jobs, prefer reviewed `sync run --config` YAML plus `--dry-run`
-before enabling cron, launchd, Kubernetes, or container schedules.
+for SQLite-backed schedules. For Postgres shared deployments, use direct
+`gongctl sync ...` commands or a small reviewed wrapper that runs the approved
+steps with `GONG_DATABASE_URL` set to the writable operator URL. The current
+`sync run --config` runner is SQLite-oriented and should not be used as the
+Postgres scheduler path.
+
+In Kubernetes, the `gongctl` image has `gongctl` as its entrypoint and `--help`
+as the default command. Override `args` for a single command, for example
+`["sync", "calls", "--from", "YYYY-MM-DD", "--to", "YYYY-MM-DD", "--preset",
+"minimal"]`, or override `command` to run a shell wrapper that executes the
+approved sequence. Do not use the `gongmcp` image for writable sync jobs.
 
 ## 7. Refresh Redacted Serving Database
 

@@ -238,6 +238,10 @@ Use this when `gongctl` and `gongmcp` already run as containers and the
 cache is Postgres. The CronJob does the writable refresh; the `gongmcp`
 Deployment stays read-only and separate.
 
+For Postgres, run direct `gongctl sync ...` commands with a writable
+`GONG_DATABASE_URL`. Do not use `sync run --config` here; that config runner is
+for SQLite cache schedules today.
+
 ```yaml
 apiVersion: batch/v1
 kind: CronJob
@@ -258,22 +262,28 @@ spec:
           serviceAccountName: gongctl
           containers:
             - name: gongctl
-              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5
+              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6
+              command: ["/bin/sh", "-lc"]
               args:
-                - "--restricted"
-                - "sync"
-                - "run"
-                - "--config"
-                - "/config/sync-run.yaml"
+                - |
+                  set -eu
+                  FROM="$(date -u -d 'yesterday' +%F)"
+                  TO="$(date -u +%F)"
+                  gongctl --restricted sync calls --from "$FROM" --to "$TO" --preset minimal
+                  gongctl --restricted sync users
+                  gongctl --restricted sync transcripts --out-dir /transcripts --batch-size 100 --allow-sensitive-export
+                  gongctl --restricted sync settings --kind trackers
+                  gongctl --restricted sync settings --kind scorecards
+                  gongctl --restricted sync read-model --rebuild
+                  gongctl --restricted sync status
               envFrom:
                 - secretRef:
                     name: gongctl-gong-credentials   # GONG_ACCESS_KEY/SECRET
                 - secretRef:
                     name: gongctl-postgres-writer    # GONG_DATABASE_URL
               volumeMounts:
-                - name: config
-                  mountPath: /config
-                  readOnly: true
+                - name: transcripts
+                  mountPath: /transcripts
               securityContext:
                 allowPrivilegeEscalation: false
                 runAsNonRoot: true
@@ -282,24 +292,9 @@ spec:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
           volumes:
-            - name: config
-              configMap:
-                name: gongctl-sync-config            # contains sync-run.yaml
-```
-
-Companion `ConfigMap`:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: gongctl-sync-config
-  namespace: gongctl
-data:
-  sync-run.yaml: |
-    version: 1
-    name: Daily incremental refresh
-    # ...content from docs/examples/sync-run.example.yaml...
+            - name: transcripts
+              persistentVolumeClaim:
+                claimName: gongctl-transcripts
 ```
 
 Watch a run:
@@ -311,6 +306,17 @@ kubectl -n gongctl logs job/<job-name>
 
 For retention, ship a sibling `gongctl-purge` CronJob with a weekly
 schedule that mounts the retention policy from another ConfigMap.
+
+For a first-run init, use the same image and writer secrets in a one-off Job,
+but run a bounded historical window instead of yesterday-only calls. The schema
+migration happens when `gongctl` opens Postgres with the writable URL; the
+`gongmcp` Deployment should start only after the source/serving database and
+scoped reader grants are ready.
+
+Remove the transcript step if transcript search is not approved for the pilot.
+When restricted mode is enabled, transcript sync requires
+`--allow-sensitive-export` or `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` as the
+operator's explicit runtime approval.
 
 ## Computing rolling date windows
 

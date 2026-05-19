@@ -31,6 +31,7 @@ of the package supports deployment, security review, support, and operations.
 | Example security questionnaire answers | [Security questionnaire](security-questionnaire.md) |
 | Postgres shared-deployment pilot packet | [Postgres client pilot release packet](postgres-client-pilot-release-packet.md) |
 | Postgres operator onboarding checklist | [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md) |
+| Postgres Kubernetes operator setup | [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md) |
 | Postgres manual-test checklist | [Postgres client manual-test checklist](postgres-client-manual-test-checklist.md) |
 | Postgres deployment runbook | [Postgres client deployment runbook](runbooks/postgres-client-deployment.md) |
 
@@ -68,6 +69,8 @@ Default enterprise posture:
 2. For shared/containerized deployments, use the Postgres two-database path in
    the [Postgres deployment runbook](runbooks/postgres-client-deployment.md):
    a writable source DB for sync plus a governed/redacted serving DB for MCP.
+   For Kubernetes operator Jobs and CronJobs, use the
+   [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md).
    For the simplest one-host customer-managed install, use
    [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md) as
    the Compose scaffold for that same boundary.

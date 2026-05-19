@@ -1,6 +1,7 @@
 # Example sync-run config for `gongctl sync run --config <this file>`.
 #
-# This file is the YAML primitive that scheduled refresh jobs should call.
+# This file is the YAML primitive that SQLite-backed scheduled refresh jobs
+# should call.
 # Copy this file, replace the REPLACE_WITH_* placeholders, and dry-run validate
 # the exact config before the scheduler enables it:
 #
@@ -10,6 +11,11 @@
 # Relative `db` and transcript `out_dir` paths resolve from the location of
 # this YAML file, so one reviewed config can travel with the operator-managed
 # job definition (systemd unit, launchd plist, K8s CronJob, etc.).
+#
+# For Postgres shared deployments, use direct `gongctl sync ...` commands or a
+# reviewed wrapper with GONG_DATABASE_URL set to the writable operator URL. The
+# current `sync run --config` implementation opens a SQLite cache from this
+# YAML's `db` field.
 #
 # Keep this file under operator-controlled storage. Real customer configs
 # may name CRM integration IDs, workspace IDs, or scorecard IDs; treat them
@@ -21,8 +27,7 @@ description: |
   Operator-owned scheduled refresh: incremental calls + users + transcripts +
   CRM context + settings, ending with a sync status snapshot for monitoring.
 
-# SQLite cache path (omit for Postgres deployments — use GONG_DATABASE_URL
-# in the environment instead).
+# SQLite cache path.
 db: /srv/gongctl/cache/gong.db
 
 steps:

@@ -39,6 +39,8 @@ You install, secure, schedule, and maintain it.
   backup, restore, decommissioning
 - [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
   — Postgres-specific bootstrap, scoped reader grants, smoke
+- [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md)
+  — Kubernetes first-run Jobs, recurring sync, image args, MCP smoke
 - [Single-VM Postgres starter](../deploy/single-vm-postgres/README.md) —
   practical all-on-one-VM Compose shape for small company setups
 - [Scheduling cache refreshes](scheduling.md) — cron / systemd / launchd /
@@ -71,6 +73,7 @@ You decide pilot scope, approve profiles, and own the business outcome.
 - [Customer implementation checklist](implementation-checklist.md)
 - [AI governance](ai-governance.md)
 - [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md)
+- [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md)
 - [Postgres client pilot release packet](postgres-client-pilot-release-packet.md)
 
 ## Developer (writing code in this repo)

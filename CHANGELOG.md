@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-05-19
+
+- Added a Postgres Kubernetes operator setup guide that covers blank-database
+  initialization, first sync scope, recurring refresh cadence, `gongctl` image
+  invocation, and MCP smoke testing without a business-user login.
+- Clarified Postgres scheduling docs so Kubernetes shared deployments use
+  direct `gongctl sync ...` commands or reviewed shell wrappers instead of the
+  SQLite-oriented `sync run --config` path.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.4.6`.
+
 ## 0.4.5 - 2026-05-10
 
 - Reworked the top-level README to put the product benefits first: governed
