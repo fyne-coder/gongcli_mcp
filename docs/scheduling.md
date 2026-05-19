@@ -10,7 +10,8 @@ templates for the four common targets:
 - `launchd` (macOS admin-workstation pilot)
 - Kubernetes `CronJob` (containerized shared deployments)
 
-All four call the same primitive:
+The cron, systemd, and launchd starters below use the SQLite-oriented
+`sync run --config` primitive:
 
 ```bash
 gongctl sync run --config /etc/gongctl/sync-run.yaml
@@ -28,6 +29,10 @@ gongctl sync run --config /etc/gongctl/sync-run.yaml --dry-run
 
 For cache purge / retention scheduling, the same pattern applies with
 [docs/examples/retention-policy.example.yaml](examples/retention-policy.example.yaml).
+
+For Kubernetes with shared Postgres, skip `sync run --config` and use Pattern 4
+below. Postgres schedules should run direct `gongctl sync ...` commands or a
+reviewed shell wrapper with `GONG_DATABASE_URL` set to a writable operator URL.
 
 ## Operating principles
 
@@ -271,7 +276,7 @@ spec:
                   TO="$(date -u +%F)"
                   gongctl --restricted sync calls --from "$FROM" --to "$TO" --preset minimal
                   gongctl --restricted sync users
-                  gongctl --restricted sync transcripts --out-dir /transcripts --batch-size 100 --allow-sensitive-export
+                  gongctl --restricted sync transcripts --out-dir /transcripts --batch-size 100 --limit 200 --allow-sensitive-export
                   gongctl --restricted sync settings --kind trackers
                   gongctl --restricted sync settings --kind scorecards
                   gongctl --restricted sync read-model --rebuild
@@ -297,6 +302,11 @@ spec:
                 claimName: gongctl-transcripts
 ```
 
+Create the `gongctl-transcripts` PVC separately, or remove the transcript step
+and volume if transcript search is not approved. A `ReadWriteOnce` PVC is
+usually sufficient for a single CronJob writer; size it for the approved
+transcript retention window.
+
 Watch a run:
 
 ```bash
@@ -316,13 +326,21 @@ scoped reader grants are ready.
 Remove the transcript step if transcript search is not approved for the pilot.
 When restricted mode is enabled, transcript sync requires
 `--allow-sensitive-export` or `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` as the
-operator's explicit runtime approval.
+operator's explicit runtime approval. `sync transcripts` defaults to
+`--limit 100`; the scheduled example uses a small daily limit, while a first
+historical backfill Job should set a larger approved `--limit` or run repeated
+Jobs until `sync status` shows the expected transcript coverage.
+
+If the inline shell becomes too large for review, move the script into a
+reviewed ConfigMap or customer-owned operator image and keep the same command
+sequence. The important boundary is still that `gongctl` receives the writable
+Postgres URL and `gongmcp` remains read-only.
 
 ## Computing rolling date windows
 
-Three of the four patterns above pass a static `from:` / `to:` from the
-YAML. To compute a rolling window at firing time, write the dates from a
-small wrapper instead of editing the YAML:
+The SQLite `sync run --config` patterns above usually pass a static `from:` /
+`to:` from the YAML. To compute a rolling window at firing time, write the
+dates from a small wrapper before invoking the SQLite sync command:
 
 ```bash
 FROM=$(date -u -d 'yesterday' +%F)

@@ -47,6 +47,10 @@ containers:
     args: ["sync", "status"]
 ```
 
+If the `v0.4.6` image has not been published yet, pin the latest published tag
+or build and push a customer-owned image before applying the Kubernetes
+manifests.
+
 Use `command` only when you need a shell wrapper that runs several commands:
 
 ```yaml
@@ -80,6 +84,7 @@ gongctl sync users
 gongctl sync transcripts \
   --out-dir /transcripts \
   --batch-size 100 \
+  --limit 1000 \
   --allow-sensitive-export
 
 gongctl sync settings --kind trackers
@@ -95,6 +100,10 @@ Notes:
   URL.
 - Remove the transcript step if transcript search is not approved for the
   pilot.
+- `sync transcripts` defaults to `--limit 100`. For first historical backfill,
+  set an approved higher `--limit` or run repeated Jobs until `sync status`
+  shows the expected transcript coverage. Keep daily scheduled refreshes
+  smaller.
 - In restricted mode, transcript sync requires `--allow-sensitive-export` or
   `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` as explicit operator approval.
 - Use `--preset business`, `--include-parties`, or `--include-highlights` only
@@ -117,6 +126,24 @@ For Postgres shared deployments, schedule direct `gongctl sync ...` commands or
 a reviewed shell wrapper. Do not use `sync run --config` for this path today;
 that runner is SQLite-oriented.
 
+## Scoped Reader Grants
+
+Before starting `gongmcp`, reconcile grants for the same preset the runtime
+will use. For the default customer-facing Postgres surface:
+
+```bash
+GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
+gongctl mcp postgres-reader-apply \
+  --preset business-workbench \
+  --role "$GONGMCP_READER_ROLE" \
+  --database "$GONGCTL_MCP_DB" \
+  --dry-run
+```
+
+Review the dry run, then rerun with `--apply` if approved. Do not rely on the
+command defaults here; they target the legacy `business-pilot` surface and a
+sample role name.
+
 ## Operator MCP Smoke Test
 
 An operator does not need to be a business MCP user to prove the deployment
@@ -125,41 +152,52 @@ works end to end. Validate the data path first, then the MCP serving path.
 Confirm data/readiness:
 
 ```bash
-GONG_DATABASE_URL="$READER_OR_WRITER_URL" gongctl sync status
+GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL" gongctl sync status
 ```
 
-Confirm HTTP MCP with the bearer token:
+Confirm HTTP MCP with the bearer token against the internal `gongmcp` service,
+not the public JumpCloud/OIDC gateway. For example, port-forward the service
+from a trusted operator workstation:
+
+```bash
+kubectl -n gongctl port-forward svc/gongmcp 8080:8080
+```
+
+Then send JSON-RPC to the forwarded service:
 
 ```bash
 curl -sS \
   -H "Authorization: Bearer $GONGMCP_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"operator-smoke","version":"0"}}}' \
-  https://MCP_HOST/mcp
+  http://127.0.0.1:8080/mcp
 
 curl -sS \
   -H "Authorization: Bearer $GONGMCP_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
-  https://MCP_HOST/mcp
+  http://127.0.0.1:8080/mcp
 
 curl -sS \
   -H "Authorization: Bearer $GONGMCP_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"gong_status","arguments":{}}}' \
-  https://MCP_HOST/mcp
+  http://127.0.0.1:8080/mcp
 ```
 
 If a gateway such as JumpCloud OIDC sits in front of `/mcp`, test that layer
-separately:
+separately against the public hostname:
 
 - unauthenticated requests are rejected
 - authenticated approved users can reach `/mcp`
+- the gateway forwards only reviewed identity and auth context to `gongmcp`
 - forged client-supplied identity headers are ignored or overwritten by the
   gateway
 
-The bearer-token smoke proves the underlying `gongmcp` runtime works. The
-gateway test proves the user access path works.
+The internal bearer-token smoke proves the underlying `gongmcp` runtime works.
+The gateway test proves the user access path works. Do not expect the bearer
+token smoke to pass through a public JumpCloud/OIDC gateway unless that gateway
+is explicitly configured to pass the internal bearer token through unchanged.
 
 ## Common Errors
 
@@ -182,5 +220,6 @@ Restricted-mode transcript or extended-context command is blocked
 `gongmcp` starts but MCP tool calls fail readiness checks
 
 : Re-run `gongctl sync read-model --rebuild`, confirm scoped reader grants with
-  `gongctl mcp postgres-reader-apply --dry-run`, then apply approved grants with
-  the writable URL.
+  `gongctl mcp postgres-reader-apply --preset business-workbench --role
+  "$GONGMCP_READER_ROLE" --database "$GONGCTL_MCP_DB" --dry-run`, then apply
+  approved grants with the writable URL.

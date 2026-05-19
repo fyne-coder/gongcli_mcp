@@ -122,6 +122,7 @@ gongctl sync users
 
 gongctl sync transcripts \
   --out-dir /srv/gongctl/transcripts \
+  --limit 1000 \
   --batch-size 100 \
   --governance-config /run/secrets/ai-governance.yaml
 
@@ -137,6 +138,9 @@ Use `--include-parties` only after sponsor approval for participant names,
 emails, speaker IDs, and titles. In restricted mode, sensitive export steps
 require explicit runtime approval as described in
 [Operator sync runbook](operator-sync.md).
+`sync transcripts` defaults to `--limit 100`; for first historical backfill,
+set an approved higher limit or run repeated Jobs until `sync status` shows the
+expected transcript coverage.
 
 For repeatable jobs, prefer reviewed `sync run --config` YAML plus `--dry-run`
 for SQLite-backed schedules. For Postgres shared deployments, use direct
@@ -208,16 +212,17 @@ different serving database URL.
 
 ## 8. Reconcile Scoped Reader Grants
 
-Apply scoped analyst grants on the serving database, using the serving writer
-URL:
+Apply scoped grants on the serving database, using the serving writer URL. For
+the default customer-facing surface, use the same `business-workbench` preset
+that `gongmcp` will run:
 
 ```bash
 GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
 gongctl mcp postgres-reader-apply \
-  --preset analyst-expansion \
-  --role gongmcp_analyst_reader \
+  --preset business-workbench \
+  --role gongmcp_business_reader \
   --database gongctl_mcp \
-  --dry-run > analyst-reader-grants.sql
+  --dry-run > business-reader-grants.sql
 ```
 
 Review the SQL. Then apply:
@@ -225,14 +230,16 @@ Review the SQL. Then apply:
 ```bash
 GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
 gongctl mcp postgres-reader-apply \
-  --preset analyst-expansion \
-  --role gongmcp_analyst_reader \
+  --preset business-workbench \
+  --role gongmcp_business_reader \
   --database gongctl_mcp \
-  --apply > analyst-reader-apply.json
+  --apply > business-reader-apply.json
 ```
 
-Retain only sanitized `analyst-reader-apply.json`; do not retain DB URLs or
-passwords.
+Retain only sanitized `business-reader-apply.json`; do not retain DB URLs or
+passwords. Repeat the same pattern with `--preset analyst` or
+`--preset analyst-expansion` only for approved analyst sessions that run a
+matching `GONGMCP_TOOL_PRESET`.
 
 ## 9. Start `gongmcp`
 
