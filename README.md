@@ -95,6 +95,7 @@ For company evaluation, start with the enterprise pilot packet:
 - [Customer-hosted package](docs/customer-hosted-package.md)
 - [Postgres client pilot release packet](docs/postgres-client-pilot-release-packet.md)
 - [Postgres client onboarding checklist](docs/postgres-client-onboarding-checklist.md)
+- [Postgres Kubernetes operator setup](docs/postgres-kubernetes-operator-setup.md)
 - [Postgres client manual-test checklist](docs/postgres-client-manual-test-checklist.md)
 - [Postgres client deployment runbook](docs/runbooks/postgres-client-deployment.md)
 - [Single-VM Postgres starter](deploy/single-vm-postgres/README.md)
@@ -135,16 +136,19 @@ gongctl profile schema
 | `analyst` (Postgres) | Full reviewed analyst catalog | Approved analyst sessions over the reviewed Postgres surface. |
 | `governance-search` (Postgres) | Narrowed governance-search slice | AI governance prepared private policy. |
 | `all-readonly` (SQLite) | Full read-only catalog | Trusted SQLite admin / analyst sessions. |
-| `redacted-all-readonly` (Postgres) | Broad surface over a **physically redacted** serving DB with scoped reader grants | Internal manual testing only. Explicit include flags can expose remaining call titles / raw call IDs from the redacted DB. |
+| `redacted-all-readonly` (Postgres) | Broad surface over a **physically redacted** serving DB with scoped reader grants | Internal manual testing only. Call titles are visible by default unless policy suppresses them; explicit include flags can expose raw call IDs from the redacted DB. |
 | `broad-public-redacted` (Postgres) | Same surface as `redacted-all-readonly` with a hardened customer-deployment startup contract | Customer-test broad surface over a redacted serving DB. |
 
 For ad-hoc business questions, prefer `business-workbench` and call
 `gong_analyze` operation `question.answer`. It returns a governed evidence
 pack (interpreted question, scope, coverage, bounded evidence/quotes,
 limitations, follow-ups, per-call duration); the host model synthesizes the
-final answer. Call titles are blanked in client surfaces because they may
-contain customer names — use `call_ref`, Gong brief/highlight rows, and
-transcript quotes as the stable client path.
+final answer. Call titles are shown by default in title-bearing MCP surfaces
+when the backend has a title and policy allows it. Suppress them with
+`field_profile=limited` for a request or `hide_call_titles` in
+`GONGMCP_POLICY_SWITCHES` / `--policy-switches` at launch. This is a
+launch/runtime policy, not an AI governance YAML toggle; see
+[MCP data exposure](docs/mcp-data-exposure.md#call-title-exposure).
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer
 deployment): `list_unmapped_crm_fields`, `search_crm_field_values`,
@@ -204,7 +208,7 @@ Primary references:
 
 ## Install From Source
 
-This repo requires Go 1.22+.
+This repo requires Go 1.26.3 or newer for local builds and release artifacts.
 
 ```bash
 go test -count=1 ./...
@@ -236,18 +240,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#2b-postgres-shared-con
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 sync status --db /data/gong.db
 ```
 
-The `v0.4.5` image references require the `v0.4.5` tag workflow to have
+The `v0.4.6` image references require the `v0.4.6` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
@@ -539,6 +543,12 @@ Rules:
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.
+- In Postgres mode, `sync status` opens the database through the default
+  read-only validation path. Run it with a scoped reader URL, not the writer
+  URL used for source sync or `sync read-model --rebuild`. For preset-scoped
+  MCP deployments such as `broad-public-redacted`, validate through the MCP
+  runtime with the same preset instead; generic `sync status` can require
+  default functions that the scoped preset intentionally does not grant.
 - `cache inventory --db PATH` opens SQLite read-only and reports file size,
   primary table counts, call date range, transcript and CRM-context presence,
   profile status, and last sync metadata with a sensitive-data warning. With
@@ -764,7 +774,9 @@ address requires bearer auth plus `--allow-open-network`; use that override
 only behind an approved TLS/private-network boundary. Bearer tokens
 are owned by the customer/operator and should come from an environment
 variable, secret file, systemd environment file, Docker secret, Kubernetes
-Secret, or company secret manager. Do not commit MCP bearer tokens to Git,
+Secret, or company secret manager. Tokens must be at least 32 characters and
+must not contain whitespace or control characters; generate a random token, for
+example with `openssl rand -base64 32`. Do not commit MCP bearer tokens to Git,
 SQLite, docs, images, or shared logs.
 Non-local HTTP also requires `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`
 so the server can reject unexpected browser `Origin` headers.
@@ -833,7 +845,7 @@ boundary and rejects direct `calls.call_id`, `calls.title`,
 remains a service secret because selected functions and sanitized views can
 still expose minimized call metadata, timings, counts, and tenant terminology.
 `search_transcript_segments` returns bounded snippets. Call and speaker provenance is controlled by the `gongmcp` server setting `--transcript-evidence-provenance` / `GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE`: `redacted` by default, stable `call_ref` / `speaker_ref` aliases in `alias` mode, and raw IDs only in `raw` mode with the per-call include flags.
-`search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call IDs, call titles, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags; the tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
+`search_transcript_quotes_with_attribution` returns bounded quote snippets joined to available Account/Opportunity metadata for marketing and sales evidence review. Call titles are returned by default where policy permits; raw call IDs, account names/websites, and opportunity names/close dates/probabilities require explicit opt-in flags. The tool also returns participant/person-title status so users can tell when contact title data is missing from the cache rather than inferred.
 When serving a physically redacted Postgres MCP database with account-name search enabled, run `gongmcp` with `GONGMCP_AI_GOVERNANCE_CONFIG` or `--ai-governance-config` pointing at the same private policy used to build the serving DB. This lets MCP deny configured restricted names and aliases before query execution instead of returning row counts for restricted-name probes.
 
 ## Data Handling Rules

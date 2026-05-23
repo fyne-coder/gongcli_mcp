@@ -10,7 +10,8 @@ templates for the four common targets:
 - `launchd` (macOS admin-workstation pilot)
 - Kubernetes `CronJob` (containerized shared deployments)
 
-All four call the same primitive:
+The cron, systemd, and launchd starters below use the SQLite-oriented
+`sync run --config` primitive:
 
 ```bash
 gongctl sync run --config /etc/gongctl/sync-run.yaml
@@ -29,6 +30,10 @@ gongctl sync run --config /etc/gongctl/sync-run.yaml --dry-run
 For cache purge / retention scheduling, the same pattern applies with
 [docs/examples/retention-policy.example.yaml](examples/retention-policy.example.yaml).
 
+For Kubernetes with shared Postgres, skip `sync run --config` and use Pattern 4
+below. Postgres schedules should run direct `gongctl sync ...` commands or a
+reviewed shell wrapper with `GONG_DATABASE_URL` set to a writable operator URL.
+
 ## Operating principles
 
 - The scheduled job runs the writable refresh; `gongmcp` stays read-only and
@@ -39,8 +44,10 @@ For cache purge / retention scheduling, the same pattern applies with
 - The scheduler exit code is the alert signal. Capture stdout/stderr to a log
   the operator can grep without containing transcript bodies.
 - Back up the cache before any major refresh, schema change, or upgrade.
-- Run `gongctl sync status` (or `get_sync_status` over MCP) after every
-  refresh so business users can see staleness.
+- Run a reader-side freshness check after every refresh so business users can
+  see staleness. For SQLite/default reader surfaces this can be
+  `gongctl sync status`; for scoped Postgres MCP presets, validate through
+  `gongmcp` with the same reader URL and preset.
 
 ## Pattern 1 — `cron`
 
@@ -238,6 +245,14 @@ Use this when `gongctl` and `gongmcp` already run as containers and the
 cache is Postgres. The CronJob does the writable refresh; the `gongmcp`
 Deployment stays read-only and separate.
 
+For Postgres, run direct `gongctl sync ...` commands with a writable
+`GONG_DATABASE_URL`. Do not use `sync run --config` here; that config runner is
+for SQLite cache schedules today.
+
+Keep the reviewed shell sequence in a ConfigMap, image-baked script, or other
+change-controlled artifact rather than editing it only inside a live CronJob
+manifest.
+
 ```yaml
 apiVersion: batch/v1
 kind: CronJob
@@ -258,22 +273,27 @@ spec:
           serviceAccountName: gongctl
           containers:
             - name: gongctl
-              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5
+              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6
+              command: ["/bin/sh", "-lc"]
               args:
-                - "--restricted"
-                - "sync"
-                - "run"
-                - "--config"
-                - "/config/sync-run.yaml"
+                - |
+                  set -eu
+                  FROM="$(date -u -d 'yesterday' +%F)"
+                  TO="$(date -u +%F)"
+                  gongctl --restricted sync calls --from "$FROM" --to "$TO" --preset minimal
+                  gongctl --restricted sync users
+                  gongctl --restricted sync transcripts --out-dir /transcripts --batch-size 100 --limit 200 --allow-sensitive-export
+                  gongctl --restricted sync settings --kind trackers
+                  gongctl --restricted sync settings --kind scorecards
+                  gongctl --restricted sync read-model --rebuild
               envFrom:
                 - secretRef:
                     name: gongctl-gong-credentials   # GONG_ACCESS_KEY/SECRET
                 - secretRef:
                     name: gongctl-postgres-writer    # GONG_DATABASE_URL
               volumeMounts:
-                - name: config
-                  mountPath: /config
-                  readOnly: true
+                - name: transcripts
+                  mountPath: /transcripts
               securityContext:
                 allowPrivilegeEscalation: false
                 runAsNonRoot: true
@@ -282,25 +302,21 @@ spec:
                   drop: ["ALL"]
                 readOnlyRootFilesystem: true
           volumes:
-            - name: config
-              configMap:
-                name: gongctl-sync-config            # contains sync-run.yaml
+            - name: transcripts
+              persistentVolumeClaim:
+                claimName: gongctl-transcripts
 ```
 
-Companion `ConfigMap`:
+Do not run `gongctl sync status` at the end of the writable Postgres CronJob
+while `GONG_DATABASE_URL` still points at the writer URL. For deployments with
+a redacted serving DB, run the serving refresh and scoped grant reconciliation
+after the source sync, then validate through the `gongmcp` reader path with the
+same preset the runtime exposes.
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: gongctl-sync-config
-  namespace: gongctl
-data:
-  sync-run.yaml: |
-    version: 1
-    name: Daily incremental refresh
-    # ...content from docs/examples/sync-run.example.yaml...
-```
+Create the `gongctl-transcripts` PVC separately, or remove the transcript step
+and volume if transcript search is not approved. A `ReadWriteOnce` PVC is
+usually sufficient for a single CronJob writer; size it for the approved
+transcript retention window.
 
 Watch a run:
 
@@ -312,11 +328,31 @@ kubectl -n gongctl logs job/<job-name>
 For retention, ship a sibling `gongctl-purge` CronJob with a weekly
 schedule that mounts the retention policy from another ConfigMap.
 
+For a first-run init, use the same image and writer secrets in a one-off Job,
+but run a bounded historical window instead of yesterday-only calls. The schema
+migration happens when `gongctl` opens Postgres with the writable URL; the
+`gongmcp` Deployment should start only after the source/serving database and
+scoped reader grants are ready.
+
+Remove the transcript step if transcript search is not approved for the pilot.
+When restricted mode is enabled, transcript sync requires
+`--allow-sensitive-export` or `GONGCTL_ALLOW_SENSITIVE_EXPORT=1` as the
+operator's explicit runtime approval. `sync transcripts` defaults to
+`--limit 100`; the scheduled example uses a small daily limit, while a first
+historical backfill Job should set a larger approved `--limit` or run repeated
+Jobs until the approved reader-side smoke shows the expected transcript
+coverage.
+
+If the inline shell becomes too large for review, move the script into a
+reviewed ConfigMap or customer-owned operator image and keep the same command
+sequence. The important boundary is still that `gongctl` receives the writable
+Postgres URL and `gongmcp` remains read-only.
+
 ## Computing rolling date windows
 
-Three of the four patterns above pass a static `from:` / `to:` from the
-YAML. To compute a rolling window at firing time, write the dates from a
-small wrapper instead of editing the YAML:
+The SQLite `sync run --config` patterns above usually pass a static `from:` /
+`to:` from the YAML. To compute a rolling window at firing time, write the
+dates from a small wrapper before invoking the SQLite sync command:
 
 ```bash
 FROM=$(date -u -d 'yesterday' +%F)
@@ -339,16 +375,20 @@ The minimum monitoring loop:
    via `OnFailure=`, K8s via `failedJobsHistoryLimit` + a kube-state-metrics
    alert, cron via the wrapper script's exit code logged to your monitoring
    pipeline.
-2. After every successful run, `gongctl sync status --db <db>` (or
-   `get_sync_status` over MCP) returns `last_sync_at` per stage. Alert if
-   `last_sync_at` is older than the expected cadence + a grace window
+2. After every successful run, check freshness with the reader path for that
+   deployment. SQLite/default reader surfaces can use
+   `gongctl sync status --db <db>`; scoped Postgres MCP deployments should use
+   the MCP smoke/status tool with the same reader URL and preset. Alert if the
+   reported freshness is older than the expected cadence + a grace window
    (e.g. cadence 24h, alert at 30h).
 3. Tail logs for `error` / `failed` lines. Refuse to log transcript bodies
    or secret values; the CLI does not log them by default but custom
    wrappers can leak.
-4. After a refresh, restart `gongmcp` so it re-fingerprints the cache and
-   governance config (it fails closed if either changes mid-process — see
-   the operator-sync runbook).
+4. Restart `gongmcp` after changes to its database URL, reader role/grants,
+   auth settings, binary/image version, tool preset/allowlist, or governance
+   config. A routine Postgres serving DB refresh does not require a restart
+   when the same database URL, role/grants, preset, and runtime config remain
+   in place.
 
 A simple "scheduler hasn't fired" alert: emit a heartbeat to your monitoring
 system from the success path of the wrapper script (`curl -fsS

@@ -61,11 +61,9 @@ Pilot packet docs:
 Goal: the project is safe to operate repeatedly inside a company with defined
 owners, retention, upgrade, rollback, and security controls.
 
-Status as of 2026-05-05: items 1, 2, 4, 5, and the backup/rollback portion of
-item 6 have shipped. Item 3 remains partial because regression tests and the
-exposure-classification table exist, but a written tool-intake checklist is not
-in the repo. Item 6 still needs customer-platform restore drills for production
-PITR/replica workflows before broad GA.
+Status as of 2026-05-14: items 1, 2, 3, 4, 5, and the backup/rollback portion
+of item 6 have shipped. Item 6 still needs customer-platform restore drills for
+production PITR/replica workflows before broad GA.
 The Postgres client pilot release packet and onboarding checklist now document
 the controlled shared-deployment handoff, but they do not replace a published
 tag, image digest verification, or customer-platform dry run.
@@ -79,8 +77,10 @@ Required outcomes:
    `gongctl cache inventory` and dry-run-first `gongctl cache purge`)
 3. MCP tool intake is formal: every new tool starts from a business question,
    maps to cached data, gets an exposure classification, ships behind allowlists,
-   and has regression tests. (partial; classification table exists in
-   [mcp-data-exposure.md](mcp-data-exposure.md), written checklist still pending)
+   and has regression tests. (shipped via
+   [mcp-tool-intake-checklist.md](mcp-tool-intake-checklist.md),
+   [mcp-data-exposure.md](mcp-data-exposure.md), and catalog/doc regression
+   tests)
 4. Supply-chain checks cover Go tests, `go vet`, static analysis, vulnerability
    scanning, secret scanning, Docker scanning, SBOM/checksums, and pinned release
    artifacts. (shipped; see [release.md](release.md))
@@ -123,6 +123,29 @@ Remaining 1.0 backlog:
 - Native remote OAuth: implement Protected Resource Metadata, issuer/audience
   validation, scopes, and per-user audit only after the private bridge boundary
   stays stable.
+- Deployment simplification for customer-hosted Postgres/Kubernetes pilots:
+  package the source-writer, serving-writer, scoped-reader, sync, serving
+  refresh, grant reconciliation, MCP runtime, and smoke-test ordering into a
+  supported deployable path instead of requiring operators to hand-script the
+  phase boundaries. Candidate deliverables:
+  - a Helm or Kustomize starter for Kubernetes with explicit values for source
+    writer URL, serving writer URL, scoped reader URL, governance YAML, preset,
+    image tag/digest, and JumpCloud/OIDC gateway settings
+  - a single `gongctl operator refresh` command that runs source sync,
+    read-model rebuild, serving DB refresh, scoped grant reconciliation, and
+    preset-aware reader validation in the correct order
+  - a `gongctl doctor postgres-deploy` diagnostic that reports the current
+    DB/user for each URL, detects writer URLs used in reader checks, verifies
+    scoped reader grants against the selected MCP preset, and emits the next
+    corrective command
+  - a preset-aware reader validation command, or a `sync status --preset`
+    option, so operators can validate `broad-public-redacted` without tripping
+    the default read-only function expectations
+  - clearer failure messages for common deployment mistakes such as running
+    `sync status` with a writer URL or starting `gongmcp` before grants are
+    reconciled
+  - an end-to-end deployment smoke Job that operators can run without becoming
+    MCP business users
 
 ## Feature Direction
 

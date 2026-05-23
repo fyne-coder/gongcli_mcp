@@ -31,6 +31,11 @@ Recommended client-safe layout:
 only the scoped reader URL for `gongctl_mcp`; it must not receive Gong API
 credentials or the source DB URL.
 
+Keep the upstream `gongmcp` service on bearer auth even when JumpCloud/OIDC is
+enabled. JumpCloud is the public user-auth layer in front of the service; the
+gateway/broker should forward approved requests to `gongmcp` with the internal
+bearer token. Do not use `auth-mode=none` outside localhost development.
+
 ## 2. Minimum Sizing
 
 Start with customer platform guidance. For a first 90-day pilot similar to the
@@ -63,6 +68,42 @@ Store these in the customer secret manager or root-only deployment env files:
 
 Never commit these values. Logs and evidence should use variable names, not
 values.
+
+Keep the Postgres URLs separate:
+
+| Secret purpose | Example variable | Runtime use |
+|---|---|---|
+| Source writer URL | `GONGCTL_SOURCE_DATABASE_URL` | `gongctl sync ...` and `gongctl sync read-model --rebuild`. |
+| Serving writer URL | `GONGCTL_MCP_DATABASE_URL` | `gongctl governance refresh-serving-db` and `gongctl mcp postgres-reader-apply`. |
+| MCP scoped reader URL | `GONGMCP_ANALYST_READER_URL` | `gongmcp`, MCP smoke tests, and optional default-surface `gongctl sync status` checks. |
+
+Each container receives only the URL it needs as `GONG_DATABASE_URL`. A writer
+URL in a reader-side command will fail read-only posture checks; a reader URL
+in a writer-side command cannot migrate, refresh, or reconcile grants.
+
+For wrappers that execute several phases, assign `GONG_DATABASE_URL` on each
+command or reset it at each phase boundary. Do not leave it globally set to the
+serving writer URL while running source sync commands:
+
+```bash
+GONG_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL" gongctl sync calls ...
+GONG_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL" gongctl sync read-model --rebuild
+
+gongctl governance refresh-serving-db \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --config "$GONGCTL_AI_GOVERNANCE_CONFIG"
+
+GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
+  gongctl mcp postgres-reader-apply --preset broad-public-redacted ...
+
+# For broad-public-redacted, validate through gongmcp with the same reader URL
+# and preset, then call initialize, tools/list, and gong_status.
+```
+
+`GONGCTL_SOURCE_DATABASE_URL` and `GONGCTL_MCP_DATABASE_URL` are read directly
+by `governance refresh-serving-db`; the other Postgres `gongctl` commands use
+`GONG_DATABASE_URL` / `DATABASE_URL`.
 
 ## 4. Bootstrap Postgres
 
@@ -122,6 +163,7 @@ gongctl sync users
 
 gongctl sync transcripts \
   --out-dir /srv/gongctl/transcripts \
+  --limit 1000 \
   --batch-size 100 \
   --governance-config /run/secrets/ai-governance.yaml
 
@@ -130,16 +172,34 @@ gongctl sync settings --kind trackers
 gongctl sync settings --kind scorecards
 
 gongctl sync read-model --rebuild
-gongctl sync status
 ```
 
 Use `--include-parties` only after sponsor approval for participant names,
 emails, speaker IDs, and titles. In restricted mode, sensitive export steps
 require explicit runtime approval as described in
 [Operator sync runbook](operator-sync.md).
+`sync transcripts` defaults to `--limit 100`; for first historical backfill,
+set an approved higher limit or run repeated Jobs until an approved
+reader-side smoke shows the expected transcript coverage.
+
+Do not run `gongctl sync status` with the writable source URL still in
+`GONG_DATABASE_URL`. In Postgres mode, `sync status` opens the database through
+the default read-only validation path. For scoped MCP presets such as
+`broad-public-redacted`, run the MCP smoke with the same preset after serving
+DB refresh and scoped grants are in place.
 
 For repeatable jobs, prefer reviewed `sync run --config` YAML plus `--dry-run`
-before enabling cron, launchd, Kubernetes, or container schedules.
+for SQLite-backed schedules. For Postgres shared deployments, use direct
+`gongctl sync ...` commands or a small reviewed wrapper that runs the approved
+steps with `GONG_DATABASE_URL` set to the writable operator URL. The current
+`sync run --config` runner is SQLite-oriented and should not be used as the
+Postgres scheduler path.
+
+In Kubernetes, the `gongctl` image has `gongctl` as its entrypoint and `--help`
+as the default command. Override `args` for a single command, for example
+`["sync", "calls", "--from", "YYYY-MM-DD", "--to", "YYYY-MM-DD", "--preset",
+"minimal"]`, or override `command` to run a shell wrapper that executes the
+approved sequence. Do not use the `gongmcp` image for writable sync jobs.
 
 ## 7. Refresh Redacted Serving Database
 
@@ -198,16 +258,22 @@ different serving database URL.
 
 ## 8. Reconcile Scoped Reader Grants
 
-Apply scoped analyst grants on the serving database, using the serving writer
-URL:
+Apply scoped grants on the serving database, using the serving writer URL. This
+step is required after the first serving DB build and after every serving DB
+refresh, schema/image upgrade, or preset change. Do not rely on manual grant
+edits; reconcile them through `postgres-reader-apply` so new reviewed columns
+and functions are included.
+
+For the default customer-facing surface, use the same `business-workbench`
+preset that `gongmcp` will run:
 
 ```bash
 GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
 gongctl mcp postgres-reader-apply \
-  --preset analyst-expansion \
-  --role gongmcp_analyst_reader \
+  --preset business-workbench \
+  --role gongmcp_business_reader \
   --database gongctl_mcp \
-  --dry-run > analyst-reader-grants.sql
+  --dry-run > business-reader-grants.sql
 ```
 
 Review the SQL. Then apply:
@@ -215,14 +281,62 @@ Review the SQL. Then apply:
 ```bash
 GONG_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
 gongctl mcp postgres-reader-apply \
-  --preset analyst-expansion \
-  --role gongmcp_analyst_reader \
+  --preset business-workbench \
+  --role gongmcp_business_reader \
   --database gongctl_mcp \
-  --apply > analyst-reader-apply.json
+  --apply > business-reader-apply.json
 ```
 
-Retain only sanitized `analyst-reader-apply.json`; do not retain DB URLs or
-passwords.
+Retain only sanitized `business-reader-apply.json`; do not retain DB URLs or
+passwords. Repeat the same pattern with `--preset analyst` or
+`--preset analyst-expansion` only for approved analyst sessions that run a
+matching `GONGMCP_TOOL_PRESET`.
+
+For a broad redacted customer-test runtime using
+`GONGMCP_TOOL_PRESET=broad-public-redacted`, apply matching scoped grants with
+`--preset broad-public-redacted`. Older operator notes may refer to
+`redacted-all-readonly`; that is the same underlying broad tool surface but an
+internal/manual testing posture.
+
+After applying grants, validate with the same surface the runtime will expose.
+For `broad-public-redacted`, start or port-forward `gongmcp` with the scoped
+reader URL and that preset, then call `initialize`, `tools/list`, and
+`gong_status`. Generic `gongctl sync status` validates the default read-only
+function set, so it can report missing functions that the scoped preset
+intentionally does not grant.
+
+In a multi-phase refresh wrapper, replace the final
+`GONG_DATABASE_URL="$MCP_READER_DATABASE_URL" gongctl sync status` phase with:
+
+1. Ensure the `gongmcp` runtime uses the scoped reader URL, not the source or
+   serving writer URL.
+2. Ensure the runtime preset matches the grant preset, for example
+   `GONGMCP_TOOL_PRESET=broad-public-redacted`.
+3. Port-forward or otherwise reach the internal `gongmcp` service before the
+   public auth gateway.
+4. Call MCP `initialize`, MCP `tools/list`, and MCP `tools/call` for
+   `gong_status`.
+5. Confirm `tools/list` shows the expected preset surface and `gong_status`
+   returns successfully.
+
+If this fails with `postgres read-only URL has CREATE privilege on public
+schema`, confirm that the command is using the reader URL, not the source or
+serving writer URL. If reader validation fails with missing column grants,
+rerun `postgres-reader-apply` with the serving writer URL, the selected grant
+preset, the actual reader role, and the current image version. If generic
+`sync status` fails with missing function grants after a successful broad
+redacted grant apply, switch to the MCP smoke; the CLI status path is not
+preset-aware yet.
+
+If it is unclear which role/database a Kubernetes secret reaches, inspect it
+with an approved Postgres client and the same URL:
+
+```sql
+SELECT current_user, current_database();
+```
+
+The result should match the scoped reader role and the serving database for
+reader-side checks.
 
 ## 9. Start `gongmcp`
 
@@ -233,6 +347,19 @@ GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \
 GONGMCP_TOOL_PRESET=analyst-expansion \
 GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
 GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
+gongmcp
+```
+
+For the broad redacted customer-test surface, the runtime preset must match the
+grant preset and must have the same governance config used to build the serving
+DB:
+
+```bash
+GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \
+GONGMCP_TOOL_PRESET=broad-public-redacted \
+GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
+GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
+GONGMCP_AI_GOVERNANCE_CONFIG=/run/secrets/ai-governance.yaml \
 gongmcp
 ```
 
@@ -250,9 +377,18 @@ it for source/raw DB readers.
 Expected behavior:
 
 - `analyst-expansion` tools list succeeds.
+- for broad redacted customer-test deployments, `broad-public-redacted` tools
+  list succeeds and `gong_status` reports the expected preset.
 - scoped grant startup validation succeeds.
+- startup logs include `postgres backend active: read-only MCP exposes ...`,
+  `AI governance active: backend=postgres_redacted_serving ...`, and
+  `serving mcp over http on ... path=/mcp auth_mode=bearer ...`.
 - small-cell suppression is active for scoped Postgres analyst dimensions.
 - Postgres `all-readonly`, `all-tools`, and `all` remain rejected.
+
+If the pod logs show the Postgres backend, AI governance, and HTTP `/mcp`
+listener as active, the DB/grant startup path has passed. Continue with the
+internal MCP JSON-RPC smoke, then test the public JumpCloud/OIDC gateway path.
 
 ## 10. Auth Gateway And MCP URL
 
@@ -277,6 +413,10 @@ For implementation details, use
 [Remote MCP auth and connector setup](../remote-mcp-auth.md) and
 [Remote MCP OAuth troubleshooting](remote-mcp-oauth-troubleshooting.md).
 
+The public gateway can use JumpCloud/OIDC, but the upstream `gongmcp` auth mode
+should remain `bearer` unless a future native OAuth mode is implemented and
+tested.
+
 ## 11. Required Smoke
 
 Run the focused two-database smoke before client testing:
@@ -298,6 +438,13 @@ The smoke should prove:
 - Postgres `all-readonly` remains rejected
 - retained artifacts do not contain DB URLs, secrets, raw IDs, restricted
   values, or transcript text
+
+For `broad-public-redacted`, use the JSON-RPC operator smoke from
+[Postgres Kubernetes Operator Setup](../postgres-kubernetes-operator-setup.md#operator-mcp-smoke-test)
+as the runtime acceptance check unless a preset-specific smoke script has been
+added for that deployment. The existing analyst smoke targets
+`analyst-expansion`, and the GA acceptance smoke targets the business-workbench
+facade.
 
 Then run the GA customer-acceptance smoke against the deployed MCP endpoint
 to produce a non-secret pass/degraded/fail acceptance artifact for the pilot

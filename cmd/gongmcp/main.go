@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
@@ -784,6 +785,8 @@ func readerGrantAllowlist(visible []string, facadeRouted []string) []string {
 
 type getenvFunc func(string) string
 
+const minBearerTokenLength = 32
+
 type httpConfig struct {
 	Enabled            bool
 	Addr               string
@@ -937,6 +940,9 @@ func resolveBearerTokens(tokenFlag, tokenFileFlag, previousTokenFileFlag string,
 	if token == "" {
 		return nil, fmt.Errorf("auth-mode=bearer requires bearer token or bearer token file")
 	}
+	if err := validateBearerToken(token); err != nil {
+		return nil, err
+	}
 	tokens := []string{token}
 	if previousTokenFile == "" {
 		previousTokenFile = strings.TrimSpace(getenv("GONGMCP_BEARER_TOKEN_PREVIOUS_FILE"))
@@ -951,6 +957,18 @@ func resolveBearerTokens(tokenFlag, tokenFileFlag, previousTokenFileFlag string,
 		}
 	}
 	return tokens, nil
+}
+
+func validateBearerToken(token string) error {
+	if len(token) < minBearerTokenLength {
+		return fmt.Errorf("bearer token must be at least %d characters", minBearerTokenLength)
+	}
+	if strings.ContainsFunc(token, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) {
+		return fmt.Errorf("bearer token must not contain whitespace or control characters")
+	}
+	return nil
 }
 
 func bearerTokenSourceConfigured(tokenFlag, tokenFileFlag string, getenv getenvFunc) bool {
@@ -968,6 +986,9 @@ func readBearerTokenFile(path string) (string, error) {
 	token := strings.TrimSpace(string(raw))
 	if token == "" {
 		return "", fmt.Errorf("auth-mode=bearer requires bearer token or bearer token file")
+	}
+	if err := validateBearerToken(token); err != nil {
+		return "", err
 	}
 	return token, nil
 }

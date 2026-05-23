@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-05-19
+
+- Added a Postgres Kubernetes operator setup guide that covers blank-database
+  initialization, first sync scope, recurring refresh cadence, `gongctl` image
+  invocation, and MCP smoke testing without a business-user login.
+- Clarified Postgres scheduling docs so Kubernetes shared deployments use
+  direct `gongctl sync ...` commands or reviewed shell wrappers instead of the
+  SQLite-oriented `sync run --config` path.
+- Expanded the Postgres/Kubernetes operator docs with explicit source writer,
+  serving writer, and scoped reader URL separation, including phase-by-phase
+  `GONG_DATABASE_URL` guidance for sync, serving refresh, grant reconciliation,
+  and MCP validation.
+- Documented the `broad-public-redacted` scoped-reader validation path: use
+  `postgres-reader-apply --preset broad-public-redacted`, validate through
+  `gongmcp` with the same reader URL and preset, and do not use generic
+  `gongctl sync status` as the broad-redacted acceptance check.
+- Clarified JumpCloud/OIDC deployments: JumpCloud remains the public
+  gateway/broker auth layer while upstream `gongmcp` stays protected by
+  internal bearer auth.
+- Added deployment-simplification backlog items for Helm/Kustomize starters,
+  `gongctl operator refresh`, `gongctl doctor postgres-deploy`, preset-aware
+  reader validation, clearer deployment failure messages, and operator E2E
+  smoke jobs.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.4.6`.
+
 ## 0.4.5 - 2026-05-10
 
 - Reworked the top-level README to put the product benefits first: governed

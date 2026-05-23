@@ -18,17 +18,36 @@ flag/env surfaces should probably move to optional YAML next.
 Today `gongmcp` runtime policy is spread across flags, env vars, Docker args,
 Claude Desktop JSON, and wrapper scripts:
 
-- `--db`
-- `--http`
-- `--stdio`
-- `--auth-mode`
-- `--bearer-token-file`
-- `--bearer-token-previous-file`
-- `--allow-open-network`
-- `--tool-preset` / `GONGMCP_TOOL_PRESET`
-- `--tool-allowlist` / `GONGMCP_TOOL_ALLOWLIST`
-- `--ai-governance-config`
-- `--allow-unmatched-ai-governance`
+| Category | Flag | Env | Notes |
+| --- | --- | --- | --- |
+| Store | `--db` | none | SQLite cache path. Postgres mode is selected from `GONG_DATABASE_URL` / `DATABASE_URL` when `--db` is omitted. |
+| Transport | `--http` | `GONGMCP_HTTP_ADDR` | HTTP `/mcp` listener. |
+| Transport | `--stdio` | none | Forces stdio and ignores `GONGMCP_HTTP_ADDR`. |
+| HTTP auth | `--auth-mode` | `GONGMCP_AUTH_MODE` | `none` or `bearer`; shared HTTP should use bearer. |
+| HTTP auth | `--bearer-token` | `GONGMCP_BEARER_TOKEN` | Direct token; prefer token files or secret manager. Token must be at least 32 characters with no whitespace/control characters. |
+| HTTP auth | `--bearer-token-file` | `GONGMCP_BEARER_TOKEN_FILE` | Preferred current-token file. Token must be at least 32 characters with no whitespace/control characters. |
+| HTTP auth | `--bearer-token-previous-file` | `GONGMCP_BEARER_TOKEN_PREVIOUS_FILE` | Optional previous-token file for rotation. Token must be at least 32 characters with no whitespace/control characters. |
+| HTTP network | `--allow-open-network` | `GONGMCP_ALLOW_OPEN_NETWORK=1` | Required for non-local binds. |
+| HTTP network | `--dev-allow-no-auth-localhost` | none | Local development only. |
+| HTTP network | `--allowed-origins` | `GONGMCP_ALLOWED_ORIGINS` | Required for non-local HTTP. |
+| Tool surface | `--tool-preset` | `GONGMCP_TOOL_PRESET` | Named presets such as `business-workbench`, `analyst`, `broad-public-redacted`. |
+| Tool surface | `--tool-allowlist` | `GONGMCP_TOOL_ALLOWLIST` | Comma-separated explicit tool names. |
+| Policy | `--policy-switches` | `GONGMCP_POLICY_SWITCHES` | Comma-separated switches such as `hide_call_titles`; restart required. |
+| Governance | `--ai-governance-config` | `GONGMCP_AI_GOVERNANCE_CONFIG` | Private AI governance YAML path. |
+| Governance | `--allow-unmatched-ai-governance` | `GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE` | Allows governance entries that do not match the current cache. |
+| Postgres guard | `--enforce-tool-scoped-db-grants` | `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` | Validates scoped reader grants against the selected surface. |
+| Postgres guard | none | `GONGMCP_POSTGRES_REDACTED_SERVING_DB=1` | Required for redacted broad Postgres presets. |
+| Limits | `--max-search-results` | `GONGMCP_MAX_SEARCH_RESULTS` | Search-style tool row cap. |
+| Limits | `--max-crm-fields` | `GONGMCP_MAX_CRM_FIELDS` | CRM field inventory cap. |
+| Limits | `--max-late-stage-signals` | `GONGMCP_MAX_LATE_STAGE_SIGNALS` | Late-stage signal cap. |
+| Limits | `--max-missing-transcripts` | `GONGMCP_MAX_MISSING_TRANSCRIPTS` | Missing transcript cap. |
+| Limits | `--max-opportunity-summaries` | `GONGMCP_MAX_OPPORTUNITY_SUMMARIES` | Opportunity summary cap. |
+| Limits | `--max-crm-matrix-cells` | `GONGMCP_MAX_CRM_MATRIX_CELLS` | CRM matrix cap. |
+| Limits | `--max-lifecycle-results` | `GONGMCP_MAX_LIFECYCLE_RESULTS` | Lifecycle/backlog cap. |
+| Limits | `--max-lifecycle-crm-fields` | `GONGMCP_MAX_LIFECYCLE_CRM_FIELDS` | Lifecycle CRM comparison cap. |
+| Limits | `--max-call-fact-groups` | `GONGMCP_MAX_CALL_FACT_GROUPS` | Call-fact aggregate cap. |
+| Limits | `--max-inventory-results` | `GONGMCP_MAX_INVENTORY_RESULTS` | Config/inventory cap. |
+| Limits | `--max-business-analysis-results` | `GONGMCP_MAX_BUSINESS_ANALYSIS_RESULTS` | Business-analysis cap. |
 
 This is the strongest YAML candidate because it is easy to make mistakes with a
 long comma-separated tool list or HTTP flag set. A future config could look like:
@@ -58,11 +77,18 @@ tools:
 governance:
   config: ""
   allow_unmatched: false
+
+policy:
+  switches:
+    # - hide_call_titles
+    # - hide_raw_call_ids
 ```
 
-Recommended contract:
+Recommended future contract:
 
-- `gongmcp --config PATH` loads this file.
+- `gongmcp --config PATH` loads this file. This is not implemented yet; today
+  these settings are launch flags, env vars, Docker args, host MCP JSON, or
+  wrapper-script configuration.
 - Flags and env vars can override YAML for local debugging and container
   platform integration.
 - Built-in presets are the fast path for common deployments:
@@ -76,6 +102,14 @@ Recommended contract:
   DNS, TLS, and external auth remain proxy/gateway configuration.
 - Raw-DB AI governance still validates that only governance-compatible tools are
   exposed.
+- Call titles are visible by default in title-bearing MCP surfaces. Suppress
+  them with `field_profile=limited` per request or with
+  `hide_call_titles` in `--policy-switches` /
+  `GONGMCP_POLICY_SWITCHES` at process launch.
+- Current `gongmcp` runtime config is restart-required. A future hot-reload
+  path should be narrow and auditable: safe tightening such as adding
+  `hide_call_titles` can reload in place; broadening exposure should require a
+  restart unless the deployment explicitly enables reviewed live policy reloads.
 - Bearer token values should not be stored in YAML; store only
   `bearer_token_file`/`bearer_token_previous_file` or use the deployment
   secret manager.
@@ -108,8 +142,8 @@ paths:
   backups: backups
 
 images:
-  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5
-  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5
+  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6
+  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6
 ```
 
 Use published image tags only after the corresponding tag workflow has

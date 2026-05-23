@@ -65,7 +65,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 		FieldProfile:            args.FieldProfile,
 		SpeakerRole:             args.SpeakerRole,
 		IncludeCallIDs:          args.IncludeCallIDs,
-		IncludeCallTitles:       args.IncludeCallTitles,
+		IncludeCallTitles:       true,
 		IncludeAccountNames:     args.IncludeAccountNames,
 		IncludeOpportunityNames: args.IncludeOpportunityNames,
 	}

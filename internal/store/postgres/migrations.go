@@ -1814,4 +1814,10 @@ DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, 
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	// Business-workbench title exposure: sanitized business-analysis helpers
+	// still hash raw call IDs and blank account/opportunity names, but call
+	// titles are now allowed in title-bearing MCP surfaces unless policy
+	// switches suppress them.
+	postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

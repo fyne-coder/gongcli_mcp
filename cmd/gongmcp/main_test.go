@@ -1528,6 +1528,13 @@ func TestRunToolAllowlistFlagPrecedenceOverEnv(t *testing.T) {
 	}
 }
 
+const (
+	testCurrentBearerToken  = "current-bearer-token-0123456789abcdef"
+	testFlagBearerToken     = "flag-bearer-token-0123456789abcdef"
+	testEnvBearerToken      = "env-bearer-token-0123456789abcdef"
+	testPreviousBearerToken = "previous-bearer-token-0123456789abcdef"
+)
+
 func TestResolveHTTPConfigRequiresBearerByDefaultAndNoAuthDevLocalhost(t *testing.T) {
 	getenv := func(string) string { return "" }
 
@@ -1541,16 +1548,16 @@ func TestResolveHTTPConfigRequiresBearerByDefaultAndNoAuthDevLocalhost(t *testin
 		t.Fatal("resolveHTTPConfig allowed non-local bind without explicit override")
 	}
 
-	cfg, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", "", true, false, "https://app.example.com", nil, getenv)
+	cfg, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", testCurrentBearerToken, "", "", true, false, "https://app.example.com", nil, getenv)
 	if err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local bind without tool allowlist")
 	}
 
-	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", "", true, false, "", []string{"get_sync_status"}, getenv); err == nil {
+	if _, err := resolveHTTPConfig("0.0.0.0:8080", false, "bearer", testCurrentBearerToken, "", "", true, false, "", []string{"get_sync_status"}, getenv); err == nil {
 		t.Fatal("resolveHTTPConfig allowed non-local HTTP without allowed origins")
 	}
 
-	cfg, err = resolveHTTPConfig("0.0.0.0:8080", false, "bearer", "token", "", "", true, false, "https://app.example.com", []string{"get_sync_status"}, getenv)
+	cfg, err = resolveHTTPConfig("0.0.0.0:8080", false, "bearer", testCurrentBearerToken, "", "", true, false, "https://app.example.com", []string{"get_sync_status"}, getenv)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig returned error with override and allowlist: %v", err)
 	}
@@ -1601,11 +1608,11 @@ func TestResolveHTTPConfigCanForceStdioWithHTTPAddrEnv(t *testing.T) {
 
 func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenPath, []byte(" file-token \n"), 0o600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte(" "+testCurrentBearerToken+" \n"), 0o600); err != nil {
 		t.Fatalf("write token file: %v", err)
 	}
 	previousTokenPath := filepath.Join(t.TempDir(), "previous-token")
-	if err := os.WriteFile(previousTokenPath, []byte(" previous-token \n"), 0o600); err != nil {
+	if err := os.WriteFile(previousTokenPath, []byte(" "+testPreviousBearerToken+" \n"), 0o600); err != nil {
 		t.Fatalf("write previous token file: %v", err)
 	}
 
@@ -1622,22 +1629,22 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig returned error: %v", err)
 	}
-	if cfg.AuthMode != "bearer" || len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != "file-token" {
+	if cfg.AuthMode != "bearer" || len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != testCurrentBearerToken {
 		t.Fatalf("unexpected bearer config: %+v", cfg)
 	}
 
 	envFile := getenv
-	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", "flag-token", "", "", false, false, "", allowlist, envFile)
+	cfg, err = resolveHTTPConfig("127.0.0.1:0", false, "", testFlagBearerToken, "", "", false, false, "", allowlist, envFile)
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig did not let bearer token flag override env file: %v", err)
 	}
-	if len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != "flag-token" {
-		t.Fatalf("bearer tokens=%v want flag-token", cfg.BearerTokens)
+	if len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != testFlagBearerToken {
+		t.Fatalf("bearer tokens=%v want flag token", cfg.BearerTokens)
 	}
 
 	envToken := func(key string) string {
 		if key == "GONGMCP_BEARER_TOKEN" {
-			return "env-token"
+			return testEnvBearerToken
 		}
 		return ""
 	}
@@ -1645,11 +1652,11 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig did not let bearer token file flag override env token: %v", err)
 	}
-	if len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != "file-token" {
-		t.Fatalf("bearer tokens=%v want file-token", cfg.BearerTokens)
+	if len(cfg.BearerTokens) != 1 || cfg.BearerTokens[0] != testCurrentBearerToken {
+		t.Fatalf("bearer tokens=%v want file token", cfg.BearerTokens)
 	}
 
-	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "flag-token", tokenPath, "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", testFlagBearerToken, tokenPath, "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed both raw token and token file")
 	}
 	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", "", "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
@@ -1661,7 +1668,7 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "", "", "", "", false, false, "", allowlist, func(key string) string {
 		switch key {
 		case "GONGMCP_BEARER_TOKEN":
-			return "env-token"
+			return testEnvBearerToken
 		case "GONGMCP_BEARER_TOKEN_FILE":
 			return tokenPath
 		default:
@@ -1675,8 +1682,27 @@ func TestResolveHTTPConfigBearerTokenSources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveHTTPConfig rejected previous token file: %v", err)
 	}
-	if !reflect.DeepEqual(cfg.BearerTokens, []string{"file-token", "previous-token"}) {
+	if !reflect.DeepEqual(cfg.BearerTokens, []string{testCurrentBearerToken, testPreviousBearerToken}) {
 		t.Fatalf("bearer tokens=%v want current and previous", cfg.BearerTokens)
+	}
+}
+
+func TestResolveHTTPConfigRejectsWeakBearerTokens(t *testing.T) {
+	allowlist := []string{"get_sync_status"}
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "short-token", "", "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
+		t.Fatal("resolveHTTPConfig allowed weak raw bearer token")
+	}
+
+	tokenPath := filepath.Join(t.TempDir(), "weak-token")
+	if err := os.WriteFile(tokenPath, []byte("short-token\n"), 0o600); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "", tokenPath, "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
+		t.Fatal("resolveHTTPConfig allowed weak bearer token file")
+	}
+
+	if _, err := resolveHTTPConfig("127.0.0.1:0", false, "bearer", "token-with-space 0123456789abcdef0123456789abcdef", "", "", false, false, "", allowlist, func(string) string { return "" }); err == nil {
+		t.Fatal("resolveHTTPConfig allowed bearer token with whitespace")
 	}
 }
 

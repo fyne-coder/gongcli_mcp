@@ -22,9 +22,10 @@ been read.
   or crontab — see [Security model §Credential Flow](security-model.md#credential-flow)
 - [ ] `gongctl` is the only process that receives Gong credentials; `gongmcp`
   does not — see [Security model §Capability Model](security-model.md#capability-model)
-- [ ] HTTP MCP bearer token, if used, is delivered through a mounted secret
-  file or platform secret manager (not a CLI flag, not an image layer) — see
-  [Remote MCP auth](remote-mcp-auth.md)
+- [ ] HTTP MCP bearer token, if used, is random, at least 32 characters,
+  contains no whitespace/control characters, and is delivered through a mounted
+  secret file or platform secret manager (not a CLI flag, not an image layer) —
+  see [Remote MCP auth](remote-mcp-auth.md)
 - [ ] OIDC client secrets / cookie secrets for the auth gateway are
   customer-managed — see [Remote MCP auth](remote-mcp-auth.md)
 - [ ] Postgres reader URL is the MCP service credential, not an analyst SQL

@@ -49,10 +49,10 @@ transcript files, JSON exports, and governance config files out of Git.
 Use the published image for released versions:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 version
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 version
 ```
 
-The `v0.4.5` examples require the matching Git tag workflow to have published
+The `v0.4.6` examples require the matching Git tag workflow to have published
 GHCR manifests for both `gongctl` and `gongmcp`. If the pull fails because the
 tag is not published yet, use locally built images for the same commands.
 
@@ -66,8 +66,8 @@ docker build --target mcp -t gongctl:mcp-local .
 
 In the remaining examples, replace the image names with either:
 
-- `ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5`
-- `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5`
+- `ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6`
+- `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6`
 - `gongctl:local`
 - `gongctl:mcp-local`
 
@@ -77,7 +77,7 @@ In the remaining examples, replace the image names with either:
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   auth check
 ```
 
@@ -91,7 +91,7 @@ Start with a bounded sync so the first run is fast:
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   sync calls --db /data/gong.db --from 2026-04-01 --to 2026-04-30 --preset minimal --max-pages 1
 ```
 
@@ -101,7 +101,7 @@ Check cache status:
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   sync status --db /data/gong.db
 ```
 
@@ -131,17 +131,17 @@ the quick path below is only a starter.
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   profile discover --db /data/gong.db --out /data/gongctl-profile.yaml
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   profile validate --db /data/gong.db --profile /data/gongctl-profile.yaml
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   profile import --db /data/gong.db --profile /data/gongctl-profile.yaml
 ```
 
@@ -156,7 +156,7 @@ Add transcripts when the call cache looks right:
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   sync transcripts --db /data/gong.db --out-dir /data/transcripts --limit 100 --batch-size 100
 ```
 
@@ -166,7 +166,7 @@ Run a quick local search:
 docker run --rm \
   --env-file .env \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   search transcripts --db /data/gong.db --query "pricing objection" --limit 5
 ```
 
@@ -199,7 +199,7 @@ Audit the cache:
 ```bash
 docker run --rm \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   governance audit --db /data/gong.db --config /data/private/ai-governance.yaml
 ```
 
@@ -208,7 +208,7 @@ Create a filtered MCP-facing copy:
 ```bash
 docker run --rm \
   -v "$HOME/gongctl-data:/data" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   governance export-filtered-db \
     --db /data/gong.db \
     --config /data/private/ai-governance.yaml \
@@ -230,7 +230,7 @@ read-only data mount:
 docker run --rm -i \
   --network none \
   -v "$HOME/gongctl-data:/data:ro" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6 \
   --db /data/gong.db \
   --tool-preset business-pilot
 ```
@@ -241,7 +241,7 @@ If you created a filtered database, use:
 docker run --rm -i \
   --network none \
   -v "$HOME/gongctl-data:/data:ro" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6 \
   --db /data/gong-mcp-governed.db \
   --tool-preset business-pilot
 ```
@@ -255,7 +255,7 @@ stdio serves the full read-only catalog. Business-user deployments should start
 with `business-pilot`; inspect the built-in options with:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5 --list-tool-presets
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6 --list-tool-presets
 ```
 
 ## 7. Optional: Test HTTP MCP Locally
@@ -276,7 +276,7 @@ docker run --rm \
   -e GONGMCP_ALLOWED_ORIGINS=http://127.0.0.1:8080,http://localhost:8080 \
   -v "$HOME/gongctl-data:/data:ro" \
   -v "$HOME/gongctl-data/gongmcp-token:/run/secrets/gongmcp_token:ro" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6 \
   --http 0.0.0.0:8080 \
   --auth-mode bearer \
   --allow-open-network \
@@ -373,7 +373,7 @@ Example host config:
         "none",
         "-v",
         "/Users/YOU/gongctl-data:/data:ro",
-        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.5",
+        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6",
         "--db",
         "/data/gong.db",
         "--tool-preset",
@@ -413,7 +413,7 @@ mkdir -p "$HOME/gongctl-data/support-bundle"
 docker run --rm \
   -v "$HOME/gongctl-data:/data:ro" \
   -v "$HOME/gongctl-data/support-bundle:/support" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.5 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 \
   support bundle --db /data/gong-mcp-governed.db --out /support
 ```
 

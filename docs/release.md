@@ -20,6 +20,7 @@ bin/gongmcp --db /path/to/gong.db
 For production-readiness checks:
 
 ```bash
+go version  # must be go1.26.3 or newer
 go test -count=1 ./...
 go vet ./...
 make secret-scan
@@ -39,26 +40,28 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
 
 1. Update `VERSION`.
 2. Update `CHANGELOG.md`.
-3. Run `go test -count=1 ./...`.
-4. Run `go vet ./...`.
-5. Run `make secret-scan`.
-6. Run `make sbom`.
-7. Run `make checksums`.
-8. Run `make postgres-backup-restore-smoke`.
-9. Run `make docker-build`.
-10. Run `make docker-build-mcp`.
-11. Run `make docker-build-ghcr`.
-12. Run `make docker-build-ghcr-mcp`.
-13. Tag the release as `v$(cat VERSION)`.
-14. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
+3. Confirm `go version` is `go1.26.3` or newer. Do not build release
+   artifacts with an older Go toolchain.
+4. Run `go test -count=1 ./...`.
+5. Run `go vet ./...`.
+6. Run `make secret-scan`.
+7. Run `make sbom`.
+8. Run `make checksums`.
+9. Run `make postgres-backup-restore-smoke`.
+10. Run `make docker-build`.
+11. Run `make docker-build-mcp`.
+12. Run `make docker-build-ghcr`.
+13. Run `make docker-build-ghcr-mcp`.
+14. Tag the release as `v$(cat VERSION)`.
+15. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
     Go tests, the synthetic Postgres backup/restore smoke, vet, secret scan,
     Docker smoke builds, and image vulnerability scans before it
     publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
-15. After the first publish, confirm the GHCR packages are public if the GitHub
+16. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-16. Run GoReleaser from the tag.
+17. Run GoReleaser from the tag with Go 1.26.3 or newer.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they

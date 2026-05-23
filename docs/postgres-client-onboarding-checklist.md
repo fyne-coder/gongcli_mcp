@@ -16,6 +16,9 @@ For a small IT setup on one Linux host, use
 [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md) as the
 Compose scaffold; it still follows the same source DB, serving DB, scoped
 reader, and read-only `gongmcp` boundary.
+For Kubernetes operator Jobs, first-run DB initialization, recurring sync
+cadence, image `args`, and non-user MCP smoke tests, use the
+[Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md).
 
 ## 1. Choose The Pilot Surface
 
@@ -90,8 +93,17 @@ fresh profile cache:
 gongctl profile validate --db "$SQLITE_OR_SOURCE_DB" --profile "$REVIEWED_PROFILE"
 gongctl profile validate --db "$SQLITE_OR_SOURCE_DB" --profile "$REVIEWED_PROFILE" --ga-readiness
 gongctl profile import --db "$SQLITE_OR_SOURCE_DB" --profile "$REVIEWED_PROFILE"
-gongctl sync read-model --db "$SQLITE_OR_SOURCE_DB" --rebuild
 ```
+
+For Postgres source DBs, omit `--db` and set the writable URL in the
+environment before rebuilding:
+
+```bash
+GONG_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL" gongctl sync read-model --rebuild
+```
+
+For SQLite pilot caches, rebuild behavior is handled by the writable profile
+import path; `sync read-model` is Postgres-only.
 
 The `--ga-readiness` pass is the customer-deployment gate. It exits non-zero
 when baseline validation fails or when the mechanical readiness checklist finds

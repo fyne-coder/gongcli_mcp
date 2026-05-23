@@ -73,6 +73,6 @@ func fieldProfileSchema() map[string]any {
 	return map[string]any{
 		"type":        "string",
 		"enum":        []string{"", fieldProfileCustom, fieldProfileLimited, fieldProfileAttribution, fieldProfileFull},
-		"description": "Optional exposure preset for structured call/account/opportunity fields. limited disables call titles, account/opportunity names, stable speaker refs, and raw call IDs; attribution enables call titles, account/opportunity names, and stable speaker refs but not raw call IDs; full enables every opt-in field subject to active policy switches. Raw speaker_id visibility is controlled separately by the hide_speaker_ids policy. Field profiles do not redact names embedded inside evidence text such as Gong AI briefs or transcript snippets.",
+		"description": "Optional exposure preset for structured call/account/opportunity fields. limited disables call titles, account/opportunity names, stable speaker refs, and raw call IDs; attribution enables account/opportunity names and stable speaker refs but not raw call IDs; full enables every governed field subject to active policy switches. Call titles are included by default outside limited when hide_call_titles is not active. Raw speaker_id visibility is controlled separately by the hide_speaker_ids policy. Field profiles do not redact names embedded inside evidence text such as Gong AI briefs or transcript snippets.",
 	}
 }
