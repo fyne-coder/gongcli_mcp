@@ -123,6 +123,29 @@ Remaining 1.0 backlog:
 - Native remote OAuth: implement Protected Resource Metadata, issuer/audience
   validation, scopes, and per-user audit only after the private bridge boundary
   stays stable.
+- Deployment simplification for customer-hosted Postgres/Kubernetes pilots:
+  package the source-writer, serving-writer, scoped-reader, sync, serving
+  refresh, grant reconciliation, MCP runtime, and smoke-test ordering into a
+  supported deployable path instead of requiring operators to hand-script the
+  phase boundaries. Candidate deliverables:
+  - a Helm or Kustomize starter for Kubernetes with explicit values for source
+    writer URL, serving writer URL, scoped reader URL, governance YAML, preset,
+    image tag/digest, and JumpCloud/OIDC gateway settings
+  - a single `gongctl operator refresh` command that runs source sync,
+    read-model rebuild, serving DB refresh, scoped grant reconciliation, and
+    preset-aware reader validation in the correct order
+  - a `gongctl doctor postgres-deploy` diagnostic that reports the current
+    DB/user for each URL, detects writer URLs used in reader checks, verifies
+    scoped reader grants against the selected MCP preset, and emits the next
+    corrective command
+  - a preset-aware reader validation command, or a `sync status --preset`
+    option, so operators can validate `broad-public-redacted` without tripping
+    the default read-only function expectations
+  - clearer failure messages for common deployment mistakes such as running
+    `sync status` with a writer URL or starting `gongmcp` before grants are
+    reconciled
+  - an end-to-end deployment smoke Job that operators can run without becoming
+    MCP business users
 
 ## Feature Direction
 

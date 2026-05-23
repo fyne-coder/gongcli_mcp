@@ -543,6 +543,12 @@ Rules:
 - Existing cached transcripts are skipped by `sync transcripts`; rerun `sync calls` to refresh call metadata and embedded CRM context. A transcript refresh policy for re-checking already downloaded transcripts is planned separately.
 - `sync status` separates embedded CRM context from CRM integration/schema inventory. A cache can contain CRM context from `sync calls --preset business` even when `sync crm-integrations` or `sync crm-schema` has not populated inventory tables.
 - `sync status` also returns public business-readiness flags for conversation volume, transcript coverage, scorecard/theme inventory, lifecycle separation, CRM segmentation, and attribution readiness.
+- In Postgres mode, `sync status` opens the database through the default
+  read-only validation path. Run it with a scoped reader URL, not the writer
+  URL used for source sync or `sync read-model --rebuild`. For preset-scoped
+  MCP deployments such as `broad-public-redacted`, validate through the MCP
+  runtime with the same preset instead; generic `sync status` can require
+  default functions that the scoped preset intentionally does not grant.
 - `cache inventory --db PATH` opens SQLite read-only and reports file size,
   primary table counts, call date range, transcript and CRM-context presence,
   profile status, and last sync metadata with a sensitive-data warning. With

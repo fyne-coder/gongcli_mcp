@@ -44,8 +44,10 @@ reviewed shell wrapper with `GONG_DATABASE_URL` set to a writable operator URL.
 - The scheduler exit code is the alert signal. Capture stdout/stderr to a log
   the operator can grep without containing transcript bodies.
 - Back up the cache before any major refresh, schema change, or upgrade.
-- Run `gongctl sync status` (or `get_sync_status` over MCP) after every
-  refresh so business users can see staleness.
+- Run a reader-side freshness check after every refresh so business users can
+  see staleness. For SQLite/default reader surfaces this can be
+  `gongctl sync status`; for scoped Postgres MCP presets, validate through
+  `gongmcp` with the same reader URL and preset.
 
 ## Pattern 1 — `cron`
 
@@ -247,6 +249,10 @@ For Postgres, run direct `gongctl sync ...` commands with a writable
 `GONG_DATABASE_URL`. Do not use `sync run --config` here; that config runner is
 for SQLite cache schedules today.
 
+Keep the reviewed shell sequence in a ConfigMap, image-baked script, or other
+change-controlled artifact rather than editing it only inside a live CronJob
+manifest.
+
 ```yaml
 apiVersion: batch/v1
 kind: CronJob
@@ -280,7 +286,6 @@ spec:
                   gongctl --restricted sync settings --kind trackers
                   gongctl --restricted sync settings --kind scorecards
                   gongctl --restricted sync read-model --rebuild
-                  gongctl --restricted sync status
               envFrom:
                 - secretRef:
                     name: gongctl-gong-credentials   # GONG_ACCESS_KEY/SECRET
@@ -301,6 +306,12 @@ spec:
               persistentVolumeClaim:
                 claimName: gongctl-transcripts
 ```
+
+Do not run `gongctl sync status` at the end of the writable Postgres CronJob
+while `GONG_DATABASE_URL` still points at the writer URL. For deployments with
+a redacted serving DB, run the serving refresh and scoped grant reconciliation
+after the source sync, then validate through the `gongmcp` reader path with the
+same preset the runtime exposes.
 
 Create the `gongctl-transcripts` PVC separately, or remove the transcript step
 and volume if transcript search is not approved. A `ReadWriteOnce` PVC is
@@ -329,7 +340,8 @@ When restricted mode is enabled, transcript sync requires
 operator's explicit runtime approval. `sync transcripts` defaults to
 `--limit 100`; the scheduled example uses a small daily limit, while a first
 historical backfill Job should set a larger approved `--limit` or run repeated
-Jobs until `sync status` shows the expected transcript coverage.
+Jobs until the approved reader-side smoke shows the expected transcript
+coverage.
 
 If the inline shell becomes too large for review, move the script into a
 reviewed ConfigMap or customer-owned operator image and keep the same command
@@ -363,16 +375,20 @@ The minimum monitoring loop:
    via `OnFailure=`, K8s via `failedJobsHistoryLimit` + a kube-state-metrics
    alert, cron via the wrapper script's exit code logged to your monitoring
    pipeline.
-2. After every successful run, `gongctl sync status --db <db>` (or
-   `get_sync_status` over MCP) returns `last_sync_at` per stage. Alert if
-   `last_sync_at` is older than the expected cadence + a grace window
+2. After every successful run, check freshness with the reader path for that
+   deployment. SQLite/default reader surfaces can use
+   `gongctl sync status --db <db>`; scoped Postgres MCP deployments should use
+   the MCP smoke/status tool with the same reader URL and preset. Alert if the
+   reported freshness is older than the expected cadence + a grace window
    (e.g. cadence 24h, alert at 30h).
 3. Tail logs for `error` / `failed` lines. Refuse to log transcript bodies
    or secret values; the CLI does not log them by default but custom
    wrappers can leak.
-4. After a refresh, restart `gongmcp` so it re-fingerprints the cache and
-   governance config (it fails closed if either changes mid-process — see
-   the operator-sync runbook).
+4. Restart `gongmcp` after changes to its database URL, reader role/grants,
+   auth settings, binary/image version, tool preset/allowlist, or governance
+   config. A routine Postgres serving DB refresh does not require a restart
+   when the same database URL, role/grants, preset, and runtime config remain
+   in place.
 
 A simple "scheduler hasn't fired" alert: emit a heartbeat to your monitoring
 system from the success path of the wrapper script (`curl -fsS
