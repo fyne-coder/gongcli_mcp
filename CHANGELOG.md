@@ -21,10 +21,6 @@
 - Clarified JumpCloud/OIDC deployments: JumpCloud remains the public
   gateway/broker auth layer while upstream `gongmcp` stays protected by
   internal bearer auth.
-- Added deployment-simplification backlog items for Helm/Kustomize starters,
-  `gongctl operator refresh`, `gongctl doctor postgres-deploy`, preset-aware
-  reader validation, clearer deployment failure messages, and operator E2E
-  smoke jobs.
 - Updated release-facing Docker image examples and deployment defaults to point
   at `v0.4.6`.
 
