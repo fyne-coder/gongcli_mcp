@@ -300,7 +300,8 @@ boundary:
 
 - Postgres runs locally on the VM and binds to loopback by default.
 - `gongctl` operator jobs write to a source database.
-- `governance refresh-serving-db` rebuilds a separate MCP serving database.
+- `gongctl deploy postgres-refresh` rebuilds a separate MCP serving database
+  and reconciles scoped reader grants.
 - `gongmcp` reads only from the serving database through a scoped reader role.
 - `gongmcp` does not receive Gong API credentials or the source DB URL.
 - the HTTP MCP service binds to loopback by default and should sit behind a
@@ -318,6 +319,17 @@ docker compose \
 Use this path when the customer wants a simple VM install but still needs the
 Postgres source/serving split. Use the older root `docker-compose.postgres.yml`
 for local synthetic smoke and developer checks.
+
+## Kubernetes Postgres Pilot Starter
+
+For customer-managed Kubernetes pilots where the customer already owns
+Postgres, secrets, ingress, auth, backups, and logs, use the Kustomize starter:
+
+- [`deploy/kubernetes/postgres-pilot`](../deploy/kubernetes/postgres-pilot/README.md)
+
+That starter renders a read-only `gongmcp` Deployment, ClusterIP Service,
+suspended refresh CronJob, and manual operator smoke Job. It does not create
+Postgres databases, roles, ingress, NetworkPolicies, or external secrets.
 
 ## MCP Over Docker
 

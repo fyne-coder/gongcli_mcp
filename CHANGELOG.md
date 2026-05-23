@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-05-23
+
+- Added deployment simplification for customer-hosted Postgres/Kubernetes
+  pilots: `gongctl deploy postgres-refresh`, `gongctl doctor postgres-deploy`,
+  preset-aware `sync status --preset`, a Kustomize starter, and an
+  operator-owned Kubernetes smoke Job that does not require business-user MCP
+  access.
+- Added durable redacted-serving refresh markers and sanitized deployment
+  diagnostics so operators can distinguish source/read-model, serving-refresh,
+  marker freshness, and scoped-reader grant issues without printing database
+  URLs, secrets, call IDs, call titles, customer names, or transcript text.
+- Added single-VM and Kubernetes deployment-doc updates for pinned images,
+  AI-governance config mounting, scoped reader validation, and fresh one-shot
+  smoke Job execution. The Kubernetes starter was validated end to end on a
+  disposable k3d cluster with synthetic Postgres data.
+
 ## 0.4.6 - 2026-05-19
 
 - Added a Postgres Kubernetes operator setup guide that covers blank-database

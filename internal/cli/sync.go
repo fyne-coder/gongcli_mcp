@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	postgresdeploy "github.com/fyne-coder/gongcli_mcp/internal/deploy/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/gong"
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
+	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/storeiface"
@@ -512,11 +514,12 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync status", flag.ContinueOnError)
 	fs.SetOutput(a.err)
 	dbPath := fs.String("db", "", "SQLite database path")
+	preset := fs.String("preset", "", "MCP tool preset to validate against Postgres deployment readiness")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
 
-	store, err := openReadOnlyStatusStore(ctx, *dbPath)
+	store, err := openReadOnlyStatusStoreWithPreset(ctx, *dbPath, *preset)
 	if err != nil {
 		return err
 	}
@@ -548,6 +551,7 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		ProfileReadiness:             summary.ProfileReadiness,
 		PublicReadiness:              summary.PublicReadiness,
 		AttributionCoverage:          summary.AttributionCoverage,
+		PresetValidation:             nil,
 		LastRun:                      newSyncRunJSON(summary.LastRun),
 		LastSuccessfulRun:            newSyncRunJSON(summary.LastSuccessfulRun),
 		States:                       []syncStateJSON{},
@@ -573,7 +577,41 @@ func (a *app) syncStatus(ctx context.Context, args []string) error {
 		}
 		response.PostgresReadModel = readModel
 	}
+	presetValidation, err := syncStatusPresetValidation(ctx, *preset, store)
+	if err != nil {
+		return err
+	}
+	response.PresetValidation = presetValidation
 	return writeJSONValue(a.out, response)
+}
+
+func syncStatusPresetValidation(ctx context.Context, preset string, store readOnlyStatusStore) (*postgresdeploy.Check, error) {
+	selectedPreset := strings.TrimSpace(preset)
+	if selectedPreset == "" {
+		return nil, nil
+	}
+	check, err := presetCatalogCheck(selectedPreset)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := store.(*postgres.Store); !ok {
+		return &postgresdeploy.Check{
+			Name:        "preset_validation",
+			Status:      postgresdeploy.CheckWarn,
+			ErrorKind:   "postgres_scoped_reader_validation_not_supported",
+			Message:     "preset is known, but this status backend cannot validate Postgres scoped reader grants",
+			Remediation: "run gongctl doctor postgres-deploy against the Postgres serving database",
+			Evidence:    check.Evidence,
+		}, nil
+	}
+	return &postgresdeploy.Check{
+		Name:    "preset_validation",
+		Status:  postgresdeploy.CheckPass,
+		Message: "status store opened with preset-scoped Postgres reader validation",
+		Evidence: append(check.Evidence,
+			postgresdeploy.Evidence{Key: "marker_attestation", Value: "operator_doctor_required"},
+		),
+	}, nil
 }
 
 func (a *app) syncSynthetic(ctx context.Context, args []string) error {
@@ -830,12 +868,24 @@ func openWritableScorecardActivityStore(ctx context.Context, path string) (writa
 }
 
 func openReadOnlyStatusStore(ctx context.Context, path string) (readOnlyStatusStore, error) {
+	return openReadOnlyStatusStoreWithPreset(ctx, path, "")
+}
+
+func openReadOnlyStatusStoreWithPreset(ctx context.Context, path string, preset string) (readOnlyStatusStore, error) {
 	if strings.TrimSpace(path) != "" {
 		return sqlite.OpenReadOnly(ctx, path)
 	}
 	databaseURL := postgres.URLFromEnv(os.Getenv)
 	if databaseURL == "" {
 		return nil, errors.New("--db is required")
+	}
+	selectedPreset := strings.TrimSpace(preset)
+	if selectedPreset != "" {
+		allowlist, err := mcp.ExpandToolPresetReaderGrantTools(selectedPreset)
+		if err != nil {
+			return nil, err
+		}
+		return postgres.OpenReadOnlyWithOptions(ctx, databaseURL, postgres.ReadOnlyOptionsForToolAllowlist(allowlist))
 	}
 	return postgres.OpenReadOnly(ctx, databaseURL)
 }
@@ -1399,6 +1449,7 @@ type syncStatusResponse struct {
 	PublicReadiness              sqlite.PublicReadiness             `json:"public_readiness"`
 	AttributionCoverage          sqlite.AttributionCoverage         `json:"attribution_coverage"`
 	PostgresReadModel            *postgres.ReadModelStatus          `json:"postgres_read_model,omitempty"`
+	PresetValidation             *postgresdeploy.Check              `json:"preset_validation"`
 	LastRun                      *syncRunJSON                       `json:"last_run,omitempty"`
 	LastSuccessfulRun            *syncRunJSON                       `json:"last_successful_run,omitempty"`
 	States                       []syncStateJSON                    `json:"states"`

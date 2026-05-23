@@ -75,6 +75,46 @@ func TestRefreshServingDBRequiresConfig(t *testing.T) {
 	}
 }
 
+func TestServingRefreshLogMigrationExists(t *testing.T) {
+	var migration string
+	for _, candidate := range migrations {
+		if strings.Contains(candidate, "CREATE TABLE IF NOT EXISTS serving_refresh_log") {
+			migration = candidate
+			break
+		}
+	}
+	if migration == "" {
+		t.Fatal("serving refresh log migration not found")
+	}
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS serving_refresh_log",
+		"source_data_fingerprint TEXT NOT NULL",
+		"target_data_fingerprint TEXT NOT NULL",
+		"policy_config_sha256 TEXT NOT NULL",
+		"row_counts_json JSONB NOT NULL",
+		"idx_pg_serving_refresh_log_refreshed_at",
+	} {
+		if !strings.Contains(migration, want) {
+			t.Fatalf("serving refresh log migration missing %q", want)
+		}
+	}
+	for _, blocked := range []string{"source_url", "target_url", "database_url", "call_id", "call_title", "blocklist"} {
+		if strings.Contains(migration, blocked+" ") {
+			t.Fatalf("serving refresh log migration includes blocked field %q", blocked)
+		}
+	}
+}
+
+func TestRefreshServingDBCopyClearsPriorServingRefreshMarker(t *testing.T) {
+	body, err := os.ReadFile("serving.go")
+	if err != nil {
+		t.Fatalf("read serving.go: %v", err)
+	}
+	if !strings.Contains(string(body), "DELETE FROM serving_refresh_log") {
+		t.Fatal("refreshServingDBCopy must clear prior serving refresh markers before mutating target data")
+	}
+}
+
 // TestRefreshServingDBVerticalSliceCopiesAllowedRows is the integration test
 // for Phase 13e4. It requires two synthetic Postgres databases:
 //
@@ -263,6 +303,9 @@ lists:
 	if result.SourceDataFingerprint == "" || result.TargetDataFingerprint == "" {
 		t.Fatalf("data fingerprints should be set: %+v", result)
 	}
+	if result.ServingRefreshID == 0 || result.RefreshedAt == "" {
+		t.Fatalf("serving refresh marker should be set: %+v", result)
+	}
 
 	body, err := json.Marshal(result)
 	if err != nil {
@@ -286,6 +329,38 @@ lists:
 		t.Fatalf("reopen target: %v", err)
 	}
 	defer target.Close()
+
+	marker, err := target.LatestServingRefreshMarker(ctx)
+	if err != nil {
+		t.Fatalf("LatestServingRefreshMarker: %v", err)
+	}
+	if marker.ID != result.ServingRefreshID ||
+		marker.RefreshedAt != result.RefreshedAt ||
+		marker.PolicyConfigSHA256 != result.PolicyConfigSHA256 ||
+		marker.SourceDataFingerprint != result.SourceDataFingerprint ||
+		marker.TargetDataFingerprint != result.TargetDataFingerprint ||
+		marker.SourceCalls != result.SourceCalls ||
+		marker.TargetCalls != result.TargetCalls ||
+		marker.RemovedCalls != result.RemovedCalls ||
+		marker.SuppressedCallCount != int64(result.SuppressedCallCount) {
+		t.Fatalf("serving refresh marker mismatch marker=%+v result=%+v", marker, result)
+	}
+	markerBody, err := json.Marshal(marker)
+	if err != nil {
+		t.Fatalf("marshal marker: %v", err)
+	}
+	for _, leak := range []string{
+		"Blocked Synthetic Corp",
+		"Restricted transcript content",
+		"pg-serving-blocked-001",
+		"Blocked serving call one",
+		sourceURL,
+		targetURL,
+	} {
+		if strings.Contains(string(markerBody), leak) {
+			t.Fatalf("serving refresh marker leaked %q: %s", leak, markerBody)
+		}
+	}
 
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM calls WHERE call_id = 'pg-serving-blocked-001'`, 0)
 	assertPostgresCount(t, ctx, target, `SELECT COUNT(*) FROM transcripts WHERE call_id = 'pg-serving-blocked-001'`, 0)

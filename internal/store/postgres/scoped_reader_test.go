@@ -36,6 +36,7 @@ func TestBuildScopedReaderGrantSQLBusinessPilot(t *testing.T) {
 		`REVOKE EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_sanitized(bigint, text) FROM "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("context_present", "parties_count", "started_at") ON TABLE public."calls" TO "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("account_count", "account_industry", "duration_seconds", "lifecycle_bucket", "lifecycle_confidence", "likely_voicemail_or_ivr", "opportunity_count", "opportunity_stage", "started_at", "transcript_present", "transcript_status") ON TABLE public."call_facts" TO "gongmcp_business_pilot_reader";`,
+		`GRANT SELECT ("field_limit_exceeded", "last_error", "object_limit_exceeded") ON TABLE public."call_read_model_diagnostics" TO "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("active", "kind", "name", "object_id", "updated_at") ON TABLE public."gong_settings" TO "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("first_seen_at", "integration_id", "name", "provider", "updated_at") ON TABLE public."crm_integrations" TO "gongmcp_business_pilot_reader";`,
 		`GRANT SELECT ("display_name", "field_count", "first_seen_at", "integration_id", "object_type", "updated_at") ON TABLE public."crm_schema_objects" TO "gongmcp_business_pilot_reader";`,

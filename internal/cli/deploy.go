@@ -1,0 +1,324 @@
+package cli
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	postgresdeploy "github.com/fyne-coder/gongcli_mcp/internal/deploy/postgres"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
+	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
+)
+
+const defaultPostgresDeployMarkerMaxAge = 24 * time.Hour
+const deploySensitiveDataWarning = "This output contains sanitized deployment counts, checks, fingerprints, and grant hashes. Protect the underlying source database, serving database, secrets, governance config, and operator logs separately."
+
+var deployRefreshServingDB = postgres.RefreshServingDB
+var deployRebuildReadModel = rebuildPostgresReadModel
+var deployApplyScopedReaderGrants = postgres.ApplyScopedReaderGrants
+var deployOpenPostgresStatus = postgres.OpenStatus
+
+func (a *app) deploy(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(a.err, "usage: gongctl deploy [postgres-refresh]")
+		return errUsage
+	}
+	switch args[0] {
+	case "postgres-refresh":
+		return a.deployPostgresRefresh(ctx, args[1:])
+	default:
+		fmt.Fprintf(a.err, "unknown deploy command %q\n", args[0])
+		return errUsage
+	}
+}
+
+func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("deploy postgres-refresh", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	sourceURL := fs.String("source", "", "Postgres source/operator database URL, e.g. $GONGCTL_SOURCE_DATABASE_URL")
+	targetURL := fs.String("target", "", "Postgres redacted serving database URL, e.g. $GONGCTL_MCP_DATABASE_URL")
+	configPath := fs.String("config", "", "AI governance YAML config path")
+	preset := fs.String("preset", "", "MCP tool preset for reader grant validation")
+	roleName := fs.String("role", "", "existing Postgres reader role name")
+	databaseName := fs.String("database", "", "Postgres database name for reader grants")
+	skipReadModel := fs.Bool("skip-read-model", false, "skip rebuilding the source read model before serving refresh")
+	skipGrants := fs.Bool("skip-grants", false, "skip scoped reader grant reconciliation")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if fs.NArg() != 0 {
+		return errUsage
+	}
+
+	source := refreshServingDBInput(*sourceURL, "GONGCTL_SOURCE_DATABASE_URL")
+	target := refreshServingDBInput(*targetURL, "GONGCTL_MCP_DATABASE_URL")
+	config := refreshServingDBInput(*configPath, "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG")
+	selectedPreset := deployInputDefault(*preset, "business-workbench", "GONGMCP_TOOL_PRESET")
+	role := deployInputDefault(*roleName, "gongmcp_business_workbench_reader", "GONGMCP_READER_ROLE")
+	database := deployInputDefault(*databaseName, "gongctl_mcp", "GONGMCP_DATABASE_NAME", "GONGCTL_MCP_DB")
+
+	if source == "" {
+		return errors.New("deploy postgres-refresh failed before connect: --source is required or set GONGCTL_SOURCE_DATABASE_URL")
+	}
+	if target == "" {
+		return errors.New("deploy postgres-refresh failed before connect: --target is required or set GONGCTL_MCP_DATABASE_URL")
+	}
+	if config == "" {
+		return errors.New("deploy postgres-refresh failed before connect: --config is required or set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG")
+	}
+	allowlist, err := mcp.ExpandToolPresetReaderGrantTools(selectedPreset)
+	if err != nil {
+		return fmt.Errorf("deploy postgres-refresh failed before connect: %w", err)
+	}
+	cfg, err := governance.LoadFile(config)
+	if err != nil {
+		return fmt.Errorf("deploy postgres-refresh failed before connect: governance config could not be loaded")
+	}
+
+	response := deployPostgresRefreshResponse{
+		Backend:              "postgres",
+		Preset:               selectedPreset,
+		Role:                 role,
+		Database:             database,
+		SensitiveDataWarning: deploySensitiveDataWarning,
+		Steps:                []deployStep{},
+	}
+
+	if *skipReadModel {
+		response.Steps = append(response.Steps, deployStep{Name: "source_read_model", Status: "skipped", Message: "source read model rebuild skipped by operator flag"})
+	} else {
+		readModel, err := deployRebuildReadModel(ctx, source)
+		if err != nil {
+			return deployPostgresRefreshFailure("source_read_model", "source database unavailable or read model rebuild failed", err)
+		}
+		response.ReadModel = readModel
+		response.Steps = append(response.Steps, deployStep{Name: "source_read_model", Status: "pass", Message: "source read model rebuilt"})
+	}
+
+	result, err := deployRefreshServingDB(ctx, postgres.RefreshServingDBOptions{
+		SourceURL: source,
+		TargetURL: target,
+		Config:    cfg,
+	})
+	if err != nil {
+		return deployPostgresRefreshFailure("serving_refresh", "serving database refresh failed", sanitizeRefreshServingDBError(err))
+	}
+	response.Result = result
+	response.Steps = append(response.Steps, deployStep{Name: "serving_refresh", Status: "pass", Message: "redacted serving database refreshed"})
+
+	if *skipGrants {
+		response.Steps = append(response.Steps, deployStep{Name: "reader_grants", Status: "skipped", Message: "scoped reader grant reconciliation skipped by operator flag"})
+	} else {
+		params := postgres.ScopedReaderGrantSQLParams{
+			Allowlist:    allowlist,
+			RoleName:     role,
+			DatabaseName: database,
+			Generator:    "gongctl deploy postgres-refresh",
+		}
+		appliedSQL, err := deployApplyScopedReaderGrants(ctx, target, params)
+		if err != nil {
+			return deployPostgresRefreshFailure("reader_grants", "scoped reader grants could not be reconciled", err)
+		}
+		sum := sha256.Sum256([]byte(appliedSQL))
+		response.GrantSQLSHA256 = hex.EncodeToString(sum[:])
+		response.Steps = append(response.Steps, deployStep{Name: "reader_grants", Status: "pass", Message: "scoped reader grants reconciled"})
+	}
+
+	return writeJSONValue(a.out, response)
+}
+
+func deployPostgresRefreshFailure(step, message string, err error) error {
+	if err == nil {
+		return fmt.Errorf("deploy postgres-refresh failed at %s: %s", step, message)
+	}
+	return fmt.Errorf("deploy postgres-refresh failed at %s: %s; detail: %s", step, message, sanitizeDeployStepError(err))
+}
+
+func sanitizeDeployStepError(err error) string {
+	if err == nil {
+		return "unknown deployment error"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "permission denied") || strings.Contains(msg, "privilege"):
+		return "Postgres privileges are insufficient for this step"
+	case strings.Contains(msg, "schema version") || strings.Contains(msg, "migration") || strings.Contains(msg, "does not exist"):
+		return "Postgres schema migrations are missing or stale"
+	case strings.Contains(msg, "password authentication failed") || strings.Contains(msg, "pg_hba") || strings.Contains(msg, "no such host") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "dial tcp") || strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline"):
+		return "database connection, network path, or credentials are invalid"
+	case strings.Contains(msg, "yaml") || strings.Contains(msg, "governance config"):
+		return "governance config could not be parsed or validated"
+	default:
+		return "inspect operator logs for the sanitized underlying error"
+	}
+}
+
+func deployInputDefault(flagValue, fallback string, envNames ...string) string {
+	if value := strings.TrimSpace(flagValue); value != "" {
+		return value
+	}
+	for _, name := range envNames {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func rebuildPostgresReadModel(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+	store, err := postgres.Open(ctx, databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return store.RebuildReadModel(ctx)
+}
+
+func (a *app) diagnosePostgresDeploy(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("doctor postgres-deploy", flag.ContinueOnError)
+	fs.SetOutput(a.err)
+	targetURL := fs.String("target", "", "Postgres redacted serving database URL, e.g. $GONGCTL_MCP_DATABASE_URL")
+	preset := fs.String("preset", "", "MCP tool preset to validate")
+	maxMarkerAge := fs.Duration("max-marker-age", defaultPostgresDeployMarkerMaxAge, "maximum allowed age for the serving refresh marker")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	if fs.NArg() != 0 {
+		return errUsage
+	}
+
+	selectedPreset := deployInputDefault(*preset, "business-workbench", "GONGMCP_TOOL_PRESET")
+	target := refreshServingDBInput(*targetURL, "GONGCTL_MCP_DATABASE_URL", "GONG_DATABASE_URL", "DATABASE_URL")
+	checks := []postgresdeploy.Check{
+		envPresenceCheck("source_database_url", refreshServingDBInput("", "GONGCTL_SOURCE_DATABASE_URL"), "set GONGCTL_SOURCE_DATABASE_URL or pass --source to gongctl deploy postgres-refresh"),
+		envPresenceCheck("serving_database_url", target, "set GONGCTL_MCP_DATABASE_URL or pass --target"),
+		envPresenceCheck("governance_config", refreshServingDBInput("", "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG"), "set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG"),
+	}
+
+	presetCheck, err := presetCatalogCheck(selectedPreset)
+	if err != nil {
+		checks = append(checks, postgresdeploy.Check{
+			Name:        "tool_preset",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "unknown_tool_preset",
+			Message:     "selected MCP tool preset is not known",
+			Remediation: "use a reviewed preset such as business-workbench",
+		})
+		return writeJSONValue(a.out, diagnosePostgresDeployResponse{
+			Backend:              "postgres",
+			Preset:               selectedPreset,
+			Checks:               checks,
+			SensitiveDataWarning: deploySensitiveDataWarning,
+		})
+	}
+	checks = append(checks, presetCheck)
+
+	if target == "" {
+		checks = append(checks, postgresdeploy.Check{
+			Name:        "serving_refresh_marker",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "serving_database_url_missing",
+			Message:     "serving refresh marker could not be checked without a serving database URL",
+			Remediation: "set GONGCTL_MCP_DATABASE_URL or pass --target",
+		})
+		return writeJSONValue(a.out, diagnosePostgresDeployResponse{
+			Backend:              "postgres",
+			Preset:               selectedPreset,
+			Checks:               checks,
+			SensitiveDataWarning: deploySensitiveDataWarning,
+		})
+	}
+
+	store, err := deployOpenPostgresStatus(ctx, target)
+	if err != nil {
+		checks = append(checks, postgresdeploy.Check{
+			Name:        "serving_database_connectivity",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "serving_database_unavailable",
+			Message:     "serving database could not be opened for diagnostics",
+			Remediation: "verify the serving database URL, network path, schema migrations, and reader privileges",
+		})
+	} else {
+		defer store.Close()
+		checks = append(checks, postgresdeploy.Check{
+			Name:    "serving_database_connectivity",
+			Status:  postgresdeploy.CheckPass,
+			Message: "serving database opened for diagnostics",
+		})
+		checks = append(checks, postgresdeploy.CheckServingRefreshMarker(ctx, store, postgresdeploy.ServingRefreshMarkerOptions{
+			MaxAge: *maxMarkerAge,
+		}))
+	}
+
+	return writeJSONValue(a.out, diagnosePostgresDeployResponse{
+		Backend:              "postgres",
+		Preset:               selectedPreset,
+		Checks:               checks,
+		SensitiveDataWarning: deploySensitiveDataWarning,
+	})
+}
+
+func envPresenceCheck(name, value, remediation string) postgresdeploy.Check {
+	if strings.TrimSpace(value) == "" {
+		return postgresdeploy.Check{
+			Name:        name,
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "missing_operator_input",
+			Message:     "required operator input is not configured",
+			Remediation: remediation,
+		}
+	}
+	return postgresdeploy.Check{
+		Name:    name,
+		Status:  postgresdeploy.CheckPass,
+		Message: "operator input is configured",
+	}
+}
+
+func presetCatalogCheck(preset string) (postgresdeploy.Check, error) {
+	allowlist, err := mcp.ExpandToolPresetReaderGrantTools(preset)
+	if err != nil {
+		return postgresdeploy.Check{}, err
+	}
+	return postgresdeploy.Check{
+		Name:    "tool_preset",
+		Status:  postgresdeploy.CheckPass,
+		Message: "MCP tool preset is known and has reviewed reader grant coverage",
+		Evidence: []postgresdeploy.Evidence{
+			{Key: "preset", Value: preset},
+			{Key: "reader_grant_tool_count", Value: fmt.Sprintf("%d", len(allowlist))},
+		},
+	}, nil
+}
+
+type deployPostgresRefreshResponse struct {
+	Backend              string                           `json:"backend"`
+	Preset               string                           `json:"preset"`
+	Role                 string                           `json:"role"`
+	Database             string                           `json:"database"`
+	Steps                []deployStep                     `json:"steps"`
+	ReadModel            *postgres.ReadModelStatus        `json:"read_model,omitempty"`
+	Result               *postgres.ServingDBRefreshResult `json:"result,omitempty"`
+	GrantSQLSHA256       string                           `json:"grant_sql_sha256,omitempty"`
+	SensitiveDataWarning string                           `json:"sensitive_data_warning"`
+}
+
+type deployStep struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type diagnosePostgresDeployResponse struct {
+	Backend              string                 `json:"backend"`
+	Preset               string                 `json:"preset"`
+	Checks               []postgresdeploy.Check `json:"checks"`
+	SensitiveDataWarning string                 `json:"sensitive_data_warning"`
+}

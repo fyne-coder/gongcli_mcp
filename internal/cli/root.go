@@ -88,6 +88,10 @@ func (a *app) run(ctx context.Context, args []string) error {
 		return a.api(ctx, args[1:])
 	case "diagnose":
 		return a.diagnose(ctx, args[1:])
+	case "doctor":
+		return a.doctor(ctx, args[1:])
+	case "deploy":
+		return a.deploy(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown command %q\n", args[0])
 		a.usage()
@@ -138,6 +142,8 @@ func (a *app) usage() {
   gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE --database DB
   gongctl mcp postgres-reader-apply --preset business-pilot --role ROLE --database DB [--dry-run|--apply]
   gongctl mcp ga-acceptance [--probes <file>|-] [--summary <file>]
+  gongctl deploy postgres-refresh [--source URL] [--target URL] [--config ai-governance.yaml] [--preset business-workbench] [--role ROLE] [--database DB] [--skip-read-model] [--skip-grants]
+  gongctl doctor postgres-deploy [--target URL] [--preset business-workbench] [--max-marker-age DURATION]
   gongctl search transcripts --db gong.db --query TEXT [--limit N]
   gongctl search calls --db gong.db [--crm-object-type TYPE] [--crm-object-id ID] [--limit N]
   gongctl calls list --from YYYY-MM-DD --to YYYY-MM-DD [--context none|extended] [--out calls.json] [--allow-sensitive-export]
@@ -149,6 +155,7 @@ func (a *app) usage() {
   gongctl version
   gongctl api raw METHOD PATH [--body body.json] [--out response.json] [--allow-sensitive-export]
   gongctl diagnose [--live]
+  gongctl diagnose postgres-deploy [--target URL] [--preset business-workbench] [--max-marker-age DURATION]
 `)
 }
 
@@ -180,6 +187,9 @@ func newClientFromEnv() (*gong.Client, error) {
 }
 
 func (a *app) diagnose(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "postgres-deploy" {
+		return a.diagnosePostgresDeploy(ctx, args[1:])
+	}
 	live, err := parseDiagnoseArgs(args)
 	if err != nil {
 		return err
@@ -230,6 +240,20 @@ func parseDiagnoseArgs(args []string) (bool, error) {
 		}
 	}
 	return live, nil
+}
+
+func (a *app) doctor(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		fmt.Fprintln(a.err, "usage: gongctl doctor [postgres-deploy]")
+		return errUsage
+	}
+	switch args[0] {
+	case "postgres-deploy":
+		return a.diagnosePostgresDeploy(ctx, args[1:])
+	default:
+		fmt.Fprintf(a.err, "unknown doctor command %q\n", args[0])
+		return errUsage
+	}
 }
 
 func newCLIHTTPClient() *http.Client {

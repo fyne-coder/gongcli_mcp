@@ -99,6 +99,7 @@ For company evaluation, start with the enterprise pilot packet:
 - [Postgres client manual-test checklist](docs/postgres-client-manual-test-checklist.md)
 - [Postgres client deployment runbook](docs/runbooks/postgres-client-deployment.md)
 - [Single-VM Postgres starter](deploy/single-vm-postgres/README.md)
+- [Kubernetes Postgres pilot starter](deploy/kubernetes/postgres-pilot/README.md)
 - [Postgres question-parity matrix](docs/postgres-question-parity.md)
 - [Data Boundary Statement](docs/data-boundary-statement.md)
 - [Support model](docs/support.md)
@@ -240,18 +241,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#2b-postgres-shared-con
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.4.6 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.0 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.0 sync status --db /data/gong.db
 ```
 
-The `v0.4.6` image references require the `v0.4.6` tag workflow to have
+The `v0.5.0` image references require the `v0.5.0` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.4.6 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.0 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
