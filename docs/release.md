@@ -29,6 +29,7 @@ make checksums
 docker build -t gongctl:local .
 docker build --target mcp -t gongctl:mcp-local .
 scripts/postgres-backup-restore-smoke.sh
+kubectl kustomize deploy/kubernetes/postgres-pilot
 ```
 
 CI also runs static analysis, Go vulnerability checks, normal image builds, and
@@ -48,20 +49,22 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
 7. Run `make sbom`.
 8. Run `make checksums`.
 9. Run `make postgres-backup-restore-smoke`.
-10. Run `make docker-build`.
-11. Run `make docker-build-mcp`.
-12. Run `make docker-build-ghcr`.
-13. Run `make docker-build-ghcr-mcp`.
-14. Tag the release as `v$(cat VERSION)`.
-15. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
+10. Render the Kubernetes Postgres pilot starter:
+   `kubectl kustomize deploy/kubernetes/postgres-pilot`.
+11. Run `make docker-build`.
+12. Run `make docker-build-mcp`.
+13. Run `make docker-build-ghcr`.
+14. Run `make docker-build-ghcr-mcp`.
+15. Tag the release as `v$(cat VERSION)`.
+16. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
     Go tests, the synthetic Postgres backup/restore smoke, vet, secret scan,
     Docker smoke builds, and image vulnerability scans before it
     publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
-16. After the first publish, confirm the GHCR packages are public if the GitHub
+17. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-17. Run GoReleaser from the tag with Go 1.26.3 or newer.
+18. Run GoReleaser from the tag with Go 1.26.3 or newer.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they

@@ -29,6 +29,8 @@ type RefreshServingDBOptions struct {
 // and shared with reviewers without leaking governance content or operator
 // secrets.
 type ServingDBRefreshResult struct {
+	ServingRefreshID         int64    `json:"serving_refresh_id,omitempty"`
+	RefreshedAt              string   `json:"refreshed_at,omitempty"`
 	Backend                  string   `json:"backend"`
 	SourceCalls              int64    `json:"source_calls"`
 	SourceUsers              int64    `json:"source_users"`
@@ -61,6 +63,23 @@ type ServingDBRefreshResult struct {
 	SkippedTables            []string `json:"skipped_tables,omitempty"`
 }
 
+// ServingDBRefreshMarker is the persisted, sanitized proof that a target
+// Postgres database was rebuilt through governance refresh. It intentionally
+// contains fingerprints and counts only: no URLs, customer names, call IDs,
+// call titles, governance terms, or transcript text.
+type ServingDBRefreshMarker struct {
+	ID                    int64           `json:"id"`
+	RefreshedAt           string          `json:"refreshed_at"`
+	SourceDataFingerprint string          `json:"source_data_fingerprint"`
+	TargetDataFingerprint string          `json:"target_data_fingerprint"`
+	PolicyConfigSHA256    string          `json:"policy_config_sha256"`
+	SourceCalls           int64           `json:"source_calls"`
+	TargetCalls           int64           `json:"target_calls"`
+	RemovedCalls          int64           `json:"removed_calls"`
+	SuppressedCallCount   int64           `json:"suppressed_call_count"`
+	RowCountsJSON         json.RawMessage `json:"row_counts_json"`
+}
+
 // servingSkippedTables enumerates tables that the redacted serving database does
 // not copy. They are listed in sanitized output so reviewers can see exactly
 // what is intentionally absent from the redacted serving database.
@@ -86,6 +105,7 @@ func servingSkippedTables() []string {
 		"profile_call_fact_cache_meta",
 		"governance_ingest_skipped_calls",
 		"purged_call_ids",
+		"serving_refresh_log",
 	}
 }
 
@@ -169,7 +189,7 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		return nil, fmt.Errorf("read target data fingerprint: %w", err)
 	}
 
-	return &ServingDBRefreshResult{
+	result := &ServingDBRefreshResult{
 		Backend:                  "postgres",
 		SourceCalls:              counts.sourceCalls,
 		SourceUsers:              counts.sourceUsers,
@@ -200,7 +220,128 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		TargetDataFingerprint:    targetFingerprint,
 		TargetSuppressedRows:     int64(targetPolicy.SuppressedCallCount),
 		SkippedTables:            servingSkippedTables(),
-	}, nil
+	}
+	marker, err := target.RecordServingRefreshMarker(ctx, result)
+	if err != nil {
+		return nil, fmt.Errorf("record serving refresh marker: %w", err)
+	}
+	result.ServingRefreshID = marker.ID
+	result.RefreshedAt = marker.RefreshedAt
+	return result, nil
+}
+
+// RecordServingRefreshMarker stores a sanitized proof record for a successful
+// serving refresh. Call it only after copy, read-model rebuild, governance
+// policy application, and validation have succeeded.
+func (s *Store) RecordServingRefreshMarker(ctx context.Context, result *ServingDBRefreshResult) (*ServingDBRefreshMarker, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("postgres store is not open")
+	}
+	if s.readOnly {
+		return nil, errors.New("postgres store is read-only")
+	}
+	if result == nil {
+		return nil, errors.New("serving refresh result is required")
+	}
+	refreshedAt := nowUTC()
+	rowCounts := map[string]int64{
+		"source_calls":               result.SourceCalls,
+		"source_users":               result.SourceUsers,
+		"source_transcripts":         result.SourceTranscripts,
+		"source_transcript_segments": result.SourceTranscriptSegments,
+		"source_context_objects":     result.SourceContextObjects,
+		"source_context_fields":      result.SourceContextFields,
+		"source_gong_settings":       result.SourceGongSettings,
+		"source_scorecards":          result.SourceScorecards,
+		"source_scorecard_activity":  result.SourceScorecardActivity,
+		"source_ai_highlights":       result.SourceAIHighlights,
+		"target_calls":               result.TargetCalls,
+		"target_users":               result.TargetUsers,
+		"target_transcripts":         result.TargetTranscripts,
+		"target_transcript_segments": result.TargetTranscriptSegments,
+		"target_context_objects":     result.TargetContextObjects,
+		"target_context_fields":      result.TargetContextFields,
+		"target_gong_settings":       result.TargetGongSettings,
+		"target_scorecards":          result.TargetScorecards,
+		"target_scorecard_activity":  result.TargetScorecardActivity,
+		"target_ai_highlights":       result.TargetAIHighlights,
+		"removed_scorecard_activity": result.RemovedScorecardActivity,
+		"removed_ai_highlights":      result.RemovedAIHighlights,
+		"target_suppressed_rows":     result.TargetSuppressedRows,
+		"suppressed_call_count":      int64(result.SuppressedCallCount),
+	}
+	rowCountsJSON, err := json.Marshal(rowCounts)
+	if err != nil {
+		return nil, err
+	}
+	var marker ServingDBRefreshMarker
+	var rowCountsText []byte
+	if err := s.db.QueryRowContext(ctx, `INSERT INTO serving_refresh_log(
+	refreshed_at, source_data_fingerprint, target_data_fingerprint,
+	policy_config_sha256, source_calls, target_calls, removed_calls,
+	suppressed_call_count, row_counts_json
+) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+RETURNING id, refreshed_at, source_data_fingerprint, target_data_fingerprint,
+	policy_config_sha256, source_calls, target_calls, removed_calls,
+	suppressed_call_count, row_counts_json::text`,
+		refreshedAt,
+		result.SourceDataFingerprint,
+		result.TargetDataFingerprint,
+		result.PolicyConfigSHA256,
+		result.SourceCalls,
+		result.TargetCalls,
+		result.RemovedCalls,
+		result.SuppressedCallCount,
+		string(rowCountsJSON),
+	).Scan(
+		&marker.ID,
+		&marker.RefreshedAt,
+		&marker.SourceDataFingerprint,
+		&marker.TargetDataFingerprint,
+		&marker.PolicyConfigSHA256,
+		&marker.SourceCalls,
+		&marker.TargetCalls,
+		&marker.RemovedCalls,
+		&marker.SuppressedCallCount,
+		&rowCountsText,
+	); err != nil {
+		return nil, err
+	}
+	marker.RowCountsJSON = json.RawMessage(rowCountsText)
+	return &marker, nil
+}
+
+// LatestServingRefreshMarker returns the most recent successful serving
+// refresh marker for diagnostics. sql.ErrNoRows means the database has no
+// durable proof that it was built by governance refresh.
+func (s *Store) LatestServingRefreshMarker(ctx context.Context) (*ServingDBRefreshMarker, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("postgres store is not open")
+	}
+	var marker ServingDBRefreshMarker
+	var rowCountsText []byte
+	err := s.db.QueryRowContext(ctx, `SELECT id, refreshed_at, source_data_fingerprint,
+	target_data_fingerprint, policy_config_sha256, source_calls, target_calls,
+	removed_calls, suppressed_call_count, row_counts_json::text
+FROM serving_refresh_log
+ORDER BY refreshed_at DESC, id DESC
+LIMIT 1`).Scan(
+		&marker.ID,
+		&marker.RefreshedAt,
+		&marker.SourceDataFingerprint,
+		&marker.TargetDataFingerprint,
+		&marker.PolicyConfigSHA256,
+		&marker.SourceCalls,
+		&marker.TargetCalls,
+		&marker.RemovedCalls,
+		&marker.SuppressedCallCount,
+		&rowCountsText,
+	)
+	if err != nil {
+		return nil, err
+	}
+	marker.RowCountsJSON = json.RawMessage(rowCountsText)
+	return &marker, nil
 }
 
 // validateRefreshServingDBURLs requires both URLs to be non-empty and to point
@@ -327,6 +468,9 @@ governance_suppressed_calls,
 governance_ingest_skipped_calls
 RESTART IDENTITY CASCADE`); err != nil {
 		return counts, fmt.Errorf("truncate target serving tables: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM serving_refresh_log`); err != nil {
+		return counts, fmt.Errorf("clear prior serving refresh marker: %w", err)
 	}
 
 	if err := copyServingUsers(ctx, sourceDB, tx, &counts); err != nil {

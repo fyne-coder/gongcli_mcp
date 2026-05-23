@@ -632,6 +632,9 @@ func ScopedReaderColumnSelectGrants() []ColumnSelectGrant {
 		{Table: "postgres_read_model_state", Column: "orphan_fact_count"},
 		{Table: "postgres_read_model_state", Column: "stale_reason"},
 		{Table: "postgres_read_model_state", Column: "updated_at"},
+		{Table: "call_read_model_diagnostics", Column: "object_limit_exceeded"},
+		{Table: "call_read_model_diagnostics", Column: "field_limit_exceeded"},
+		{Table: "call_read_model_diagnostics", Column: "last_error"},
 	}
 	for _, column := range []string{"id", "scope", "sync_key", "cursor", "from_value", "to_value", "request_context", "status", "started_at", "finished_at", "records_seen", "records_written", "error_text"} {
 		grants = append(grants, ColumnSelectGrant{Table: "gongmcp_sync_runs", Column: column})

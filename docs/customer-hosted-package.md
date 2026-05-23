@@ -13,6 +13,7 @@ of the package supports deployment, security review, support, and operations.
 | Developer/agent source map | [Developer orientation](developer-orientation.md) |
 | Docker image or source-deployable package | [Docker deployment](docker.md), [Release versioning](release.md), `Dockerfile`, `.github/workflows/publish-images.yml` |
 | Simple single-VM Postgres setup | [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md), [Docker deployment](docker.md#single-vm-postgres-starter) |
+| Kubernetes Postgres pilot starter | [`deploy/kubernetes/postgres-pilot`](../deploy/kubernetes/postgres-pilot/README.md) |
 | Terraform examples | Non-production starters in [`deploy/terraform`](../deploy/terraform/README.md) |
 | Environment-variable config | [Configuration surfaces](configuration-surfaces.md), `.env.example`, [Docker deployment](docker.md) |
 | Read-only mode by default | [Security model](security-model.md), [Enterprise deployment](enterprise-deployment.md) |
@@ -73,7 +74,10 @@ Default enterprise posture:
    [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md).
    For the simplest one-host customer-managed install, use
    [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md) as
-   the Compose scaffold for that same boundary.
+   the Compose scaffold for that same boundary. For customer-managed
+   Kubernetes pilots, use
+   [`deploy/kubernetes/postgres-pilot`](../deploy/kubernetes/postgres-pilot/README.md)
+   as the Kustomize starter.
 3. Pin the image tag/digest from a tagged release. If an operator deliberately
    uses an untagged branch build, record it as customer-ready pilot code, not a
    versioned GA release.
@@ -82,7 +86,8 @@ Default enterprise posture:
 5. Sync the approved date window, build the read model, and import only a
    reviewed customer profile that passes
    `gongctl profile validate --ga-readiness`.
-6. Refresh the redacted serving DB from the source DB and retain a
+6. Refresh the redacted serving DB from the source DB with
+   `gongctl deploy postgres-refresh` and retain a
    source-vs-serving redaction audit artifact. Store only non-secret evidence
    paths and counts in acceptance artifacts.
 7. Start `gongmcp` against the scoped Postgres reader with the
@@ -90,10 +95,14 @@ Default enterprise posture:
    tools; analyst operations remain routed behind the facade.
 8. Expose HTTPS `/mcp` through the customer gateway/OAuth broker, or connect a
    local approved MCP host.
-9. Run `scripts/postgres-ga-acceptance-smoke.sh` with `READER_DB_URL` and
+9. Run `gongctl doctor postgres-deploy --preset business-workbench` and
+   `gongctl sync status --preset business-workbench` against the scoped reader.
+   Kubernetes operators can use the starter smoke Job without a business-user
+   MCP host session.
+10. Run `scripts/postgres-ga-acceptance-smoke.sh` with `READER_DB_URL` and
    `REDACTION_AUDIT_JSON` or compact `REDACTION_AUDIT_*` fields. Save the JSON
    report and Markdown summary.
-10. Connect the first business user only after `fail` checks are clear and any
+11. Connect the first business user only after `fail` checks are clear and any
     `degraded` checks have an owner, caveat, and remediation path.
 
 Current customer-ready boundary: tagged releases at `v0.4.0` or later are

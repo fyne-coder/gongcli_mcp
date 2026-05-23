@@ -43,6 +43,8 @@ You install, secure, schedule, and maintain it.
   — Kubernetes first-run Jobs, recurring sync, image args, MCP smoke
 - [Single-VM Postgres starter](../deploy/single-vm-postgres/README.md) —
   practical all-on-one-VM Compose shape for small company setups
+- [Kubernetes Postgres pilot starter](../deploy/kubernetes/postgres-pilot/README.md)
+  — Kustomize starter for customer-managed Kubernetes and Postgres pilots
 - [Scheduling cache refreshes](scheduling.md) — cron / systemd / launchd /
   K8s CronJob templates
 - [Configuration surfaces](configuration-surfaces.md) — what is YAML, what
@@ -95,6 +97,8 @@ You decide pilot scope, approve profiles, and own the business outcome.
   — AI governance config shape
 - [deploy/single-vm-postgres/](../deploy/single-vm-postgres/README.md) —
   simple one-VM Postgres deployment scaffold
+- [deploy/kubernetes/postgres-pilot/](../deploy/kubernetes/postgres-pilot/README.md)
+  — Kustomize scaffold for customer-managed Kubernetes pilots
 - [docs/examples/medical-device-saas/](examples/medical-device-saas/) —
   end-to-end synthetic example dataset
 

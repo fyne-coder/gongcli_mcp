@@ -19,6 +19,10 @@ reader, and read-only `gongmcp` boundary.
 For Kubernetes operator Jobs, first-run DB initialization, recurring sync
 cadence, image `args`, and non-user MCP smoke tests, use the
 [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md).
+For customer-managed Kubernetes pilots, use
+[`deploy/kubernetes/postgres-pilot`](../deploy/kubernetes/postgres-pilot/README.md)
+as the Kustomize starter and run its operator smoke Job before business-user
+access.
 
 ## 1. Choose The Pilot Surface
 
@@ -65,6 +69,19 @@ gongctl mcp postgres-reader-apply \
 Review the dry run, then rerun with `--apply` if approved. Use
 `--preset business-pilot` only for the legacy narrow aggregate/status pilot
 lane. Repeat with `--preset analyst` for approved analyst sessions.
+
+For the default business-workbench serving refresh, prefer the single operator
+command:
+
+```bash
+gongctl deploy postgres-refresh \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --config /run/secrets/ai-governance.yaml \
+  --preset business-workbench \
+  --role ROLE \
+  --database DB
+```
 
 ## 4. Review The Customer Profile
 

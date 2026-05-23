@@ -35,7 +35,8 @@ sudo install -m 600 /dev/null /srv/gongctl/secrets/ai-governance.yaml
 
 Edit `/srv/gongctl/single-vm.env` and the secret files with customer-approved
 values. Keep the env file and secret files out of Git and out of shared support
-bundles.
+bundles. Replace the `vX.Y.Z` image placeholders with a pinned release tag or
+digest before running `docker compose pull` or starting services.
 
 Render the Compose config before starting containers:
 
@@ -83,7 +84,12 @@ docker compose \
   run --rm refresh-serving-db
 ```
 
-Apply scoped reader grants on the serving DB:
+That profile runs the consolidated operator command with the required source
+URL, target URL, governance config, preset, role, and database inputs already
+wired into the service environment.
+
+Apply scoped reader grants on the serving DB separately only when you did not
+use `deploy postgres-refresh` or when repairing grants:
 
 ```bash
 docker compose \
@@ -116,6 +122,9 @@ after taking approved backups.
 
 Before connecting business users:
 
+- run `gongctl doctor postgres-deploy --preset business-workbench`
+- run `gongctl sync status --preset business-workbench` against the scoped
+  reader URL
 - run the GA acceptance smoke from the Postgres deployment runbook
 - verify the HTTPS/OAuth/SSO gateway denies unauthenticated users
 - verify forged identity headers are stripped or ignored by the gateway

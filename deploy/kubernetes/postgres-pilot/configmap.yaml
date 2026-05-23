@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gongctl-postgres-pilot-config
+data:
+  GONGMCP_TOOL_PRESET: business-workbench
+  GONGMCP_READER_ROLE: gongmcp_business_workbench_reader
+  GONGMCP_DATABASE_NAME: gongctl_mcp
+  GONGMCP_POSTGRES_REDACTED_SERVING_DB: "1"
+  GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS: "1"
+  GONGMCP_ALLOWED_ORIGINS: https://approved-client.example.com
+  GONGCTL_DEPLOY_SMOKE_MAX_MARKER_AGE: 24h
