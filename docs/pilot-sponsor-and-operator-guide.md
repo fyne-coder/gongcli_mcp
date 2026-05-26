@@ -271,7 +271,10 @@ Use the remote HTTPS MCP connector path documented in
 [Remote MCP auth and connector setup](remote-mcp-auth.md) when ChatGPT is the
 host. The operator should expose a reviewed `/mcp` endpoint with an approved
 tool preset or allowlist and should verify `initialize`, `tools/list`, and at
-least one `tools/call` before business use.
+least one `tools/call` before business use. For hosted ChatGPT/OpenAI
+connector paths, that endpoint must be reachable from provider infrastructure
+over public HTTPS; private-network-only or localhost URLs are for local MCP
+clients only.
 
 Starter prompt:
 
@@ -291,9 +294,12 @@ guessing from earlier output.
 
 For local Claude Desktop, use stdio MCP over a read-only SQLite mount or local
 database path. For Claude remote add-by-URL, use the same remote `/mcp` OAuth
-or bearer-gateway path as other remote clients. The business contract is the
-same either way: reviewed cache, approved preset, bounded result sizes, and no
-live Gong pull from the host.
+or bearer-gateway path as other remote clients. Hosted Claude/Anthropic
+connector paths require provider-reachable public HTTPS; local stdio,
+localhost, VPN-only, or private-DNS endpoints apply only when the client runs
+inside the company boundary. The business contract is the same either way:
+reviewed cache, approved preset, bounded result sizes, and no live Gong pull
+from the host.
 
 Starter prompt:
 

@@ -442,6 +442,9 @@ https://mcp.example.com/mcp
 Before user access, verify:
 
 - HTTPS is valid.
+- For hosted ChatGPT/OpenAI or Claude/Anthropic connector paths, public DNS and
+  TLS resolve from outside the company network and the provider backend can
+  reach the gateway URL.
 - unauthenticated `/mcp` is denied.
 - blocked users are denied.
 - approved users can authenticate.

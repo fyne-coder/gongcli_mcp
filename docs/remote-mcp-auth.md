@@ -6,6 +6,11 @@ This guide explains how a customer can expose `gongmcp` as a remote HTTPS MCP
 endpoint for approved users without turning this repo into a vendor-hosted
 service.
 
+For the DevOps-facing deployment checklist, infrastructure requirements, smoke
+test sequence, and security guardrails, start with
+[Remote MCP deployment requirements](remote-mcp-deployment-requirements.md).
+This document focuses on auth boundaries, broker options, and connector setup.
+
 Current boundary:
 
 - `gongmcp` serves read-only MCP over an existing customer-controlled cache:
@@ -16,6 +21,46 @@ Current boundary:
   broker, or application layer in front of `gongmcp`.
 - The writable `gongctl` sync job remains separate and should not be exposed to
   ChatGPT, Claude, or end-user MCP clients.
+
+## Hosted Client Reachability Requirement
+
+Hosted chat clients and hosted API MCP connectors do not call `gongmcp` from
+the user's browser or laptop. ChatGPT Apps/connectors, OpenAI remote MCP tool
+calls, Claude.ai connectors, and Anthropic-hosted MCP connector calls originate
+from the provider's infrastructure. For those paths, the customer edge MCP
+endpoint must be reachable from the public internet over HTTPS, usually at a
+URL like:
+
+```text
+https://gong-mcp.example.com/mcp
+```
+
+A `localhost`, stdio-only, RFC1918/private-network, VPN-only, or internal DNS
+endpoint will not work for those hosted connector paths unless the provider's
+backend can reach it. "Public" does not mean exposing the raw internal MCP
+process. The production shape should be:
+
+```text
+Hosted MCP client
+  -> public HTTPS /mcp at the customer edge
+  -> OAuth/MCP broker, API gateway, tunnel, WAF, or reverse proxy
+  -> internal bearer-authenticated HTTP
+  -> private gongmcp service
+  -> read-only SQLite cache or Postgres serving DB
+```
+
+Cloudflare Tunnel, ngrok, or an equivalent managed tunnel is acceptable for a
+short lab or demo when it terminates at, or forwards through, an auth boundary.
+Do not tunnel directly to unauthenticated `gongmcp`. Production customer
+deployments should prefer the company's standard public edge, identity,
+logging, rate-limit, and secret-rotation controls. Keep the upstream `gongmcp`
+service private and authenticated with an internal bearer token unless a future
+native OAuth mode is implemented and tested.
+
+Local clients are different. Claude Desktop, Claude Code, Codex, Cursor, MCP
+Inspector, or a custom MCP client running inside the company network can use
+stdio, localhost, or private HTTP when they run in the same trust boundary as
+the MCP server.
 
 ## Implemented Now
 
@@ -78,6 +123,10 @@ client, confirm the endpoint provides:
 - PKCE support for public clients
 - dynamic client registration or a documented static-client fallback supported
   by the target MCP client
+- for Claude custom connectors specifically, one of the supported connector
+  auth modes such as Dynamic Client Registration, Client ID Metadata Document,
+  or Anthropic-held client credentials; user-pasted static bearer tokens are not
+  a Claude.ai custom connector auth mode
 - scoped access tokens with issuer, audience/resource, expiry, and scope
   validation
 - refresh-token or offline-token policy that matches the target client behavior
@@ -114,18 +163,31 @@ and tool calls accepted by the MCP server.
 
 Client behavior differs. ChatGPT developer-mode connectors, Claude remote
 add-by-URL, MCP Inspector, and custom clients can vary in redirect URI shape,
-requested scopes, refresh-token behavior, dynamic-client-registration support,
+requested scopes, refresh-token behavior, supported client-registration modes,
 and `_meta` contents. Claude Desktop local stdio MCP is different: it does not
-use this remote OAuth path.
+use this remote OAuth path. Claude custom connectors can use remote MCP through
+Claude.ai infrastructure, but the auth server still needs a Claude-supported
+OAuth registration or client-credential strategy before Claude will send bearer
+tokens to `/mcp`.
 
 Protocol references:
 
 - MCP Streamable HTTP transport:
   <https://modelcontextprotocol.io/specification/2025-11-25/basic/transports>
+- OpenAI Apps SDK quickstart for adding a connector to ChatGPT:
+  <https://developers.openai.com/apps-sdk/quickstart#add-your-app-to-chatgpt>
 - OpenAI MCP server guide:
   <https://developers.openai.com/api/docs/mcp>
 - ChatGPT developer mode guide:
   <https://developers.openai.com/api/docs/guides/developer-mode>
+- Anthropic MCP connector limitations:
+  <https://docs.anthropic.com/en/docs/agents-and-tools/mcp-connector>
+- Claude connector authentication:
+  <https://claude.com/docs/connectors/building/authentication>
+- Claude Code MCP local and remote transport setup:
+  <https://docs.anthropic.com/en/docs/claude-code/mcp>
+- JumpCloud OIDC SSO:
+  <https://jumpcloud.com/support/sso-with-oidc>
 - MCP authorization specification:
   <https://modelcontextprotocol.io/specification/draft/basic/authorization>
 
@@ -170,6 +232,10 @@ is useful for curl, MCP Inspector, internal gateway testing, and controlled
 service-to-service pilots. If the approved client sends an `Origin` header,
 that origin must match `GONGMCP_ALLOWED_ORIGINS`; unexpected origins receive
 `403 Forbidden` before auth or tool dispatch.
+
+Bearer-only HTTP is not a production substitute for the public edge
+gateway/broker when the endpoint is reachable from the internet. Use it as the
+private upstream leg or for controlled internal tests.
 
 ## Option B: OAuth Broker In Front Of `gongmcp`
 
@@ -248,19 +314,23 @@ starters under `deploy/remote-mcp-auth/`:
 - [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md)
 
 The JumpCloud and Cognito Compose files are static-client/JWT-validation
-fallback examples, not full OAuth brokers. In those examples, `/mcp` is handled
-by the shim, which validates a bearer JWT and then forwards the request to
-`gongmcp` with the internal bearer token. Trusted proxy identity headers are
-disabled by default; enable `TRUST_PROXY_HEADERS=1` only where a reviewed
-upstream gateway overwrites those headers, and set `TRUST_PROXY_CIDRS` to that
-exact gateway source range. The bundled Caddy `/mcp` route strips inbound proxy
-identity headers before forwarding. The included `oauth2-proxy` service is a
-browser/session helper for rehearsing the IdP login path; it does not add
-Dynamic Client Registration or
-issue MCP-scoped access tokens for ChatGPT/Claude. Use these Compose examples
-only when the target MCP client can be configured to use a pre-registered/static
-client or when an upstream gateway already performs the MCP-compatible OAuth
-work.
+fallback examples, not full OAuth brokers. In those examples, `/mcp` is intended
+to be handled by a shim or broker that validates a bearer JWT and then forwards
+the request to `gongmcp` with the internal bearer token. Provider details still
+matter: a production adapter must read the provider's OIDC discovery document
+and use its `jwks_uri` instead of assuming a Keycloak-style certificate path.
+For JumpCloud, verify the issuer string, access-token format, audience/client
+claim, and JWKS endpoint before treating JWT validation as working. Trusted
+proxy identity headers are disabled by default; enable `TRUST_PROXY_HEADERS=1`
+only where a reviewed upstream gateway overwrites those headers, and set
+`TRUST_PROXY_CIDRS` to that exact gateway source range. The bundled Caddy `/mcp`
+route strips inbound proxy identity headers before forwarding. The included
+`oauth2-proxy` service is a browser/session helper for rehearsing the IdP login
+path; it does not add Dynamic Client Registration, Client ID Metadata Document
+support, or MCP-scoped access-token issuance for ChatGPT/Claude. Use these
+Compose examples only when the target MCP client can use a supported
+pre-registered/static OAuth client path or when an upstream gateway already
+performs the MCP-compatible OAuth work.
 
 For the fully MCP-shaped broker path, use the Cloudflare Worker example. It uses
 Cloudflare's OAuth Provider Library for Dynamic Client Registration, PKCE, token
@@ -329,7 +399,16 @@ Minimum scopes to define for a first read-only pilot:
 - `gongmcp:aggregate`
 - `gongmcp:search`
 
-Keep sync/admin operations out of MCP scopes.
+The broker enforces these scopes today and maps approved scopes to the internal
+`gongmcp` preset or allowlist. Keep sync/admin operations out of MCP scopes.
+
+If Claude probes `/.well-known/oauth-protected-resource` successfully and then
+POSTs `/mcp` without an `Authorization` header, do not debug that as a JumpCloud
+password problem. It usually means Claude found metadata but could not complete
+a supported registration/token flow, or the edge route is still sending `/mcp`
+to a browser-session proxy instead of an MCP auth broker. `oauth2-proxy` can be
+useful for browser login rehearsal, especially with PKCE S256 enabled where the
+provider supports it, but it is not the full MCP OAuth broker.
 
 ## AWS Cognito Pattern
 
@@ -406,6 +485,7 @@ fall into one of these buckets:
 | Symptom | Likely cause | What to check |
 | --- | --- | --- |
 | Dynamic client registration rejected | IdP/broker registration policy blocked the MCP client | trusted hosts, redirect URI policy, allowed scopes, client auth method |
+| Metadata probes succeed, then `/mcp` gets unauthenticated `401` or `403` | client could not complete a supported registration/token flow, or `/mcp` is still routed to a browser-session proxy such as `oauth2-proxy` | auth server metadata for DCR/CIMD/static client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
 | Browser login succeeds, token exchange fails | refresh/offline token policy or client grant policy is missing | `offline_access`, refresh-token grant, public/confidential client settings |
 | Authenticated `/mcp` gets 401 | token issuer, audience/resource, expiry, signature, or group claim is wrong | gateway/shim logs and decoded access token claims |
 | Tools import but first tool call fails | MCP JSON payload compatibility problem | `_meta` tolerance, argument schema, result size, tool allowlist |
@@ -449,6 +529,9 @@ Expected:
 ## Backlog For Native OAuth
 
 Native OAuth in `gongmcp` should be a separate implementation slice.
+Use maintained OAuth/OIDC and JWT/JWKS libraries for discovery, signature
+verification, claim validation, refresh handling, and cache behavior; do not
+extend the lab shim's hand-rolled token parsing into a production auth layer.
 
 Likely scope:
 

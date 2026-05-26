@@ -47,6 +47,11 @@ Operational implications:
 - `gongmcp` should not be given Gong API secrets.
 - Stdio Docker MCP runs should use a read-only data mount and `--network none`;
   HTTP MCP runs need only the MCP port exposed through the approved proxy path.
+- Hosted ChatGPT/OpenAI or Claude/Anthropic connector access requires the proxy
+  or broker's `/mcp` URL to be reachable from the provider's infrastructure over
+  public HTTPS. This public URL should terminate at the customer edge only; the
+  upstream `gongmcp` process should remain private, authenticated, and connected
+  only to a read-only cache or scoped reader URL.
 - Shared hosts should avoid long-lived plaintext environment variables when possible because container inspection can expose them.
 - HTTP MCP bearer tokens are customer-managed deployment secrets. Prefer mounted
   secret files or platform secret managers over raw command-line flags.

@@ -5,11 +5,18 @@ add-by-URL, MCP Inspector, or a custom client fails against an HTTPS `/mcp`
 endpoint.
 
 Local Claude Desktop stdio MCP does not use this OAuth path.
+For hosted ChatGPT/OpenAI or Claude/Anthropic connector paths, the HTTPS
+`/mcp` endpoint must be reachable from the provider's infrastructure, not only
+from the user's browser, laptop, VPN, or private network.
+For pre-deploy infrastructure, auth split, and the ordered smoke test sequence,
+see [Remote MCP deployment requirements](../remote-mcp-deployment-requirements.md).
 
 ## Failure Ladder
 
 Check the path in order:
 
+0. Public DNS and TLS resolve from outside the company network when the target
+   client is a hosted connector.
 1. OAuth protected-resource metadata resolves.
 2. Authorization-server metadata resolves.
 3. The client can register dynamically, or the documented static client exists.
@@ -69,8 +76,9 @@ LAB_PUBLIC_BASE_URL=https://lab.example.com \
 | Symptom | Likely cause | Next check |
 | --- | --- | --- |
 | Dynamic client registration rejected | IdP or broker registration policy blocked the client | trusted hosts, redirect URI, client auth method, allowed scopes |
+| Metadata probes succeed, then Claude or another hosted client POSTs `/mcp` without auth and gets `401`/`403` | the client could not complete a supported registration/token flow, or `/mcp` is routed to a browser-session proxy instead of the MCP broker | authorization-server metadata for DCR/CIMD/static-client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
 | Login succeeds but token exchange fails | refresh/offline token policy, grant type, or client type mismatch | IdP events around code-to-token exchange |
-| Authenticated `/mcp` gets 401 | token does not match gateway validation | issuer, audience/resource, expiry, signature, groups, email allowlist |
+| Authenticated `/mcp` gets 401 | token does not match gateway validation | issuer, audience/resource, expiry, signature, groups, email allowlist, OIDC `jwks_uri` discovery |
 | Tools import but `get_sync_status` fails | MCP JSON/tool-call compatibility issue | server logs for `_meta`, unknown fields, result size, or tool allowlist |
 | A tool is missing | preset or allowlist is narrower than expected | `tools/list`, `GONGMCP_TOOL_PRESET`, `GONGMCP_TOOL_ALLOWLIST` |
 | Connector worked before a deploy and now needs OAuth setup again | full lab deploy reset the disposable Keycloak volume and dynamic clients | reconnect once, then use `LAB_DEPLOY_MODE=app-only` for normal MCP changes |
@@ -86,6 +94,9 @@ For any IdP or broker, prove these final properties:
 - requested scopes and refresh/offline-token behavior are allowed
 - access tokens include the MCP resource audience
 - access tokens include the user/group/role/email claims the gateway validates
+- JWT validation uses the provider's OIDC discovery `jwks_uri`; do not assume a
+  Keycloak-style certificate endpoint for JumpCloud, Cognito, Okta, Entra, or
+  another IdP
 - the gateway rejects unauthenticated requests with the right `401` challenge
 - the MCP server tolerates reserved protocol extension fields such as `_meta`
 

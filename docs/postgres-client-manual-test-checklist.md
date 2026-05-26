@@ -25,6 +25,10 @@ counts, tool names, and reviewed evidence paths only.
 ## 1. Preconditions
 
 - MCP URL is HTTPS and ends in `/mcp`.
+- For hosted ChatGPT/OpenAI or Claude/Anthropic connector testing, the
+  gateway/edge MCP URL is reachable from the public internet by the provider
+  backend, not only from the tester's browser, VPN, or private network; the
+  upstream `gongmcp` service remains private behind that gateway.
 - Authentication is enabled through the approved gateway.
 - `gongmcp` receives only the redacted serving DB reader URL.
 - `GONGMCP_TOOL_PRESET=business-workbench` for the recommended client
