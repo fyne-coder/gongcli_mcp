@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-05-26
+
+- Added a DevOps-oriented remote MCP deployment requirements guide covering
+  hosted ChatGPT/Claude reachability, local/private MCP modes, required
+  infrastructure, ownership boundaries, auth responsibilities, configuration
+  inventory, smoke tests, common failure modes, and security guardrails.
+- Clarified the public gateway/broker versus private upstream `gongmcp`
+  boundary across the README, deployment, quickstart, security, and runbook
+  docs so hosted connectors do not expose raw MCP services directly.
+- Hardened JumpCloud/Cognito `oauth2-proxy` guidance with Dynamic Client
+  Registration and Client ID Metadata caveats, OIDC discovery and `jwks_uri`
+  requirements, metadata-success troubleshooting, unauthenticated POST failure
+  triage, and explicit bearer-token validation expectations.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.5.1`.
+- Fixed the Postgres backup/restore smoke script so container-local Postgres
+  client commands use explicit TCP instead of relying on Unix socket defaults.
+
 ## 0.5.0 - 2026-05-23
 
 - Added deployment simplification for customer-hosted Postgres/Kubernetes

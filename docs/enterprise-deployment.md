@@ -31,6 +31,16 @@ support-access policy. The complete customer-hosted review packet is indexed in
 ChatGPT connector setup are covered in
 [Remote MCP auth and connector setup](remote-mcp-auth.md).
 
+Hosted connector deployments have an additional reachability requirement:
+ChatGPT Apps/connectors, OpenAI remote MCP tool calls, Claude.ai connectors,
+and Anthropic-hosted MCP connector calls must reach the MCP endpoint from the
+provider's infrastructure over public HTTPS. A private `localhost`, VPN-only,
+internal-DNS, or stdio-only endpoint can still work for local clients such as
+Claude Desktop, Claude Code, Codex, or a company-internal MCP client, but it
+will not satisfy hosted connector setup. Expose only the customer edge gateway
+or broker publicly; keep the upstream `gongmcp` service private and
+bearer-authenticated.
+
 Current limitations still matter for deployment approval: `gongmcp` can narrow
 its tool surface with an allowlist and can require bearer tokens for HTTP mode,
 and `gongctl` now has a restricted company mode for high-risk CLI commands, but
@@ -226,6 +236,9 @@ flowchart LR
 - Mount the SQLite cache read-only.
 - Do not provide Gong credentials to the MCP process.
 - Refresh happens upstream through operator-owned `gongctl` jobs only.
+- This stdio-only shape works for local MCP clients. It does not satisfy
+  hosted ChatGPT/OpenAI or Claude/Anthropic connector setup, which requires a
+  provider-reachable public HTTPS edge endpoint.
 
 ### 4. Private HTTP MCP pilot
 
@@ -254,6 +267,10 @@ flowchart LR
   company proxy/gateway or equivalent private-network boundary. Use `/healthz`
   for infrastructure health checks; do not use MCP JSON-RPC as the health
   probe.
+- For hosted ChatGPT/OpenAI or Claude/Anthropic connector paths, the gateway
+  URL itself must be reachable over public HTTPS from the provider backend.
+  A private-network-only gateway is appropriate only for clients running inside
+  the company boundary.
 - Set `--allowed-origins` or `GONGMCP_ALLOWED_ORIGINS` for every non-local HTTP
   deployment so browser-capable MCP clients cannot bypass the proxy boundary
   through DNS rebinding.

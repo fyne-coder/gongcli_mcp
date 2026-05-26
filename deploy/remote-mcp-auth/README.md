@@ -3,6 +3,11 @@
 These examples show the auth boundary in front of `gongmcp` for customer-hosted
 remote MCP pilots.
 
+Before choosing an example, read the operator checklist in
+[Remote MCP deployment requirements](../../docs/remote-mcp-deployment-requirements.md).
+It covers hosted-connector vs local-client paths, IdP vs broker
+responsibilities, and the smoke test sequence.
+
 The common shape is:
 
 ```text
@@ -14,6 +19,17 @@ Remote MCP client
   -> read-only governed SQLite cache in these examples
 ```
 
+Hosted ChatGPT/OpenAI and Claude/Anthropic connector paths require that public
+HTTPS `/mcp` URL because provider infrastructure initiates the request. Local
+stdio, localhost HTTP, private DNS, or VPN-only URLs are valid only for MCP
+clients running inside the company boundary.
+
+If every MCP client runs inside the company boundary, you may not need these
+remote-auth examples. Use stdio or a loopback/private HTTP bridge for Claude
+Desktop, Claude Code, Codex, Cursor, MCP Inspector, or custom internal clients,
+then add this gateway/broker layer only when hosted connectors or cross-boundary
+clients need it.
+
 Use these examples as implementation starters, not production identity-provider
 defaults. Each customer still needs to review redirect URI policy, token
 lifetimes, refresh/offline-token behavior, allowed users/groups, logging,
@@ -24,15 +40,18 @@ Important distinction:
 - `cloudflare-worker/` is the only example here shaped as an MCP-facing OAuth
   broker with Dynamic Client Registration.
 - `jumpcloud/` and `cognito/` are static-client/JWT-validation gateway
-  examples. Their `/mcp` route is handled by the shim, which validates an
-  incoming bearer JWT before forwarding to `gongmcp`. Trusted proxy identity
-  headers are disabled by default; enable `TRUST_PROXY_HEADERS=1` only behind a
-  reviewed upstream gateway that overwrites those headers, and set
-  `TRUST_PROXY_CIDRS` to that exact gateway source range. The bundled Caddy
-  `/mcp` route strips inbound copies. The included `oauth2-proxy` service is a
-  browser/session
-  helper for rehearsing the IdP login path; it does not make JumpCloud or Cognito
-  provide Dynamic Client Registration or MCP-scoped access-token issuance.
+  examples. Their `/mcp` route is handled by a shim/broker that validates an
+  incoming bearer JWT before forwarding to `gongmcp`; when adapting that shim to
+  a real IdP, fetch keys from the provider's OIDC discovery `jwks_uri` and
+  verify issuer, audience, token format, and group/email claims instead of
+  assuming one provider's certificate path. Trusted proxy identity headers are
+  disabled by default; enable `TRUST_PROXY_HEADERS=1` only behind a reviewed
+  upstream gateway that overwrites those headers, and set `TRUST_PROXY_CIDRS` to
+  that exact gateway source range. The bundled Caddy `/mcp` route strips inbound
+  proxy identity headers before forwarding. The included `oauth2-proxy` service
+  is a browser/session helper for rehearsing the IdP login path; it does not
+  make JumpCloud or Cognito provide Dynamic Client Registration, Client ID
+  Metadata Document support, or MCP-scoped access-token issuance.
 
 ## Which Example To Use
 
@@ -45,6 +64,13 @@ Important distinction:
 JumpCloud and Cognito are identity providers in these examples. They do not
 replace the MCP broker requirement for clients that require Dynamic Client
 Registration or MCP-specific token issuance.
+
+For Claude custom connectors, a successful metadata probe followed by
+unauthenticated `/mcp` POSTs normally means Claude could not complete a supported
+registration/token flow, or the public edge is still routing `/mcp` to a
+browser-session proxy. Route `/mcp` to the MCP broker/shim, keep `oauth2-proxy`
+limited to browser-login rehearsal paths, and use the Cloudflare Worker example
+when the client needs a DCR-capable broker.
 
 ## Files
 

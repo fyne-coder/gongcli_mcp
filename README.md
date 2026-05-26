@@ -57,6 +57,12 @@ Two binaries:
   (Claude Desktop, Cursor, …) or HTTP (private pilots). Never calls Gong
   directly.
 
+Local MCP clients such as Claude Desktop, Claude Code, Codex, Cursor, MCP
+Inspector, or custom internal clients can use stdio, localhost, or private HTTP
+inside the company boundary. Hosted ChatGPT/OpenAI and Claude/Anthropic
+connector paths require a public HTTPS `/mcp` URL at the customer edge; the
+upstream `gongmcp` process should remain private and authenticated.
+
 Two cache backends:
 
 - **SQLite** — default for local / single-host use. Full feature parity.
@@ -241,18 +247,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#2b-postgres-shared-con
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.0 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.0 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.1 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.1 sync status --db /data/gong.db
 ```
 
-The `v0.5.0` image references require the `v0.5.0` tag workflow to have
+The `v0.5.1` image references require the `v0.5.1` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.0 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.1 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
@@ -770,9 +776,17 @@ GONGMCP_TOOL_PRESET=operator-smoke \
   gongmcp --http 127.0.0.1:8080 --auth-mode none --dev-allow-no-auth-localhost --db /srv/gongctl/gong.db
 ```
 
-Non-local unauthenticated HTTP is not supported. Binding HTTP to a non-local
-address requires bearer auth plus `--allow-open-network`; use that override
-only behind an approved TLS/private-network boundary. Bearer tokens
+For hosted ChatGPT/OpenAI or Claude/Anthropic connector paths, the proxy or
+gateway URL must be reachable from the provider's infrastructure over public
+HTTPS. Localhost, stdio, VPN-only, and private-DNS endpoints remain valid only
+for MCP clients running inside the company boundary. Public reachability should
+terminate at the customer edge; keep the upstream `gongmcp` process private and
+bearer-authenticated.
+
+Non-local unauthenticated HTTP is not supported. Binding `gongmcp` HTTP to a
+non-local address requires bearer auth plus `--allow-open-network`; use that
+override only on a private or management network behind the approved gateway,
+not as a direct public internet listener. Bearer tokens
 are owned by the customer/operator and should come from an environment
 variable, secret file, systemd environment file, Docker secret, Kubernetes
 Secret, or company secret manager. Tokens must be at least 32 characters and

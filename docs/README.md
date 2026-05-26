@@ -49,6 +49,11 @@ You install, secure, schedule, and maintain it.
   K8s CronJob templates
 - [Configuration surfaces](configuration-surfaces.md) — what is YAML, what
   is flags, what is env
+- [Remote MCP deployment requirements](remote-mcp-deployment-requirements.md)
+  — DevOps checklist for hosted ChatGPT/Claude connectors vs local MCP,
+  infrastructure, smoke tests, and security guardrails
+- [Remote MCP auth and connector setup](remote-mcp-auth.md) — OAuth broker
+  options and connector configuration
 
 ## Security reviewer
 
@@ -65,6 +70,8 @@ You review the data boundary, credential flow, and capability model.
 - [Customer-hosted package](customer-hosted-package.md)
 - [Remote MCP auth and connector setup](remote-mcp-auth.md)
 - [Remote MCP OAuth troubleshooting](runbooks/remote-mcp-oauth-troubleshooting.md)
+  — hosted ChatGPT/OpenAI and Claude/Anthropic connector reachability,
+  metadata, token, and first-tool-call failures
 
 ## Pilot sponsor / RevOps owner
 
