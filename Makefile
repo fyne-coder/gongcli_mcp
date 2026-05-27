@@ -4,11 +4,12 @@ DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 IMAGE_BASE ?= ghcr.io/fyne-coder/gongcli_mcp
 LDFLAGS := -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$(VERSION) -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$(COMMIT) -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$(DATE)
 
-.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-build-ghcr docker-build-ghcr-mcp docker-smoke postgres-backup-restore-smoke clean
+.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-build-mcp-gateway docker-build-ghcr docker-build-ghcr-mcp docker-build-ghcr-mcp-gateway docker-smoke postgres-backup-restore-smoke clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gongctl ./cmd/gongctl
 	go build -ldflags "$(LDFLAGS)" -o bin/gongmcp ./cmd/gongmcp
+	go build -ldflags "$(LDFLAGS)" -o bin/gongmcp-gateway ./cmd/gongmcp-gateway
 
 test:
 	go test ./...
@@ -35,11 +36,17 @@ docker-build:
 docker-build-mcp:
 	docker build --target mcp --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t gongctl:mcp-local .
 
+docker-build-mcp-gateway:
+	docker build --target mcp-gateway --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t gongctl:mcp-gateway-local .
+
 docker-build-ghcr:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t $(IMAGE_BASE)/gongctl:v$(VERSION) -t $(IMAGE_BASE)/gongctl:$(VERSION) .
 
 docker-build-ghcr-mcp:
 	docker build --target mcp --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t $(IMAGE_BASE)/gongmcp:v$(VERSION) -t $(IMAGE_BASE)/gongmcp:$(VERSION) .
+
+docker-build-ghcr-mcp-gateway:
+	docker build --target mcp-gateway --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg DATE=$(DATE) -t $(IMAGE_BASE)/gongmcp-gateway:v$(VERSION) -t $(IMAGE_BASE)/gongmcp-gateway:$(VERSION) .
 
 docker-smoke: docker-build docker-build-mcp
 	./scripts/docker-smoke.sh

@@ -37,8 +37,11 @@ network placement, and secret storage.
 
 Important distinction:
 
-- `cloudflare-worker/` is the only example here shaped as an MCP-facing OAuth
-  broker with Dynamic Client Registration.
+- `cloudflare-worker/` is the full MCP-facing OAuth broker example with Dynamic
+  Client Registration.
+- `aws-cognito-gateway/` is the Kubernetes/Postgres customer path. It defaults
+  to a pre-registered Cognito app client and now includes optional Cognito app
+  client DCR for Claude fallback testing.
 - `jumpcloud/` and `cognito/` are static-client/JWT-validation gateway
   examples. Their `/mcp` route is handled by a shim/broker that validates an
   incoming bearer JWT before forwarding to `gongmcp`; when adapting that shim to
@@ -57,13 +60,16 @@ Important distinction:
 
 | Example | Use when | Client-registration model |
 | --- | --- | --- |
+| `aws-cognito-gateway/` | The customer uses Cognito, optionally federated to JumpCloud, and needs the Kubernetes/Postgres gateway path. | Pre-registered Cognito client by default; optional gateway-backed DCR that creates real Cognito app clients. |
 | `cloudflare-worker/` | The customer can deploy Cloudflare Workers and wants the recommended MCP-shaped broker. | Dynamic Client Registration through Cloudflare's OAuth Provider Library. |
 | `jumpcloud/` | JumpCloud is the customer IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client fallback. |
 | `cognito/` | AWS Cognito is the customer IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client fallback. |
 
 JumpCloud and Cognito are identity providers in these examples. They do not
-replace the MCP broker requirement for clients that require Dynamic Client
-Registration or MCP-specific token issuance.
+replace the MCP broker requirement for MCP metadata, protected-resource
+challenges, policy enforcement, and private upstream proxying. The Cognito
+gateway can now cover the DCR fallback by creating real Cognito app clients, but
+it should still be treated as a fallback after the pre-registered Claude path.
 
 For Claude custom connectors, a successful metadata probe followed by
 unauthenticated `/mcp` POSTs normally means Claude could not complete a supported
@@ -75,6 +81,9 @@ when the client needs a DCR-capable broker.
 ## Files
 
 - `cloudflare-worker/`: Worker scaffold for the recommended broker path.
+- `aws-cognito-gateway/`: AWS/Cognito gateway starter for Claude custom
+  connectors using pre-registered Cognito OAuth credentials, with optional DCR
+  fallback.
 - `jumpcloud/docker-compose.yml`: Compose gateway using JumpCloud OIDC.
 - `jumpcloud/jumpcloud.env.example`: JumpCloud pilot settings.
 - `cognito/docker-compose.yml`: Compose gateway using Cognito OIDC.

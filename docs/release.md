@@ -28,6 +28,7 @@ make sbom
 make checksums
 docker build -t gongctl:local .
 docker build --target mcp -t gongctl:mcp-local .
+docker build --target mcp-gateway -t gongctl:mcp-gateway-local .
 scripts/postgres-backup-restore-smoke.sh
 kubectl kustomize deploy/kubernetes/postgres-pilot
 ```
@@ -53,18 +54,21 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
    `kubectl kustomize deploy/kubernetes/postgres-pilot`.
 11. Run `make docker-build`.
 12. Run `make docker-build-mcp`.
-13. Run `make docker-build-ghcr`.
-14. Run `make docker-build-ghcr-mcp`.
-15. Tag the release as `v$(cat VERSION)`.
-16. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
+13. Run `make docker-build-mcp-gateway`.
+14. Run `make docker-build-ghcr`.
+15. Run `make docker-build-ghcr-mcp`.
+16. Run `make docker-build-ghcr-mcp-gateway`.
+17. Tag the release as `v$(cat VERSION)`.
+18. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
     Go tests, the synthetic Postgres backup/restore smoke, vet, secret scan,
     Docker smoke builds, and image vulnerability scans before it
     publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
-17. After the first publish, confirm the GHCR packages are public if the GitHub
+    - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z`
+19. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-18. Run GoReleaser from the tag with Go 1.26.3 or newer.
+20. Run GoReleaser from the tag with Go 1.26.3 or newer.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they
@@ -79,7 +83,9 @@ Public docs may be prepared for the next `VERSION`, but a Docker image tag is
 not public until the corresponding protected tag workflow completes and
 `docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
 and `docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
-both succeed.
+and
+`docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z`
+all succeed.
 
 ## Supply-Chain Notes
 
@@ -90,8 +96,9 @@ both succeed.
   `git ls-remote --tags https://github.com/OWNER/REPO.git refs/tags/TAG`,
   update the workflow, and review the upstream changelog before merging.
 - Publish the full `gongctl` image and the MCP-only `gongmcp` image as separate
-  GHCR packages. Business-user MCP host configs should point at the MCP-only
-  package.
+  GHCR packages. Publish the remote MCP OAuth gateway as
+  `gongmcp-gateway`. Business-user MCP host configs should point at the
+  MCP-only or gateway package required by the deployment shape.
 - Run image vulnerability scanning in the publishing registry or company
   container pipeline before promoting an image digest. Local CI proves the image
   builds, but registry scanners usually have the right policy exceptions and
@@ -110,6 +117,7 @@ Digest verification commands:
 ```bash
 docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z
 docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z
+docker buildx imagetools inspect ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z
 ```
 
 Record and deploy the returned `sha256:` digest:

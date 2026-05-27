@@ -6,4 +6,6 @@ resources:
   - configmap.yaml
   - gongmcp-deployment.yaml
   - gongmcp-service.yaml
+  - gongmcp-gateway-deployment.yaml
+  - gongmcp-gateway-service.yaml
   - postgres-refresh-cronjob.yaml

@@ -16,7 +16,12 @@ NetworkPolicies before production access.
 - `secret.example.yaml`: placeholder secret keys for reference only; it is not
   included in `kustomization.yaml`.
 - `gongmcp-deployment.yaml`: read-only HTTP `gongmcp` runtime.
-- `gongmcp-service.yaml`: cluster-internal service for an approved gateway.
+- `gongmcp-service.yaml`: cluster-internal private `gongmcp` service.
+- `gongmcp-gateway-deployment.yaml`: Cognito-validating public MCP gateway.
+- `gongmcp-gateway-service.yaml`: service targeted by the customer's ingress.
+- `gongmcp-gateway-ingress.example.yaml`: AWS ALB-style ingress example; it is
+  not included in `kustomization.yaml` because ingress annotations are
+  customer-specific.
 - `postgres-refresh-cronjob.yaml`: optional scheduled operator refresh.
 - `postgres-deploy-smoke-job.yaml`: manual operator smoke that does not require
   business-user MCP host access; it is not included in the base Kustomize
@@ -45,8 +50,32 @@ kubectl -n gongctl-postgres-pilot create secret generic gongctl-postgres-pilot-s
   --from-literal=GONGCTL_MCP_DATABASE_URL='postgres://serving-writer:replace@postgres.example.com:5432/gongctl_mcp?sslmode=require' \
   --from-literal=GONGMCP_ANALYST_READER_URL='postgres://gongmcp_business_workbench_reader:replace@postgres.example.com:5432/gongctl_mcp?sslmode=require' \
   --from-literal=GONGMCP_BEARER_TOKEN=replace \
+  --from-literal=COGNITO_CLIENT_ID=replace \
   --from-file=ai-governance.yaml=/secure/path/ai-governance.yaml
 ```
+
+For Claude-first Cognito deployments, also review
+[`deploy/remote-mcp-auth/aws-cognito-gateway/README.md`](../../remote-mcp-auth/aws-cognito-gateway/README.md).
+That runbook explains the public gateway, Cognito app client, Claude connector,
+optional DCR fallback, and remote MCP smoke sequence.
+
+If DCR is enabled, the gateway pod also needs AWS identity for
+`cognito-idp:CreateUserPoolClient` and `cognito-idp:DescribeUserPoolClient` on
+the target user pool. Prefer IRSA or EKS Pod Identity instead of static AWS
+keys in Kubernetes Secrets. Copyable policy JSON and a ServiceAccount example
+live under
+[`deploy/remote-mcp-auth/aws-cognito-gateway/iam/`](../../remote-mcp-auth/aws-cognito-gateway/iam/).
+
+Support shims for JumpCloud claim mapping and DCR operations:
+
+| Artifact | Purpose |
+| --- | --- |
+| [`deploy/remote-mcp-auth/aws-cognito-gateway/lambda/`](../../remote-mcp-auth/aws-cognito-gateway/lambda/) | Pre Token Generation Lambda template for access-token group claims |
+| [`scripts/smoke-cognito-dcr.sh`](../../../scripts/smoke-cognito-dcr.sh) | DCR metadata smoke; optional `--create-client` registration test |
+| [`scripts/cognito-dcr-cleanup.sh`](../../../scripts/cognito-dcr-cleanup.sh) | List/delete DCR-created Cognito app clients by prefix |
+
+See the Cognito gateway runbook for the recommended operator order:
+[`deploy/remote-mcp-auth/aws-cognito-gateway/README.md`](../../remote-mcp-auth/aws-cognito-gateway/README.md).
 
 ## Operator Flow
 

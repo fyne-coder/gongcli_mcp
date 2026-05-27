@@ -258,9 +258,24 @@ The broker owns:
 - consent and scope presentation
 - access-token issuance
 - token validation and mapping to internal bearer auth
-- Origin validation at the edge plus a matching internal `GONGMCP_ALLOWED_ORIGINS`
-  policy when browser clients are involved
+- Origin validation at the edge plus a matching internal
+  `GONGMCP_ALLOWED_ORIGINS` policy when browser clients are involved
 - audit logging for user/app/tool access
+
+For Claude-first AWS deployments where Cognito can use a pre-registered OAuth
+client, or where Claude requires DCR against Cognito, use the
+[AWS Cognito MCP gateway starter](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md).
+It provides a `gongmcp-gateway` service that owns MCP protected-resource
+metadata, `WWW-Authenticate` challenge behavior, Cognito access-token
+validation, optional Cognito app-client DCR, scope/group policy, and private
+proxying to `gongmcp`.
+In optional DCR mode, the gateway serves the authorization-server metadata so
+hosted MCP clients can discover `/register`, while Cognito still mints access
+tokens with the Cognito issuer. Treat that as a compatibility path that needs a
+live Claude smoke before customer production rollout.
+The customer-facing runbook is Kubernetes/Postgres-first and includes an
+auth-only sequence for the case where `gongmcp`, Postgres, and ingress already
+work but Cognito/JumpCloud federation still needs to be finished.
 
 `gongmcp` owns:
 

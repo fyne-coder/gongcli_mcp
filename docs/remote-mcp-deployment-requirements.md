@@ -125,6 +125,9 @@ routing before asking the user to retry their JumpCloud password.
 Use maintained OAuth/OIDC/JWT/JWKS libraries or official SDKs for production
 discovery, signature verification, claim validation, refresh handling, and JWKS
 caching. Do not extend lab-only hand-rolled token parsing into production auth.
+For the AWS Cognito gateway starter, configure at least one
+`COGNITO_REQUIRED_GROUP`, `COGNITO_ALLOWED_SUBJECTS`, or
+`COGNITO_ALLOWED_EMAILS` gate in addition to the required scope.
 
 ## Smoke Test Sequence
 
@@ -188,6 +191,18 @@ For private bearer pilots, use
 [`scripts/smoke-http-mcp.sh`](../scripts/smoke-http-mcp.sh) with the approved
 origin and internal bearer token.
 
+For the AWS Cognito gateway starter, use
+[`scripts/smoke-mcp-gateway.sh`](../scripts/smoke-mcp-gateway.sh). It checks
+protected-resource metadata, HTTPS authorization-server metadata, endpoint
+challenge behavior, challenge scope hints, optional CORS preflight, and an
+optional authenticated `tools/list` call when provided a test Cognito access
+token. Add `--expect-dcr` when the optional Cognito DCR fallback is enabled.
+For DCR registration against live Cognito, use
+[`scripts/smoke-cognito-dcr.sh`](../scripts/smoke-cognito-dcr.sh) with explicit
+`--create-client` only in non-prod. JumpCloud claim mapping and IAM/IRSA
+templates live under
+[`deploy/remote-mcp-auth/aws-cognito-gateway/`](../deploy/remote-mcp-auth/aws-cognito-gateway/).
+
 ## Common Failure Map
 
 | Symptom | Likely cause | First checks |
@@ -220,6 +235,7 @@ origin and internal bearer token.
 
 | Example | Role |
 | --- | --- |
+| [AWS Cognito MCP gateway starter](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md) | Step-by-step Kubernetes/Postgres runbook for a Claude-first gateway/proxy, including an auth-only Cognito/JumpCloud finish path and optional Cognito DCR fallback when `gongmcp` already works |
 | [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md) | Recommended MCP-shaped broker with Dynamic Client Registration |
 | [JumpCloud Compose starter](../deploy/remote-mcp-auth/jumpcloud/docker-compose.yml) | JumpCloud IdP plus static-client/JWT gateway shape; not a full hosted MCP broker by itself |
 | [Cognito Compose starter](../deploy/remote-mcp-auth/cognito/docker-compose.yml) | Cognito IdP plus static-client/JWT gateway shape |

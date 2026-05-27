@@ -8,5 +8,15 @@ data:
   GONGMCP_DATABASE_NAME: gongctl_mcp
   GONGMCP_POSTGRES_REDACTED_SERVING_DB: "1"
   GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS: "1"
-  GONGMCP_ALLOWED_ORIGINS: https://approved-client.example.com
+  GONGMCP_ALLOWED_ORIGINS: https://mcp.customer.example.com
   GONGCTL_DEPLOY_SMOKE_MAX_MARKER_AGE: 24h
+  PUBLIC_BASE_URL: https://mcp.customer.example.com
+  GATEWAY_UPSTREAM_URL: http://gongmcp:8080
+  GATEWAY_ADDR: :8090
+  COGNITO_ISSUER_URL: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX
+  COGNITO_REQUIRED_SCOPE: gongmcp/read
+  COGNITO_SCOPES_SUPPORTED: gongmcp/read
+  COGNITO_REQUIRED_GROUP: gongmcp-users
+  COGNITO_GROUP_CLAIM: cognito:groups
+  GATEWAY_DCR_ENABLED: "0"
+  GATEWAY_ALLOWED_ORIGINS: https://claude.ai
