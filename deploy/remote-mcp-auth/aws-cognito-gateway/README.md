@@ -570,6 +570,33 @@ This proves the Postgres reader, governance config, preset, and private
 From outside the customer network:
 
 ```bash
+gongctl doctor mcp-gateway \
+  --url https://mcp.customer.example.com \
+  --issuer https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX \
+  --origin https://claude.ai
+```
+
+If DCR is enabled:
+
+```bash
+gongctl doctor mcp-gateway \
+  --url https://mcp.customer.example.com \
+  --issuer https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX \
+  --expect-dcr \
+  --origin https://claude.ai
+```
+
+Expected: metadata, endpoint-scoped metadata, unauthenticated `401` challenge,
+OIDC discovery, JWKS reachability, and DCR metadata checks pass. The command
+prints sanitized JSON and does not require AWS credentials or mutate Cognito.
+For automation, inspect `.checks[]`; like `gongctl doctor postgres-deploy`,
+normal validation failures are reported as JSON checks rather than a nonzero
+process exit.
+
+The raw `curl` checks below are useful when you need to inspect the exact
+metadata body:
+
+```bash
 curl -fsS https://mcp.customer.example.com/.well-known/oauth-protected-resource \
   | python3 -m json.tool
 ```
@@ -694,6 +721,17 @@ This step is optional if Claude has already completed login and can list tools.
 It is useful when DevOps wants to test the gateway directly.
 
 After obtaining a test Cognito access token for an allowed user:
+
+```bash
+GONGMCP_TEST_ACCESS_TOKEN="$ACCESS_TOKEN" \
+  gongctl doctor mcp-gateway \
+    --url https://mcp.customer.example.com \
+    --issuer https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX \
+    --token-env GONGMCP_TEST_ACCESS_TOKEN
+```
+
+`gongctl doctor mcp-gateway` verifies that authenticated `tools/list` returns
+success, but it does not print the token or the raw tool response body.
 
 ```bash
 GONGMCP_GATEWAY_SMOKE_TOKEN="$ACCESS_TOKEN" \

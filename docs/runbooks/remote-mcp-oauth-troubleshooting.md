@@ -33,6 +33,22 @@ Check the path in order:
 
 Browser login success alone is not enough.
 
+For the Cognito/JumpCloud gateway branch, run the bundled validator before
+asking a Claude user to retry:
+
+```bash
+gongctl doctor mcp-gateway \
+  --url https://mcp.customer.example.com \
+  --issuer https://cognito-idp.<region>.amazonaws.com/<pool> \
+  --origin https://claude.ai
+```
+
+Use `--expect-dcr` when the gateway DCR fallback is enabled. Use
+`--token-env ENV_NAME` only from an operator shell that already has a test
+Cognito access token; the doctor reports status and does not print the token or
+raw tool response body. For automation, inspect `.checks[]`; normal validation
+failures are reported as JSON checks rather than a nonzero process exit.
+
 ## Lab Commands
 
 For the auth lab:

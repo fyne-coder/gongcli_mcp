@@ -70,6 +70,7 @@ Support shims for JumpCloud claim mapping and DCR operations:
 
 | Artifact | Purpose |
 | --- | --- |
+| `gongctl doctor mcp-gateway --url https://mcp.customer.example.com --issuer https://cognito-idp.<region>.amazonaws.com/<pool>` | First public gateway validator before asking Claude users to retry |
 | [`deploy/remote-mcp-auth/aws-cognito-gateway/lambda/`](../../remote-mcp-auth/aws-cognito-gateway/lambda/) | Pre Token Generation Lambda template for access-token group claims |
 | [`scripts/smoke-cognito-dcr.sh`](../../../scripts/smoke-cognito-dcr.sh) | DCR metadata smoke; optional `--create-client` registration test |
 | [`scripts/cognito-dcr-cleanup.sh`](../../../scripts/cognito-dcr-cleanup.sh) | List/delete DCR-created Cognito app clients by prefix |
@@ -102,3 +103,17 @@ postgres-deploy`, `gongctl sync status --preset`, and a local stdio
 `gongmcp` `tools/list` probe against the scoped reader. It does not require a
 business user's MCP client, OAuth session, ChatGPT connector, or Claude MCP
 configuration.
+
+After the private Postgres smoke passes and the public ingress points at
+`gongmcp-gateway`, run the public auth validator from an operator machine:
+
+```bash
+gongctl doctor mcp-gateway \
+  --url https://mcp.customer.example.com \
+  --issuer https://cognito-idp.<region>.amazonaws.com/<pool> \
+  --origin https://claude.ai
+```
+
+Add `--expect-dcr` only if the gateway DCR fallback is enabled. Use
+`--token-env ENV_NAME` with an operator-held test access token when you want the
+doctor to verify authenticated `tools/list`; the token value is never printed.
