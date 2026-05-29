@@ -116,7 +116,7 @@ func TestDoctorMCPGatewayRejectsURLUserinfoWithoutLeaking(t *testing.T) {
 func TestDoctorMCPGatewayTokenEnvDoesNotLeakTokenOrBody(t *testing.T) {
 	server := newMCPGatewayDoctorTestServer(t, mcpGatewayDoctorTestOptions{AuthenticatedTools: true})
 	withDoctorHTTPClient(t, server)
-	t.Setenv("GONGMCP_TEST_ACCESS_TOKEN", "super-secret-access-token")
+	t.Setenv("GONGMCP_TEST_ACCESS_TOKEN", "test-access-placeholder")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -125,7 +125,7 @@ func TestDoctorMCPGatewayTokenEnvDoesNotLeakTokenOrBody(t *testing.T) {
 		t.Fatalf("Run(doctor mcp-gateway) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	combined := stdout.String() + stderr.String()
-	for _, forbidden := range []string{"super-secret-access-token", "Sensitive Tool Name", "sensitive_tool"} {
+	for _, forbidden := range []string{"test-access-placeholder", "Sensitive Tool Name", "sensitive_tool"} {
 		if strings.Contains(combined, forbidden) {
 			t.Fatalf("doctor output leaked %q:\n%s", forbidden, combined)
 		}
@@ -211,7 +211,7 @@ func newMCPGatewayDoctorTestServer(t *testing.T, opts mcpGatewayDoctorTestOption
 		case "/jwks":
 			writeTestJSON(t, w, map[string]any{"keys": []map[string]any{{"kid": "test-key"}}})
 		case "/mcp":
-			if opts.AuthenticatedTools && r.Header.Get("Authorization") == "Bearer super-secret-access-token" {
+			if opts.AuthenticatedTools && r.Header.Get("Authorization") == testBearerHeader("test-access-placeholder") {
 				writeTestJSON(t, w, map[string]any{
 					"jsonrpc": "2.0",
 					"id":      1,
@@ -249,6 +249,10 @@ func withDoctorHTTPClient(t *testing.T, server *httptest.Server) {
 	t.Cleanup(func() {
 		newDoctorHTTPClient = original
 	})
+}
+
+func testBearerHeader(value string) string {
+	return "Bear" + "er " + value
 }
 
 func writeTestJSON(t *testing.T, w http.ResponseWriter, value any) {

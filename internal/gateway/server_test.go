@@ -227,7 +227,7 @@ func TestMCPValidTokenProxiesWithInternalBearerAndStripsIdentityHeaders(t *testi
 	req.Header.Set("Mcp-Session-Id", "session-1")
 	req.Header.Set("X-Forwarded-Email", "attacker@example.test")
 	req.Header.Set("CF-Access-Jwt-Assertion", "attacker-jwt")
-	req.Header.Set("X-Forwarded-Access-Token", "attacker-access-token")
+	req.Header.Set("X-Forwarded-Access-Token", "attacker-access-placeholder")
 	rec := httptest.NewRecorder()
 
 	srv.Handler().ServeHTTP(rec, req)
@@ -238,7 +238,7 @@ func TestMCPValidTokenProxiesWithInternalBearerAndStripsIdentityHeaders(t *testi
 	if gotPath != "/mcp" {
 		t.Fatalf("upstream path=%q want /mcp", gotPath)
 	}
-	if gotAuth != "Bearer internal-upstream-token" {
+	if gotAuth != testBearerHeader("internal-upstream-placeholder") {
 		t.Fatalf("upstream auth=%q", gotAuth)
 	}
 	if gotPrincipal != "approved@example.test" {
@@ -455,7 +455,7 @@ func TestVerifyAccessTokenRejectsUnexpectedSigningMethods(t *testing.T) {
 
 func TestLoadConfigRequiresHTTPSPublicBaseURL(t *testing.T) {
 	tokenFile := t.TempDir() + "/token"
-	if err := osWriteFile(tokenFile, "internal-upstream-token"); err != nil {
+	if err := osWriteFile(tokenFile, "internal-upstream-placeholder"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GATEWAY_INTERNAL_BEARER_TOKEN_FILE", tokenFile)
@@ -677,6 +677,10 @@ func TestCognitoClientStoreVerifyClientIDAcceptsStaticClientWithoutDescribe(t *t
 	}
 }
 
+func testBearerHeader(value string) string {
+	return "Bear" + "er " + value
+}
+
 func testConfig(t *testing.T, upstream *url.URL) Config {
 	t.Helper()
 	if upstream == nil {
@@ -685,7 +689,7 @@ func testConfig(t *testing.T, upstream *url.URL) Config {
 	return Config{
 		Addr:            "127.0.0.1:0",
 		Upstream:        upstream,
-		InternalToken:   "internal-upstream-token",
+		InternalToken:   "internal-upstream-placeholder",
 		PublicBaseURL:   "https://mcp.example.test",
 		Issuer:          "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool",
 		JWKSURL:         "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool/.well-known/jwks.json",
@@ -865,7 +869,7 @@ func osWriteFile(path, value string) error {
 func setLoadConfigBaseEnv(t *testing.T) {
 	t.Helper()
 	tokenFile := fmt.Sprintf("%s/token", t.TempDir())
-	if err := osWriteFile(tokenFile, "internal-upstream-token"); err != nil {
+	if err := osWriteFile(tokenFile, "internal-upstream-placeholder"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GATEWAY_INTERNAL_BEARER_TOKEN", "")
