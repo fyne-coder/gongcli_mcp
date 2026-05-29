@@ -58,7 +58,8 @@ services:
 
   shim:
     build:
-      context: ./shim
+      context: ../..
+      dockerfile: deploy/lab-auth/shim/Dockerfile
     image: gongctl-lab-auth-shim:local
     restart: unless-stopped
     environment:

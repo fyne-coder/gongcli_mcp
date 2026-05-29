@@ -16,6 +16,7 @@ LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB="${LAB_GONGMCP_POSTGRES_REDACTED_SERVIN
 LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST="${LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-${GONGMCP_AI_GOVERNANCE_CONFIG_HOST:-}}"
 LAB_GONGMCP_POLICY_SWITCHES="${LAB_GONGMCP_POLICY_SWITCHES:-${GONGMCP_POLICY_SWITCHES:-}}"
 LAB_DEPLOY_MODE="${LAB_DEPLOY_MODE:-full}"
+LAB_KEYCLOAK_PROFILE="${LAB_KEYCLOAK_PROFILE:-disposable}"
 LAB_APPROVED_EMAIL_WAS_SET="${LAB_APPROVED_EMAIL+x}"
 LAB_SECONDARY_EMAIL_WAS_SET="${LAB_SECONDARY_EMAIL+x}"
 LAB_BLOCKED_EMAIL_WAS_SET="${LAB_BLOCKED_EMAIL+x}"
@@ -47,6 +48,13 @@ rand_b64() {
 
 rand_hex() {
   openssl rand -hex "${1:-16}" | tr -d '\n'
+}
+
+hostname_from_url() {
+  local value="${1#*://}"
+  value="${value%%/*}"
+  value="${value%%:*}"
+  printf '%s\n' "$value"
 }
 
 sed_escape() {
@@ -100,6 +108,10 @@ esac
 case "$LAB_DEPLOY_MODE" in
   full|app-only) ;;
   *) echo "LAB_DEPLOY_MODE must be 'full' or 'app-only'" >&2; exit 2 ;;
+esac
+case "$LAB_KEYCLOAK_PROFILE" in
+  disposable|production-like) ;;
+  *) echo "LAB_KEYCLOAK_PROFILE must be 'disposable' or 'production-like'" >&2; exit 2 ;;
 esac
 case "$LAB_GONGMCP_IMAGE" in
 	*\'*|*\"*|*[\;\`\$[:space:]]*)
@@ -156,6 +168,12 @@ if [[ "$LAB_DEPLOY_MODE" == "app-only" ]]; then
     echo "LAB_DEPLOY_MODE=app-only cannot change LAB_PUBLIC_BASE_URL; use LAB_DEPLOY_MODE=full for issuer/origin changes" >&2
     exit 1
   fi
+  existing_keycloak_profile="$(read_remote_env "$tmpdir/.env" LAB_KEYCLOAK_PROFILE)"
+  existing_keycloak_profile="${existing_keycloak_profile:-disposable}"
+  if [[ "$existing_keycloak_profile" != "$LAB_KEYCLOAK_PROFILE" ]]; then
+    echo "LAB_DEPLOY_MODE=app-only cannot change LAB_KEYCLOAK_PROFILE; use LAB_DEPLOY_MODE=full for Keycloak runtime profile changes" >&2
+    exit 1
+  fi
   for auth_key in LAB_APPROVED_EMAIL LAB_SECONDARY_EMAIL LAB_BLOCKED_EMAIL; do
     existing_auth_value="$(read_remote_env "$tmpdir/.env" "$auth_key")"
     requested_auth_value="${!auth_key}"
@@ -185,8 +203,15 @@ if [[ ! -f "$tmpdir/.env" ]]; then
   cat >"$tmpdir/.env" <<EOF
 LAB_PUBLIC_BASE_URL=$LAB_PUBLIC_BASE_URL
 REMOTE_ROOT=$REMOTE_ROOT
+LAB_KEYCLOAK_PROFILE=$LAB_KEYCLOAK_PROFILE
+KEYCLOAK_HOSTNAME=$(hostname_from_url "$LAB_PUBLIC_BASE_URL")
+KEYCLOAK_ADMIN_URL=$LAB_PUBLIC_BASE_URL
+KEYCLOAK_DB_DATABASE=keycloak
+KEYCLOAK_DB_USERNAME=keycloak
+KEYCLOAK_DB_PASSWORD=$(rand_b64 24)
 KEYCLOAK_ADMIN_PASSWORD=$(rand_b64 24)
 OIDC_CLIENT_SECRET=$(rand_b64 24)
+CLAUDE_OIDC_CLIENT_SECRET=$(rand_b64 24)
 OAUTH2_PROXY_COOKIE_SECRET=$(rand_hex 16)
 LAB_APPROVED_EMAIL=$LAB_APPROVED_EMAIL
 LAB_SECONDARY_EMAIL=$LAB_SECONDARY_EMAIL
@@ -203,6 +228,7 @@ set_env_value "$tmpdir/.env" GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS "$LAB_GONGMCP
 set_env_value "$tmpdir/.env" GONGMCP_POSTGRES_REDACTED_SERVING_DB "$LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB"
 set_env_value "$tmpdir/.env" GONGMCP_POLICY_SWITCHES "$LAB_GONGMCP_POLICY_SWITCHES"
 set_env_value "$tmpdir/.env" LAB_DEPLOY_MODE "$LAB_DEPLOY_MODE"
+set_env_value "$tmpdir/.env" LAB_KEYCLOAK_PROFILE "$LAB_KEYCLOAK_PROFILE"
 set_env_value "$tmpdir/.env" LAB_GONGMCP_IMAGE "$LAB_GONGMCP_IMAGE"
 set_env_value "$tmpdir/.env" GONG_DATABASE_URL "$LAB_GONG_DATABASE_URL"
 if [[ -n "$LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST" ]]; then
@@ -220,6 +246,24 @@ set_env_value "$tmpdir/.env" LAB_APPROVED_EMAIL "$LAB_APPROVED_EMAIL"
 set_env_value "$tmpdir/.env" LAB_SECONDARY_EMAIL "$LAB_SECONDARY_EMAIL"
 set_env_value "$tmpdir/.env" LAB_BLOCKED_EMAIL "$LAB_BLOCKED_EMAIL"
 set_env_value "$tmpdir/.env" LAB_ALLOWED_EMAILS "$LAB_APPROVED_EMAIL,$LAB_SECONDARY_EMAIL"
+if [[ -z "$(read_remote_env "$tmpdir/.env" KEYCLOAK_HOSTNAME)" ]]; then
+  set_env_value "$tmpdir/.env" KEYCLOAK_HOSTNAME "$(hostname_from_url "$LAB_PUBLIC_BASE_URL")"
+fi
+if [[ -z "$(read_remote_env "$tmpdir/.env" KEYCLOAK_ADMIN_URL)" ]]; then
+  set_env_value "$tmpdir/.env" KEYCLOAK_ADMIN_URL "$LAB_PUBLIC_BASE_URL"
+fi
+if [[ -z "$(read_remote_env "$tmpdir/.env" KEYCLOAK_DB_DATABASE)" ]]; then
+  set_env_value "$tmpdir/.env" KEYCLOAK_DB_DATABASE keycloak
+fi
+if [[ -z "$(read_remote_env "$tmpdir/.env" KEYCLOAK_DB_USERNAME)" ]]; then
+  set_env_value "$tmpdir/.env" KEYCLOAK_DB_USERNAME keycloak
+fi
+if [[ -z "$(read_remote_env "$tmpdir/.env" KEYCLOAK_DB_PASSWORD)" ]]; then
+  set_env_value "$tmpdir/.env" KEYCLOAK_DB_PASSWORD "$(rand_b64 24)"
+fi
+if [[ -z "$(read_remote_env "$tmpdir/.env" CLAUDE_OIDC_CLIENT_SECRET)" ]]; then
+  set_env_value "$tmpdir/.env" CLAUDE_OIDC_CLIENT_SECRET "$(rand_b64 24)"
+fi
 
 cookie_secret="$(read_remote_env "$tmpdir/.env" OAUTH2_PROXY_COOKIE_SECRET)"
 case "${#cookie_secret}" in
@@ -232,6 +276,7 @@ case "${#cookie_secret}" in
 esac
 
 oidc_secret="$(read_remote_env "$tmpdir/.env" OIDC_CLIENT_SECRET)"
+claude_oidc_secret="$(read_remote_env "$tmpdir/.env" CLAUDE_OIDC_CLIENT_SECRET)"
 approved_password="$(read_remote_env "$tmpdir/.env" LAB_APPROVED_PASSWORD)"
 blocked_password="$(read_remote_env "$tmpdir/.env" LAB_BLOCKED_PASSWORD)"
 secondary_password="$(read_remote_env "$tmpdir/.env" LAB_SECONDARY_PASSWORD)"
@@ -247,27 +292,36 @@ fi
 set_env_value "$tmpdir/.env" LAB_APPROVED_PASSWORD "$approved_password"
 set_env_value "$tmpdir/.env" LAB_BLOCKED_PASSWORD "$blocked_password"
 set_env_value "$tmpdir/.env" LAB_SECONDARY_PASSWORD "$secondary_password"
-if [[ -z "$oidc_secret" || -z "$approved_password" || -z "$blocked_password" || -z "$secondary_password" ]]; then
+if [[ -z "$oidc_secret" || -z "$claude_oidc_secret" || -z "$approved_password" || -z "$blocked_password" || -z "$secondary_password" ]]; then
   echo "lab env is missing required secrets" >&2
   exit 1
 fi
 
-mkdir -p "$tmpdir/import"
+mkdir -p "$tmpdir/import" "$tmpdir/well-known"
 sed \
   -e "s/__LAB_PUBLIC_BASE_URL__/$(sed_escape "$LAB_PUBLIC_BASE_URL")/g" \
   -e "s/__LAB_APPROVED_EMAIL__/$(sed_escape "$LAB_APPROVED_EMAIL")/g" \
   -e "s/__LAB_SECONDARY_EMAIL__/$(sed_escape "$LAB_SECONDARY_EMAIL")/g" \
   -e "s/__LAB_BLOCKED_EMAIL__/$(sed_escape "$LAB_BLOCKED_EMAIL")/g" \
   -e "s/__OIDC_CLIENT_SECRET__/$(sed_escape "$oidc_secret")/g" \
+  -e "s/__CLAUDE_OIDC_CLIENT_SECRET__/$(sed_escape "$claude_oidc_secret")/g" \
   -e "s/__LAB_APPROVED_PASSWORD__/$(sed_escape "$approved_password")/g" \
   -e "s/__LAB_BLOCKED_PASSWORD__/$(sed_escape "$blocked_password")/g" \
   -e "s/__LAB_SECONDARY_PASSWORD__/$(sed_escape "$secondary_password")/g" \
   "$ROOT/deploy/lab-auth/keycloak/realm.template.json" >"$tmpdir/import/realm.json"
+sed \
+  -e "s/__LAB_PUBLIC_BASE_URL__/$(sed_escape "$LAB_PUBLIC_BASE_URL")/g" \
+  "$ROOT/deploy/lab-auth/keycloak/openid-configuration.production-like.template.json" >"$tmpdir/well-known/openid-configuration.json"
+sed \
+  -e "s/__LAB_PUBLIC_BASE_URL__/$(sed_escape "$LAB_PUBLIC_BASE_URL")/g" \
+  "$ROOT/deploy/lab-auth/keycloak/oauth-authorization-server.production-like.template.json" >"$tmpdir/well-known/oauth-authorization-server.json"
 
-ssh "$LAB_VM" "mkdir -p '$REMOTE_LAB/keycloak/import'"
+ssh "$LAB_VM" "mkdir -p '$REMOTE_LAB/keycloak/import' '$REMOTE_LAB/keycloak/well-known'"
 scp "$tmpdir/.env" "$LAB_VM:$REMOTE_LAB/.env" >/dev/null
 scp "$tmpdir/import/realm.json" "$LAB_VM:$REMOTE_LAB/keycloak/import/realm.json" >/dev/null
-ssh "$LAB_VM" "chmod 600 '$REMOTE_LAB/.env' && chmod 644 '$REMOTE_LAB/keycloak/import/realm.json'"
+scp "$tmpdir/well-known/openid-configuration.json" "$LAB_VM:$REMOTE_LAB/keycloak/well-known/openid-configuration.json" >/dev/null
+scp "$tmpdir/well-known/oauth-authorization-server.json" "$LAB_VM:$REMOTE_LAB/keycloak/well-known/oauth-authorization-server.json" >/dev/null
+ssh "$LAB_VM" "chmod 600 '$REMOTE_LAB/.env' && chmod 644 '$REMOTE_LAB/keycloak/import/realm.json' '$REMOTE_LAB/keycloak/well-known/openid-configuration.json' '$REMOTE_LAB/keycloak/well-known/oauth-authorization-server.json'"
 
 ssh "$LAB_VM" "
 set -euo pipefail
@@ -303,9 +357,16 @@ else
   DOCKER_BUILDKIT=1 docker build --target mcp -t gongctl:mcp-local '$REMOTE_SOURCE'
 fi
 cd '$REMOTE_LAB'
+compose() {
+  if [ '$LAB_KEYCLOAK_PROFILE' = 'production-like' ]; then
+    docker-compose -f docker-compose.yml -f docker-compose.production-keycloak.yml \"\$@\"
+  else
+    docker-compose \"\$@\"
+  fi
+}
 if [ '$LAB_DEPLOY_MODE' = 'app-only' ]; then
-  keycloak_container=\$(docker-compose ps -q keycloak 2>/dev/null || true)
-  gongmcp_container=\$(docker-compose ps -q gongmcp 2>/dev/null || true)
+  keycloak_container=\$(compose ps -q keycloak 2>/dev/null || true)
+  gongmcp_container=\$(compose ps -q gongmcp 2>/dev/null || true)
   if [ -z \"\$keycloak_container\" ] || [ -z \"\$gongmcp_container\" ]; then
     echo \"LAB_DEPLOY_MODE=app-only requires an existing running lab stack; run LAB_DEPLOY_MODE=full first\" >&2
     exit 1
@@ -314,8 +375,8 @@ if [ '$LAB_DEPLOY_MODE' = 'app-only' ]; then
     echo \"LAB_DEPLOY_MODE=app-only found Keycloak but it is not running; use LAB_DEPLOY_MODE=full or repair the lab stack first\" >&2
     exit 1
   fi
-  docker-compose rm -sf gongmcp >/dev/null || true
-  docker-compose up -d --no-deps gongmcp
+  compose rm -sf gongmcp >/dev/null || true
+  compose up -d --no-deps gongmcp
   echo \"lab app-only deploy restarted gongmcp and preserved Keycloak/Caddy/oauth2-proxy\" >&2
   exit 0
 fi
@@ -324,17 +385,21 @@ for postgres_container in gongctl-lab-postgres-governed gongctl-lab-postgres; do
     docker network disconnect lab-auth_default \"\$postgres_container\" >/dev/null 2>&1 || true
   fi
 done
-docker-compose down -v >/dev/null || true
-docker-compose up -d --build
+if [ '$LAB_KEYCLOAK_PROFILE' = 'production-like' ]; then
+  compose down >/dev/null || true
+else
+  compose down -v >/dev/null || true
+fi
+compose up -d --build
 for postgres_container in gongctl-lab-postgres-governed gongctl-lab-postgres; do
   if docker ps --format '{{.Names}}' | grep -qx \"\$postgres_container\"; then
     docker network connect lab-auth_default \"\$postgres_container\" >/dev/null 2>&1 || true
   fi
 done
-docker-compose restart gongmcp >/dev/null
+compose restart gongmcp >/dev/null
 keycloak_ready=0
 for _ in \$(seq 1 60); do
-  if docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+  if compose exec -T keycloak /opt/keycloak/bin/kcadm.sh config credentials \
     --server http://127.0.0.1:8080 \
     --realm master \
     --user admin \
@@ -345,12 +410,13 @@ for _ in \$(seq 1 60); do
   sleep 2
 done
 if [ \"\$keycloak_ready\" != \"1\" ]; then
-  echo \"Keycloak admin login did not become ready; check preserved keycloak-data volume or KEYCLOAK_ADMIN_PASSWORD\" >&2
-  docker-compose logs --tail=80 keycloak >&2 || true
+  echo \"Keycloak admin login did not become ready; check preserved Keycloak state volume or KEYCLOAK_ADMIN_PASSWORD\" >&2
+    compose logs --tail=80 keycloak >&2 || true
   exit 1
 fi
+if [ '$LAB_KEYCLOAK_PROFILE' != 'production-like' ]; then
 for name in 'Trusted Hosts' 'Allowed Client Scopes' 'Allowed Protocol Mapper Types' 'Consent Required' 'Full Scope Disabled'; do
-  ids=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get components \
+  ids=\$(compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get components \
     -r gong-lab \
     -q name=\"\$name\" \
     --fields id,subType \
@@ -359,10 +425,11 @@ for name in 'Trusted Hosts' 'Allowed Client Scopes' 'Allowed Protocol Mapper Typ
     | awk -F, '\$2 == \"anonymous\" {print \$1}' \
     | tr -d '\\r')
   for id in \$ids; do
-    docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh delete components/\$id -r gong-lab >/dev/null
+    compose exec -T keycloak /opt/keycloak/bin/kcadm.sh delete components/\$id -r gong-lab >/dev/null
   done
 done
-audience_scope_id=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes \
+fi
+audience_scope_id=\$(compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes \
   -r gong-lab \
   --fields id,name \
   --format csv \
@@ -370,14 +437,14 @@ audience_scope_id=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh 
   | awk -F, '\$2 == \"gong-lab-mcp-audience\" {print \$1}' \
   | tr -d '\\r')
 if [ -z \"\$audience_scope_id\" ]; then
-  audience_scope_id=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes \
+  audience_scope_id=\$(compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes \
     -r gong-lab \
     -s name=gong-lab-mcp-audience \
     -s protocol=openid-connect \
     -s 'attributes.\"include.in.token.scope\"=false' \
     -i \
     | tr -d '\\r')
-  docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes/\$audience_scope_id/protocol-mappers/models \
+  compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes/\$audience_scope_id/protocol-mappers/models \
     -r gong-lab \
     -s name=audience-gong-lab-proxy \
     -s protocol=openid-connect \
@@ -387,10 +454,10 @@ if [ -z \"\$audience_scope_id\" ]; then
     -s 'config.\"id.token.claim\"=false' \
     -s 'config.\"introspection.token.claim\"=true' >/dev/null
 fi
-docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update realms/gong-lab/default-default-client-scopes/\$audience_scope_id \
+compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update realms/gong-lab/default-default-client-scopes/\$audience_scope_id \
   -r gong-lab \
   -n >/dev/null || true
-basic_scope_id=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes \
+basic_scope_id=\$(compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes \
   -r gong-lab \
   --fields id,name \
   --format csv \
@@ -398,14 +465,14 @@ basic_scope_id=\$(docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get
   | awk -F, '\$2 == \"basic\" {print \$1}' \
   | tr -d '\\r')
 if [ -n \"\$basic_scope_id\" ]; then
-  if ! docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes/\$basic_scope_id/protocol-mappers/models \
+  if ! compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes/\$basic_scope_id/protocol-mappers/models \
     -r gong-lab \
     --fields name \
     --format csv \
     --noquotes \
     | tr -d '\\r' \
     | grep -qx 'audience-gong-lab-proxy'; then
-    docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes/\$basic_scope_id/protocol-mappers/models \
+    compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes/\$basic_scope_id/protocol-mappers/models \
       -r gong-lab \
       -s name=audience-gong-lab-proxy \
       -s protocol=openid-connect \
@@ -415,14 +482,14 @@ if [ -n \"\$basic_scope_id\" ]; then
       -s 'config.\"id.token.claim\"=false' \
       -s 'config.\"introspection.token.claim\"=true' >/dev/null
   fi
-  if ! docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes/\$basic_scope_id/protocol-mappers/models \
+  if ! compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes/\$basic_scope_id/protocol-mappers/models \
     -r gong-lab \
     --fields name \
     --format csv \
     --noquotes \
     | tr -d '\\r' \
     | grep -qx 'groups'; then
-    docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes/\$basic_scope_id/protocol-mappers/models \
+    compose exec -T keycloak /opt/keycloak/bin/kcadm.sh create client-scopes/\$basic_scope_id/protocol-mappers/models \
       -r gong-lab \
       -s name=groups \
       -s protocol=openid-connect \
@@ -434,7 +501,7 @@ if [ -n \"\$basic_scope_id\" ]; then
       -s 'config.\"userinfo.token.claim\"=true' >/dev/null
   fi
 fi
-docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get clients \
+compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get clients \
   -r gong-lab \
   --fields id,clientId,defaultClientScopes \
   --format json \
@@ -442,11 +509,28 @@ docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get clients \
   | while IFS=\$(printf '\\t') read -r client_id scopes; do
       case \";\$scopes;\" in
         *';gong-lab-mcp-audience;'*) ;;
-        *) docker-compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update clients/\$client_id/default-client-scopes/\$audience_scope_id -r gong-lab -n >/dev/null || true ;;
+        *) compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update clients/\$client_id/default-client-scopes/\$audience_scope_id -r gong-lab -n >/dev/null || true ;;
       esac
     done
-docker-compose restart caddy >/dev/null
+claude_client_id=\$(compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get clients \
+  -r gong-lab \
+  -q clientId=claude-remote-mcp \
+  --fields id \
+  --format csv \
+  --noquotes \
+  | tr -d '\\r' \
+  | head -n 1)
+offline_scope_id=\$(compose exec -T keycloak /opt/keycloak/bin/kcadm.sh get client-scopes \
+  -r gong-lab \
+  --fields id,name \
+  --format json \
+  | jq -r '.[] | select(.name == \"offline_access\") | .id' \
+  | head -n 1)
+if [ -n \"\$claude_client_id\" ] && [ -n \"\$offline_scope_id\" ]; then
+  compose exec -T keycloak /opt/keycloak/bin/kcadm.sh update clients/\$claude_client_id/optional-client-scopes/\$offline_scope_id -r gong-lab -n >/dev/null || true
+fi
+compose restart caddy >/dev/null
 "
 
-echo "lab deployed to $LAB_VM ($LAB_PUBLIC_BASE_URL) with LAB_DEPLOY_MODE=$LAB_DEPLOY_MODE"
+echo "lab deployed to $LAB_VM ($LAB_PUBLIC_BASE_URL) with LAB_DEPLOY_MODE=$LAB_DEPLOY_MODE LAB_KEYCLOAK_PROFILE=$LAB_KEYCLOAK_PROFILE"
 echo "run: deploy/lab-auth/scripts/lab-smoke.sh"

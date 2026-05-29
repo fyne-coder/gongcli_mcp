@@ -1,0 +1,82 @@
+:80 {
+	route /healthz {
+		reverse_proxy shim:8090
+	}
+
+	route /.well-known/oauth-protected-resource* {
+		reverse_proxy shim:8090
+	}
+
+	route /.well-known/oauth-authorization-server* {
+		reverse_proxy shim:8090
+	}
+
+	route /admin* {
+		respond "not found" 404
+	}
+
+	route /realms/master* {
+		respond "not found" 404
+	}
+
+	route /realms/gong-lab/account* {
+		respond "not found" 404
+	}
+
+	route /realms/gong-lab/.well-known/openid-configuration {
+		root * /srv/keycloak-well-known
+		rewrite * /openid-configuration.json
+		file_server
+	}
+
+	route /realms/gong-lab/.well-known/openid-configuration/ {
+		respond "not found" 404
+	}
+
+	route /realms/gong-lab/.well-known/oauth-authorization-server {
+		root * /srv/keycloak-well-known
+		rewrite * /oauth-authorization-server.json
+		file_server
+	}
+
+	route /realms/gong-lab/.well-known/oauth-authorization-server/ {
+		respond "not found" 404
+	}
+
+	route /realms/gong-lab/* {
+		reverse_proxy keycloak:8080 {
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Port 443
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	route /resources/* {
+		reverse_proxy keycloak:8080 {
+			header_up X-Forwarded-Proto https
+			header_up X-Forwarded-Port 443
+			header_up X-Forwarded-Host {host}
+		}
+	}
+
+	route /oauth2/* {
+		reverse_proxy oauth2-proxy:4180
+	}
+
+	route /mcp {
+		reverse_proxy shim:8090 {
+			header_up -X-Auth-Request-Email
+			header_up -X-Auth-Request-Groups
+			header_up -X-Auth-Request-Preferred-Username
+			header_up -X-Auth-Request-Access-Token
+			header_up -X-Auth-Request-Id-Token
+			header_up -X-Auth-Request-User
+			header_up -X-Forwarded-Email
+			header_up -X-Forwarded-Groups
+			header_up -X-Forwarded-User
+			header_up -X-Forwarded-Preferred-Username
+		}
+	}
+
+	respond "gongctl lab auth gateway" 200
+}

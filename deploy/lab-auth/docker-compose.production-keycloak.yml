@@ -1,0 +1,54 @@
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.production-keycloak:/etc/caddy/Caddyfile:ro
+      - ./keycloak/well-known:/srv/keycloak-well-known:ro
+
+  keycloak-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${KEYCLOAK_DB_DATABASE:?set KEYCLOAK_DB_DATABASE}
+      POSTGRES_USER: ${KEYCLOAK_DB_USERNAME:?set KEYCLOAK_DB_USERNAME}
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - keycloak-postgres-data:/var/lib/postgresql/data
+
+  keycloak:
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile.production-keycloak
+    image: gongctl-lab-keycloak:production-like
+    command:
+      - start
+      - --optimized
+      - --import-realm
+      - --http-port=8080
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/${KEYCLOAK_DB_DATABASE:?set KEYCLOAK_DB_DATABASE}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USERNAME:?set KEYCLOAK_DB_USERNAME}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?set KEYCLOAK_DB_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:?set KEYCLOAK_HOSTNAME}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HOSTNAME_STRICT_HTTPS: "true"
+      KC_HOSTNAME_ADMIN_URL: ${KEYCLOAK_ADMIN_URL:?set KEYCLOAK_ADMIN_URL}
+      KC_PROXY_HEADERS: xforwarded
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+
+volumes:
+  keycloak-postgres-data:

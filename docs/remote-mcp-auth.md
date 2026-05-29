@@ -348,6 +348,42 @@ The lab uses Keycloak as a disposable OIDC provider, Caddy as the local gateway,
 resource metadata and token checks, and `gongmcp` as the read-only internal MCP
 service.
 
+### Proof Order: Keycloak Lab Before JumpCloud Trial
+
+Use the Keycloak lab as the open-source surrogate to prove Claude remote MCP can
+complete OAuth before spending JumpCloud trial time. Keycloak exercises the same
+final acceptance properties: discoverable MCP metadata, DCR or static-client
+path, browser login, authorization-code token exchange, audience/resource
+claims, group/email claims, scopes, callback URL handling, unauthenticated
+`/mcp` challenge, authenticated initialize, and first `tools/call`.
+
+Keep JumpCloud as the later provider-specific smoke. After the Keycloak lab and
+manual Claude test pass, rerun the same checks against JumpCloud for issuer,
+JWKS, audience/client claims, group/email claims, scopes, callback URL, and
+token exchange. JumpCloud admin screens differ, but the MCP client still needs
+the same final properties.
+
+Do not start JumpCloud issuer/JWKS debugging when protected-resource metadata
+already resolves but unauthenticated `/mcp` does not return `401` with
+`WWW-Authenticate` and `resource_metadata`. That pattern usually means a
+registration, broker, shim, or routing mismatch, not an IdP-specific claim
+problem.
+
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| Keycloak IdP | Human login, OIDC metadata, DCR/token issuance | MCP `/mcp`, protected-resource metadata, internal bearer to `gongmcp` |
+| `oauth2-proxy` | Browser/session helper for IdP login rehearsal | DCR, MCP metadata, MCP-scoped tokens for Claude/ChatGPT |
+| MCP broker/shim | Protected-resource metadata, JWT validation, internal bearer forwarding | Gong cache reads or native OAuth inside `gongmcp` |
+| `gongmcp` | Read-only MCP tools over bearer auth | IdP login, DCR, OAuth discovery |
+
+Lab operator steps:
+
+1. Deploy the lab and run `deploy/lab-auth/scripts/lab-smoke.sh`.
+2. Run `deploy/lab-auth/scripts/lab-claude-remote-preflight.sh`.
+3. Complete the manual Claude remote test in
+   [Lab auth deployment](lab-auth-deployment.md#manual-claude-remote-test).
+4. Move to JumpCloud-backed smoke only after those steps pass.
+
 ```text
 Remote MCP client
   -> HTTPS /mcp
@@ -381,7 +417,17 @@ or `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres reader deployments.
 ## JumpCloud Pattern
 
 Use JumpCloud as the human identity provider, not as the whole MCP
-authorization layer.
+authorization layer. Treat JumpCloud as a later provider-specific smoke after
+the Keycloak lab proves Claude remote MCP OAuth end to end.
+
+JumpCloud validation checklist after the Keycloak proof path is green:
+
+- issuer and JWKS match the broker/shim configuration
+- audience/client claims match the MCP resource
+- group/email claims match the approved-user policy
+- scopes and offline-token behavior match the target MCP client
+- callback/redirect URL policy accepts the client registration shape
+- authorization-code token exchange succeeds for the registered client
 
 Recommended customer implementation:
 
@@ -505,6 +551,58 @@ the local host configuration and OS user account rather than browser OAuth.
 
 Use local stdio for quick desktop tests. Use remote HTTPS/OAuth only when the
 customer has decided who owns TLS, auth, logging, retention, and user access.
+
+### Keycloak Lab First
+
+Prove Claude remote MCP against the Keycloak lab before JumpCloud trial time.
+See [Lab auth deployment](lab-auth-deployment.md#keycloak-first-claude-remote-mcp-proof)
+and run:
+
+```bash
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+  deploy/lab-auth/scripts/lab-smoke.sh
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+  deploy/lab-auth/scripts/lab-claude-remote-preflight.sh
+```
+
+### Manual Claude Remote Test
+
+Connector settings:
+
+- MCP server URL: `https://.../mcp`
+- authentication: OAuth
+- test user: an approved lab or pilot user in the allowed group/email policy
+
+First prompt:
+
+```text
+Use the gongctl MCP connector. Call get_sync_status. Then summarize total
+calls, total transcripts, missing transcripts, and which business-pilot tools
+are available next.
+```
+
+Evidence to capture:
+
+- Claude connector OAuth success
+- `lab-claude-remote-preflight.sh` output showing metadata plus unauthenticated
+  `/mcp` `401`/`WWW-Authenticate`
+- `lab-smoke.sh` success when using the lab stack
+- first-prompt tool output from Claude
+
+Failure ladder:
+
+1. Protected-resource metadata resolves.
+2. Authorization-server metadata resolves.
+3. Unauthenticated `/mcp` returns `401` with `WWW-Authenticate` and
+   `resource_metadata`.
+4. Claude completes browser login and token exchange.
+5. Authenticated `/mcp` initialize succeeds.
+6. First `get_sync_status` tool call succeeds.
+
+If metadata resolves but step 3 fails, fix registration, broker, shim, or
+routing before JumpCloud issuer/JWKS debugging. See
+[Remote MCP OAuth troubleshooting](runbooks/remote-mcp-oauth-troubleshooting.md).
 
 ## Smoke Tests
 

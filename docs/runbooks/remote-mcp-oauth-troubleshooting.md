@@ -11,6 +11,19 @@ from the user's browser, laptop, VPN, or private network.
 For pre-deploy infrastructure, auth split, and the ordered smoke test sequence,
 see [Remote MCP deployment requirements](../remote-mcp-deployment-requirements.md).
 
+## Proof Order: Keycloak Before JumpCloud
+
+Use the Keycloak lab as the open-source surrogate to prove Claude remote MCP can
+complete OAuth before JumpCloud trial time. Run
+`deploy/lab-auth/scripts/lab-smoke.sh`, then
+`deploy/lab-auth/scripts/lab-claude-remote-preflight.sh`, then the manual Claude
+steps in [Lab auth deployment](../lab-auth-deployment.md#manual-claude-remote-test).
+
+Move to JumpCloud only after that proof path passes. On JumpCloud, rerun the
+same acceptance properties with provider-specific checks for issuer, JWKS,
+audience/client claims, group/email claims, scopes, callback URL, and token
+exchange.
+
 ## Failure Ladder
 
 Check the path in order:
@@ -30,6 +43,13 @@ Check the path in order:
 9. `tools/list` returns the approved tool preset.
 10. A first `tools/call` succeeds, including client extension fields such as
     `_meta`.
+
+If steps 1-2 pass but step 7 fails, stop before JumpCloud issuer/JWKS work.
+That usually means dynamic client registration, broker/shim selection, Caddy
+routing, or MCP callback URL handling is wrong even though metadata discovery
+succeeds. Confirm `/mcp` reaches the MCP auth shim rather than `gongmcp` or
+`oauth2-proxy` directly, then rerun
+`deploy/lab-auth/scripts/lab-claude-remote-preflight.sh`.
 
 Browser login success alone is not enough.
 
@@ -75,6 +95,7 @@ LAB_PUBLIC_BASE_URL=https://lab.example.com \
 
 | Symptom | Likely cause | Next check |
 | --- | --- | --- |
+| Protected-resource metadata resolves but unauthenticated `/mcp` is not `401`/`WWW-Authenticate` | registration, broker, shim, or routing mismatch | confirm `/mcp` hits the MCP auth shim; rerun `lab-claude-remote-preflight.sh`; fix Caddy/shim routing before JumpCloud issuer/JWKS debugging |
 | Dynamic client registration rejected | IdP or broker registration policy blocked the client | trusted hosts, redirect URI, client auth method, allowed scopes |
 | Metadata probes succeed, then Claude or another hosted client POSTs `/mcp` without auth and gets `401`/`403` | the client could not complete a supported registration/token flow, or `/mcp` is routed to a browser-session proxy instead of the MCP broker | authorization-server metadata for DCR/CIMD/static-client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
 | Login succeeds but token exchange fails | refresh/offline token policy, grant type, or client type mismatch | IdP events around code-to-token exchange |
@@ -103,3 +124,8 @@ For any IdP or broker, prove these final properties:
 The admin screens differ across Keycloak, Auth0, Okta, Entra, WorkOS,
 Cloudflare Access, Cognito, and JumpCloud-backed brokers, but these acceptance
 properties do not.
+
+For Claude remote add-by-URL, capture evidence in this order: metadata curl,
+unauthenticated `/mcp` headers, `lab-smoke.sh`, Claude OAuth success, and first
+`get_sync_status` output. Only after that sequence passes should you spend
+JumpCloud trial time on issuer/JWKS and provider-specific claim tuning.

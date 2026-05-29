@@ -14,6 +14,41 @@ current Postgres shared-deployment and `business-workbench` paths; this lab
 still defaults to a synthetic SQLite cache unless the operator explicitly wires
 another reviewed cache/store.
 
+## Keycloak-First Claude Remote MCP Proof
+
+Use this lab as the open-source surrogate to prove Claude remote add-by-URL can
+complete the OAuth flow before spending JumpCloud trial time. Keycloak is
+disposable and exercises the MCP-facing properties remote clients need:
+protected-resource metadata, authorization-server discovery, browser login,
+authorization-code token exchange, audience/resource claims, group/email claims,
+scopes, callback URL handling, and authenticated `/mcp` initialize.
+
+JumpCloud remains the later provider-specific smoke. After the Keycloak lab
+passes `lab-smoke.sh` and the manual Claude steps below, rerun the same
+acceptance checks against JumpCloud: issuer, JWKS, audience/client claims,
+group/email claims, scopes, callback URL, and token exchange. Do not start
+JumpCloud debugging until the Keycloak proof path is green or a
+provider-specific mismatch has been isolated.
+
+Recommended operator order:
+
+1. Deploy the Keycloak lab and run `deploy/lab-auth/scripts/lab-smoke.sh`.
+2. Run `deploy/lab-auth/scripts/lab-claude-remote-preflight.sh` for a
+   Claude-focused metadata and `401`/`WWW-Authenticate` check.
+3. Complete the manual Claude remote test below and capture evidence.
+4. Only then move to JumpCloud-backed broker smoke for customer IdP specifics.
+
+## Auth Stack Components
+
+Do not collapse these layers when troubleshooting Claude or ChatGPT remote MCP:
+
+| Layer | Role in the lab | What it does not do |
+| --- | --- | --- |
+| Keycloak IdP | Human login, OIDC metadata, dynamic client registration, access-token issuance | Serve MCP, validate MCP resource metadata, or replace the broker/shim |
+| `oauth2-proxy` | Browser/session helper for rehearsing IdP login through Caddy | Dynamic Client Registration, MCP protected-resource metadata, or MCP-scoped token issuance for Claude/ChatGPT |
+| MCP auth shim | OAuth protected-resource metadata, `WWW-Authenticate` on unauthenticated `/mcp`, JWT validation, internal bearer injection | Store Gong data or expose tools directly without `gongmcp` |
+| `gongmcp` | Private bearer-authenticated read-only MCP over `/mcp` | Native OAuth, IdP login, or DCR |
+
 ## Shape
 
 ```text
@@ -45,10 +80,10 @@ gateway source range. The bundled Caddy `/mcp` route strips inbound proxy
 identity headers before forwarding so a public client cannot forge
 `X-Auth-Request-Email` or `X-Forwarded-Email`.
 
-For ChatGPT remote MCP testing, `/mcp` must be reachable at a trusted HTTPS URL.
-The lab keeps Caddy and `gongmcp` on plain HTTP inside the VM and uses
-Cloudflare Tunnel for external TLS termination, matching the customer-hosted
-pattern where HTTPS ends at a trusted edge/gateway.
+For ChatGPT and Claude remote MCP testing, `/mcp` must be reachable at a trusted
+HTTPS URL. The lab keeps Caddy and `gongmcp` on plain HTTP inside the VM and
+uses Cloudflare Tunnel for external TLS termination, matching the
+customer-hosted pattern where HTTPS ends at a trusted edge/gateway.
 
 ## OAuth Discovery
 
@@ -194,6 +229,46 @@ LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/srv/gongctl-governed/private/ai-governanc
   deploy/lab-auth/scripts/lab-up.sh
 ```
 
+For a production-like Keycloak rehearsal before trying a paid IdP trial, add
+`LAB_KEYCLOAK_PROFILE=production-like` to the full deploy. This uses Keycloak
+`start --optimized`, a Postgres-backed Keycloak store, strict hostname/HTTPS
+settings, public admin/account route blocking, and a pre-registered Claude MCP
+client instead of the disposable `start-dev` profile:
+
+```bash
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+LAB_GONG_DATABASE_URL='postgres://...' \
+LAB_KEYCLOAK_PROFILE=production-like \
+LAB_DEPLOY_MODE=full \
+  deploy/lab-auth/scripts/lab-up.sh
+LAB_VM=ssh-user@lab-host.example.com \
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+  deploy/lab-auth/scripts/lab-smoke.sh
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+  deploy/lab-auth/scripts/lab-claude-remote-preflight.sh
+```
+
+In production-like mode the public Caddy edge serves generated Keycloak
+well-known metadata for the lab realm without `registration_endpoint`. Keycloak
+still owns the authorization, token, userinfo, and JWKS endpoints, and
+anonymous dynamic client registration remains denied. This is intentional for
+testing Claude's pre-registered client path before spending JumpCloud trial
+time.
+
+The production-like Claude client is pre-registered as `claude-remote-mcp` with
+PKCE S256, redirect URI `https://claude.ai/api/mcp/auth_callback`, and
+`offline_access` as an optional client scope. Keep that scope in place because
+Claude can request `openid profile email offline_access` during the browser
+authorization flow.
+
+Production-like full deploys preserve the Keycloak Postgres volume; they do not
+run `down -v`. That is intentional for persistence testing, but it also means
+changing imported realm secrets or users in `.env` will not rewrite an existing
+realm automatically. For deliberate secret rotation, update the realm with
+Keycloak admin tooling or intentionally reset the Keycloak Postgres volume and
+re-import the realm.
+
 For a normal MCP-code update against an existing lab, preserve connected MCP
 clients by using app-only mode:
 
@@ -261,12 +336,17 @@ The smoke verifies:
 
 - `/healthz` reaches `gongmcp`.
 - OAuth protected-resource metadata is published.
-- anonymous dynamic client registration succeeds for a ChatGPT-style redirect
-  and `offline_access` scope.
-- newly registered dynamic clients can receive access tokens with the
-  `gong-lab-proxy` audience and `/gong-mcp-users` group claims.
+- disposable profile: anonymous dynamic client registration succeeds for a
+  ChatGPT-style redirect and `offline_access` scope.
+- production-like profile: public discovery omits `registration_endpoint`,
+  anonymous DCR is denied on both OIDC and default registration endpoints,
+  public admin/master/account routes are blocked, and the pre-registered Claude
+  authorize/token probes accept the expected scope set and client secret.
+- disposable profile: newly registered dynamic clients can receive access
+  tokens with the `gong-lab-proxy` audience and `/gong-mcp-users` group claims.
 - unauthenticated `/mcp` is denied with `401` and `WWW-Authenticate`.
 - forged proxy identity headers on the direct `/mcp` route are denied.
+- forged proxy identity headers cannot override a blocked bearer token.
 - the secondary approved user can request `offline_access` from Keycloak.
 - a Keycloak user outside `gong-mcp-users` is denied.
 - wrong `Origin` is denied.
@@ -289,6 +369,64 @@ The app-only smoke registers a temporary dynamic client, confirms it can obtain
 a token, performs `LAB_DEPLOY_MODE=app-only` with a fresh deployment id, checks
 `/healthz` for that deployment id, then confirms the same dynamic client can
 still obtain a token.
+
+## Manual Claude Remote Test
+
+Run this after `lab-smoke.sh` passes. Use a fresh Claude remote MCP connector
+after a full lab deploy because the Keycloak volume and dynamic clients are
+disposable. App-only deploys preserve dynamic clients; retry the existing
+connector first when only the MCP binary or response payload changed.
+
+Preflight from your workstation:
+
+```bash
+LAB_PUBLIC_BASE_URL=https://your-stable-hostname.example.com \
+  deploy/lab-auth/scripts/lab-claude-remote-preflight.sh
+```
+
+Connector settings:
+
+- MCP server URL: `$LAB_PUBLIC_BASE_URL/mcp`
+- authentication: OAuth
+- test user: the value of `LAB_APPROVED_EMAIL` or `LAB_SECONDARY_EMAIL`
+
+First prompt:
+
+```text
+Use the gongctl MCP connector. Call get_sync_status. Then summarize total
+calls, total transcripts, missing transcripts, and which business-pilot tools
+are available next.
+```
+
+Evidence to capture before moving to JumpCloud:
+
+- screenshot or note of Claude connector OAuth success
+- timestamped output from `lab-claude-remote-preflight.sh`
+- timestamped `lab-smoke.sh` success
+- Claude first-prompt result showing `get_sync_status` totals and tool names
+- if Claude fails, payload-free logs from `keycloak`, `shim`, `caddy`, and
+  `gongmcp` around the attempt
+
+Failure ladder for Claude remote MCP:
+
+1. Protected-resource metadata resolves at
+   `$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource`.
+2. Authorization-server metadata resolves at
+   `$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration`.
+3. Unauthenticated `POST /mcp` returns `401` with `WWW-Authenticate` and
+   `resource_metadata`.
+4. Claude completes browser login and token exchange.
+5. Authenticated `/mcp` `initialize` succeeds.
+6. First `tools/call` for `get_sync_status` succeeds.
+
+If steps 1-2 pass but step 3 fails or returns an unexpected status, treat that
+as a registration, broker, shim, or routing mismatch before JumpCloud
+debugging. Metadata discovery can succeed while `/mcp` still points at the wrong
+handler or rejects the MCP challenge shape Claude expects.
+
+If step 3 passes but Claude still fails after login, inspect DCR policy,
+redirect/callback URL, audience/group claims, offline-token policy, and shim
+logs before changing IdP settings on JumpCloud.
 
 ## Manual ChatGPT Test
 
@@ -354,6 +492,7 @@ Common lab failures:
 | `required group` missing or user denied | token lacks `/gong-mcp-users` or email is not allowed | verify group mapper and `ALLOWED_EMAILS` |
 | `unknown field "_meta"` | MCP server rejected client extension metadata | deploy a build that strips/ignores MCP `_meta` before strict argument decoding |
 | `redacted Postgres serving DB mode requires --ai-governance-config` | redacted-serving mode is enabled but the private governance YAML is not mounted into `gongmcp` | rerun `lab-up.sh` with `LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/absolute/remote/path/to/ai-governance.yaml` |
+| Metadata resolves but unauthenticated `/mcp` is not `401`/`WWW-Authenticate` | registration, broker, shim, or Caddy routing mismatch; Claude/ChatGPT may still show a generic connector error | verify `/mcp` reaches the auth shim, not `gongmcp` or `oauth2-proxy` directly; rerun `lab-claude-remote-preflight.sh` before JumpCloud issuer/JWKS work |
 
 The same categories apply beyond Keycloak. Other IdPs and brokers use different
 admin controls, but remote MCP clients still need successful registration or a

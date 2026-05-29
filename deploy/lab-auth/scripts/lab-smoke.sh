@@ -57,6 +57,21 @@ http_status() {
   curl -sS -o /tmp/gongctl-lab-smoke-body.$$ -w '%{http_code}' "$@"
 }
 
+assert_status_class() {
+	local label="$1"
+	local want_prefix="$2"
+	shift 2
+	local status
+	status="$(http_status "$@")"
+	rm -f /tmp/gongctl-lab-smoke-body.$$
+	if [[ "${status:0:1}" == "$want_prefix" ]]; then
+		echo "ok: $label status=$status"
+	else
+		echo "expected $label ${want_prefix}xx status, got status=$status" >&2
+		exit 1
+	fi
+}
+
 wait_for_url() {
   local url="$1"
   for _ in $(seq 1 30); do
@@ -101,9 +116,12 @@ LAB_BLOCKED_EMAIL="$(remote_env LAB_BLOCKED_EMAIL)"
 LAB_APPROVED_PASSWORD="$(remote_env LAB_APPROVED_PASSWORD)"
 LAB_BLOCKED_PASSWORD="$(remote_env LAB_BLOCKED_PASSWORD)"
 LAB_SECONDARY_PASSWORD="$(remote_env LAB_SECONDARY_PASSWORD)"
+CLAUDE_OIDC_CLIENT_SECRET="$(remote_env CLAUDE_OIDC_CLIENT_SECRET)"
 GONGMCP_TOOL_PRESET="$(remote_env GONGMCP_TOOL_PRESET)"
 GONGMCP_TOOL_PRESET="${GONGMCP_TOOL_PRESET:-business-pilot}"
 GONGMCP_DEPLOYMENT_ID="$(remote_env GONGMCP_DEPLOYMENT_ID)"
+LAB_KEYCLOAK_PROFILE="$(remote_env LAB_KEYCLOAK_PROFILE)"
+LAB_KEYCLOAK_PROFILE="${LAB_KEYCLOAK_PROFILE:-disposable}"
 if [[ -z "$OIDC_CLIENT_SECRET" || -z "$LAB_APPROVED_EMAIL" || -z "$LAB_SECONDARY_EMAIL" || -z "$LAB_BLOCKED_EMAIL" || -z "$LAB_APPROVED_PASSWORD" || -z "$LAB_BLOCKED_PASSWORD" || -z "$LAB_SECONDARY_PASSWORD" ]]; then
   echo "remote lab .env is missing required lab auth values; redeploy with lab-up.sh" >&2
   exit 1
@@ -130,7 +148,34 @@ echo "$metadata_response" | jq -e '.scopes_supported | index("openid")' >/dev/nu
 echo "$metadata_response" | jq -e '.scopes_supported | index("offline_access")' >/dev/null
 echo "$metadata_response" | jq -e '.audiences_supported | index("gong-lab-proxy")' >/dev/null
 
-echo "== anonymous dynamic client registration is accepted =="
+if [[ "$LAB_KEYCLOAK_PROFILE" == "production-like" ]]; then
+  echo "== production-like discovery omits dynamic registration =="
+  oidc_discovery="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration")"
+  echo "$oidc_discovery" | jq -e --arg issuer "$LAB_PUBLIC_BASE_URL/realms/gong-lab" '.issuer == $issuer' >/dev/null
+  echo "$oidc_discovery" | jq -e --arg endpoint "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/auth" '.authorization_endpoint == $endpoint' >/dev/null
+  echo "$oidc_discovery" | jq -e --arg endpoint "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/token" '.token_endpoint == $endpoint' >/dev/null
+  echo "$oidc_discovery" | jq -e --arg endpoint "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/certs" '.jwks_uri == $endpoint' >/dev/null
+  echo "$oidc_discovery" | jq -e '.code_challenge_methods_supported == ["S256"]' >/dev/null
+  echo "$oidc_discovery" | jq -e 'has("registration_endpoint") | not' >/dev/null
+  oauth_as_discovery="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/oauth-authorization-server")"
+  echo "$oauth_as_discovery" | jq -e --arg issuer "$LAB_PUBLIC_BASE_URL/realms/gong-lab" '.issuer == $issuer' >/dev/null
+  echo "$oauth_as_discovery" | jq -e '.code_challenge_methods_supported == ["S256"]' >/dev/null
+  echo "$oauth_as_discovery" | jq -e 'has("registration_endpoint") | not' >/dev/null
+  oidc_discovery_query="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration?_=1")"
+  echo "$oidc_discovery_query" | jq -e --arg issuer "$LAB_PUBLIC_BASE_URL/realms/gong-lab" '.issuer == $issuer' >/dev/null
+  echo "$oidc_discovery_query" | jq -e 'has("registration_endpoint") | not' >/dev/null
+  assert_status_class "OIDC discovery trailing slash denied" "4" "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/openid-configuration/"
+  assert_status_class "OAuth AS discovery trailing slash denied" "4" "$LAB_PUBLIC_BASE_URL/realms/gong-lab/.well-known/oauth-authorization-server/"
+  echo "ok: production-like discovery keeps pre-registered OAuth endpoints and omits registration_endpoint"
+
+  echo "== production-like public admin routes are blocked =="
+  assert_status_class "admin route denied" "4" "$LAB_PUBLIC_BASE_URL/admin/"
+  assert_status_class "admin master console denied" "4" "$LAB_PUBLIC_BASE_URL/admin/master/console/"
+  assert_status_class "master realm denied" "4" "$LAB_PUBLIC_BASE_URL/realms/master/.well-known/openid-configuration"
+  assert_status_class "account console denied" "4" "$LAB_PUBLIC_BASE_URL/realms/gong-lab/account/"
+fi
+
+echo "== anonymous dynamic client registration posture =="
 dcr_body="$(jq -n '{
   client_name: "gongctl-lab-smoke",
   redirect_uris: ["https://chatgpt.com/aip/gongctl-lab-smoke/oauth/callback"],
@@ -144,10 +189,90 @@ dcr_status="$(curl -sS -o "$dcr_response_file" -w '%{http_code}' \
   "$LAB_PUBLIC_BASE_URL/realms/gong-lab/clients-registrations/openid-connect" \
   -H "Content-Type: application/json" \
   --data "$dcr_body")"
-case "$dcr_status" in
-  201) echo "ok: dynamic client registration status=$dcr_status" ;;
-  *) echo "expected dynamic client registration status=201, got status=$dcr_status" >&2; jq . "$dcr_response_file" >&2 || cat "$dcr_response_file" >&2; rm -f "$dcr_response_file"; exit 1 ;;
-esac
+if [[ "$LAB_KEYCLOAK_PROFILE" == "production-like" ]]; then
+  case "$dcr_status" in
+    401|403|404) echo "ok: production-like anonymous DCR denied status=$dcr_status"; rm -f "$dcr_response_file" ;;
+    *) echo "expected production-like anonymous DCR denial, got status=$dcr_status" >&2; jq . "$dcr_response_file" >&2 || cat "$dcr_response_file" >&2; rm -f "$dcr_response_file"; exit 1 ;;
+  esac
+  dcr_default_body="$(jq -n '{
+    clientId: "gongctl-lab-smoke-default-dcr",
+    name: "gongctl lab smoke default dcr",
+    enabled: true,
+    protocol: "openid-connect",
+    publicClient: true,
+    standardFlowEnabled: true,
+    redirectUris: ["https://claude.ai/api/mcp/auth_callback"]
+  }')"
+  dcr_default_response_file="/tmp/gongctl-lab-dcr-default-response.$$"
+  dcr_default_status="$(curl -sS -o "$dcr_default_response_file" -w '%{http_code}' \
+    "$LAB_PUBLIC_BASE_URL/realms/gong-lab/clients-registrations/default" \
+    -H "Content-Type: application/json" \
+    --data "$dcr_default_body")"
+  case "$dcr_default_status" in
+    401|403|404) echo "ok: production-like legacy/default anonymous DCR denied status=$dcr_default_status"; rm -f "$dcr_default_response_file" ;;
+    *) echo "expected production-like legacy/default anonymous DCR denial, got status=$dcr_default_status" >&2; jq . "$dcr_default_response_file" >&2 || cat "$dcr_default_response_file" >&2; rm -f "$dcr_default_response_file"; exit 1 ;;
+  esac
+  if [[ -z "$CLAUDE_OIDC_CLIENT_SECRET" ]]; then
+    echo "remote lab .env is missing CLAUDE_OIDC_CLIENT_SECRET" >&2
+    exit 1
+  fi
+  echo "== production-like pre-registered Claude authorize scope set is accepted =="
+  claude_authorize_probe_file="/tmp/gongctl-lab-claude-authorize-probe.$$"
+  claude_authorize_probe_status="$(curl -sS -o "$claude_authorize_probe_file" -w '%{http_code}' -G \
+    "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/auth" \
+    --data-urlencode "client_id=claude-remote-mcp" \
+    --data-urlencode "redirect_uri=https://claude.ai/api/mcp/auth_callback" \
+    --data-urlencode "response_type=code" \
+    --data-urlencode "scope=openid profile email offline_access" \
+    --data-urlencode "state=gongctl-lab-smoke-state" \
+    --data-urlencode "code_challenge=BtUPCn8Rrb4xW_3B3apW6r0rdvOTkuCJ9zGiiytJMLM" \
+    --data-urlencode "code_challenge_method=S256")"
+  case "$claude_authorize_probe_status" in
+    200|302)
+      if grep -Eqi 'invalid.*scope|Invalid scopes' "$claude_authorize_probe_file"; then
+        echo "Claude authorize probe rejected the requested scopes" >&2
+        cat "$claude_authorize_probe_file" >&2
+        rm -f "$claude_authorize_probe_file"
+        exit 1
+      fi
+      echo "ok: pre-registered Claude authorize request accepts openid/profile/email/offline_access"
+      ;;
+    *)
+      echo "expected Claude authorize probe status 200 or 302, got status=$claude_authorize_probe_status" >&2
+      cat "$claude_authorize_probe_file" >&2
+      rm -f "$claude_authorize_probe_file"
+      exit 1
+      ;;
+  esac
+  rm -f "$claude_authorize_probe_file"
+  echo "== production-like pre-registered Claude client secret is accepted =="
+  claude_token_probe_file="/tmp/gongctl-lab-claude-token-probe.$$"
+  claude_token_probe_status="$(curl -sS -o "$claude_token_probe_file" -w '%{http_code}' \
+    "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "grant_type=authorization_code" \
+    --data-urlencode "client_id=claude-remote-mcp" \
+    --data-urlencode "client_secret=$CLAUDE_OIDC_CLIENT_SECRET" \
+    --data-urlencode "code=gongctl-lab-smoke-invalid-code" \
+    --data-urlencode "redirect_uri=https://claude.ai/api/mcp/auth_callback")"
+  case "$claude_token_probe_status" in
+    400)
+      jq -e '.error == "invalid_grant"' "$claude_token_probe_file" >/dev/null
+      echo "ok: pre-registered Claude client authenticated; bogus code rejected as invalid_grant"
+      ;;
+    *)
+      echo "expected Claude client probe status=400 invalid_grant, got status=$claude_token_probe_status" >&2
+      jq . "$claude_token_probe_file" >&2 || cat "$claude_token_probe_file" >&2
+      rm -f "$claude_token_probe_file"
+      exit 1
+      ;;
+  esac
+  rm -f "$claude_token_probe_file"
+else
+  case "$dcr_status" in
+    201) echo "ok: dynamic client registration status=$dcr_status" ;;
+    *) echo "expected dynamic client registration status=201, got status=$dcr_status" >&2; jq . "$dcr_response_file" >&2 || cat "$dcr_response_file" >&2; rm -f "$dcr_response_file"; exit 1 ;;
+  esac
 dcr_registration_uri="$(jq -r '.registration_client_uri' "$dcr_response_file")"
 dcr_registration_token="$(jq -r '.registration_access_token' "$dcr_response_file")"
 dcr_client_id="$(jq -r '.client_id' "$dcr_response_file")"
@@ -212,6 +337,7 @@ if [[ "$dcr_registration_uri" != "null" && "$dcr_registration_token" != "null" ]
   curl -fsS -X DELETE "$dcr_registration_uri" -H "Authorization: Bearer $dcr_registration_token" >/dev/null || true
 fi
 rm -f "$dcr_response_file"
+fi
 
 echo "== unauthenticated /mcp is denied =="
 headers_file="/tmp/gongctl-lab-smoke-headers.$$"
@@ -251,6 +377,21 @@ test "$approved_token" != "null"
 test "$blocked_token" != "null"
 test "$secondary_token" != "null"
 echo "ok: received approved, secondary, and blocked-user tokens"
+
+echo "== forged proxy identity header cannot bypass bearer identity =="
+forged_proxy_with_blocked_bearer_status="$(http_status \
+  -H "Authorization: Bearer $blocked_token" \
+  -H "X-Auth-Request-Email: $LAB_APPROVED_EMAIL" \
+  -H "X-Forwarded-Email: $LAB_APPROVED_EMAIL" \
+  -H "Origin: $LAB_PUBLIC_BASE_URL" \
+  -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","id":12,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"lab-smoke-forged-bearer","version":"0"}}}' \
+  "$LAB_PUBLIC_BASE_URL/mcp")"
+rm -f /tmp/gongctl-lab-smoke-body.$$
+case "$forged_proxy_with_blocked_bearer_status" in
+  401|403) echo "ok: forged proxy header with blocked bearer status=$forged_proxy_with_blocked_bearer_status" ;;
+  *) echo "expected forged proxy identity header not to override blocked bearer, got status=$forged_proxy_with_blocked_bearer_status" >&2; exit 1 ;;
+esac
 
 echo "== approved users can request offline_access =="
 offline_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/realms/gong-lab/protocol/openid-connect/token" \

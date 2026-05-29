@@ -1,9 +1,10 @@
 FROM golang:1.26.3-bookworm AS build
 
 WORKDIR /src
-COPY main.go .
-RUN go mod init gongctl-lab-auth-shim \
-	&& CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/lab-auth-shim .
+COPY go.mod go.sum ./
+RUN go mod download
+COPY deploy/lab-auth/shim/main.go ./deploy/lab-auth/shim/main.go
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/lab-auth-shim ./deploy/lab-auth/shim
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates

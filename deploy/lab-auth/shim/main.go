@@ -2,16 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
 )
 
 type config struct {
@@ -37,21 +33,18 @@ type config struct {
 }
 
 type app struct {
-	cfg    config
-	jwksMu sync.Mutex
-	jwks   map[string]*rsa.PublicKey
+	cfg config
+
+	verifierMu sync.Mutex
+	verifier   *oidc.IDTokenVerifier
 }
 
 type claims struct {
-	Issuer        string          `json:"iss"`
-	Subject       string          `json:"sub"`
-	Email         string          `json:"email"`
-	PreferredName string          `json:"preferred_username"`
-	Authorized    string          `json:"azp"`
-	Audience      json.RawMessage `json:"aud"`
-	ExpiresAt     int64           `json:"exp"`
-	NotBefore     int64           `json:"nbf"`
-	Groups        []string        `json:"groups"`
+	Issuer        string   `json:"iss"`
+	Subject       string   `json:"sub"`
+	Email         string   `json:"email"`
+	PreferredName string   `json:"preferred_username"`
+	Groups        []string `json:"groups"`
 }
 
 func main() {
@@ -267,58 +260,32 @@ func (a *app) authorize(email string, groups []string) error {
 	return nil
 }
 
+func (a *app) tokenVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {
+	a.verifierMu.Lock()
+	defer a.verifierMu.Unlock()
+	if a.verifier != nil {
+		return a.verifier, nil
+	}
+	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, http.DefaultClient), a.cfg.issuer)
+	if err != nil {
+		return nil, fmt.Errorf("oidc provider discovery: %w", err)
+	}
+	a.verifier = provider.Verifier(&oidc.Config{ClientID: a.cfg.clientID})
+	return a.verifier, nil
+}
+
 func (a *app) verifyJWT(ctx context.Context, token string) (claims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return claims{}, errors.New("token is not a JWT")
-	}
-	headerRaw, err := decodeSegment(parts[0])
+	verifier, err := a.tokenVerifier(ctx)
 	if err != nil {
 		return claims{}, err
 	}
-	var header struct {
-		Algorithm string `json:"alg"`
-		KeyID     string `json:"kid"`
-	}
-	if err := json.Unmarshal(headerRaw, &header); err != nil {
-		return claims{}, err
-	}
-	if header.Algorithm != "RS256" || header.KeyID == "" {
-		return claims{}, errors.New("unsupported JWT header")
-	}
-	key, err := a.publicKey(ctx, header.KeyID)
-	if err != nil {
-		return claims{}, err
-	}
-	signed := []byte(parts[0] + "." + parts[1])
-	digest := sha256.Sum256(signed)
-	sig, err := decodeSegment(parts[2])
-	if err != nil {
-		return claims{}, err
-	}
-	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], sig); err != nil {
-		return claims{}, errors.New("invalid token signature")
-	}
-	claimsRaw, err := decodeSegment(parts[1])
+	idToken, err := verifier.Verify(ctx, token)
 	if err != nil {
 		return claims{}, err
 	}
 	var claim claims
-	if err := json.Unmarshal(claimsRaw, &claim); err != nil {
+	if err := idToken.Claims(&claim); err != nil {
 		return claims{}, err
-	}
-	now := time.Now().Unix()
-	if claim.Issuer != a.cfg.issuer {
-		return claims{}, fmt.Errorf("issuer mismatch: %s", claim.Issuer)
-	}
-	if claim.ExpiresAt <= now {
-		return claims{}, errors.New("token expired")
-	}
-	if claim.NotBefore > 0 && claim.NotBefore > now+60 {
-		return claims{}, errors.New("token not yet valid")
-	}
-	if claim.Authorized != a.cfg.clientID && !audienceContains(claim.Audience, a.cfg.clientID) {
-		return claims{}, errors.New("token audience/client mismatch")
 	}
 	return claim, nil
 }
@@ -341,107 +308,6 @@ func writeJSON(w http.ResponseWriter, value any) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		log.Printf("write json failed: %v", err)
 	}
-}
-
-func (a *app) publicKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
-	a.jwksMu.Lock()
-	defer a.jwksMu.Unlock()
-	if a.jwks != nil {
-		if key := a.jwks[kid]; key != nil {
-			return key, nil
-		}
-	}
-	keys, err := fetchJWKS(ctx, a.cfg.issuer+"/protocol/openid-connect/certs")
-	if err != nil {
-		return nil, err
-	}
-	a.jwks = keys
-	if key := a.jwks[kid]; key != nil {
-		return key, nil
-	}
-	return nil, fmt.Errorf("jwks key %q not found", kid)
-}
-
-func fetchJWKS(ctx context.Context, endpoint string) (map[string]*rsa.PublicKey, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jwks status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
-	var jwks struct {
-		Keys []struct {
-			KeyID     string `json:"kid"`
-			KeyType   string `json:"kty"`
-			Algorithm string `json:"alg"`
-			Use       string `json:"use"`
-			N         string `json:"n"`
-			E         string `json:"e"`
-		} `json:"keys"`
-	}
-	if err := json.Unmarshal(body, &jwks); err != nil {
-		return nil, err
-	}
-	keys := map[string]*rsa.PublicKey{}
-	for _, item := range jwks.Keys {
-		if item.KeyID == "" || item.KeyType != "RSA" || item.N == "" || item.E == "" {
-			continue
-		}
-		nBytes, err := decodeSegment(item.N)
-		if err != nil {
-			continue
-		}
-		eBytes, err := decodeSegment(item.E)
-		if err != nil {
-			continue
-		}
-		e := 0
-		for _, b := range eBytes {
-			e = e<<8 + int(b)
-		}
-		if e == 0 {
-			continue
-		}
-		keys[item.KeyID] = &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: e}
-	}
-	if len(keys) == 0 {
-		return nil, errors.New("jwks had no RSA keys")
-	}
-	return keys, nil
-}
-
-func decodeSegment(value string) ([]byte, error) {
-	return base64.RawURLEncoding.DecodeString(value)
-}
-
-func audienceContains(raw json.RawMessage, want string) bool {
-	if len(raw) == 0 {
-		return false
-	}
-	var one string
-	if err := json.Unmarshal(raw, &one); err == nil {
-		return one == want
-	}
-	var many []string
-	if err := json.Unmarshal(raw, &many); err != nil {
-		return false
-	}
-	for _, item := range many {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
 
 func firstHeader(r *http.Request, names ...string) string {
