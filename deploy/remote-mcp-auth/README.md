@@ -60,6 +60,7 @@ Important distinction:
 
 | Example | Use when | Client-registration model |
 | --- | --- | --- |
+| `tradecentric-jumpcloud/` | TradeCentric needs one Claude-first JumpCloud deployment handoff branch. | Pre-registered Cognito app client with JumpCloud federated behind Cognito; optional Cognito DCR fallback. |
 | `aws-cognito-gateway/` | The customer uses Cognito, optionally federated to JumpCloud, and needs the Kubernetes/Postgres gateway path. | Pre-registered Cognito client by default; optional gateway-backed DCR that creates real Cognito app clients. |
 | `cloudflare-worker/` | The customer can deploy Cloudflare Workers and wants the recommended MCP-shaped broker. | Dynamic Client Registration through Cloudflare's OAuth Provider Library. |
 | `jumpcloud/` | JumpCloud is the customer IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client fallback. |
@@ -81,6 +82,8 @@ when the client needs a DCR-capable broker.
 ## Files
 
 - `cloudflare-worker/`: Worker scaffold for the recommended broker path.
+- `tradecentric-jumpcloud/`: TC-specific deployment handoff for the
+  JumpCloud-through-Cognito gateway path that mirrors the Keycloak proof.
 - `aws-cognito-gateway/`: AWS/Cognito gateway starter for Claude custom
   connectors using pre-registered Cognito OAuth credentials, with optional DCR
   fallback.
