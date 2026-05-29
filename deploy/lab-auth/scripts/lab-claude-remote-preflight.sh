@@ -37,6 +37,7 @@ trap cleanup EXIT
 echo "== Claude remote MCP preflight =="
 echo "MCP server URL: $LAB_PUBLIC_BASE_URL/mcp"
 echo "authentication: OAuth"
+echo "static OAuth client ID: claude-remote-mcp"
 echo
 
 echo "== protected-resource metadata =="
@@ -76,12 +77,18 @@ cat <<EOF
 Manual Claude remote test checklist:
 1. Add MCP server URL: $LAB_PUBLIC_BASE_URL/mcp
 2. Choose authentication: OAuth
-3. Sign in with an approved lab user such as LAB_APPROVED_EMAIL
-4. First prompt:
+3. Open Advanced OAuth settings for the production-like/static-client path:
+   - OAuth Client ID: claude-remote-mcp
+   - OAuth Client Secret: paste the pre-registered Claude client secret from
+     the operator-held lab/IdP secret store. Do not paste it into logs.
+   - Redirect/callback URI allowed by the IdP:
+     https://claude.ai/api/mcp/auth_callback
+4. Sign in with an approved lab user such as LAB_APPROVED_EMAIL
+5. First prompt:
    Use the gongctl MCP connector. Call get_sync_status. Then summarize total
    calls, total transcripts, missing transcripts, and which business-pilot
    tools are available next.
-5. Capture evidence:
+6. Capture evidence:
    - this preflight output
    - lab-smoke.sh success
    - Claude OAuth success
@@ -89,8 +96,15 @@ Manual Claude remote test checklist:
 
 Failure ladder:
 - metadata ok but unauthenticated /mcp not 401/WWW-Authenticate -> fix registration/broker/shim/routing before JumpCloud debugging
-- login ok but initialize fails -> check audience/group claims and offline_access policy
+- Keycloak says "Invalid parameter: redirect_uri" -> add https://claude.ai/api/mcp/auth_callback to the Claude client's IdP redirect URI allowlist
+- Claude shows oauth_error=unauthorized_client or mcp_token_exchange_failed and IdP logs show invalid_client_credentials -> recreate/update the Claude connector with the static OAuth client secret
+- login ok but initialize fails -> check audience/group claims, requested scope, resource/audience, and offline_access policy
 - initialize ok but first tool call fails -> check _meta tolerance and tool preset
+
+This preflight checks the public protocol surface only. It does not prove the
+IdP admin-side client secret, redirect URI allowlist, group mapper, or token
+claim policy unless you also run provider admin checks or the full manual Claude
+connector flow.
 
 Only move to JumpCloud provider-specific smoke after this Keycloak proof path passes.
 EOF

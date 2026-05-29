@@ -388,7 +388,19 @@ Connector settings:
 
 - MCP server URL: `$LAB_PUBLIC_BASE_URL/mcp`
 - authentication: OAuth
+- Advanced OAuth settings for the production-like/static-client path:
+  - OAuth Client ID: `claude-remote-mcp`
+  - OAuth Client Secret: the operator-held secret for the pre-registered
+    `claude-remote-mcp` client. Do not paste it into docs, logs, or support
+    artifacts.
+  - Redirect/callback URI allowed by Keycloak:
+    `https://claude.ai/api/mcp/auth_callback`
 - test user: the value of `LAB_APPROVED_EMAIL` or `LAB_SECONDARY_EMAIL`
+
+Use `claude-remote-mcp` for the production-like Claude remote rehearsal.
+`gong-lab-proxy` is the lab proxy client used by the shim/browser helper path;
+only use it for intentional direct-OIDC experiments where the operator has also
+updated its redirect URI and secret handling for Claude.
 
 First prompt:
 
@@ -419,13 +431,18 @@ Failure ladder for Claude remote MCP:
 5. Authenticated `/mcp` `initialize` succeeds.
 6. First `tools/call` for `get_sync_status` succeeds.
 
+Browser login success alone is not enough. The manual proof is only green after
+the token exchange, authenticated initialize, and first `get_sync_status` tool
+call succeed.
+
 If steps 1-2 pass but step 3 fails or returns an unexpected status, treat that
 as a registration, broker, shim, or routing mismatch before JumpCloud
 debugging. Metadata discovery can succeed while `/mcp` still points at the wrong
 handler or rejects the MCP challenge shape Claude expects.
 
 If step 3 passes but Claude still fails after login, inspect DCR policy,
-redirect/callback URL, audience/group claims, offline-token policy, and shim
+static-client ID/secret entry in Claude, redirect/callback URL,
+audience/group claims, requested scope/resource, offline-token policy, and shim
 logs before changing IdP settings on JumpCloud.
 
 ## Manual ChatGPT Test
@@ -493,6 +510,9 @@ Common lab failures:
 | `unknown field "_meta"` | MCP server rejected client extension metadata | deploy a build that strips/ignores MCP `_meta` before strict argument decoding |
 | `redacted Postgres serving DB mode requires --ai-governance-config` | redacted-serving mode is enabled but the private governance YAML is not mounted into `gongmcp` | rerun `lab-up.sh` with `LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/absolute/remote/path/to/ai-governance.yaml` |
 | Metadata resolves but unauthenticated `/mcp` is not `401`/`WWW-Authenticate` | registration, broker, shim, or Caddy routing mismatch; Claude/ChatGPT may still show a generic connector error | verify `/mcp` reaches the auth shim, not `gongmcp` or `oauth2-proxy` directly; rerun `lab-claude-remote-preflight.sh` before JumpCloud issuer/JWKS work |
+| Keycloak shows `Invalid parameter: redirect_uri` in the Claude browser login | the static Claude client does not allow Claude's callback URL | add `https://claude.ai/api/mcp/auth_callback` to the `claude-remote-mcp` redirect URI allowlist, then recreate or reconnect the Claude connector |
+| Claude reports `oauth_error=unauthorized_client` / `mcp_token_exchange_failed`, and Keycloak logs show `invalid_client_credentials` | the Claude connector was created without the confidential/static client secret or with the wrong client ID | recreate the connector with Advanced OAuth Client ID `claude-remote-mcp` and the matching client secret; do not switch to `gong-lab-proxy` unless intentionally testing that direct-OIDC client |
+| Connector imports tools but first tool call returns `required scope` or another auth mismatch | token scope, audience/resource, or claim policy does not match the gateway/shim validation | compare protected-resource `scopes_supported`, `WWW-Authenticate` scope, token `scope`/`aud`, and shim/gateway required-scope settings before provider-specific JumpCloud debugging |
 
 The same categories apply beyond Keycloak. Other IdPs and brokers use different
 admin controls, but remote MCP clients still need successful registration or a

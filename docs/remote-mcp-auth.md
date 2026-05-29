@@ -572,7 +572,18 @@ Connector settings:
 
 - MCP server URL: `https://.../mcp`
 - authentication: OAuth
+- Advanced OAuth settings when using the production-like/static-client path:
+  - OAuth Client ID: `claude-remote-mcp` for the Keycloak lab rehearsal
+  - OAuth Client Secret: the operator-held secret for that pre-registered
+    client; do not paste it into shared logs or docs
+  - Redirect/callback URI allowed by the IdP:
+    `https://claude.ai/api/mcp/auth_callback`
 - test user: an approved lab or pilot user in the allowed group/email policy
+
+Use the lab's `claude-remote-mcp` client for the production-like Keycloak proof.
+Do not document `gong-lab-proxy` as the canonical Claude client; it is the lab
+proxy/shim client and should only be used for intentional direct-OIDC
+experiments.
 
 First prompt:
 
@@ -599,6 +610,10 @@ Failure ladder:
 4. Claude completes browser login and token exchange.
 5. Authenticated `/mcp` initialize succeeds.
 6. First `get_sync_status` tool call succeeds.
+
+Browser login success alone is not enough. A provider-specific JumpCloud smoke
+should wait until Keycloak proves token exchange, authenticated initialize, and
+the first tool call against the same `/mcp` surface.
 
 If metadata resolves but step 3 fails, fix registration, broker, shim, or
 routing before JumpCloud issuer/JWKS debugging. See

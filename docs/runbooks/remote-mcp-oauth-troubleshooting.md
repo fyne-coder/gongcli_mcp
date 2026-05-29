@@ -53,6 +53,33 @@ succeeds. Confirm `/mcp` reaches the MCP auth shim rather than `gongmcp` or
 
 Browser login success alone is not enough.
 
+For the production-like Keycloak lab and other static-client rehearsals, Claude
+also needs the static OAuth client details in its connector Advanced settings.
+Use `claude-remote-mcp` for the Keycloak lab, provide that client's secret from
+the operator-held secret store, and allow
+`https://claude.ai/api/mcp/auth_callback` as an IdP redirect/callback URI.
+`gong-lab-proxy` is the lab proxy/shim client, not the canonical Claude remote
+client, unless you are intentionally testing a direct-OIDC shortcut.
+
+For the longer-term public gateway check, run:
+
+```bash
+gongctl doctor mcp-gateway \
+  --url https://gong-mcp.example.com \
+  --issuer https://issuer.example.com/realms/customer
+```
+
+The doctor defaults to `--required-scope gongmcp/read`; override it when the
+lab or provider advertises a different scope set, for example
+`--required-scope openid` for the current Keycloak shim path. Use
+`--expect-dcr` only when the gateway intentionally exposes dynamic client
+registration metadata. Use `--token-env ENV_NAME` only from an operator shell
+that already holds a non-prod access token; the doctor reports status and does
+not print the token or raw tool response body. Add `--origin https://claude.ai`
+only when the gateway is expected to support browser-style CORS preflight for
+that origin; some hosted connector paths are server-to-server and do not need
+that as a baseline proof.
+
 ## Lab Commands
 
 For the auth lab:
@@ -96,10 +123,13 @@ LAB_PUBLIC_BASE_URL=https://lab.example.com \
 | Symptom | Likely cause | Next check |
 | --- | --- | --- |
 | Protected-resource metadata resolves but unauthenticated `/mcp` is not `401`/`WWW-Authenticate` | registration, broker, shim, or routing mismatch | confirm `/mcp` hits the MCP auth shim; rerun `lab-claude-remote-preflight.sh`; fix Caddy/shim routing before JumpCloud issuer/JWKS debugging |
+| Keycloak browser page says `Invalid parameter: redirect_uri` | the IdP client allowlist does not include Claude's callback URL | add `https://claude.ai/api/mcp/auth_callback` to the static Claude client's redirect URI allowlist, then recreate or reconnect the Claude connector |
+| Claude redirects back with `oauth_error=unauthorized_client` / `mcp_token_exchange_failed`, and IdP logs show `invalid_client_credentials` | Claude attempted token exchange without the confidential/static client secret, or with the wrong client ID | recreate/update the Claude connector Advanced settings with OAuth Client ID `claude-remote-mcp` and the matching client secret; do not paste the secret into support logs |
 | Dynamic client registration rejected | IdP or broker registration policy blocked the client | trusted hosts, redirect URI, client auth method, allowed scopes |
 | Metadata probes succeed, then Claude or another hosted client POSTs `/mcp` without auth and gets `401`/`403` | the client could not complete a supported registration/token flow, or `/mcp` is routed to a browser-session proxy instead of the MCP broker | authorization-server metadata for DCR/CIMD/static-client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
 | Login succeeds but token exchange fails | refresh/offline token policy, grant type, or client type mismatch | IdP events around code-to-token exchange |
 | Authenticated `/mcp` gets 401 | token does not match gateway validation | issuer, audience/resource, expiry, signature, groups, email allowlist, OIDC `jwks_uri` discovery |
+| Connector imports tools but first tool call fails with a required-scope, audience, or resource error | token was accepted far enough to connect, but the gateway/shim requires a scope/audience/resource not present in the access token | compare protected-resource `scopes_supported`, `WWW-Authenticate` scope, decoded token `scope`/`aud`, and gateway required-scope settings; then rerun `gongctl doctor mcp-gateway` with the expected `--required-scope` |
 | Tools import but `get_sync_status` fails | MCP JSON/tool-call compatibility issue | server logs for `_meta`, unknown fields, result size, or tool allowlist |
 | A tool is missing | preset or allowlist is narrower than expected | `tools/list`, `GONGMCP_TOOL_PRESET`, `GONGMCP_TOOL_ALLOWLIST` |
 | Connector worked before a deploy and now needs OAuth setup again | full lab deploy reset the disposable Keycloak volume and dynamic clients | reconnect once, then use `LAB_DEPLOY_MODE=app-only` for normal MCP changes |
