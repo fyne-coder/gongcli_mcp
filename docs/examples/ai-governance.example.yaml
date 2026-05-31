@@ -1,0 +1,14 @@
+version: 1
+lists:
+  no_ai:
+    description: Synthetic example list for customers requiring per-use consent before AI processing.
+    customers:
+      - name: "Example Restricted Corp"
+        aliases:
+          - "Example Restricted Corporation"
+  notification_required:
+    description: Synthetic example list for customers excluded until notification is complete.
+    customers:
+      - name: "Example Notice Customer"
+        aliases:
+          - "Example Notice Co"

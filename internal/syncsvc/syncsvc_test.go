@@ -1,0 +1,1133 @@
+package syncsvc
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/auth"
+	"github.com/fyne-coder/gongcli_mcp/internal/gong"
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
+)
+
+func TestSyncCallsPaginatesAndStoresContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/extensive" {
+			t.Fatalf("path=%q want /v2/calls/extensive", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%q want POST", r.Method)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+
+		filter, ok := body["filter"].(map[string]any)
+		if !ok {
+			t.Fatalf("filter missing: %#v", body)
+		}
+		if got := filter["fromDateTime"]; got != "2026-04-20T00:00:00-04:00" {
+			t.Fatalf("fromDateTime=%v want 2026-04-20T00:00:00-04:00", got)
+		}
+		if got := filter["toDateTime"]; got != "2026-04-24T23:59:59-04:00" {
+			t.Fatalf("toDateTime=%v want 2026-04-24T23:59:59-04:00", got)
+		}
+		contentSelector, ok := body["contentSelector"].(map[string]any)
+		if !ok || contentSelector["context"] != "Extended" {
+			t.Fatalf("contentSelector=%#v want Extended", body["contentSelector"])
+		}
+		exposedFields, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok || exposedFields["parties"] != true {
+			t.Fatalf("contentSelector.exposedFields=%#v want parties=true", contentSelector["exposedFields"])
+		}
+
+		requests++
+		switch requests {
+		case 1:
+			if got := strings.TrimSpace(stringValue(body["cursor"])); got != "" {
+				t.Fatalf("page1 cursor=%q want empty", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 0,
+					"cursor":            "page-2",
+				},
+				"calls": []map[string]any{
+					{
+						"id":       "call-001",
+						"title":    "Discovery",
+						"started":  "2026-04-20T14:00:00Z",
+						"duration": 120,
+						"parties":  []map[string]any{{"id": "user-001"}},
+						"context": map[string]any{
+							"crm": []map[string]any{
+								{
+									"id":   "opp-001",
+									"type": "Opportunity",
+									"name": "ACME renewal",
+									"fields": []map[string]any{
+										{"name": "amount", "value": 40000},
+										{"name": "stage", "value": "Negotiation"},
+									},
+								},
+							},
+						},
+					},
+				},
+			})
+		case 2:
+			if got := stringValue(body["cursor"]); got != "page-2" {
+				t.Fatalf("page2 cursor=%q want page-2", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 1,
+				},
+				"calls": []map[string]any{
+					{
+						"id":       "call-002",
+						"title":    "Demo",
+						"started":  "2026-04-21T15:00:00Z",
+						"duration": 300,
+						"parties":  []map[string]any{{"id": "user-002"}},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncCalls(ctx, client, store, CallsParams{
+		From:          "2026-04-20",
+		To:            "2026-04-24",
+		Context:       "Extended",
+		Preset:        "daily",
+		ExposeParties: true,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.Pages != 2 {
+		t.Fatalf("pages=%d want 2", result.Pages)
+	}
+	if result.RecordsSeen != 2 {
+		t.Fatalf("records seen=%d want 2", result.RecordsSeen)
+	}
+	if result.RecordsWritten != 2 {
+		t.Fatalf("records written=%d want 2", result.RecordsWritten)
+	}
+	if result.Cursor != "page-2" {
+		t.Fatalf("cursor=%q want page-2", result.Cursor)
+	}
+
+	assertCount(t, store.DB(), "calls", 2)
+	assertCount(t, store.DB(), "call_context_objects", 1)
+	assertCount(t, store.DB(), "call_context_fields", 2)
+	assertCount(t, store.DB(), "sync_runs", 1)
+
+	var scope, syncKey, requestContext, status string
+	var seen, written int64
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT scope, sync_key, request_context, status, records_seen, records_written
+		   FROM sync_runs
+		  ORDER BY id DESC
+		  LIMIT 1`,
+	).Scan(&scope, &syncKey, &requestContext, &status, &seen, &written); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	if scope != scopeCalls {
+		t.Fatalf("scope=%q want %q", scope, scopeCalls)
+	}
+	if !strings.Contains(syncKey, "preset=daily") || !strings.Contains(syncKey, "context=Extended") {
+		t.Fatalf("syncKey=%q missing preset/context", syncKey)
+	}
+	for _, want := range []string{"preset=daily", "context=Extended", "include_parties_requested=true", "include_parties_result=request_sent"} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+	if status != "success" {
+		t.Fatalf("status=%q want success", status)
+	}
+	if seen != 2 || written != 2 {
+		t.Fatalf("seen/written=%d/%d want 2/2", seen, written)
+	}
+}
+
+func TestSyncCallsGovernanceIngestSkipsRestrictedSyntheticCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	cfg, err := governance.ParseYAML([]byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example Restricted Corp"
+        aliases:
+          - "restricted.example"
+`))
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"call-governance-skip","title":"Example Restricted Corp cached","started":"2026-04-19T14:00:00Z","context":{"crmObjects":[{"type":"Account","name":"Example Restricted Corp"}]}}`)); err != nil {
+		t.Fatalf("precache restricted call: %v", err)
+	}
+	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"call-governance-skip","transcript":[{"speakerId":"speaker-1","sentences":[{"start":0,"end":1000,"text":"cached restricted transcript"}]}]}`)); err != nil {
+		t.Fatalf("precache restricted transcript: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 2},
+			"calls": []map[string]any{
+				{
+					"id":      "call-governance-skip",
+					"title":   "Example Restricted Corp discovery",
+					"started": "2026-04-20T14:00:00Z",
+					"context": map[string]any{"crmObjects": []map[string]any{{
+						"type": "Account",
+						"name": "Example Restricted Corp",
+					}}},
+				},
+				{
+					"id":      "call-governance-allowed",
+					"title":   "Allowed account discovery",
+					"started": "2026-04-21T14:00:00Z",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	result, err := SyncCalls(ctx, newTestClient(t, server), store, CallsParams{
+		From:       "2026-04-20",
+		To:         "2026-04-24",
+		Governance: cfg,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.RecordsSeen != 2 || result.RecordsWritten != 1 || result.RecordsSkipped != 1 {
+		t.Fatalf("seen/written/skipped=%d/%d/%d want 2/1/1", result.RecordsSeen, result.RecordsWritten, result.RecordsSkipped)
+	}
+	assertCount(t, store.DB(), "calls", 1)
+	assertCount(t, store.DB(), "transcripts", 0)
+	assertCount(t, store.DB(), "transcript_segments", 0)
+
+	var callID, configSHA, matchedList, sourceCategory string
+	if err := store.DB().QueryRowContext(ctx, `SELECT call_id, config_sha256, matched_list, source_category FROM governance_ingest_skipped_calls`).Scan(&callID, &configSHA, &matchedList, &sourceCategory); err != nil {
+		t.Fatalf("query skipped ledger: %v", err)
+	}
+	if callID != "call-governance-skip" || configSHA == "" || matchedList != governance.ListNoAI || sourceCategory != "call_payload" {
+		t.Fatalf("unexpected ledger row call_id=%q sha=%q list=%q source=%q", callID, configSHA, matchedList, sourceCategory)
+	}
+	var ledgerText string
+	if err := store.DB().QueryRowContext(ctx, `SELECT config_sha256 || ' ' || matched_list || ' ' || source_category FROM governance_ingest_skipped_calls`).Scan(&ledgerText); err != nil {
+		t.Fatalf("query ledger text: %v", err)
+	}
+	if strings.Contains(ledgerText, "Example Restricted Corp") || strings.Contains(ledgerText, "restricted.example") {
+		t.Fatalf("ledger leaked restricted name or alias: %q", ledgerText)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(ctx, `SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync request context: %v", err)
+	}
+	if !strings.Contains(requestContext, "governance_config_sha256="+cfg.Fingerprint()) {
+		t.Fatalf("request_context=%q missing governance fingerprint", requestContext)
+	}
+}
+
+func TestSyncCallsGovernanceClearsStaleSkipLedgerForAllowedCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	cfg, err := governance.ParseYAML([]byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Example Stale Restricted Corp"
+`))
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+		CallID:         "call-governance-stale",
+		ConfigSHA256:   "old-config",
+		MatchedList:    governance.ListNoAI,
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall returned error: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 1},
+			"calls": []map[string]any{{
+				"id":      "call-governance-stale",
+				"title":   "Allowed after governance relaxation",
+				"started": "2026-04-22T14:00:00Z",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	result, err := SyncCalls(ctx, newTestClient(t, server), store, CallsParams{Governance: cfg})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.RecordsWritten != 1 || result.RecordsSkipped != 0 {
+		t.Fatalf("written/skipped=%d/%d want 1/0", result.RecordsWritten, result.RecordsSkipped)
+	}
+	assertCount(t, store.DB(), "calls", 1)
+	assertCount(t, store.DB(), "governance_ingest_skipped_calls", 0)
+}
+
+func TestSyncCallsNoGovernanceCannotRehydrateLedgeredCall(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	if err := store.RecordGovernanceIngestSkippedCall(ctx, sqlite.GovernanceIngestSkippedCallParams{
+		CallID:         "call-governance-tombstone",
+		ConfigSHA256:   "old-config",
+		MatchedList:    governance.ListNoAI,
+		SourceCategory: "call_payload",
+	}); err != nil {
+		t.Fatalf("RecordGovernanceIngestSkippedCall returned error: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 1},
+			"calls": []map[string]any{{
+				"id":      "call-governance-tombstone",
+				"title":   "Ungoverned rehydrate attempt",
+				"started": "2026-04-22T14:00:00Z",
+			}},
+		})
+	}))
+	defer server.Close()
+
+	_, err := SyncCalls(ctx, newTestClient(t, server), store, CallsParams{})
+	if err == nil || !strings.Contains(err.Error(), "previously skipped by governance ingest") {
+		t.Fatalf("SyncCalls error=%v, want governance tombstone error", err)
+	}
+	assertCount(t, store.DB(), "calls", 0)
+}
+
+func TestSyncCallsFallsBackWhenExposedPartiesRejected(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		contentSelector, _ := body["contentSelector"].(map[string]any)
+		if requests == 1 {
+			exposedFields, ok := contentSelector["exposedFields"].(map[string]any)
+			if !ok || exposedFields["parties"] != true {
+				t.Fatalf("first request exposedFields=%#v want parties=true", contentSelector["exposedFields"])
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"unsupported exposed fields"}`))
+			return
+		}
+		if _, ok := contentSelector["exposedFields"]; ok {
+			t.Fatalf("fallback request still included exposedFields: %#v", contentSelector)
+		}
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"calls": []map[string]any{
+				{
+					"id":      "call-fallback",
+					"title":   "Fallback",
+					"started": "2026-04-22T10:00:00Z",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncCalls(ctx, client, store, CallsParams{
+		Context:       "Extended",
+		Preset:        "daily",
+		ExposeParties: true,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests=%d want fallback retry count 2", requests)
+	}
+	if result.RecordsWritten != 1 {
+		t.Fatalf("records written=%d want 1", result.RecordsWritten)
+	}
+	if result.ParticipantCaptureStatus != "omitted_fallback" {
+		t.Fatalf("ParticipantCaptureStatus=%q want omitted_fallback", result.ParticipantCaptureStatus)
+	}
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query fallback sync run: %v", err)
+	}
+	for _, want := range []string{"include_parties_requested=true", "include_parties_result=omitted_fallback"} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("fallback requestContext=%q missing %q", requestContext, want)
+		}
+	}
+}
+
+func TestSyncCallsExposeHighlightsRequestsExposedFieldAndContextMarkers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/calls/extensive" {
+			t.Fatalf("path=%q want /v2/calls/extensive", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		contentSelector, ok := body["contentSelector"].(map[string]any)
+		if !ok {
+			t.Fatalf("contentSelector missing: %#v", body)
+		}
+		exposed, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", contentSelector)
+		}
+		assertSpotlightContentSelector(t, exposed)
+		if exposed["parties"] != true {
+			t.Fatalf("exposedFields.parties=%v want true", exposed["parties"])
+		}
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 1, "currentPageNumber": 0},
+			"calls": []map[string]any{
+				{
+					"id":       "call-highlights-001",
+					"title":    "Synthetic highlights call",
+					"started":  "2026-04-22T15:00:00Z",
+					"duration": 600,
+					"content": map[string]any{
+						"highlights": []map[string]any{
+							{"type": "summary", "text": "Synthetic next-step summary."},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncCalls(ctx, client, store, CallsParams{
+		From:             "2026-04-22",
+		To:               "2026-04-22",
+		Context:          "Extended",
+		Preset:           "daily",
+		ExposeParties:    true,
+		ExposeHighlights: true,
+	})
+	if err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+	if result.RecordsWritten != 1 {
+		t.Fatalf("records written=%d want 1", result.RecordsWritten)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	for _, want := range []string{
+		"include_parties_requested=true",
+		"include_parties_result=request_sent",
+		"include_highlights_requested=true",
+		"include_highlights_result=request_sent",
+	} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+}
+
+func TestSyncCallsHighlightsOnlyOmitsPartiesContextMarkers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		contentSelector, _ := body["contentSelector"].(map[string]any)
+		exposed, ok := contentSelector["exposedFields"].(map[string]any)
+		if !ok {
+			t.Fatalf("exposedFields missing: %#v", contentSelector)
+		}
+		assertSpotlightContentSelector(t, exposed)
+		if _, hasParties := exposed["parties"]; hasParties {
+			t.Fatalf("exposedFields.parties unexpectedly present: %#v", exposed)
+		}
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{"currentPageSize": 0, "currentPageNumber": 0},
+			"calls":   []map[string]any{},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	if _, err := SyncCalls(ctx, client, store, CallsParams{
+		From:             "2026-04-22",
+		To:               "2026-04-22",
+		Preset:           "minimal",
+		ExposeHighlights: true,
+	}); err != nil {
+		t.Fatalf("SyncCalls returned error: %v", err)
+	}
+
+	var requestContext string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT request_context FROM sync_runs ORDER BY id DESC LIMIT 1`,
+	).Scan(&requestContext); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	if strings.Contains(requestContext, "include_parties_requested=true") {
+		t.Fatalf("requestContext=%q must not advertise include_parties_requested when only highlights opted in", requestContext)
+	}
+	for _, want := range []string{
+		"include_highlights_requested=true",
+		"include_highlights_result=request_sent",
+	} {
+		if !strings.Contains(requestContext, want) {
+			t.Fatalf("requestContext=%q missing %q", requestContext, want)
+		}
+	}
+}
+
+func TestSyncCallsRejectsRepeatedCursorAndFinishesRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+				"cursor":            "loop",
+			},
+			"calls": []map[string]any{
+				{
+					"id":       "call-loop",
+					"title":    "Loop",
+					"started":  "2026-04-22T10:00:00Z",
+					"duration": 60,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := SyncCalls(ctx, client, store, CallsParams{Cursor: "loop"})
+	if err == nil {
+		t.Fatal("SyncCalls returned nil error, want repeated cursor error")
+	}
+	if !strings.Contains(err.Error(), "pagination cursor repeated") {
+		t.Fatalf("error=%q want repeated cursor message", err)
+	}
+
+	assertCount(t, store.DB(), "calls", 1)
+	assertCount(t, store.DB(), "sync_runs", 1)
+
+	var status, errorText string
+	var seen, written int64
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT status, error_text, records_seen, records_written
+		   FROM sync_runs
+		  ORDER BY id DESC
+		  LIMIT 1`,
+	).Scan(&status, &errorText, &seen, &written); err != nil {
+		t.Fatalf("query failed sync run: %v", err)
+	}
+	if status != "error" {
+		t.Fatalf("status=%q want error", status)
+	}
+	if !strings.Contains(errorText, "pagination cursor repeated") {
+		t.Fatalf("error_text=%q want repeated cursor message", errorText)
+	}
+	if seen != 1 || written != 1 {
+		t.Fatalf("seen/written=%d/%d want 1/1", seen, written)
+	}
+}
+
+func TestSyncCallsRerunIsIdempotentOnRowCounts(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+			},
+			"calls": []map[string]any{
+				{
+					"id":       "call-constant",
+					"title":    "Constant",
+					"started":  "2026-04-23T10:00:00Z",
+					"duration": 90,
+					"context": map[string]any{
+						"crm": []map[string]any{
+							{
+								"id":   "opp-constant",
+								"type": "Opportunity",
+								"fields": []map[string]any{
+									{"name": "amount", "value": 123},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	for i := 0; i < 2; i++ {
+		result, err := SyncCalls(ctx, client, store, CallsParams{Preset: "nightly"})
+		if err != nil {
+			t.Fatalf("SyncCalls run %d returned error: %v", i+1, err)
+		}
+		if result.RecordsSeen != 1 || result.RecordsWritten != 1 {
+			t.Fatalf("run %d seen/written=%d/%d want 1/1", i+1, result.RecordsSeen, result.RecordsWritten)
+		}
+	}
+
+	assertCount(t, store.DB(), "calls", 1)
+	assertCount(t, store.DB(), "call_context_objects", 1)
+	assertCount(t, store.DB(), "call_context_fields", 1)
+	assertCount(t, store.DB(), "sync_runs", 2)
+
+	var rawSHA string
+	if err := store.DB().QueryRowContext(ctx, `SELECT raw_sha256 FROM calls WHERE call_id = ?`, "call-constant").Scan(&rawSHA); err != nil {
+		t.Fatalf("query raw sha: %v", err)
+	}
+	if len(rawSHA) != 64 {
+		t.Fatalf("raw_sha256=%q want 64-char sha256", rawSHA)
+	}
+}
+
+func TestSyncScorecardActivityPaginatesAndStores(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/stats/activity/scorecards" {
+			t.Fatalf("path=%q want /v2/stats/activity/scorecards", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%q want POST", r.Method)
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		filter := body["filter"].(map[string]any)
+		if got := filter["callFromDate"]; got != "2026-01-01" {
+			t.Fatalf("callFromDate=%v want 2026-01-01", got)
+		}
+		if got := filter["callToDate"]; got != "2026-04-01" {
+			t.Fatalf("callToDate=%v want 2026-04-01", got)
+		}
+		if got := filter["reviewMethod"]; got != "BOTH" {
+			t.Fatalf("reviewMethod=%v want BOTH", got)
+		}
+
+		requests++
+		switch requests {
+		case 1:
+			if got := stringValue(body["cursor"]); got != "" {
+				t.Fatalf("page1 cursor=%q want empty", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 0,
+					"cursor":            "scorecards-page-2",
+				},
+				"answeredScorecards": []map[string]any{
+					scorecardActivityFixture("answered-001", "call-001"),
+				},
+			})
+		case 2:
+			if got := stringValue(body["cursor"]); got != "scorecards-page-2" {
+				t.Fatalf("page2 cursor=%q want scorecards-page-2", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 1,
+				},
+				"answeredScorecards": []map[string]any{
+					scorecardActivityFixture("answered-002", "call-002"),
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncScorecardActivity(ctx, client, store, ScorecardActivityParams{
+		CallFrom:     "2026-01-01",
+		CallTo:       "2026-04-01",
+		ReviewMethod: "BOTH",
+	})
+	if err != nil {
+		t.Fatalf("SyncScorecardActivity returned error: %v", err)
+	}
+	if result.Pages != 2 || result.RecordsSeen != 2 || result.RecordsWritten != 2 {
+		t.Fatalf("result=%+v want 2 pages/seen/written", result)
+	}
+	if result.Cursor != "scorecards-page-2" {
+		t.Fatalf("cursor=%q want scorecards-page-2", result.Cursor)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 2)
+	assertCount(t, store.DB(), "sync_runs", 1)
+
+	var scope, syncKey string
+	if err := store.DB().QueryRowContext(ctx, `SELECT scope, sync_key FROM sync_runs ORDER BY id DESC LIMIT 1`).Scan(&scope, &syncKey); err != nil {
+		t.Fatalf("query sync run: %v", err)
+	}
+	if scope != scopeScorecardActivity {
+		t.Fatalf("scope=%q want %q", scope, scopeScorecardActivity)
+	}
+	for _, want := range []string{"call_from=2026-01-01", "call_to=2026-04-01", "review_method=BOTH"} {
+		if !strings.Contains(syncKey, want) {
+			t.Fatalf("syncKey=%q missing %q", syncKey, want)
+		}
+	}
+}
+
+func TestSyncScorecardActivityRejectsRepeatedCursorAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"records": map[string]any{
+				"currentPageSize":   1,
+				"currentPageNumber": 0,
+				"cursor":            "loop",
+			},
+			"answeredScorecards": []map[string]any{
+				scorecardActivityFixture("answered-loop", "call-loop"),
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	_, err := SyncScorecardActivity(ctx, client, store, ScorecardActivityParams{
+		CallFrom: "2026-01-01",
+		CallTo:   "2026-04-01",
+		Cursor:   "loop",
+	})
+	if err == nil || !strings.Contains(err.Error(), "pagination cursor repeated") {
+		t.Fatalf("error=%v want repeated cursor", err)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 1)
+
+	result, err := SyncScorecardActivity(ctx, client, store, ScorecardActivityParams{
+		CallFrom: "2026-01-01",
+		CallTo:   "2026-04-01",
+		MaxPages: 1,
+	})
+	if err != nil {
+		t.Fatalf("idempotent rerun returned error: %v", err)
+	}
+	if result.RecordsSeen != 1 || result.RecordsWritten != 1 {
+		t.Fatalf("idempotent rerun result=%+v want 1/1 seen/written", result)
+	}
+	assertCount(t, store.DB(), "scorecard_activity", 1)
+}
+
+func TestSyncCRMInventoryAndSettings(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/crm/integrations":
+			if r.Method != http.MethodGet {
+				t.Fatalf("crm integrations method=%q want GET", r.Method)
+			}
+			writeJSON(t, w, map[string]any{
+				"integrations": []map[string]any{
+					{
+						"integrationId": "crm-int-001",
+						"name":          "Salesforce production",
+						"crmType":       "Salesforce",
+					},
+				},
+			})
+		case "/v2/crm/entity-schema":
+			if r.Method != http.MethodGet {
+				t.Fatalf("crm schema method=%q want GET", r.Method)
+			}
+			if got := r.URL.Query().Get("integrationId"); got != "crm-int-001" {
+				t.Fatalf("integrationId=%q want crm-int-001", got)
+			}
+			if got := r.URL.Query().Get("objectType"); got != "DEAL" {
+				t.Fatalf("objectType=%q want DEAL", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"requestId": "schema-request-001",
+				"objectTypeToSelectedFields": map[string]any{
+					"DEAL": []map[string]any{
+						{"fieldName": "Amount", "label": "Amount", "fieldType": "currency"},
+						{"fieldName": "StageName", "label": "Stage", "fieldType": "picklist"},
+					},
+				},
+			})
+		case "/v2/settings/trackers":
+			if got := r.URL.Query().Get("workspaceId"); got != "workspace-001" {
+				t.Fatalf("workspaceId=%q want workspace-001", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"keywordTrackers": []map[string]any{
+					{
+						"id":      "tracker-001",
+						"name":    "Pricing objection",
+						"enabled": true,
+					},
+				},
+			})
+		case "/v2/settings/scorecards":
+			writeJSON(t, w, map[string]any{
+				"scorecards": []map[string]any{
+					{
+						"scorecardId":   "scorecard-001",
+						"scorecardName": "Discovery quality",
+						"enabled":       true,
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected path=%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	integrationsResult, err := SyncCRMIntegrations(ctx, client, store, CRMIntegrationsParams{})
+	if err != nil {
+		t.Fatalf("SyncCRMIntegrations returned error: %v", err)
+	}
+	if integrationsResult.RecordsWritten != 1 {
+		t.Fatalf("integrations written=%d want 1", integrationsResult.RecordsWritten)
+	}
+
+	schemaResult, err := SyncCRMSchema(ctx, client, store, CRMSchemaParams{
+		IntegrationID: "crm-int-001",
+		ObjectTypes:   []string{"DEAL"},
+	})
+	if err != nil {
+		t.Fatalf("SyncCRMSchema returned error: %v", err)
+	}
+	if schemaResult.RecordsSeen != 1 || schemaResult.RecordsWritten != 2 {
+		t.Fatalf("schema seen/written=%d/%d want 1/2", schemaResult.RecordsSeen, schemaResult.RecordsWritten)
+	}
+
+	settingsResult, err := SyncSettings(ctx, client, store, SettingsParams{
+		Kind:        "trackers",
+		WorkspaceID: "workspace-001",
+	})
+	if err != nil {
+		t.Fatalf("SyncSettings returned error: %v", err)
+	}
+	if settingsResult.RecordsSeen != 1 || settingsResult.RecordsWritten != 1 {
+		t.Fatalf("settings seen/written=%d/%d want 1/1", settingsResult.RecordsSeen, settingsResult.RecordsWritten)
+	}
+	scorecardsResult, err := SyncSettings(ctx, client, store, SettingsParams{Kind: "scorecards"})
+	if err != nil {
+		t.Fatalf("SyncSettings scorecards returned error: %v", err)
+	}
+	if scorecardsResult.RecordsSeen != 1 || scorecardsResult.RecordsWritten != 1 {
+		t.Fatalf("scorecards seen/written=%d/%d want 1/1", scorecardsResult.RecordsSeen, scorecardsResult.RecordsWritten)
+	}
+
+	assertCount(t, store.DB(), "crm_integrations", 1)
+	assertCount(t, store.DB(), "crm_schema_fields", 2)
+	assertCount(t, store.DB(), "gong_settings", 2)
+	assertCount(t, store.DB(), "sync_runs", 4)
+}
+
+func TestSyncUsersPaginatesAndOmitsDefaultLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/users" {
+			t.Fatalf("path=%q want /v2/users", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("limit"); got != "" {
+			t.Fatalf("limit query=%q want omitted", got)
+		}
+
+		requests++
+		switch requests {
+		case 1:
+			if got := r.URL.Query().Get("cursor"); got != "" {
+				t.Fatalf("page1 cursor=%q want empty", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 0,
+					"cursor":            "users-2",
+				},
+				"users": []map[string]any{
+					{
+						"id":           "user-001",
+						"emailAddress": "one@example.invalid",
+						"firstName":    "One",
+						"lastName":     "User",
+						"name":         "One User",
+						"title":        "AE",
+						"active":       true,
+					},
+				},
+			})
+		case 2:
+			if got := r.URL.Query().Get("cursor"); got != "users-2" {
+				t.Fatalf("page2 cursor=%q want users-2", got)
+			}
+			writeJSON(t, w, map[string]any{
+				"records": map[string]any{
+					"currentPageSize":   1,
+					"currentPageNumber": 1,
+				},
+				"users": []map[string]any{
+					{
+						"id":           "user-002",
+						"emailAddress": "two@example.invalid",
+						"firstName":    "Two",
+						"lastName":     "User",
+						"name":         "Two User",
+						"title":        "CSM",
+						"active":       false,
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server)
+	result, err := SyncUsers(ctx, client, store, UsersParams{Preset: "full"})
+	if err != nil {
+		t.Fatalf("SyncUsers returned error: %v", err)
+	}
+	if result.Pages != 2 {
+		t.Fatalf("pages=%d want 2", result.Pages)
+	}
+	if result.RecordsSeen != 2 || result.RecordsWritten != 2 {
+		t.Fatalf("seen/written=%d/%d want 2/2", result.RecordsSeen, result.RecordsWritten)
+	}
+
+	assertCount(t, store.DB(), "users", 2)
+	assertCount(t, store.DB(), "sync_runs", 1)
+
+	var scope, syncKey, requestContext, status string
+	if err := store.DB().QueryRowContext(
+		ctx,
+		`SELECT scope, sync_key, request_context, status
+		   FROM sync_runs
+		  ORDER BY id DESC
+		  LIMIT 1`,
+	).Scan(&scope, &syncKey, &requestContext, &status); err != nil {
+		t.Fatalf("query users sync run: %v", err)
+	}
+	if scope != scopeUsers {
+		t.Fatalf("scope=%q want %q", scope, scopeUsers)
+	}
+	if syncKey != "users:preset=full" {
+		t.Fatalf("syncKey=%q want users:preset=full", syncKey)
+	}
+	if requestContext != "preset=full" {
+		t.Fatalf("requestContext=%q want preset=full", requestContext)
+	}
+	if status != "success" {
+		t.Fatalf("status=%q want success", status)
+	}
+}
+
+func newTestClient(t *testing.T, server *httptest.Server) *gong.Client {
+	t.Helper()
+
+	client, err := gong.NewClient(gong.Options{
+		BaseURL: server.URL,
+		Credentials: auth.Credentials{
+			AccessKey:       "key",
+			AccessKeySecret: "secret",
+		},
+		MaxRetries: 0,
+	})
+	if err != nil {
+		t.Fatalf("new test client: %v", err)
+	}
+	return client
+}
+
+func openTestStore(t *testing.T) *sqlite.Store {
+	t.Helper()
+
+	store, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "syncsvc.db"))
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	return store
+}
+
+func assertCount(t *testing.T, db *sql.DB, table string, want int) {
+	t.Helper()
+
+	var got int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&got); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	if got != want {
+		t.Fatalf("%s count=%d want %d", table, got, want)
+	}
+}
+
+func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
+}
+
+func assertSpotlightContentSelector(t *testing.T, exposed map[string]any) {
+	t.Helper()
+
+	if _, hasLegacyHighlights := exposed["highlights"]; hasLegacyHighlights {
+		t.Fatalf("exposedFields must use content selector, got legacy highlights=true: %#v", exposed)
+	}
+	content, ok := exposed["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("exposedFields.content missing: %#v", exposed)
+	}
+	for _, field := range []string{"brief", "callOutcome", "highlights", "keyPoints", "outline"} {
+		if content[field] != true {
+			t.Fatalf("exposedFields.content.%s=%v want true; content=%#v", field, content[field], content)
+		}
+	}
+}
+
+func stringValue(value any) string {
+	typed, _ := value.(string)
+	return typed
+}
+
+func scorecardActivityFixture(answeredID string, callID string) map[string]any {
+	return map[string]any{
+		"answeredScorecardId": answeredID,
+		"scorecardId":         "scorecard-sync-001",
+		"scorecardName":       "Discovery QA",
+		"callId":              callID,
+		"callStartTime":       "2026-03-01T15:00:00Z",
+		"reviewedUserId":      "user-sync-001",
+		"reviewerUserId":      "reviewer-sync-001",
+		"reviewMethod":        "MANUAL",
+		"reviewTime":          "2026-03-02T15:00:00Z",
+		"answers": []map[string]any{
+			{"questionId": "question-sync-001", "isOverall": true, "score": 4},
+		},
+	}
+}

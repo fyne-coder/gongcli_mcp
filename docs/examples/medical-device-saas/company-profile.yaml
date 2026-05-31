@@ -1,0 +1,116 @@
+profile_version: 1
+profile_id: demo-profile-pmp-001
+synthetic: true
+review_state: approved-for-doc-examples
+
+account:
+  account_id: demo-acct-pmp-001
+  display_name: Pulsaris Medical Platform
+  legal_name: Pulsaris Medical Platform
+  industry: medical devices
+  subindustry: compliance workflow software
+  business_model: b2b_saas
+  headquarters_region: north_america
+  operating_regions:
+    - north_america
+    - western_europe
+  employee_band: 500_to_1500
+  annual_revenue_band: 50m_to_150m
+  deployment_model: cloud_with_validated_workflows
+  fictional_note: fully synthetic demo profile
+
+segmentation:
+  ideal_customer_band:
+    - regulated_mid_market
+    - enterprise_device_manufacturer
+  target_device_types:
+    - connected_monitoring
+    - disposable_supply_chain
+    - software_enabled_capital_equipment
+  urgency_signals:
+    - audit_readiness_gap
+    - fragmented_capa_tracking
+    - software_release_governance_pressure
+    - post_market_visibility_gap
+
+crm:
+  crm_account_ref: crm-acct-pmp-001
+  crm_workspace_ref: crm-workspace-demo-01
+  owner_role: account_executive
+  lifecycle_stage: late_stage_pipeline
+  opportunity_stage: evaluation_and_validation
+  pipeline_name: enterprise_quality_pipeline
+  active_opportunity_ref: opp-pmp-q1-001
+  renewal_motion: new_logo_with_land_expand_path
+  forecast_category: commit_candidate
+
+go_to_market:
+  sales_motion: enterprise_multi_stakeholder
+  average_deal_band_usd: 90000_to_240000
+  average_sales_cycle_days: 120_to_210
+  entry_wedge: quality_and_regulatory_workflow
+  expansion_paths:
+    - post_market_surveillance
+    - launch_readiness_governance
+    - executive_quality_reporting
+  implementation_shape: phased_rollout_by_device_family
+
+personas:
+  - role_id: persona-quality-systems
+    title: quality_systems_leader
+    department: quality
+    primary_outcome: reduce_capa_cycle_time
+    buying_weight: primary
+  - role_id: persona-regulatory
+    title: regulatory_affairs_lead
+    department: regulatory
+    primary_outcome: improve_audit_evidence_traceability
+    buying_weight: primary
+  - role_id: persona-clinical-safety
+    title: clinical_safety_lead
+    department: clinical_affairs
+    primary_outcome: identify_post_market_safety_trends
+    buying_weight: secondary
+    escalation_focus: quality_risk_and_patient_safety
+  - role_id: persona-commercial-ops
+    title: commercial_operations_sponsor
+    department: commercial_operations
+    primary_outcome: reduce_launch_and_revenue_delay_risk
+    buying_weight: executive_sponsor
+
+use_case_tags:
+  - capa_coordination
+  - complaint_workflow
+  - release_readiness
+  - audit_preparation
+
+objection_tags:
+  - duplicate_system_risk
+  - validation_overhead
+  - budget_justification
+  - adoption_change_management
+
+demo_defaults:
+  q1_window_label: q1_demo_shape
+  transcript_status_mix:
+    fully_available: common
+    metadata_only: occasional
+  evidence_density: medium_to_high
+  scope_mix:
+    discovery: present
+    validation: common
+    rollout_planning: common
+    executive_review: occasional
+
+safety:
+  allowed_identifier_prefixes:
+    - demo-
+    - crm-
+    - opp-
+    - persona-
+  prohibited_content:
+    - real_customer_names
+    - real_person_names
+    - real_emails
+    - real_gong_ids
+    - raw_transcript_text

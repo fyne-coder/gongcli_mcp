@@ -1,0 +1,109 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gongctl-postgres-deploy-smoke
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: smoke
+          image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -ec
+          args:
+            - |
+              mkdir -p /tmp/gongctl-smoke
+              echo "phase: doctor postgres-deploy"
+              gongctl doctor postgres-deploy \
+                --preset "$GONGMCP_TOOL_PRESET" \
+                --target "$GONGCTL_MCP_DATABASE_URL" \
+                --max-marker-age "${GONGCTL_DEPLOY_SMOKE_MAX_MARKER_AGE:-24h}" \
+                > /tmp/gongctl-smoke/doctor-postgres-deploy.json
+              if grep -Eq '"status"[[:space:]]*:[[:space:]]*"fail"' /tmp/gongctl-smoke/doctor-postgres-deploy.json; then
+                echo "doctor postgres-deploy reported a failed check" >&2
+                cat /tmp/gongctl-smoke/doctor-postgres-deploy.json >&2
+                exit 1
+              fi
+              echo "phase: sync status --preset"
+              GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \
+                gongctl sync status --preset "$GONGMCP_TOOL_PRESET" \
+                > /tmp/gongctl-smoke/sync-status.json
+              if grep -Eq '"status"[[:space:]]*:[[:space:]]*"fail"' /tmp/gongctl-smoke/sync-status.json; then
+                echo "sync status --preset reported failed preset validation" >&2
+                exit 1
+              fi
+              echo "phase: gongmcp tools/list"
+              printf '%s\n' \
+                '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"kubernetes-postgres-deploy-smoke","version":"0"}}}' \
+                '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' |
+                GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \
+                GONGMCP_TOOL_PRESET="$GONGMCP_TOOL_PRESET" \
+                GONGMCP_POSTGRES_REDACTED_SERVING_DB="$GONGMCP_POSTGRES_REDACTED_SERVING_DB" \
+                GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS="$GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS" \
+                gongmcp --stdio \
+                > /tmp/gongctl-smoke/mcp-tools-list.jsonl
+              for tool in gong_status gong_discover_capabilities gong_query gong_analyze gong_get_evidence gong_explain_limitations; do
+                grep -q "\"$tool\"" /tmp/gongctl-smoke/mcp-tools-list.jsonl
+              done
+              echo "gongctl postgres deploy smoke passed"
+          envFrom:
+            - configMapRef:
+                name: gongctl-postgres-pilot-config
+          env:
+            - name: GONGCTL_SOURCE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gongctl-postgres-pilot-secrets
+                  key: GONGCTL_SOURCE_DATABASE_URL
+            - name: GONGCTL_MCP_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gongctl-postgres-pilot-secrets
+                  key: GONGCTL_MCP_DATABASE_URL
+            - name: GONGMCP_ANALYST_READER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: gongctl-postgres-pilot-secrets
+                  key: GONGMCP_ANALYST_READER_URL
+            - name: GONGCTL_AI_GOVERNANCE_CONFIG
+              value: /run/secrets/ai-governance.yaml
+            - name: GONGMCP_AI_GOVERNANCE_CONFIG
+              value: /run/secrets/ai-governance.yaml
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: governance-config
+              mountPath: /run/secrets/ai-governance.yaml
+              subPath: ai-governance.yaml
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: governance-config
+          secret:
+            secretName: gongctl-postgres-pilot-secrets
+            items:
+              - key: ai-governance.yaml
+                path: ai-governance.yaml

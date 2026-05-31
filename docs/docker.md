@@ -1,0 +1,482 @@
+# Docker Deployment
+
+`gongctl` can run as a local container for three current use cases:
+
+- one-shot CLI sync, search, and analysis commands
+- read-only stdio MCP over a mounted SQLite cache
+- read-only HTTP MCP private pilots over a mounted SQLite cache
+- shared Postgres deployments where sync and MCP containers use one
+  Postgres database instead of a shared SQLite filesystem
+
+HTTP mode is explicit via `gongmcp --http ...`; the default MCP path remains
+stdio. SQLite remains the default local cache with the broadest coverage, while
+the Postgres shared-deployment backend lets separate sync and MCP containers share one
+database for approved presets such as `business-pilot`, narrower analyst
+presets, and `analyst`; `all-readonly` remains excluded. Keep credentials and
+customer data outside the image.
+
+## Build
+
+```bash
+docker build -t gongctl:local .
+```
+
+Build the MCP-only target for business-user hosts that should not contain the
+writable CLI binary:
+
+```bash
+docker build --target mcp -t gongctl:mcp-local .
+```
+
+Or use Compose:
+
+```bash
+GONGCTL_DATA_DIR="$HOME/gongctl-data" docker compose build
+```
+
+## Published Images
+
+Release images are published to GHCR as two separate packages:
+
+- `ghcr.io/fyne-coder/gongcli_mcp/gongctl` for operator CLI sync, search, and analysis jobs
+- `ghcr.io/fyne-coder/gongcli_mcp/gongmcp` for read-only stdio MCP hosts and
+  private HTTP MCP pilots
+
+Use immutable version tags or digest-pinned references in company deployments:
+
+```bash
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z
+docker pull ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z
+```
+
+A version tag is available only after the matching Git tag triggers
+`.github/workflows/publish-images.yml` and that workflow publishes the GHCR
+manifests. A `VERSION` bump or source release branch alone does not make an
+image tag pullable. Until the manifest exists, build `gongctl:local` and
+`gongctl:mcp-local` from source.
+
+The `gongctl` image includes both binaries, but business-user MCP hosts should
+use the `gongmcp` package so the writable CLI is not present in that runtime.
+
+## Data And Credentials
+
+Create a host data directory outside the source repo:
+
+```bash
+mkdir -p "$HOME/gongctl-data"
+```
+
+Use environment variables or an ignored `.env` file for Gong credentials:
+
+```bash
+cp .env.example .env
+```
+
+Never bake `.env`, SQLite databases, transcript files, or JSONL exports into the image. The Docker build context excludes those files.
+
+## CLI Examples
+
+Run a safe local smoke:
+
+```bash
+docker run --rm gongctl:local --help
+```
+
+Run a command with credentials and a mounted data directory:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -v "$HOME/gongctl-data:/data" \
+  gongctl:local \
+  sync status --db /data/gong.db
+```
+
+Run a bounded sync:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -v "$HOME/gongctl-data:/data" \
+  gongctl:local \
+  sync calls --db /data/gong.db --from 2026-04-01 --to 2026-04-24 --preset business --max-pages 2
+```
+
+Run the repeatable real-data smoke used before tagging:
+
+```bash
+scripts/docker-smoke.sh
+```
+
+The smoke uses the full local image for operator CLI steps and the MCP-only
+image for the no-network MCP step by default. It runs:
+
+- `auth check`
+- `sync calls --preset minimal --max-pages 1`
+- `sync status`
+- a `gongmcp` `tools/list` request against the same SQLite DB with `--network none` and a read-only `/data` mount
+
+With Compose, prefer an explicit external data directory:
+
+```bash
+export GONGCTL_DATA_DIR="$HOME/gongctl-data"
+docker compose run --rm gongctl sync status --db /data/gong.db
+```
+
+Compose intentionally fails if `GONGCTL_DATA_DIR` is unset so customer data is not written under the source checkout by accident.
+
+## Postgres Shared Deployment
+
+Use Postgres when the operator sync container and `gongmcp` container do not
+share a filesystem. SQLite remains the default for local/single-host pilots.
+
+Configuration contract:
+
+- SQLite: pass `--db PATH`.
+- Postgres: omit `--db` and set `GONG_DATABASE_URL`; `DATABASE_URL` is accepted
+  as a fallback.
+- Use a writer URL for `gongctl` sync jobs.
+- Use a reader URL for `gongmcp`.
+- The default Compose reader role is the compatibility `gongmcp_reader`
+  service role. For the reviewed `business-pilot` scoped reader path, use the
+  generated grant block instead of copying baseline `gongmcp_reader` grants.
+  The canonical operator command is `gongctl mcp postgres-reader-sql --preset
+  business-pilot --role ROLE --database DB`; `gongctl mcp
+  postgres-reader-apply --preset business-pilot --role ROLE --database DB`
+  dry-runs the same SQL by default and applies it only with `--apply` plus a
+  writable `GONG_DATABASE_URL` / `DATABASE_URL`; `gongmcp
+  --print-postgres-reader-grants --tool-preset business-pilot
+  --postgres-reader-role ROLE --postgres-database DB` is a compatibility path
+  for MCP-only images. Create the role and credential separately through the
+  deployment secret manager, then reconcile grants for the existing role and start
+  `gongmcp` with `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` or
+  `--enforce-tool-scoped-db-grants`. Other presets still need their own
+  reviewed maps before customer role automation. A scoped reader URL is still a
+  service credential, not an analyst SQL login. The scoped active-profile and
+  profile-cache helpers redact source metadata and call IDs/titles, and the
+  direct profile-cache helper is capped at 1,000 rows per direct helper call, but selected functions still expose
+  minimized operational metadata, timings, counts, and tenant terminology. This
+  first scoped `business-pilot` role is profile-backed; explicit
+  `lifecycle_source=builtin` still requires the broader compatibility reader
+  until a sanitized builtin SQL surface exists.
+- The Compose example binds Postgres to `127.0.0.1` for local smoke use and
+  uses explicit dev passwords by default. Company deployments should provide
+  `GONGCTL_POSTGRES_PASSWORD` and `GONGMCP_READER_PASSWORD` from an approved
+  secret manager and should not publish the database port directly.
+
+The current Postgres shared-deployment path supports:
+
+- `gongctl sync synthetic`
+- `gongctl sync calls`
+- `gongctl sync users`
+- `gongctl sync transcripts`
+- `gongctl sync crm-integrations`
+- `gongctl sync crm-schema`
+- `gongctl sync settings --kind scorecards`
+- `gongctl sync status`
+- `gongctl sync read-model` and `gongctl sync read-model --rebuild` for
+  Postgres builtin fact readiness and repair
+- `gongctl profile discover`, `profile validate`, `profile import`,
+  `profile history`, `profile activate`, and `profile show` when `--db` is
+  omitted and the operator sets a writer `GONG_DATABASE_URL`
+- `gongctl governance audit --config PATH --apply-postgres-policy` when the
+  operator sets a writer `GONG_DATABASE_URL`; read-only Postgres `gongmcp` can
+  then load the same private config for the narrowed `governance-search` slice
+- `gongctl search calls` and `gongctl calls show --json` for minimized
+  read-model call metadata/detail; use explicit raw-export commands with
+  `--allow-sensitive-export` for raw payload access
+- `gongctl search transcripts`
+- `gongctl analyze crm-schema`, `analyze settings --kind scorecards`,
+  `analyze scorecards`, `analyze scorecard`, and aggregate
+  `analyze scorecard-activity` over the read-only role
+- `gongmcp --tool-preset business-pilot`: `get_sync_status`,
+  `summarize_call_facts`, `summarize_calls_by_lifecycle`, and
+  `rank_transcript_backlog`
+- `gongmcp --tool-preset operator-smoke`: `get_sync_status`, `search_calls`,
+  `search_transcript_segments`, `get_call`, and `rank_transcript_backlog`
+- `gongmcp --tool-preset analyst-core`: supported CRM context inventory,
+  cached CRM schema/settings inventory, profile/lifecycle, scorecard
+  inventory, and aggregate scorecard activity tools
+- `gongmcp --tool-preset analyst-business-core`: bounded transcript-evidence
+  and business-analysis tools plus analyst-core
+- `gongmcp --tool-preset analyst`: approved analyst sessions over the reviewed
+  Postgres catalog; use narrower presets when the host only needs a starter
+  surface
+- explicit `gongmcp --tool-allowlist list_unmapped_crm_fields`,
+  `search_crm_field_values`, `analyze_late_stage_crm_signals`,
+  `opportunities_missing_transcripts`, `opportunity_call_summary`,
+  `crm_field_population_matrix`, `compare_lifecycle_crm_fields`,
+  `missing_transcripts`, or `search_transcripts_by_crm_context` for
+  directed CRM field discovery, value lookup, aggregate late-stage signal
+  review, redacted Opportunity transcript coverage gaps, redacted Opportunity
+  call aggregates, aggregate CRM field-population diagnostics, lifecycle CRM
+  field comparison, admin transcript-backfill call references, or
+  CRM-constrained transcript snippets.
+  `compare_lifecycle_crm_fields`, `missing_transcripts`, and
+  `search_transcripts_by_crm_context` require a tagged `v0.4.0` or later
+  release before customer deployment.
+- `gongmcp --tool-preset governance-search` with
+  `GONGMCP_AI_GOVERNANCE_CONFIG` after a Postgres governance policy has been
+  prepared; Postgres narrows this preset to supported search tools
+
+It does not yet provide full SQLite query parity for database-enforced
+governance snapshots/RLS, the all-readonly preset, production PITR
+policy, broad full-catalog query parity, or customer-scale privacy/performance
+hardening. Postgres support bundles, cache inventory, retention purge planning,
+and synthetic backup/restore smoke are available as operator diagnostics that
+do not export the database URL.
+Confirmed Postgres purge is call-scoped row cleanup with a writable URL, not
+physical erasure of WAL, replicas, snapshots, or backups. See the
+[Postgres parity matrix](postgres-parity.md) for the phased parity contract.
+
+Read-only `gongmcp` never rebuilds the Postgres read model. If startup reports a
+missing or stale Postgres read model, run the writable operator command first:
+
+```bash
+export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
+gongctl sync read-model --rebuild
+```
+
+Run metadata-only diagnostics against the read-only Postgres role:
+
+```bash
+export GONG_DATABASE_URL="$GONGMCP_READER_DATABASE_URL"
+gongctl cache inventory
+gongctl support bundle --out ./support-bundle
+gongctl cache purge --older-than 2026-04-01
+gongctl cache purge --config ./retention-policy.yaml --dry-run
+```
+
+Run an approved Postgres retention cleanup with the writable operator role:
+
+```bash
+export GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL"
+gongctl cache purge --older-than 2026-04-01 --confirm
+gongctl cache purge --config ./retention-policy.yaml --confirm
+```
+
+Run a local synthetic Postgres backup/restore drill before release promotion or
+after changing migrations, grants, or read-model startup behavior:
+
+```bash
+scripts/postgres-backup-restore-smoke.sh
+```
+
+The drill creates an isolated Compose Postgres instance, writes synthetic data,
+dumps and restores it into a second database, rebuilds Postgres read-model
+readiness, runs read-only MCP `operator-smoke` calls against the restored
+database, and records synthetic-only evidence under `/tmp/gongctl-postgres-restore-*`.
+The MCP evidence can include synthetic transcript snippets; production restore
+evidence must use synthetic or approved non-production data and must be
+sanitized before sharing.
+
+Run the local synthetic smoke:
+
+```bash
+scripts/postgres-smoke.sh
+```
+
+Inspect the Compose shape:
+
+```bash
+docker compose -f docker-compose.postgres.yml config --quiet
+```
+
+The Compose example separates:
+
+- `postgres`: shared database
+- `gongctl`: writer/sync container
+- `gongmcp`: read-only MCP container using a Postgres reader role
+
+## Single-VM Postgres Starter
+
+For a small company setup where IT wants one hardened Linux VM before adopting
+ECS, Kubernetes, or managed container apps, use the single-VM starter:
+
+- [`deploy/single-vm-postgres`](../deploy/single-vm-postgres/README.md)
+
+That starter keeps everything on one host while preserving the important
+boundary:
+
+- Postgres runs locally on the VM and binds to loopback by default.
+- `gongctl` operator jobs write to a source database.
+- `gongctl deploy postgres-refresh` rebuilds a separate MCP serving database
+  and reconciles scoped reader grants.
+- `gongmcp` reads only from the serving database through a scoped reader role.
+- `gongmcp` does not receive Gong API credentials or the source DB URL.
+- the HTTP MCP service binds to loopback by default and should sit behind a
+  customer-managed HTTPS/OAuth/SSO gateway before user access.
+
+Render the starter config before use:
+
+```bash
+docker compose \
+  --env-file /srv/gongctl/single-vm.env \
+  -f deploy/single-vm-postgres/docker-compose.yml \
+  config --quiet
+```
+
+Use this path when the customer wants a simple VM install but still needs the
+Postgres source/serving split. Use the older root `docker-compose.postgres.yml`
+for local synthetic smoke and developer checks.
+
+## Kubernetes Postgres Pilot Starter
+
+For customer-managed Kubernetes pilots where the customer already owns
+Postgres, secrets, ingress, auth, backups, and logs, use the Kustomize starter:
+
+- [`deploy/kubernetes/postgres-pilot`](../deploy/kubernetes/postgres-pilot/README.md)
+
+That starter renders a read-only `gongmcp` Deployment, ClusterIP Service,
+suspended refresh CronJob, and manual operator smoke Job. It does not create
+Postgres databases, roles, ingress, NetworkPolicies, or external secrets.
+
+## MCP Over Docker
+
+Point an MCP host at `docker run` with stdin kept open:
+
+```json
+{
+  "mcpServers": {
+    "gong": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "none",
+        "-v",
+        "/Users/YOU/gongctl-data:/data:ro",
+        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z",
+        "--db",
+        "/data/gong.db",
+        "--tool-preset",
+        "business-pilot"
+      ]
+    }
+  }
+}
+```
+
+Replace `/Users/YOU/gongctl-data` with the absolute host path that contains `gong.db`.
+
+The MCP container does not need Gong API credentials because it only reads the configured cache store. Use `gongctl sync ...` commands to refresh that cache.
+
+## HTTP MCP For Private Pilots
+
+The same MCP-only image can expose `/mcp` over HTTP when a company wants one
+customer-managed endpoint for multiple approved users or MCP hosts:
+
+```bash
+docker run --rm \
+  -p 127.0.0.1:8080:8080 \
+  -e GONGMCP_BEARER_TOKEN_FILE=/run/secrets/gongmcp_token \
+  -e GONGMCP_TOOL_PRESET=business-pilot \
+  -e GONGMCP_POLICY_SWITCHES=hide_call_titles \
+  -e GONGMCP_TRANSCRIPT_EVIDENCE_PROVENANCE=redacted \
+  -e GONGMCP_ALLOWED_ORIGINS=https://approved-client.example.com \
+  -v /srv/gongctl/gong.db:/data/gong.db:ro \
+  -v /srv/gongctl/secrets/gongmcp_token:/run/secrets/gongmcp_token:ro \
+  ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z \
+  --http 0.0.0.0:8080 \
+  --auth-mode bearer \
+  --allow-open-network \
+  --db /data/gong.db
+```
+
+HTTP mode does not need Gong credentials and opens the configured cache store
+read-only. It is a private-pilot request/response endpoint over one
+operator-owned cache, not a tenant router or hosted review application. HTTP
+mode always requires an explicit tool preset or allowlist, including loopback
+binds behind a proxy. Non-local binds also require `--allow-open-network`, an
+explicit Origin allowlist, and TLS termination at a trusted company
+proxy/gateway. For Postgres HTTP MCP, omit `--db` and set `GONG_DATABASE_URL`
+to the reader role URL. The customer's IT/platform owner manages bearer tokens
+outside the repo, image, and cache store. Suitable
+places include Docker secrets, mounted secret files, systemd environment files,
+Kubernetes Secrets, or a company secret manager.
+Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
+JSON-RPC traffic.
+
+Use the named tool profiles in
+[Customer implementation checklist](implementation-checklist.md#named-tool-profiles)
+when deciding `GONGMCP_TOOL_PRESET` or `GONGMCP_TOOL_ALLOWLIST`. The example
+above uses `business-pilot`.
+
+`GONGMCP_POLICY_SWITCHES` is launch-time configuration. For example,
+`hide_call_titles` suppresses call titles that are otherwise visible by
+default in title-bearing MCP surfaces. Change policy switches by restarting or
+redeploying `gongmcp`; there is no hot reload for this setting today.
+
+The example binds the host port to `127.0.0.1` so only a local customer proxy,
+gateway, or tunnel can reach it. Do not change this to `-p 8080:8080` unless
+the host firewall, private network, and customer auth boundary are already in
+place and approved for a temporary lab bridge.
+
+Unauthenticated HTTP is blocked by default. It is only for explicit local
+development with the native binary, not for shared Docker pilots:
+
+```bash
+GONGMCP_TOOL_PRESET=operator-smoke \
+  gongmcp --http 127.0.0.1:8080 --auth-mode none --dev-allow-no-auth-localhost --db /srv/gongctl/gong.db
+```
+
+Non-local unauthenticated HTTP is not supported. Binding HTTP to a non-local
+address requires bearer auth and fails unless `--allow-open-network` is set.
+Use that override only behind an approved TLS/private-network boundary during a
+temporary pilot.
+
+For remote clients that require HTTPS/OAuth, put this HTTP service behind a
+customer-managed gateway or broker. See
+[Remote MCP auth and connector setup](remote-mcp-auth.md) for ChatGPT, Claude
+remote add-by-URL, JumpCloud, Cognito, and other IdP patterns.
+
+## Claude Add-By-URL Requires HTTPS
+
+Claude's UI flow for adding a remote MCP server validates the URL and requires
+`https://`. A local endpoint such as `http://127.0.0.1:8080/mcp` is still useful
+for curl, MCP Inspector, and desktop JSON bridge testing, but it is not the
+right onboarding path for users who add MCP servers through Claude's UI.
+
+For that flow, deploy `gongmcp` behind a company-managed HTTPS endpoint:
+
+```text
+Claude UI -> https://gong-mcp.example.com/mcp -> TLS/proxy/gateway -> gongmcp http://127.0.0.1:8080/mcp
+```
+
+A minimal reverse-proxy shape looks like:
+
+```text
+gong-mcp.example.com {
+  reverse_proxy 127.0.0.1:8080
+}
+```
+
+Keep bearer token values out of Git and out of image layers. Store them in a
+secret manager or mounted secret file, pass only the HTTPS `/mcp` URL to users,
+and use the UI's authentication/token flow if enabled by the MCP host. For a
+quick local demo, a temporary HTTPS tunnel can prove reachability, but it should
+not be treated as a production deployment for customer data.
+
+## Publishing Shape
+
+For company-managed use, publish two distinct artifacts: the full image for
+operator sync jobs and the MCP-only target for business-user MCP hosts. Do not
+point business-user hosts at the full image. Pin immutable tags or digests in
+the MCP host config. The expected operational contract is:
+
+- the company controls the image tag and rollout
+- each tenant/user controls credentials and local or mounted data
+- SQLite/transcript/profile paths are mounted volumes, not image contents
+- MCP stays read-only; HTTP mode is a private-pilot transport, not a tenant
+  management layer
+- shared hosts should avoid long-lived plain environment variables where possible; Docker socket access can expose container environment through inspection
+- production rollouts should pin immutable digests and can add image signing outside this repo's local-development defaults
+- stdio MCP host configs must use the MCP-only target once published, with no
+  Gong credentials, `--network none` for SQLite, and either a read-only SQLite
+  mount or a Postgres reader URL with `--db` omitted
+- HTTP MCP host configs must use the MCP-only target with no Gong credentials,
+  an explicit tool preset or allowlist, either a read-only SQLite mount or a
+  Postgres reader URL with `--db` omitted, and a TLS/private-network boundary
+  managed outside the container

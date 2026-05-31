@@ -1,0 +1,48 @@
+version: 2
+
+project_name: gongctl
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: gongctl
+    main: ./cmd/gongctl
+    binary: gongctl
+    ldflags:
+      - -s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version={{ .Version }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit={{ .Commit }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Date={{ .Date }}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+  - id: gongmcp
+    main: ./cmd/gongmcp
+    binary: gongmcp
+    ldflags:
+      - -s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version={{ .Version }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit={{ .Commit }} -X github.com/fyne-coder/gongcli_mcp/internal/version.Date={{ .Date }}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: git

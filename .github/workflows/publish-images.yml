@@ -1,0 +1,219 @@
+name: publish-images
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Build metadata version for manual SHA-tagged image publishes. Release tags publish versioned image tags."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+        env:
+          POSTGRES_USER: gongctl
+          POSTGRES_PASSWORD: gongctl_release_password
+          POSTGRES_DB: gongctl
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gongctl -d gongctl"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      GONGCTL_TEST_POSTGRES_URL: postgres://gongctl:gongctl_release_password@127.0.0.1:5432/gongctl?sslmode=disable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Require tag or default branch dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          echo "Manual image publishing must run from the default branch." >&2
+          exit 1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.3"
+
+      - name: Release gates
+        shell: bash
+        run: |
+          go test -count=1 ./...
+          ./scripts/postgres-backup-restore-smoke.sh
+          go vet ./...
+          make secret-scan
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Docker smoke build
+        shell: bash
+        run: |
+          docker build -t gongctl:release-smoke .
+          docker build --target mcp -t gongmcp:release-smoke .
+          docker build --target mcp-gateway -t gongmcp-gateway:release-smoke .
+          docker run --rm --entrypoint /bin/sh gongctl:release-smoke -c 'test -x /usr/local/bin/gongctl && test -x /usr/local/bin/gongmcp'
+          docker run --rm --entrypoint /bin/sh gongmcp:release-smoke -c 'test -x /usr/local/bin/gongmcp'
+          docker run --rm --entrypoint /bin/sh gongmcp-gateway:release-smoke -c 'test -x /usr/local/bin/gongmcp-gateway'
+
+      - name: Scan gongctl image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: gongctl:release-smoke
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Scan gongmcp image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: gongmcp:release-smoke
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Scan gongmcp-gateway image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: gongmcp-gateway:release-smoke
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          version="$(sed 's/^v//' VERSION)"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${DISPATCH_VERSION}" ]]; then
+            version="${DISPATCH_VERSION#v}"
+          fi
+          stable=false
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            stable=true
+          elif [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z][0-9A-Za-z.-]*$ ]]; then
+            echo "version must be semver like 0.3.2, v0.3.2, or v0.4.0-rc1" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=$(cut -d. -f1,2 <<<"$version")" >> "$GITHUB_OUTPUT"
+          echo "stable=${stable}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Metadata for gongctl
+        id: meta-gongctl
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/gongctl
+          tags: |
+            type=semver,pattern={{raw}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=sha,prefix=sha-
+
+      - name: Build and publish gongctl image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-gongctl.outputs.tags }}
+          labels: ${{ steps.meta-gongctl.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.release.outputs.date }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata for gongmcp
+        id: meta-gongmcp
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/gongmcp
+          tags: |
+            type=semver,pattern={{raw}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=sha,prefix=sha-
+
+      - name: Build and publish gongmcp image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: mcp
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-gongmcp.outputs.tags }}
+          labels: ${{ steps.meta-gongmcp.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.release.outputs.date }}
+          provenance: true
+          sbom: true
+
+      - name: Metadata for gongmcp-gateway
+        id: meta-gongmcp-gateway
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE_BASE }}/gongmcp-gateway
+          tags: |
+            type=semver,pattern={{raw}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && steps.release.outputs.stable == 'true' }}
+            type=sha,prefix=sha-
+
+      - name: Build and publish gongmcp-gateway image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          target: mcp-gateway
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-gongmcp-gateway.outputs.tags }}
+          labels: ${{ steps.meta-gongmcp-gateway.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.release.outputs.date }}
+          provenance: true
+          sbom: true

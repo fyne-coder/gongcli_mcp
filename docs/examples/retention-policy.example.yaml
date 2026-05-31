@@ -1,0 +1,28 @@
+# Example retention policy for `gongctl cache purge --config <this file>`.
+#
+# Confirmed (`--confirm`) config-driven purge fails closed if any required
+# approval field is absent. This file is the operator-reviewed,
+# evidence-bearing record that travels with the destructive job.
+#
+# Typical use:
+#   gongctl cache purge --db /srv/gongctl/cache/gong.db --config /etc/gongctl/retention-policy.yaml --dry-run
+#   gongctl cache purge --db /srv/gongctl/cache/gong.db --config /etc/gongctl/retention-policy.yaml --confirm
+#
+# Postgres deployments omit --db and set GONG_DATABASE_URL to the writable
+# operator URL only for the --confirm run; the --dry-run plan can use the
+# reader URL.
+#
+# Replace the example values below with real change-management metadata.
+# Do not put customer locations, paths, or secrets in approval fields; they
+# are surfaced (with redaction for path-like values) in command output.
+
+version: 1
+older_than: 2026-04-01
+
+approval:
+  reference: CHANGE-RETENTION-123
+  approved_by: revops-retention-reviewer
+  approved_at: 2026-04-15
+  data_owner: revenue-operations
+  backup_reference: backup-20260415-approved
+  legal_hold_reviewed: true

@@ -1,0 +1,20 @@
+version: 1
+name: Minimal staged refresh
+description: Safe-first staged refresh for dry-run validation and scheduled operator jobs.
+db: ./run-cache/gong.db
+steps:
+  - name: daily_calls
+    action: calls
+    from: 2026-04-01
+    to: 2026-04-02
+    preset: minimal
+    max_pages: 1
+  - name: directory_users
+    action: users
+    max_pages: 1
+  - name: tracker_settings
+    action: settings
+    settings_kind: trackers
+  - name: scorecard_settings
+    action: settings
+    settings_kind: scorecards

@@ -1,0 +1,161 @@
+# Roadmap
+
+`gongctl` should mature through explicit deployment gates instead of treating all
+hardening as one broad "production ready" milestone. The product boundary stays:
+`gongctl` syncs and maintains a customer-controlled cache; `gongmcp` reads that
+cache only.
+
+## Current Baseline
+
+- Local CLI for Gong auth, sync, search, analysis, transcript fetch/export,
+  SQLite-backed local status checks, and supported Postgres shared-deployment
+  slices.
+- Read-only local stdio MCP server over SQLite by default, supported Postgres
+  shared-deployment MCP slices, plus private-pilot HTTP `/mcp` mode for
+  customer-managed deployments.
+- Docker packaging for local/company-managed CLI and MCP use.
+- Version source in `VERSION`, changelog entries, and SemVer-style tags.
+- Public-safe docs for local data handling, Docker, release flow, and readiness.
+
+## Gate 1: Enterprise Pilot Ready
+
+Goal: a company can run a limited, reviewed pilot with admin-only sync and
+business-user MCP access over a read-only cache.
+
+Status: all six required outcomes have shipped. The list is kept here as the
+contract for what "Gate 1" means; new pilots should verify each item against
+the current binary and docs rather than treating this status line as a
+deployment guarantee.
+
+Required outcomes:
+
+1. Repo identity is unambiguous across GitHub repo, Go module, Docker labels,
+   release metadata, and security advisory links. (shipped, v0.2.0)
+2. Client-facing docs exist for enterprise deployment, security model, MCP data
+   exposure, operator sync, business-user use, and pilot scope. (shipped)
+3. Data refresh is repeatable through a documented config/runbook, with clear
+   cache freshness and readiness signals. (shipped via `sync run --config` plus
+   the operator sync runbook)
+4. `gongmcp` supports tool presets and custom allowlists so a company can
+   expose only approved MCP tools. (shipped via `--tool-preset`,
+   `GONGMCP_TOOL_PRESET`, `--tool-allowlist`, and `GONGMCP_TOOL_ALLOWLIST`)
+5. High-risk CLI commands have a restricted/company mode that blocks or requires
+   explicit override for raw API, transcript export/sync, raw cached JSON, and
+   extended CRM context. (shipped via `GONGCTL_RESTRICTED` and
+   `--allow-sensitive-export`)
+6. MCP output contracts are tested for read-only behavior, bounded results,
+   redaction defaults, no raw JSON, and no full transcript dumps. (shipped;
+   covered by `internal/mcp/server_test.go` and `internal/cli/restricted_test.go`)
+
+Pilot packet docs:
+
+- [Enterprise deployment](enterprise-deployment.md)
+- [Security model](security-model.md)
+- [MCP data exposure](mcp-data-exposure.md)
+- [Operator sync runbook](runbooks/operator-sync.md)
+- [Pilot sponsor and operator guide](pilot-sponsor-and-operator-guide.md)
+- [Pilot plan](pilot-plan.md)
+
+## Gate 2: Company Production Ready
+
+Goal: the project is safe to operate repeatedly inside a company with defined
+owners, retention, upgrade, rollback, and security controls.
+
+Status as of 2026-05-14: items 1, 2, 3, 4, 5, and the backup/rollback portion
+of item 6 have shipped. Item 6 still needs customer-platform restore drills for
+production PITR/replica workflows before broad GA.
+The Postgres client pilot release packet and onboarding checklist now document
+the controlled shared-deployment handoff, but they do not replace a published
+tag, image digest verification, or customer-platform dry run.
+
+Required outcomes:
+
+1. Scheduled sync patterns are documented and supported by a config file, for
+   example `gongctl sync run --config company-sync.yaml`. (shipped)
+2. Cache inventory and purge commands let operators answer what sensitive data is
+   present and remove approved slices without manual SQLite work. (shipped via
+   `gongctl cache inventory` and dry-run-first `gongctl cache purge`)
+3. MCP tool intake is formal: every new tool starts from a business question,
+   maps to cached data, gets an exposure classification, ships behind allowlists,
+   and has regression tests. (shipped via
+   [mcp-tool-intake-checklist.md](mcp-tool-intake-checklist.md),
+   [mcp-data-exposure.md](mcp-data-exposure.md), and catalog/doc regression
+   tests)
+4. Supply-chain checks cover Go tests, `go vet`, static analysis, vulnerability
+   scanning, secret scanning, Docker scanning, SBOM/checksums, and pinned release
+   artifacts. (shipped; see [release.md](release.md))
+5. A company can deploy a `gongmcp`-only image or target with no Gong
+   credentials, no network, and a read-only SQLite mount. (shipped via the
+   `mcp` Docker target documented in [docker.md](docker.md))
+6. Upgrade and rollback procedures protect existing SQLite/Postgres caches and
+   require migration testing on copies before production use. (partial;
+   SQLite copy validation and synthetic Postgres backup/restore smoke shipped;
+   customer-platform PITR/replica restore drills still pending)
+
+## Gate 3: Public 1.0 Ready
+
+Goal: outside companies can evaluate and adopt a stable release contract without
+maintainer hand-holding.
+
+Required outcomes:
+
+1. Stable documented CLI/MCP contracts for supported commands and tools.
+2. Signed or provenance-backed release artifacts and container images.
+3. Security disclosure, versioning, deprecation, and compatibility policies.
+4. Complete operator and business-user documentation with approved and disallowed
+   workflows.
+5. A tested feedback loop for adding MCP tools without widening the default data
+   exposure surface.
+
+Review-driven hardening shipped for the customer-hosted pilot:
+
+- Tool preset discovery via `gongmcp --list-tool-presets`.
+- Token rotation for private HTTP bridge mode through current and previous
+  bearer token files.
+- Release workflow hardening with commit-SHA-pinned GitHub Actions and
+  customer digest-verification instructions.
+- Profile operations for staged import, activation, history, diff, and generated
+  schema output.
+
+Remaining 1.0 backlog:
+
+- Optional image signing in the publisher or customer release pipeline.
+- Native remote OAuth: implement Protected Resource Metadata, issuer/audience
+  validation, scopes, and per-user audit only after the private bridge boundary
+  stays stable.
+- Deployment simplification for customer-hosted Postgres/Kubernetes pilots:
+  package the source-writer, serving-writer, scoped-reader, sync, serving
+  refresh, grant reconciliation, MCP runtime, and smoke-test ordering into a
+  supported deployable path instead of requiring operators to hand-script the
+  phase boundaries. Candidate deliverables:
+  - a Helm or Kustomize starter for Kubernetes with explicit values for source
+    writer URL, serving writer URL, scoped reader URL, governance YAML, preset,
+    image tag/digest, and JumpCloud/OIDC gateway settings
+  - a single `gongctl operator refresh` command that runs source sync,
+    read-model rebuild, serving DB refresh, scoped grant reconciliation, and
+    preset-aware reader validation in the correct order
+  - a `gongctl doctor postgres-deploy` diagnostic that reports the current
+    DB/user for each URL, detects writer URLs used in reader checks, verifies
+    scoped reader grants against the selected MCP preset, and emits the next
+    corrective command
+  - a preset-aware reader validation command, or a `sync status --preset`
+    option, so operators can validate `broad-public-redacted` without tripping
+    the default read-only function expectations
+  - clearer failure messages for common deployment mistakes such as running
+    `sync status` with a writer URL or starting `gongmcp` before grants are
+    reconciled
+  - an end-to-end deployment smoke Job that operators can run without becoming
+    MCP business users
+
+## Feature Direction
+
+- Keep MCP read-only over the configured cache store. SQLite remains the
+  default; Postgres supports explicitly listed shared-deployment slices. Do not
+  add live Gong API calls to MCP.
+- Add new MCP tools only after the CLI/cache layer can ingest the required data
+  safely.
+- Prefer aggregate and metadata-first tools. Transcript snippets and CRM values
+  remain bounded, redacted by default, and allowlist-controlled.
+- Keep business users on `gongmcp`; keep `gongctl` for IT/RevOps operators.
+- Treat customer data refresh as an operator workflow with explicit scope,
+  schedule, storage, retention, and cache freshness reporting.

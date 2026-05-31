@@ -1,0 +1,84 @@
+# Example sync-run config for `gongctl sync run --config <this file>`.
+#
+# This file is the YAML primitive that SQLite-backed scheduled refresh jobs
+# should call.
+# Copy this file, replace the REPLACE_WITH_* placeholders, and dry-run validate
+# the exact config before the scheduler enables it:
+#
+#   gongctl sync run --config /etc/gongctl/sync-run.yaml --dry-run
+#   gongctl sync run --config /etc/gongctl/sync-run.yaml
+#
+# Relative `db` and transcript `out_dir` paths resolve from the location of
+# this YAML file, so one reviewed config can travel with the operator-managed
+# job definition (systemd unit, launchd plist, K8s CronJob, etc.).
+#
+# For Postgres shared deployments, use direct `gongctl sync ...` commands or a
+# reviewed wrapper with GONG_DATABASE_URL set to the writable operator URL. The
+# current `sync run --config` implementation opens a SQLite cache from this
+# YAML's `db` field.
+#
+# Keep this file under operator-controlled storage. Real customer configs
+# may name CRM integration IDs, workspace IDs, or scorecard IDs; treat them
+# as sensitive metadata.
+
+version: 1
+name: Daily incremental refresh
+description: |
+  Operator-owned scheduled refresh: incremental calls + users + transcripts +
+  CRM context + settings, ending with a sync status snapshot for monitoring.
+
+# SQLite cache path.
+db: /srv/gongctl/cache/gong.db
+
+steps:
+  # 1. Calls for the approved window. For scheduled incremental refreshes,
+  #    render these placeholders from the scheduler wrapper before each run
+  #    (see scheduling.md for cron/systemd templates that compute from/to
+  #    from date).
+  - name: incremental_calls
+    action: calls
+    from: REPLACE_WITH_START_DATE_YYYY_MM_DD
+    to: REPLACE_WITH_END_DATE_YYYY_MM_DD
+    preset: business        # business | minimal | all
+    max_pages: 50
+    include_parties: true
+    include_highlights: true
+
+  # 2. Refresh user directory (cheap; safe to run every cycle).
+  - name: directory_users
+    action: users
+    max_pages: 5
+
+  # 3. Refresh transcripts for the same window. `limit` bounds per-run cost;
+  #    `batch_size` controls Gong API page size.
+  - name: incremental_transcripts
+    action: transcripts
+    out_dir: /srv/gongctl/transcripts
+    limit: 200
+    batch_size: 100
+
+  # 4. Refresh CRM integrations + schema for approved object types only.
+  - name: crm_integrations
+    action: crm-integrations
+
+  - name: crm_schema_account_deal
+    action: crm-schema
+    integration_id: REPLACE_WITH_APPROVED_INTEGRATION_ID
+    object_types:
+      - ACCOUNT
+      - DEAL
+
+  # 5. Refresh tracker and scorecard settings (low-volume; once per cycle).
+  - name: tracker_settings
+    action: settings
+    settings_kind: trackers
+
+  - name: scorecard_settings
+    action: settings
+    settings_kind: scorecards
+
+# `sync run` does not include a `status` step. The scheduler should call
+#   gongctl sync status --db /srv/gongctl/cache/gong.db
+# (or `get_sync_status` over MCP) immediately after `sync run` so the
+# monitoring system can read freshness per stage. See docs/scheduling.md
+# for the wrapper-script pattern.

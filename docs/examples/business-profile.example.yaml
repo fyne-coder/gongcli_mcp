@@ -1,0 +1,102 @@
+# Synthetic example only. See ../profiles.md for field-by-field explanations.
+# Real tenant business profiles can contain CRM object names, CRM field names,
+# lifecycle values, tracker IDs, scorecard question IDs, and evidence values.
+# Keep real profiles outside Git.
+version: 1
+name: Example tenant business profile
+
+objects:
+  deal:
+    object_types:
+      - Opportunity
+      - Deal
+  account:
+    object_types:
+      - Account
+      - Company
+
+fields:
+  deal_stage:
+    object: deal
+    names:
+      - StageName
+      - DealStage
+  deal_type:
+    object: deal
+    names:
+      - Type
+  forecast_category:
+    object: deal
+    names:
+      - ForecastCategoryName
+  account_industry:
+    object: account
+    names:
+      - Industry
+  account_lifecycle:
+    object: account
+    names:
+      - Customer_Status__c
+
+lifecycle:
+  open:
+    label: Open pipeline
+    order: 10
+    rules:
+      - field: deal_stage
+        op: in
+        values:
+          - Discovery
+          - Evaluation
+          - Proposal
+          - Negotiation
+  closed_won:
+    label: Closed won
+    order: 20
+    rules:
+      - field: deal_stage
+        op: equals
+        value: Closed Won
+  closed_lost:
+    label: Closed lost
+    order: 30
+    rules:
+      - field: deal_stage
+        op: equals
+        value: Closed Lost
+  post_sales:
+    label: Post-sales customer
+    order: 40
+    rules:
+      - field: account_lifecycle
+        op: in
+        values:
+          - Customer
+          - Active Customer
+          - Renewal
+  unknown:
+    label: Unknown lifecycle
+    order: 999
+
+methodology:
+  pain:
+    description: Pain, challenge, or business problem evidence.
+    aliases:
+      - pain
+      - challenge
+      - problem
+    fields:
+      - object: deal
+        name: Pain_Point__c
+  next_steps:
+    description: Explicit next step, decision process, or action owner.
+    aliases:
+      - next step
+      - follow up
+      - action item
+  risk:
+    description: Deal, renewal, implementation, or adoption risk evidence.
+    aliases:
+      - risk
+      - blocker
+      - concern

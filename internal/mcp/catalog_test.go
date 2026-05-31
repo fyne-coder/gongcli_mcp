@@ -1,0 +1,373 @@
+package mcp
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestToolCatalogInvariants(t *testing.T) {
+	t.Parallel()
+
+	catalogNames := ToolCatalogNames()
+	if len(catalogNames) == 0 {
+		t.Fatal("ToolCatalogNames returned no tools")
+	}
+
+	catalog := make(map[string]struct{}, len(catalogNames))
+	for _, name := range catalogNames {
+		if name == "" {
+			t.Fatal("ToolCatalogNames returned an empty tool name")
+		}
+		if _, ok := catalog[name]; ok {
+			t.Fatalf("ToolCatalogNames contains duplicate tool %q", name)
+		}
+		catalog[name] = struct{}{}
+	}
+
+	presets := ToolPresetCatalog()
+	if len(presets) == 0 {
+		t.Fatal("ToolPresetCatalog returned no presets")
+	}
+
+	seenPresetNames := make(map[string]string)
+	for _, preset := range presets {
+		if preset.Name == "" {
+			t.Fatal("ToolPresetCatalog returned a preset with an empty name")
+		}
+		if preset.ToolCount != len(preset.Tools) {
+			t.Fatalf("preset %q tool_count=%d len(tools)=%d", preset.Name, preset.ToolCount, len(preset.Tools))
+		}
+
+		registerPresetName(t, seenPresetNames, preset.Name, preset.Name)
+		for _, alias := range preset.Aliases {
+			registerPresetName(t, seenPresetNames, alias, preset.Name)
+		}
+
+		canonicalTools, err := ExpandToolPreset(preset.Name)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset.Name, err)
+		}
+		assertStringSlicesEqual(t, canonicalTools, preset.Tools, "catalog tools for "+preset.Name)
+
+		for _, tool := range preset.Tools {
+			if _, ok := catalog[tool]; !ok {
+				t.Fatalf("preset %q references unknown tool %q", preset.Name, tool)
+			}
+		}
+
+		for _, alias := range preset.Aliases {
+			aliasTools, err := ExpandToolPreset(alias)
+			if err != nil {
+				t.Fatalf("ExpandToolPreset(%q) alias for %q returned error: %v", alias, preset.Name, err)
+			}
+			assertStringSlicesEqual(t, aliasTools, canonicalTools, "alias "+alias+" for "+preset.Name)
+		}
+	}
+
+	allReadonly, err := ExpandToolPreset("all-readonly")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(all-readonly) returned error: %v", err)
+	}
+	assertStringSlicesEqual(t, allReadonly, catalogNames, "all-readonly catalog")
+
+	governanceTools, err := ExpandToolPreset("governance-search")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(governance-search) returned error: %v", err)
+	}
+	if err := ValidateGovernanceAllowlist(governanceTools); err != nil {
+		t.Fatalf("governance-search preset rejected by governance validator: %v", err)
+	}
+
+	facadeTools, err := ExpandToolPreset("analyst-facade")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst-facade) returned error: %v", err)
+	}
+	assertStringSlicesEqual(t, facadeTools, FacadeToolNames(), "analyst-facade visible tools")
+	facadeRoutedTools, err := ExpandToolPresetFacadeRoutedTools("analyst-facade")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetFacadeRoutedTools(analyst-facade) returned error: %v", err)
+	}
+	analystTools, err := ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
+	}
+	wantFacadeRoutedTools := append(copyStrings(analystTools), facadeHiddenRoutedToolNames()...)
+	assertStringSlicesEqual(t, facadeRoutedTools, wantFacadeRoutedTools, "analyst-facade hidden routed tools")
+
+	for _, preset := range []string{"analyst-business-core", "analyst", "redacted-all-readonly", "all-readonly"} {
+		visibleTools, err := ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		routedTools, err := ExpandToolPresetFacadeRoutedTools(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPresetFacadeRoutedTools(%q) returned error: %v", preset, err)
+		}
+		want := append(copyStrings(visibleTools), facadeHiddenRoutedToolNames()...)
+		assertStringSlicesEqual(t, routedTools, want, preset+" hidden facade routed tools")
+	}
+}
+
+func TestFacadeHiddenRoutedToolsDerivedFromRegistry(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		internalRoutedToolCallDrilldown,
+		internalRoutedToolListAIHighlights,
+		internalRoutedToolBuyerQuestions,
+		internalRoutedToolObjectionSignals,
+		internalRoutedToolProspectQuestionAnswer,
+		internalRoutedToolQuestionAnswer,
+		internalRoutedToolThemeIntelReport,
+	}
+	assertStringSlicesEqual(t, facadeHiddenRoutedToolNames(), want, "hidden facade routed tools")
+}
+
+func TestMCPToolIntakeDocumentationCoversCatalog(t *testing.T) {
+	t.Parallel()
+
+	exposureDoc := readRepoDoc(t, "docs/mcp-data-exposure.md")
+	intakeDoc := readRepoDoc(t, "docs/mcp-tool-intake-checklist.md")
+	roadmapDoc := readRepoDoc(t, "docs/roadmap.md")
+
+	lowerIntake := strings.ToLower(intakeDoc)
+	for _, required := range []string{
+		"business question",
+		"cache source",
+		"backend scope",
+		"exposure level",
+		"default preset decision",
+		"postgres decision",
+		"governance decision",
+		"output contract",
+		"tests and smoke",
+		"postgres `all-readonly` remains rejected",
+	} {
+		if !strings.Contains(lowerIntake, required) {
+			t.Fatalf("MCP tool intake checklist missing required gate %q", required)
+		}
+	}
+
+	var missingTools []string
+	for _, name := range ToolCatalogNames() {
+		if !strings.Contains(exposureDoc, "`"+name+"`") {
+			missingTools = append(missingTools, name)
+		}
+	}
+	if len(missingTools) > 0 {
+		t.Fatalf("docs/mcp-data-exposure.md missing tool exposure entries for: %v", missingTools)
+	}
+
+	for _, preset := range ToolPresetCatalog() {
+		if !strings.Contains(intakeDoc, "`"+preset.Name+"`") {
+			t.Fatalf("docs/mcp-tool-intake-checklist.md missing preset rule for %q", preset.Name)
+		}
+	}
+
+	if !strings.Contains(exposureDoc, "MCP Tool Intake Checklist") {
+		t.Fatal("docs/mcp-data-exposure.md must link the MCP tool intake checklist")
+	}
+	if strings.Contains(roadmapDoc, "written checklist still pending") {
+		t.Fatal("docs/roadmap.md still says the written MCP tool-intake checklist is pending")
+	}
+	if !strings.Contains(roadmapDoc, "mcp-tool-intake-checklist.md") {
+		t.Fatal("docs/roadmap.md must cite the MCP tool-intake checklist for Gate 2 item 3")
+	}
+}
+
+func TestBusinessWorkbenchPresetExposesOnlyFacadeTools(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"business-workbench", "analyst-facade", "facade-analyst"} {
+		tools, err := ExpandToolPreset(name)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", name, err)
+		}
+		assertStringSlicesEqual(t, tools, FacadeToolNames(), "business-workbench visible tools via "+name)
+	}
+
+	routed, err := ExpandToolPresetFacadeRoutedTools("business-workbench")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetFacadeRoutedTools(business-workbench) returned error: %v", err)
+	}
+	analyst, err := ExpandToolPreset("analyst")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(analyst) returned error: %v", err)
+	}
+	wantRouted := append(copyStrings(analyst), facadeHiddenRoutedToolNames()...)
+	assertStringSlicesEqual(t, routed, wantRouted, "business-workbench hidden facade routed tools")
+
+	grants, err := ExpandToolPresetReaderGrantTools("business-workbench")
+	if err != nil {
+		t.Fatalf("ExpandToolPresetReaderGrantTools(business-workbench) returned error: %v", err)
+	}
+	assertStringSlicesEqual(t, grants, wantRouted, "business-workbench reader grant tools")
+
+	presets := ToolPresetCatalog()
+	var entry ToolPresetInfo
+	for _, info := range presets {
+		if info.Name == "business-workbench" {
+			entry = info
+			break
+		}
+	}
+	if entry.Name == "" {
+		t.Fatalf("ToolPresetCatalog missing business-workbench entry; presets=%v", presets)
+	}
+	if entry.ToolCount != 6 || len(entry.Tools) != 6 {
+		t.Fatalf("business-workbench preset tool count=%d want 6 (six facade tools); tools=%v", entry.ToolCount, entry.Tools)
+	}
+	wantAliases := map[string]struct{}{"analyst-facade": {}, "facade-analyst": {}}
+	for _, alias := range entry.Aliases {
+		delete(wantAliases, alias)
+	}
+	if len(wantAliases) != 0 {
+		t.Fatalf("business-workbench preset missing analyst-facade/facade-analyst aliases; got %v", entry.Aliases)
+	}
+}
+
+func TestAnalystPresetExposesScorecardInventoryTools(t *testing.T) {
+	t.Parallel()
+
+	for _, preset := range []string{"analyst", "analyst-expansion"} {
+		tools, err := ExpandToolPreset(preset)
+		if err != nil {
+			t.Fatalf("ExpandToolPreset(%q) returned error: %v", preset, err)
+		}
+		for _, want := range []string{"list_scorecards", "get_scorecard"} {
+			found := false
+			for _, name := range tools {
+				if name == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("preset %q missing scorecard inventory tool %q in %v", preset, want, tools)
+			}
+		}
+		for _, blocked := range []string{"summarize_scorecard_activity"} {
+			for _, name := range tools {
+				if name == blocked {
+					t.Fatalf("preset %q must not expose %q (Phase 13g keeps activity aggregates in analyst-core/analyst-business-core)", preset, blocked)
+				}
+			}
+		}
+	}
+}
+
+func TestBroadPublicRedactedPresetExposesSameSurfaceAsRedactedAllReadonly(t *testing.T) {
+	t.Parallel()
+
+	// broad-public-redacted is the customer-test alias of the redacted-all-readonly
+	// internal lab posture. They expose the same reviewed Postgres tool surface
+	// so existing manual lab use does not break, but the new name signals the
+	// client-deployment posture and is enforced by stricter startup gates.
+	got, err := ExpandToolPreset("broad-public-redacted")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(broad-public-redacted) returned error: %v", err)
+	}
+	want := PostgresRedactedAllReadonlyToolNames()
+	assertStringSlicesEqual(t, got, want, "broad-public-redacted vs redacted-all-readonly")
+
+	if !IsBroadPublicRedactedPreset(BroadPublicRedactedPresetName()) {
+		t.Fatalf("IsBroadPublicRedactedPreset must accept canonical name %q", BroadPublicRedactedPresetName())
+	}
+	if IsBroadPublicRedactedPreset("redacted-all-readonly") {
+		t.Fatal("IsBroadPublicRedactedPreset must distinguish broad-public-redacted from redacted-all-readonly")
+	}
+
+	presets := ToolPresetCatalog()
+	var entry ToolPresetInfo
+	for _, p := range presets {
+		if p.Name == "broad-public-redacted" {
+			entry = p
+			break
+		}
+	}
+	if entry.Name == "" {
+		t.Fatalf("ToolPresetCatalog missing broad-public-redacted entry; presets=%v", presets)
+	}
+	if entry.ToolCount != len(want) {
+		t.Fatalf("broad-public-redacted ToolCount=%d want %d", entry.ToolCount, len(want))
+	}
+}
+
+func TestRedactedAllReadonlyPresetExposesReviewedPostgresSearchSurface(t *testing.T) {
+	t.Parallel()
+
+	tools, err := ExpandToolPreset("redacted-all-readonly")
+	if err != nil {
+		t.Fatalf("ExpandToolPreset(redacted-all-readonly) returned error: %v", err)
+	}
+	for _, want := range []string{
+		"gong_query",
+		"gong_analyze",
+		"search_calls",
+		"get_call",
+		"search_calls_by_lifecycle",
+		"search_crm_field_values",
+		"search_transcript_segments",
+		"search_transcripts_by_call_facts",
+		"search_transcripts_by_crm_context",
+		"search_transcript_quotes_with_attribution",
+		"list_crm_integrations",
+		"list_cached_crm_schema_objects",
+		"list_cached_crm_schema_fields",
+		"list_gong_settings",
+		"list_scorecards",
+		"get_scorecard",
+		"summarize_scorecard_activity",
+		"missing_transcripts",
+	} {
+		if !containsString(tools, want) {
+			t.Fatalf("redacted-all-readonly missing reviewed Postgres tool %q in %v", want, tools)
+		}
+	}
+	for _, name := range BusinessAnalysisToolNames() {
+		if !containsString(tools, name) {
+			t.Fatalf("redacted-all-readonly missing business-analysis tool %q", name)
+		}
+	}
+	if len(tools) == 0 {
+		t.Fatal("redacted-all-readonly returned no tools")
+	}
+}
+
+func registerPresetName(t *testing.T, seen map[string]string, name, preset string) {
+	t.Helper()
+
+	normalized := normalizedToolPresetName(name)
+	if normalized == "" {
+		t.Fatalf("preset %q includes an empty normalized name or alias %q", preset, name)
+	}
+	if existing, ok := seen[normalized]; ok {
+		t.Fatalf("preset name or alias %q for %q duplicates normalized name used by %q", name, preset, existing)
+	}
+	seen[normalized] = preset
+}
+
+func assertStringSlicesEqual(t *testing.T, got, want []string, label string) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("%s len=%d want %d\ngot:  %v\nwant: %v", label, len(got), len(want), got, want)
+	}
+	for idx := range want {
+		if got[idx] != want[idx] {
+			t.Fatalf("%s[%d]=%q want %q\ngot:  %v\nwant: %v", label, idx, got[idx], want[idx], got, want)
+		}
+	}
+}
+
+func readRepoDoc(t *testing.T, path string) string {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join("..", "..", path))
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(body)
+}

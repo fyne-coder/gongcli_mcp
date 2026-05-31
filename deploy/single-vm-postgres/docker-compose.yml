@@ -1,0 +1,115 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${GONGCTL_SOURCE_DB:-gongctl_source}
+      POSTGRES_USER: ${GONGCTL_POSTGRES_USER:?set GONGCTL_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${GONGCTL_POSTGRES_PASSWORD:?set GONGCTL_POSTGRES_PASSWORD}
+      GONGCTL_SOURCE_DB: ${GONGCTL_SOURCE_DB:-gongctl_source}
+      GONGCTL_MCP_DB: ${GONGCTL_MCP_DB:-gongctl_mcp}
+      GONGMCP_READER_ROLE: ${GONGMCP_READER_ROLE:-gongmcp_business_workbench_reader}
+      GONGMCP_READER_PASSWORD: ${GONGMCP_READER_PASSWORD:?set GONGMCP_READER_PASSWORD}
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1:55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - gongctl-postgres-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+
+  gongctl:
+    image: ${GONGCTL_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z}
+    profiles: ["operator"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GONG_DATABASE_URL: postgres://${GONGCTL_POSTGRES_USER}:${GONGCTL_POSTGRES_PASSWORD}@postgres:5432/${GONGCTL_SOURCE_DB:-gongctl_source}?sslmode=disable
+      GONG_ACCESS_KEY: ${GONG_ACCESS_KEY:-}
+      GONG_ACCESS_KEY_SECRET: ${GONG_ACCESS_KEY_SECRET:-}
+      GONG_BASE_URL: ${GONG_BASE_URL:-}
+    volumes:
+      - ${GONGCTL_TRANSCRIPT_DIR:-./transcripts}:/transcripts
+      - ${GONGCTL_CONFIG_DIR:-./config}:/config:ro
+    command: ["sync", "status"]
+
+  refresh-serving-db:
+    image: ${GONGCTL_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z}
+    profiles: ["refresh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-lc"]
+    environment:
+      GONGCTL_SOURCE_DATABASE_URL: postgres://${GONGCTL_POSTGRES_USER}:${GONGCTL_POSTGRES_PASSWORD}@postgres:5432/${GONGCTL_SOURCE_DB:-gongctl_source}?sslmode=disable
+      GONGCTL_MCP_DATABASE_URL: postgres://${GONGCTL_POSTGRES_USER}:${GONGCTL_POSTGRES_PASSWORD}@postgres:5432/${GONGCTL_MCP_DB:-gongctl_mcp}?sslmode=disable
+      GONGCTL_AI_GOVERNANCE_CONFIG: /run/secrets/ai-governance.yaml
+      GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-workbench}
+      GONGMCP_READER_ROLE: ${GONGMCP_READER_ROLE:-gongmcp_business_workbench_reader}
+      GONGMCP_DATABASE_NAME: ${GONGCTL_MCP_DB:-gongctl_mcp}
+    volumes:
+      - ${AI_GOVERNANCE_CONFIG:?set AI_GOVERNANCE_CONFIG}:/run/secrets/ai-governance.yaml:ro
+    command:
+      - |
+        gongctl deploy postgres-refresh \
+          --source "$$GONGCTL_SOURCE_DATABASE_URL" \
+          --target "$$GONGCTL_MCP_DATABASE_URL" \
+          --config "$$GONGCTL_AI_GOVERNANCE_CONFIG" \
+          --preset "$$GONGMCP_TOOL_PRESET" \
+          --role "$$GONGMCP_READER_ROLE" \
+          --database "$$GONGMCP_DATABASE_NAME"
+
+  apply-reader-grants:
+    image: ${GONGCTL_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z}
+    profiles: ["grants"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-lc"]
+    environment:
+      GONG_DATABASE_URL: postgres://${GONGCTL_POSTGRES_USER}:${GONGCTL_POSTGRES_PASSWORD}@postgres:5432/${GONGCTL_MCP_DB:-gongctl_mcp}?sslmode=disable
+      GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-workbench}
+      GONGMCP_READER_ROLE: ${GONGMCP_READER_ROLE:-gongmcp_business_workbench_reader}
+      GONGCTL_MCP_DB: ${GONGCTL_MCP_DB:-gongctl_mcp}
+    command:
+      - |
+        gongctl mcp postgres-reader-apply \
+          --preset "$$GONGMCP_TOOL_PRESET" \
+          --role "$$GONGMCP_READER_ROLE" \
+          --database "$$GONGCTL_MCP_DB" \
+          --apply
+
+  gongmcp:
+    image: ${GONGMCP_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GONG_DATABASE_URL: postgres://${GONGMCP_READER_ROLE:-gongmcp_business_workbench_reader}:${GONGMCP_READER_PASSWORD}@postgres:5432/${GONGCTL_MCP_DB:-gongctl_mcp}?sslmode=disable
+      GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
+      GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-workbench}
+      GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS: "1"
+      GONGMCP_POSTGRES_REDACTED_SERVING_DB: "1"
+      GONGMCP_AI_GOVERNANCE_CONFIG: /run/secrets/ai-governance.yaml
+      GONGMCP_ALLOWED_ORIGINS: ${GONGMCP_ALLOWED_ORIGINS:?set GONGMCP_ALLOWED_ORIGINS}
+    command:
+      - --http
+      - 0.0.0.0:8080
+      - --auth-mode
+      - bearer
+      - --allow-open-network
+    ports:
+      - "${GONGMCP_BIND:-127.0.0.1:8080}:8080"
+    volumes:
+      - ${GONGMCP_BEARER_TOKEN_FILE:?set GONGMCP_BEARER_TOKEN_FILE}:/run/secrets/gongmcp_token:ro
+      - ${AI_GOVERNANCE_CONFIG:?set AI_GOVERNANCE_CONFIG}:/run/secrets/ai-governance.yaml:ro
+
+volumes:
+  gongctl-postgres-data:

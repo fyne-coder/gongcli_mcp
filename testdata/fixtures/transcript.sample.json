@@ -1,0 +1,29 @@
+{
+  "callTranscripts": [
+    {
+      "callId": "call_sanitized_001",
+      "transcript": [
+        {
+          "speakerId": "speaker_internal_001",
+          "sentences": [
+            {
+              "start": 1000,
+              "end": 3500,
+              "text": "Synthetic internal speaker sentence."
+            }
+          ]
+        },
+        {
+          "speakerId": "speaker_external_001",
+          "sentences": [
+            {
+              "start": 3600,
+              "end": 7000,
+              "text": "Synthetic external speaker sentence."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

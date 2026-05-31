@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gongmcp-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gongmcp-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gongmcp-gateway
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: gongmcp-gateway
+          image: ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: gongctl-postgres-pilot-config
+          env:
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gongctl-postgres-pilot-secrets
+                  key: OIDC_CLIENT_ID
+            - name: GATEWAY_INTERNAL_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gongctl-postgres-pilot-secrets
+                  key: GONGMCP_BEARER_TOKEN
+          ports:
+            - name: http
+              containerPort: 8090
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true

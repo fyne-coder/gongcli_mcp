@@ -1,0 +1,867 @@
+# Pilot Sponsor and Operator Guide
+
+> **Are you a business end-user?** This is not the right doc. Open
+> [Business User Quickstart](business-user-quickstart.md) — copy/paste
+> prompts for sales, marketing, enablement, and RevOps users.
+>
+> **Are you a power analyst designing cohorts and tool sequences?** Start
+> with [Analyst orientation](analyst-orientation.md).
+>
+> This file is the fuller pilot boundary for **sponsors, operators, RevOps,
+> and security reviewers** who own the deployment, the profile, and the
+> tool-preset decisions on behalf of business users.
+
+This guide is for the sponsor/operator lane of the `Enterprise Pilot Review
+Packet`. It applies to reviewed pilot use through `gongmcp` over a prebuilt
+cache or shared Postgres reader role.
+
+Business users should not run `gongctl`, should not receive Gong credentials,
+and should not be asked to manage sync jobs, profile imports, raw exports, or
+local database files. Those workflows stay with the pilot operator.
+
+## Who This Guide Is For
+
+- Pilot sponsors who need to understand what business users may ask.
+- Operators who configure sync, profiles, cache freshness, and MCP tool scope.
+- Security, RevOps, or IT reviewers who need the business boundary in one place.
+
+## Operating Boundary
+
+- Business users interact with a host application connected to `gongmcp`.
+- `gongmcp` reads a reviewed cache/store: SQLite by default, or a supported
+  Postgres reader role for shared deployments. It does not call Gong live.
+- For the `business-workbench` facade, every business-facing response should
+  be treated as evidence-assisted analysis. The host must inspect
+  `evidence_policy`, `evidence_type`, `answer_contract`,
+  `speaker_attribution_summary`, `dimension_readiness`, and
+  `data_readiness_caveats` before writing a final business answer.
+- `gongmcp` can enforce a reviewed server-side tool subset through
+  `--tool-preset business-pilot`, `GONGMCP_TOOL_PRESET=business-pilot`, or a
+  custom allowlist. In SQLite stdio mode, if no preset or allowlist is set,
+  the full read-only catalog remains visible to stdio hosts; Postgres stdio
+  defaults to its supported starter slice.
+- Results reflect the last approved sync and profile state, not current tenant
+  state.
+- Outputs must stay aggregate-first, metadata-oriented, and bounded.
+- Business users must not request or receive Gong credentials, raw API access,
+  transcript files, raw cached JSON, or direct filesystem/database access.
+- The default business-user tool preset is `business-pilot` from
+  [Customer implementation checklist](implementation-checklist.md#named-tool-profiles).
+  Wider analyst/full-catalog presets such as `analyst` and `all-readonly`
+  require operator/sponsor approval and are not the business-user default.
+  Postgres expansion uses reviewed Postgres presets such as `analyst`,
+  `analyst-core`, `analyst-business-core`, `governance-search`, or explicit tool allowlists
+  such as `compare_lifecycle_crm_fields` for reviewed Opportunity lifecycle
+  CRM field comparison or `search_transcripts_by_crm_context` for reviewed CRM-constrained snippet
+  investigations. The `compare_lifecycle_crm_fields` and
+  `search_transcripts_by_crm_context` Postgres slices require a tagged
+  `v0.4.0` or later release for customer deployment.
+
+For the first-session handoff, use
+[Business User First 10 Minutes](implementation-checklist.md#business-user-first-10-minutes).
+
+## Participant Roles
+
+- Pilot sponsor: owns the business questions, approves the pilot scope, and
+  decides whether the answers are useful enough to continue.
+- Pilot operator: runs `gongctl`, manages credentials, refreshes the cache,
+  validates profile state, and exposes only the approved MCP tool set through
+  `gongmcp` allowlisting plus any host-side policy needed for the pilot.
+- Security or RevOps reviewer: confirms acceptable-use boundaries, storage
+  location, retention, and tool preset/allowlist before business access starts.
+- Business user: asks approved business questions through the host application
+  and escalates anything outside scope instead of trying to bypass controls.
+
+## Approved Business Prompts
+
+Use prompts shaped like these:
+
+- "Summarize conversation volume by lifecycle, scope, or direction for the
+  reviewed pilot dataset."
+- "Where is transcript coverage weakest by lifecycle or call type?"
+- "Which lifecycle buckets or business segments have the largest missing
+  transcript backlog?"
+- "Show a metadata-only rollup of calls by month, duration bucket, transcript
+  status, or forecast category."
+- "Ask the operator to compare separate reviewed `sync status` snapshots when a
+  before-and-after refresh comparison is needed."
+- "What business-ready signals are blocked because the cache, profile, or
+  transcript coverage is incomplete?"
+
+These prompts are in-bounds because they stay on reviewed cached metadata and
+backlog prioritization.
+
+## Analyst Cohort Workflow
+
+The full analyst MCP surface is for approved analyst sessions, not the default
+business-pilot lane. Use it when the analyst needs to define a reproducible set
+of calls, inspect coverage, analyze themes, extract bounded evidence, and then
+ask the host model to synthesize the final business answer.
+
+Recommended flow:
+
+1. Filter: define a narrow `call_filter` with a time window and at least one
+   business constraint such as `title_query`, `quarter`, `industry`,
+   `participant_title_query`, `opportunity_stage`, or `transcript_status`.
+2. Cohort: call `build_call_cohort` and keep the echoed normalized filter. The
+   normalized filter is the durable handle; `cohort_id` is a deterministic
+   label/debug handle and is not resolved from persisted server state.
+3. Inspect: call `inspect_call_cohort` before analysis. Check call count,
+   transcript coverage, persona/industry coverage, CRM outcome coverage, and
+   warning flags.
+4. Analyze: use theme, persona, industry, segment, time, and outcome tools only
+   after the cohort is specific enough to support the question.
+5. Quotes: use quote tools for bounded evidence packs. Provide `theme_query`,
+   `query`, or `filter.query`; excerpt tools intentionally reject blank search
+   terms so they cannot dump arbitrary transcript text.
+6. Limitations: finish every analyst answer with
+   `score_cohort_evidence_quality`, `diagnose_attribution_coverage`,
+   `explain_analysis_limitations`, or `suggest_filter_refinements` as
+   appropriate.
+
+The MCP server does not run an LLM for these tools. Synthesis tools return
+structured inputs for ChatGPT, Claude, or another reviewed host to finish the
+business narrative; they should not be treated as hidden model conclusions from
+inside `gongmcp`.
+
+### Business Workbench Workflow
+
+For broad ad-hoc prompts, prefer the `business-workbench` facade workflow
+instead of asking the host model to guess which narrow tool to use. The
+host-assistant contract is documented in
+[Business Workbench Host Instructions](business-workbench-host-instructions.md).
+
+1. For broad prompts such as "what are the main themes this quarter", start
+   with `gong_analyze` operation `question.answer`. It should return either
+   `needs_theme_seed` with suggested seeds or directional Gong AI condensed
+   candidate evidence. Do not let the host synthesize final themes from
+   seedless candidate terms alone.
+2. Run `gong_analyze` operation `theme_intelligence_report` with a concrete
+   `theme_query` such as `pricing`, `implementation effort`, `manual order
+   entry`, `ERP integration`, `punchout`, `security review`, `timeline`, or
+   `ROI`. The business policy excludes outbound prospecting and likely
+   voicemail/IVR by default and reports that policy in `evidence_policy`.
+3. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
+   the source of truth for drill-down terms.
+4. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
+   operation `evidence.call_drilldown` exactly as returned. This avoids fuzzy
+   synonym misses and gives both Gong-generated brief/key-point evidence and
+   bounded transcript excerpts for the same call.
+5. For business-user objection and question discovery, prefer
+   `gong_analyze` operations `extract.objection_signals` and
+   `extract.buyer_questions`. They run seeded, external-speaker-first evidence
+   searches over familiar topics such as pricing, implementation, security
+   review, and timeline so a sales or marketing user does not need to know the
+   lower-level quote tools.
+6. For a question about one named prospect or account across calls, use
+   `gong_analyze` operation `prospect.question.answer`. The caller must provide
+   `filter.account_query` and explicitly set `include_account_names: true`.
+   This is an opt-in account-scoped evidence workflow, not a customer
+   enumeration path. It searches Gong AI brief/keyPoint/highlight rows first,
+   then bounded transcript quote evidence for the same account-scoped cohort.
+
+Use this evidence hierarchy in host answers:
+
+1. `verbatim_transcript_quote`: strongest support for customer-facing claims.
+2. `gong_ai_condensed_candidate`: useful for candidate themes and direction,
+   not a verbatim buyer quote.
+3. `dimension_rollup`: useful when `dimension_readiness` is `ready` or clearly
+   disclosed as `degraded_sparse`.
+4. Seedless candidates: suggestions for what to investigate next, not final
+   conclusions.
+
+If `speaker_role_status` is `affiliation_missing` or the
+`speaker_attribution_summary` counts evidence under `unknown`, call it
+unattributed transcript evidence. Do not write "buyers said" unless the
+returned evidence proves external speaker attribution.
+
+For non-technical Sales and Marketing users, keep the tool trace out of the
+answer unless they ask for it. Business-workbench responses include
+`evidence_policy.host_display_policy`; by default hosts should omit exact MCP
+operations, raw tool inventories, schema details, and runtime identity tables.
+Use those details in QA reports and operator handoffs, not in the normal
+business answer. When showing filter impact, use before/after counts and
+positive excluded counts instead of negative deltas such as `-1337`.
+
+For synonym work, do not assume the server expands meanings semantically. Run
+separate explicit seeds such as `manual order entry`, `double entry`,
+`hand keying`, and `manually enter`, then compare the resulting
+`top_quotes_by_theme`, `support_count`, and drilldown inputs. The GA-supported
+path is deterministic and bounded: exact seeded reports first, exact drilldown
+terms second, and host-model synthesis last. `gongmcp` does not run fuzzy
+LLM-based synonym expansion inside the MCP server.
+
+Treat `question.answer` as an evidence-pack generator, not a hidden analyst. It
+derives bounded search terms from the free-form question and may fall back to a
+matching high-signal term when the full derived phrase returns no quotes. Generic
+business words such as "main", "themes", "concerns", and "business discovery"
+are not used as literal fallback searches; if only generic words remain, the
+payload returns `status: needs_theme_seed`, reports no evidence, and includes
+`suggested_seed_topics` plus `recommended_operations` for the host to continue.
+The payload reports the actual `evidence_query`, `speaker_role_filter`, and
+derivation metadata so the host's final answer can disclose what was searched.
+Explicit `query` or `theme_query` inputs are authoritative and are not retried
+or rewritten by this fallback path.
+
+For named-account ad hoc questions, keep the account name user-supplied. Do not
+ask the MCP to list possible customers and then choose one. Use
+`prospect.question.answer` when the business user already names the account or
+prospect and asks a bounded question such as:
+
+> For ProspectCo, what have they said across calls about manual order entry,
+> punchout, and implementation timeline?
+
+The operation returns `ai_condensed_evidence` from Gong brief/keyPoint/highlight
+rows and `transcript_evidence`/`quotes` when a bounded transcript query is
+available. Host answers should describe AI condensed evidence as directional
+context and use transcript quote evidence for stronger customer-facing claims.
+Unknown speaker rows remain unattributed evidence, not buyer quotes.
+
+Business-workbench release validation is deterministic. Operators should run
+the scripted GA harness before broad business rollout:
+
+```bash
+MCP_URL="https://<host>/mcp" \
+MCP_BEARER_TOKEN="<redacted>" \
+scripts/business-workbench-ga-harness.sh
+```
+
+Manual Claude or ChatGPT prompt loops are still useful for exploratory review,
+but they are not the release gate.
+
+### Field Exposure Profiles
+
+Use `field_profile` when a business-user prompt should switch between a narrow
+client-safe view and richer internal attribution without remembering every
+individual include flag:
+
+| Profile | Effect |
+| --- | --- |
+| `limited` | Hides raw IDs, call titles, account names, opportunity names, and stable speaker refs. Raw `speaker_id` is controlled separately by `hide_speaker_ids`. Use for broad client-safe exploration with the matching policy switches enabled. |
+| `attribution` | Enables account names, opportunity names, and stable speaker refs, but not raw call IDs. Call titles are already on by default where policy allows. Raw `speaker_id` is controlled separately by `hide_speaker_ids`. Use when the client profile permits named account/opportunity attribution. |
+| `full` | Enables every governed field, including raw call IDs and stable speaker refs, subject to active server policy switches. Call titles are already on by default where policy allows, and raw `speaker_id` is still hidden when `hide_speaker_ids` is enabled. Use only for approved internal/operator sessions. |
+| `custom` or omitted | Keeps the explicit `include_*` flags supplied by the caller; call titles remain on by default unless policy suppresses them. |
+
+Policy switches still win. For example, `field_profile=full` cannot expose raw
+call IDs when `hide_raw_call_ids` is enabled, and none of the profiles can
+expose raw `speaker_id` when `hide_speaker_ids` is enabled. Operators should
+set `hide_speaker_ids` as a client-level policy decision before business-user
+testing, rather than relying on `field_profile` alone.
+
+Call titles also depend on the launch surface. There is no YAML switch that
+enables them. Trusted SQLite and reviewed Postgres analyst/business-workbench
+surfaces return call titles by default when the backend has a title. To hide
+titles for one request, use `field_profile=limited`; to hide them for the
+whole MCP process, add `hide_call_titles` to `--policy-switches` or
+`GONGMCP_POLICY_SWITCHES` and restart `gongmcp`.
+
+Field profiles control structured metadata fields. They do not redact names
+embedded inside transcript snippets or Gong AI brief/keyPoint/highlight text.
+When `field_profile=limited` returns AI condensed evidence, the host should
+surface the warning and avoid treating the payload as externally shareable
+unless a separate text-redaction layer is enabled.
+
+For a concise supported/caveated/blocked mapping of the SQLite-era question set
+to the reviewed Postgres pilot surface, see the
+[Postgres question-parity matrix](postgres-question-parity.md).
+
+### ChatGPT Usage
+
+Use the remote HTTPS MCP connector path documented in
+[Remote MCP auth and connector setup](remote-mcp-auth.md) when ChatGPT is the
+host. The operator should expose a reviewed `/mcp` endpoint with an approved
+tool preset or allowlist and should verify `initialize`, `tools/list`, and at
+least one `tools/call` before business use. For hosted ChatGPT/OpenAI
+connector paths, that endpoint must be reachable from provider infrastructure
+over public HTTPS; private-network-only or localhost URLs are for local MCP
+clients only.
+
+Starter prompt:
+
+```text
+Use the Gong MCP tools against the reviewed cache only. Start by building a
+cohort for business discovery calls in Q1 2026, inspect coverage, then analyze
+persona, industry, theme, quote, pipeline-outcome, and attribution limitations.
+Do not infer missing CRM outcomes, titles, or industries. End with what the
+cache can prove, what is directional, and what needs operator refresh.
+```
+
+If ChatGPT reports that a tool is unavailable, treat that as a preset or
+allowlist issue. Do not ask the model to work around the missing tool by
+guessing from earlier output.
+
+### Claude Usage
+
+For local Claude Desktop, use stdio MCP over a read-only SQLite mount or local
+database path. For Claude remote add-by-URL, use the same remote `/mcp` OAuth
+or bearer-gateway path as other remote clients. Hosted Claude/Anthropic
+connector paths require provider-reachable public HTTPS; local stdio,
+localhost, VPN-only, or private-DNS endpoints apply only when the client runs
+inside the company boundary. The business contract is the same either way:
+reviewed cache, approved preset, bounded result sizes, and no live Gong pull
+from the host.
+
+Starter prompt:
+
+```text
+Use Gong MCP as a read-only evidence workbench. Follow this sequence exactly:
+filter, build_call_cohort, inspect_call_cohort, theme/persona/industry analysis,
+quote pack, pipeline outcome caveats, and final limitations. Reuse the
+normalized filter echoed by the tool for every follow-up. Treat cohort_id as a
+deterministic label only, not as stored state. Keep identifiers redacted unless
+the enabled tool policy explicitly returns them.
+```
+
+### Analyst Tool List
+
+These are the full analyst cohort tools in the built-in `analyst` and
+`all-readonly` presets. The operator must confirm that the deployed binary
+exposes them in `tools/list` before relying on the examples.
+
+| Group | Tools | Use |
+| --- | --- | --- |
+| Cohort | `build_call_cohort`, `inspect_call_cohort`, `list_call_cohorts`, `compare_call_cohorts` | Create reproducible call sets, inspect coverage, confirm stateless cohort behavior, and compare slices |
+| Generic filter/search | `search_calls_by_filters`, `summarize_calls_by_filters`, `search_transcripts_by_filters` | Find bounded calls, metadata summaries, and snippets from an allowlisted `call_filter` |
+| Themes | `discover_themes_in_cohort`, `summarize_themes_by_dimension`, `compare_themes_over_time`, `compare_themes_by_segment` | Surface deterministic cache-derived theme signals by quarter, persona, industry, or segment |
+| Quotes/evidence | `extract_theme_quotes`, `search_quotes_in_cohort`, `rank_quotes_for_sales_use`, `build_quote_pack` | Pull bounded representative excerpts and package evidence for sales or marketing review |
+| Outcome/pipeline | `compare_theme_outcomes`, `summarize_pipeline_progression_by_theme`, `summarize_loss_reasons_by_theme`, `compare_won_lost_theme_patterns` | Compare theme presence to cached CRM progression and outcome fields where coverage exists |
+| Persona/industry | `summarize_themes_by_persona`, `summarize_themes_by_industry`, `rank_personas_by_insight_quality`, `diagnose_attribution_coverage` | Report persona/industry patterns and expose missing title, industry, or attribution coverage |
+| Sales/marketing synthesis | `generate_sales_hooks_from_themes`, `generate_outreach_sequence_inputs`, `recommend_target_personas_and_industries`, `build_theme_brief` | Produce structured inputs for a host model or analyst to turn into collateral, outreach, and briefs |
+| Coverage/quality | `score_cohort_evidence_quality`, `explain_analysis_limitations`, `suggest_filter_refinements` | Grade whether the cohort can support the requested answer and recommend safer filters |
+
+### `call_filter` Fields
+
+The analyst tools use only these allowlisted filter fields:
+`title_query`, `query`, `from_date`, `to_date`, `quarter`,
+`lifecycle_bucket`, `scope`, `system`, `direction`, `transcript_status`,
+`industry`, `account_query`, `opportunity_stage`, `crm_object_type`,
+`crm_object_id`, `participant_title_query`, and `limit`.
+
+Use `limit` deliberately. Broad unfiltered scans are not appropriate for
+ChatGPT or Claude sessions because every tool result becomes model context.
+If a tool returns `capped: true`, keep the returned `results` but narrow the
+next request before increasing limits. Prefer a concrete date window plus one
+or more of `lifecycle_bucket`, `scope`, `system`, `direction`, CRM object, or a
+more specific transcript/theme query. Operators can configure higher MCP row
+caps for analyst or trusted-admin deployments, but the business-user workflow
+should stay filter-first.
+
+### Example: Business Discovery Title Filtering
+
+```text
+Build a cohort where title_query is "business discovery", quarter is Q1 2026,
+and transcript_status is present. Inspect the cohort before analysis. Then
+summarize the top themes, representative transcript excerpts, persona coverage, industry
+coverage, pipeline outcome coverage, and limitations. Do not infer account
+industry, participant title, opportunity stage, loss reason, or won/lost status
+when the coverage tools say those fields are missing. Only call excerpts
+buyer-side or customer-side when speaker-role attribution is present.
+```
+
+Expected tool sequence for the full analyst preset:
+
+- `build_call_cohort`
+- `inspect_call_cohort`
+- `discover_themes_in_cohort`
+- `summarize_themes_by_persona`
+- `summarize_themes_by_industry`
+- `build_quote_pack`
+- `diagnose_attribution_coverage`
+- `explain_analysis_limitations`
+
+Business-workbench facade equivalent, covered by
+`scripts/business-workbench-ga-harness.sh`:
+
+- `gong_query` operation `query.calls`
+- `gong_get_evidence` operation `evidence.highlights.list`
+- `gong_analyze` operation `theme_intelligence_report` without a seed to
+  return Gong AI candidate themes, or `needs_theme_seed` when no candidate
+  survives
+- `gong_analyze` operation `theme_intelligence_report` with a concrete seed
+  before making customer-facing theme claims
+- `gong_get_evidence` operation `evidence.quote_pack.build` for bounded quote
+  candidates
+
+### Example: Cross-Quarter Persona And Industry Themes
+
+```text
+Compare business discovery themes across Q1 2026 and Q2 2026. Segment the
+answer by participant title and account industry where cached attribution is
+present. Report missing-title and missing-industry rates before ranking any
+persona or industry.
+```
+
+Expected tool sequence for the full analyst preset:
+
+- `build_call_cohort` for each quarter
+- `compare_call_cohorts`
+- `compare_themes_over_time`
+- `summarize_themes_by_persona`
+- `summarize_themes_by_industry`
+- `rank_personas_by_insight_quality`
+- `diagnose_attribution_coverage`
+
+Business-workbench facade equivalent:
+
+- Run `gong_analyze` operation `theme_intelligence_report` for each quarter
+  with the same `theme_query` and groupings.
+- Compare returned `dimension_readiness`, `themes_by_persona`,
+  `themes_by_industry`, and `data_readiness_caveats` in the host response.
+
+### Example: Top Quotes
+
+```text
+For the business discovery cohort, find representative quote candidates for
+the manual-process theme. Return bounded snippets, theme labels, and the
+available attribution fields so the analyst or host model can rank usefulness
+for sales enablement. Only label a snippet customer-side when speaker-role
+attribution is present. Do not request full transcripts.
+```
+
+Expected tool sequence for the full analyst preset:
+
+- `search_quotes_in_cohort`
+- `extract_theme_quotes`
+- `rank_quotes_for_sales_use`
+- `build_quote_pack`
+- `score_cohort_evidence_quality`
+
+Business-workbench facade equivalent, covered by the harness with the
+`manual process` Q1 Business Discovery prompt:
+
+- `gong_get_evidence` operation `evidence.quote_pack.build` with
+  `theme_query`, `speaker_role: external_or_unknown`, the same cohort filter,
+  and `field_profile: limited`.
+- Treat rows with `speaker_role: unknown` or
+  `speaker_role_status: affiliation_missing` as unattributed evidence, not
+  buyer/customer speech.
+
+### Example: Pipeline Outcomes
+
+```text
+For the business discovery cohort, compare themes against downstream pipeline
+progression. Separate closed-won, closed-lost, open, and unknown only when the
+cache has those fields. If opportunity outcome or loss reason is missing, say
+so directly and avoid causal claims.
+```
+
+Customer configuration note: loss reasons and close reasons are tenant-specific
+CRM fields. The operator must map and validate them in the customer profile
+before the MCP can answer "why did these close lost?" questions reliably. When
+the profile or source data is missing, use the empty/limitation status as a
+readiness finding rather than inferring a loss reason from transcript text.
+
+Expected tool sequence for the full analyst preset:
+
+- `compare_theme_outcomes`
+- `summarize_pipeline_progression_by_theme`
+- `summarize_loss_reasons_by_theme`
+- `compare_won_lost_theme_patterns`
+- `explain_analysis_limitations`
+
+Business-workbench facade equivalent, covered by the harness with the
+`manual process` Q1 Business Discovery prompt:
+
+- `gong_analyze` operation `theme_intelligence_report` with a concrete
+  `theme_query`, the cohort filter, and
+  `group_by: ["industry","persona","quarter","won_lost"]`.
+- Use `pipeline_outcome_summary`, `dimension_readiness`, and
+  `data_readiness_caveats`; do not infer loss reasons when
+  `loss_reason` is `unavailable_unmapped`.
+
+### Example: Attribution Gaps
+
+```text
+For the same cohort, diagnose whether the cache can support persona, industry,
+account, opportunity, stage, loss-reason, and won/lost analysis. Recommend
+filter refinements or operator sync/profile work before writing the final
+business summary.
+```
+
+Expected tool sequence:
+
+- `inspect_call_cohort`
+- `diagnose_attribution_coverage`
+- `score_cohort_evidence_quality`
+- `suggest_filter_refinements`
+- `explain_analysis_limitations`
+
+Scorecard inventory is optional, not part of the default strict pilot lane. Add
+`list_scorecards` and `get_scorecard` only after the customer approves exposure
+of coaching configuration, scorecard question text, and stable scorecard
+metadata.
+
+## Analyst Expansion Prompts
+
+The prompts in the previous section are deliberately thin so they fit the
+strict pilot allowlist. Real business work usually needs more structure: a
+specific time window, prospect-side filtering, a required output shape, and an
+explicit separation between evidence-backed findings and hypotheses.
+
+The four templates below are not strict-pilot prompts. Use them only in an
+approved analyst expansion where the operator has widened the MCP tool surface
+beyond the strict business-user allowlist. They go beyond what the pilot
+allowlist exposes by design, and each one names the additional tools and opt-in
+flags it requires. See
+[mcp-data-exposure.md](mcp-data-exposure.md#default-posture-and-optional-wider-surface)
+for how to enable that wider posture intentionally.
+
+### 1. Content gap discovery from prospect questions
+
+Business intent: surface where prospects are repeatedly asking the same thing
+on calls, and turn that into concrete recommendations for the website, nurture
+sequences, or sales-enablement collateral.
+
+Prompt:
+
+> Use Gong to answer: What prospect questions in Q1 2026 indicate gaps in
+> website, nurture, or sales enablement content?
+>
+> Only include prospect/customer-side questions where possible. For each gap
+> category, provide:
+>
+> 1. exact question pattern
+> 2. matching segment count
+> 3. unique call count
+> 4. top 5 representative quotes
+> 5. call/company/contact/title if available
+> 6. lifecycle/stage if available
+> 7. confidence level
+> 8. recommended content asset
+>
+> Separate evidence-backed findings from hypotheses. Do not claim an asset is
+> missing unless the transcript evidence supports it; flag asset gaps as
+> "possible" when the evidence only suggests a direction.
+
+Tools required: `search_transcript_quotes_with_attribution` (with
+`include_call_ids=true` and the matching account/opportunity opt-ins when
+attribution is needed; call titles are returned by default when policy allows),
+`search_transcript_segments`, `summarize_call_facts`, `get_sync_status`.
+
+Output discipline: reject any "asset is missing" claim that does not list at
+least the matching segment count, the unique call count, and a quote. Treat
+contact/title as present only when the attribution tool reports
+person-title status as available; never infer titles from call names.
+
+### 2. Recurring objection mining for coaching playbook updates
+
+Business intent: identify the top recurring prospect or customer objections by
+lifecycle/segment over a recent window, decide which ones are already covered
+by existing scorecard questions, and flag the ones that are not.
+
+Prompt:
+
+> Using cached Gong calls from the last 90 days, list the top recurring
+> prospect or customer objections by lifecycle and segment. For each objection
+> theme, provide:
+>
+> 1. theme label and one-sentence description
+> 2. matching segment count and unique call count
+> 3. top 5 representative customer-side quotes
+> 4. lifecycle bucket and (if present) opportunity stage
+> 5. which existing scorecard questions already address it
+> 6. whether existing coaching coverage looks sufficient, partial, or missing
+> 7. confidence level (low / medium / high)
+>
+> Treat coverage as "missing" only when no scorecard question matches the
+> theme; treat it as "partial" when a scorecard question matches but does not
+> appear in the rep-side responses on the same calls.
+
+Tools required: `search_transcript_segments`, `search_transcripts_by_call_facts`,
+`summarize_calls_by_lifecycle`, `list_scorecards`, `get_scorecard`,
+`get_sync_status`. Add `include_call_ids=true` only if the operator needs to
+follow up on individual calls.
+
+Output discipline: treat "rep-side responses absent" as a transcript-coverage
+question first; if scorecard tagging is missing because transcripts are not
+synced, flag it instead of inferring sufficiency from metadata alone.
+
+### 3. Renewal and expansion intent vs. churn risk
+
+Business intent: for customer success leaders, separate post-sales calls that
+show expansion or renewal intent from calls that show churn risk, and produce
+a per-account briefing using only what is in the cached transcripts.
+
+Prompt:
+
+> For accounts in the renewal, upsell/expansion, or customer-success
+> lifecycle buckets in the last 90 days, classify each account into one of:
+> renewal-likely, expansion-signal, at-risk, or insufficient-evidence. For
+> each account in the first three buckets, provide:
+>
+> 1. account name and (if cached) opportunity name and close date
+> 2. matching segment count and unique call count
+> 3. top 3 customer-side quotes that drove the classification
+> 4. lifecycle bucket and lifecycle source (profile or builtin)
+> 5. confidence level
+> 6. recommended next step (executive review, expansion play, save play,
+>    or "needs more transcript coverage")
+>
+> Place every account with fewer than two cached transcripts in the
+> insufficient-evidence bucket regardless of metadata signals. Do not infer
+> sentiment from call titles, durations, or scorecard scores alone.
+
+Tools required: `search_calls_by_lifecycle`, `summarize_calls_by_lifecycle`,
+`search_transcript_quotes_with_attribution` (with the Account and Opportunity
+attribution opt-ins enabled), `opportunity_call_summary`, `get_sync_status`.
+Imported business profile recommended; lifecycle answers from the builtin
+compatibility view should be flagged as directional.
+
+Output discipline: every classification must cite at least two customer-side
+quotes from at least two distinct calls; otherwise the account drops into
+insufficient-evidence rather than getting a soft label.
+
+### 4. Late-stage pipeline risk from thin transcript evidence
+
+Business intent: for RevOps or pipeline review, list late-stage opportunities
+whose transcript coverage is too thin to support a confident forecast, and
+quote the small amount of evidence that does exist so the deal review has
+something to react to.
+
+Prompt:
+
+> List the late-stage opportunities (commit, best case, or equivalent) with
+> the weakest transcript coverage in the cached dataset. For each
+> opportunity, provide:
+>
+> 1. opportunity name, account name, stage, amount, and close date if cached
+> 2. cached call count, transcript count, and total transcript minutes
+> 3. days since the most recent call
+> 4. up to 5 representative customer-side quotes that exist
+> 5. risk drivers from the late-stage CRM signal analysis
+> 6. confidence level for the forecast given the available evidence
+> 7. recommended next step (operator transcript refresh, executive sponsor
+>    call, deal-desk review, or "evidence sufficient")
+>
+> Only mark "evidence sufficient" if there are at least two calls with
+> cached transcripts in the last 30 days and at least one customer-side
+> quote covering pricing, decision criteria, or timing. Otherwise mark it as
+> needing operator refresh and name the specific sync command the operator
+> should run.
+
+Postgres shared-deployment note: `opportunity_call_summary` only supplies
+redacted stage, call-count, transcript-count, duration, and latest-call timing
+metadata. Opportunity/account names, amount, close date, and other deal fields
+require SQLite/full-catalog mode or a separately reviewed attribution surface.
+
+Tools required: `analyze_late_stage_crm_signals`,
+`opportunities_missing_transcripts`, `opportunity_call_summary`,
+`search_transcript_quotes_with_attribution` (with Opportunity attribution
+opt-ins), `rank_transcript_backlog`, `get_sync_status`. The operator must have
+enabled the wider analyst posture for these tools to be available. In Postgres
+shared deployments, `analyze_late_stage_crm_signals`,
+`opportunities_missing_transcripts`, `opportunity_call_summary`,
+`search_transcript_quotes_with_attribution`, `rank_transcript_backlog`, and
+`get_sync_status` are available through the approved `analyst` preset for
+approved analyst sessions, or explicit allowlists for narrower operator
+sessions.
+
+Optional operator diagnostic: `crm_field_population_matrix` is available in
+Postgres through the approved `analyst` preset for approved analyst sessions,
+or through an explicit allowlist for reviewed field-population diagnostics.
+Keep `missing_transcripts` explicit/admin-only, and keep CRM matrix use scoped
+until small-cell privacy and customer-scale performance hardening are complete.
+
+Output discipline: do not turn missing transcript coverage into a forecast
+recommendation by itself; treat it as a refresh request to the operator and a
+deal-desk review trigger.
+
+## Ad-Hoc Analysis And Gong AI Loop
+
+Use `gongctl` as the analysis lab and Gong as the production conversation
+intelligence system.
+
+The local workflow is useful when the business question is not yet clean enough
+for Gong-native configuration:
+
+- the team is still discovering which prospect questions, objections, or buying
+  signals recur often enough to deserve a tracker, theme, scorecard, or Gong AI
+  prompt
+- the analyst needs exact evidence counts, quote samples, transcript coverage,
+  and CRM/lifecycle slices before trusting an AI summary
+- the question cuts across Gong surfaces, such as transcript snippets plus
+  lifecycle state plus scorecard configuration
+- the answer needs to separate evidence-backed findings from hypotheses before
+  it becomes a stakeholder-facing summary
+
+Recommended loop:
+
+1. Start with `get_sync_status` and coverage checks so the model knows what the
+   cache can and cannot support.
+2. Run a narrow ad-hoc analysis with bounded transcript or attribution tools,
+   using a defined date window, lifecycle bucket, segment, and output shape.
+3. Save the useful pattern as a candidate business definition: signal name,
+   positive examples, negative examples, required quote evidence, and any CRM
+   or lifecycle filters.
+4. Convert that candidate into the right Gong-native artifact: tracker,
+   scorecard question, call category, theme, or Gong AI prompt.
+5. Use Gong AI against the improved native setup, then compare its output
+   against the local evidence counts and quote samples before treating it as
+   reliable.
+
+This prevents a common failure mode: asking Gong AI a broad question before the
+underlying trackers, scorecards, themes, or coverage expectations are clear.
+`gongctl` should produce the evidence and definitions that make the Gong-native
+AI question sharper.
+
+## Disallowed Prompts
+
+Do not use prompts like these:
+
+- "Give me the full transcript."
+- "Show the raw call JSON, raw API payload, or export file."
+- "List customer names, tenant names, exact object IDs, call IDs, or direct
+  participant records."
+- "Search raw CRM values for a named account, opportunity, or person."
+- "Pull the latest data from Gong right now."
+- "Give me the database path, transcript directory, or operator config."
+- "Import or edit the business profile."
+- "Tell me which credentials to use or paste the access key/secret."
+- "Judge an individual employee, rep, or manager from a single call."
+
+If a user needs one of these workflows, stop and route it to the pilot operator
+or sponsor for a separate review.
+
+## Approved MCP Tools For Business Users
+
+The pilot tool set should stay narrow. Configure native `gongmcp` tool
+allowlisting for the deployment and keep host prompts or wrapper policy aligned
+with the same approved set.
+
+- `get_sync_status`
+- `summarize_call_facts`
+- `summarize_calls_by_lifecycle`
+- `rank_transcript_backlog`
+
+Optional after reviewer approval:
+
+- `list_scorecards`
+- `get_scorecard`
+
+Why this allowlist:
+
+- It answers the core pilot questions about coverage, lifecycle mix, backlog,
+  and available coaching surfaces.
+- It stays on cached metadata and scorecard configuration rather than exact
+  records, raw transcript content, or directed CRM value lookup.
+- `list_scorecards` and `get_scorecard` may expose stable scorecard,
+  workspace, question text, or question IDs as configuration metadata. Enable
+  them only when the pilot checklist includes "coaching configuration exposure
+  approved."
+- It keeps business users away from tools that can expose tenant-specific schema
+  details, exact calls, or sensitive search pivots.
+
+## MCP Tools Not Approved For Business Users
+
+Do not expose these tools to business users during the pilot:
+
+- `search_calls`
+- `get_call`
+- `missing_transcripts`
+- `list_crm_object_types`
+- `list_crm_fields`
+- `list_crm_integrations`
+- `list_cached_crm_schema_objects`
+- `list_cached_crm_schema_fields`
+- `list_gong_settings`
+- `get_business_profile`
+- `list_business_concepts`
+- `list_unmapped_crm_fields`
+- `search_crm_field_values`
+- `analyze_late_stage_crm_signals`
+- `opportunities_missing_transcripts`
+- `search_transcripts_by_crm_context`
+- `search_transcripts_by_call_facts`
+- `search_transcript_quotes_with_attribution`
+- `opportunity_call_summary`
+- `crm_field_population_matrix`
+- `list_lifecycle_buckets`
+- `search_calls_by_lifecycle`
+- `prioritize_transcripts_by_lifecycle`
+- `compare_lifecycle_crm_fields`
+- `search_transcript_segments`
+
+These tools are operator-only or expansion-candidate tools because they can
+reveal tenant structure, allow directed value lookup, or move too close to
+exact-call review for an initial business pilot.
+For Postgres deployments, `crm_field_population_matrix` and
+`compare_lifecycle_crm_fields` are available through approved `analyst`
+sessions or reviewed explicit operator allowlists. `missing_transcripts`
+remains explicit/admin-only and should stay out of business-user presets until
+record-reference safety and customer-scale performance are hardened. The
+current Postgres lifecycle comparison slice is limited to Opportunity fields.
+
+`search_transcript_quotes_with_attribution` is the right tool for marketing
+asks like “top quotes by Q1 theme, industry, and opportunity stage.” It returns
+bounded snippets plus available CRM attribution. Contact/person title should be
+used only when the tool reports it as present; do not infer titles from call
+names or transcript wording.
+
+## Cache Freshness Caveats
+
+- The MCP server is not a live Gong connection. A business answer can be stale
+  even when the host app is working correctly.
+- `get_sync_status` should be the first check in every business-user session.
+- `get_sync_status` can include recommended operator commands such as sync or
+  profile actions. Business users should treat those as handoff instructions for
+  the pilot operator, not commands to run themselves.
+- If the cache age, transcript coverage, settings inventory, or profile cache
+  state is not acceptable for the question, stop and ask the operator to
+  refresh or review before using the answer. The operator-side refresh
+  procedure lives in [runbooks/operator-sync.md](runbooks/operator-sync.md);
+  business users should not run those commands themselves.
+- Lifecycle answers are only as reliable as the reviewed profile and synced CRM
+  context. If profile-backed lifecycle status is absent or stale, treat the
+  answer as directional rather than authoritative.
+- Missing data should be reported as a pilot limitation, not silently filled in
+  by inference.
+
+Status interpretation:
+
+- Cache stale: stop and ask the pilot operator to refresh the reviewed cache.
+- Profile stale or inactive: lifecycle and attribution answers are directional
+  only.
+- Transcript coverage low: do not draw quote-based conclusions.
+- Tool unavailable: the tool is not approved for this pilot lane.
+- Unexpected sensitive output: stop the session, do not paste the output
+  elsewhere, and notify the pilot operator or security contact with the prompt,
+  approximate time, and tool if the host exposes it.
+
+## Acceptable-Use Boundaries
+
+- Use the pilot for aggregate business review, coverage gaps, scorecard
+  inventory, and transcript-backlog prioritization.
+- Treat all outputs as internal reviewed pilot material.
+- Keep prompts and downstream notes free of secrets, raw transcript text,
+  private file paths, and direct identifiers.
+- Do not use the pilot for HR, compensation, disciplinary, or legal decisions.
+- Do not use the pilot to monitor or rank individuals from raw call-level
+  evidence.
+- Do not use the pilot output as the sole basis for pipeline, forecast, or
+  customer-commitment decisions without operator review.
+
+## Dataset Limits For Business Users
+
+Business-user access should remain within a reviewed pilot slice:
+
+- One approved tenant only.
+- One approved business unit or call-program slice at a time.
+- A time window small enough for manual sponsor review, usually the most recent
+  30 to 90 days.
+- Cached metadata, transcript status, and scorecard inventory only through the
+  approved allowlist above.
+
+If the business asks for broader history, multi-tenant comparison, or exact
+call-level follow-up, treat that as an expansion request rather than silently
+widening the pilot.
+
+## Out Of Scope
+
+- Running `gongctl` directly.
+- Receiving or storing Gong credentials.
+- Live Gong API pulls from the business-user host.
+- Raw transcript review or transcript export.
+- Raw CRM value mining.
+- Tenant schema discovery for general exploration.
+- Profile authoring, validation, or import.
+- Full audit, compliance, legal hold, or eDiscovery workflows.

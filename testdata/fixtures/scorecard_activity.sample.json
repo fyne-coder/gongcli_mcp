@@ -1,0 +1,38 @@
+{
+  "requestId": "request_scorecard_activity_sample",
+  "records": {
+    "totalRecords": 1,
+    "currentPageSize": 1,
+    "currentPageNumber": 0
+  },
+  "answeredScorecards": [
+    {
+      "answeredScorecardId": "answered_scorecard_sample_001",
+      "scorecardId": "scorecard_sample_001",
+      "scorecardName": "Discovery QA",
+      "callId": "call_sample_001",
+      "callStartTime": "2026-03-01T15:00:00Z",
+      "reviewedUserId": "user_sample_001",
+      "reviewerUserId": "user_sample_reviewer_001",
+      "editorUserId": "user_sample_editor_001",
+      "reviewMethod": "MANUAL",
+      "reviewTime": "2026-03-02T15:00:00Z",
+      "visibilityType": "PUBLIC",
+      "answers": [
+        {
+          "questionId": "question_sample_001",
+          "isOverall": true,
+          "score": 4,
+          "notApplicable": false,
+          "answerText": "Sanitized answer text"
+        },
+        {
+          "questionId": "question_sample_002",
+          "score": 5,
+          "notApplicable": false,
+          "selectedOptions": ["Sanitized option"]
+        }
+      ]
+    }
+  ]
+}

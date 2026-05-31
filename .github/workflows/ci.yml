@@ -1,0 +1,65 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
+        env:
+          POSTGRES_USER: gongctl
+          POSTGRES_PASSWORD: gongctl_ci_password
+          POSTGRES_DB: gongctl
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gongctl -d gongctl"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      GONGCTL_TEST_POSTGRES_URL: postgres://gongctl:gongctl_ci_password@127.0.0.1:5432/gongctl?sslmode=disable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.3"
+      - run: make secret-scan
+      - run: |
+          bash -n \
+            scripts/business-workbench-ga-harness.sh \
+            deploy/lab-auth/scripts/lab-app-only-smoke.sh \
+            deploy/lab-auth/scripts/lab-up.sh
+      - run: go test -count=1 ./...
+      - name: Postgres backup/restore smoke
+        run: ./scripts/postgres-backup-restore-smoke.sh
+      - run: go vet ./...
+      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+      - run: |
+          "$(go env GOPATH)/bin/staticcheck" -checks=all,-U1000,-ST1000 ./...
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+      - run: |
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - run: go build ./cmd/gongctl
+      - run: go build ./cmd/gongmcp
+      - run: make sbom
+      - run: make checksums
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-metadata
+          path: |
+            dist/checksums.txt
+            dist/sbom-go-modules.json
+            dist/build-env.txt
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - run: docker build -t gongctl:ci .
+      - run: docker build --target mcp -t gongctl:mcp-ci .
