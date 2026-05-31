@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CognitoDCRCleanupOptional",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:ListUserPoolClients",
+        "cognito-idp:DeleteUserPoolClient"
+      ],
+      "Resource": "arn:aws:cognito-idp:<AWS_REGION>:<AWS_ACCOUNT_ID>:userpool/<USER_POOL_ID>"
+    }
+  ]
+}

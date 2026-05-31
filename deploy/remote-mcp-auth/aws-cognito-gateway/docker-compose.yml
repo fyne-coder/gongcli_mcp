@@ -1,0 +1,29 @@
+services:
+  gateway:
+    image: ${GONGMCP_GATEWAY_IMAGE:-gongctl:mcp-gateway-local}
+    restart: unless-stopped
+    env_file:
+      - ${GATEWAY_ENV_FILE:-gateway.env}
+    ports:
+      - "${GATEWAY_HTTP_BIND:-127.0.0.1:8090}:8090"
+    volumes:
+      - ${GONGMCP_BEARER_TOKEN_FILE:?set GONGMCP_BEARER_TOKEN_FILE}:/run/secrets/gongmcp_token:ro
+    depends_on:
+      - gongmcp
+
+  gongmcp:
+    image: ${GONGMCP_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.2}
+    restart: unless-stopped
+    environment:
+      GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token
+      GONGMCP_TOOL_PRESET: ${GONGMCP_TOOL_PRESET:-business-pilot}
+      GONGMCP_ALLOWED_ORIGINS: ${GONGMCP_ALLOWED_ORIGINS:?set GONGMCP_ALLOWED_ORIGINS}
+      GONG_DATABASE_URL: ${GONG_DATABASE_URL:?set GONG_DATABASE_URL}
+    command:
+      - --http
+      - 0.0.0.0:8080
+      - --auth-mode
+      - bearer
+      - --allow-open-network
+    volumes:
+      - ${GONGMCP_BEARER_TOKEN_FILE:?set GONGMCP_BEARER_TOKEN_FILE}:/run/secrets/gongmcp_token:ro

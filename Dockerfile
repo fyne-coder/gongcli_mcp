@@ -15,7 +15,8 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$VERSION -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$COMMIT -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$DATE" -o /out/gongctl ./cmd/gongctl \
-	&& CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$VERSION -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$COMMIT -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$DATE" -o /out/gongmcp ./cmd/gongmcp
+	&& CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$VERSION -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$COMMIT -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$DATE" -o /out/gongmcp ./cmd/gongmcp \
+	&& CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$VERSION -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$COMMIT -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$DATE" -o /out/gongmcp-gateway ./cmd/gongmcp-gateway
 
 FROM alpine:3.22 AS runtime-base
 
@@ -42,10 +43,17 @@ COPY --from=build /out/gongmcp /usr/local/bin/gongmcp
 
 ENTRYPOINT ["/usr/local/bin/gongmcp"]
 
+FROM runtime-base AS mcp-gateway
+
+COPY --from=build /out/gongmcp-gateway /usr/local/bin/gongmcp-gateway
+
+ENTRYPOINT ["/usr/local/bin/gongmcp-gateway"]
+
 FROM runtime-base
 
 COPY --from=build /out/gongctl /usr/local/bin/gongctl
 COPY --from=build /out/gongmcp /usr/local/bin/gongmcp
+COPY --from=build /out/gongmcp-gateway /usr/local/bin/gongmcp-gateway
 
 ENTRYPOINT ["/usr/local/bin/gongctl"]
 CMD ["--help"]

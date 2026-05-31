@@ -144,6 +144,7 @@ func (a *app) usage() {
   gongctl mcp ga-acceptance [--probes <file>|-] [--summary <file>]
   gongctl deploy postgres-refresh [--source URL] [--target URL] [--config ai-governance.yaml] [--preset business-workbench] [--role ROLE] [--database DB] [--skip-read-model] [--skip-grants]
   gongctl doctor postgres-deploy [--target URL] [--preset business-workbench] [--max-marker-age DURATION]
+  gongctl doctor mcp-gateway --url URL [--issuer URL] [--profile cognito|direct-oidc] [--required-scope gongmcp/read] [--group-claim CLAIM] [--client-id ID] [--required-group GROUP] [--expect-dcr] [--token-env ENV] [--origin ORIGIN] [--timeout DURATION]
   gongctl search transcripts --db gong.db --query TEXT [--limit N]
   gongctl search calls --db gong.db [--crm-object-type TYPE] [--crm-object-id ID] [--limit N]
   gongctl calls list --from YYYY-MM-DD --to YYYY-MM-DD [--context none|extended] [--out calls.json] [--allow-sensitive-export]
@@ -244,12 +245,14 @@ func parseDiagnoseArgs(args []string) (bool, error) {
 
 func (a *app) doctor(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintln(a.err, "usage: gongctl doctor [postgres-deploy]")
+		fmt.Fprintln(a.err, "usage: gongctl doctor [postgres-deploy|mcp-gateway]")
 		return errUsage
 	}
 	switch args[0] {
 	case "postgres-deploy":
 		return a.diagnosePostgresDeploy(ctx, args[1:])
+	case "mcp-gateway":
+		return a.doctorMCPGateway(ctx, args[1:])
 	default:
 		fmt.Fprintf(a.err, "unknown doctor command %q\n", args[0])
 		return errUsage

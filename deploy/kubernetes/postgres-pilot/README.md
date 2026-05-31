@@ -16,7 +16,12 @@ NetworkPolicies before production access.
 - `secret.example.yaml`: placeholder secret keys for reference only; it is not
   included in `kustomization.yaml`.
 - `gongmcp-deployment.yaml`: read-only HTTP `gongmcp` runtime.
-- `gongmcp-service.yaml`: cluster-internal service for an approved gateway.
+- `gongmcp-service.yaml`: cluster-internal private `gongmcp` service.
+- `gongmcp-gateway-deployment.yaml`: OIDC-validating public MCP gateway.
+- `gongmcp-gateway-service.yaml`: service targeted by the customer's ingress.
+- `gongmcp-gateway-ingress.example.yaml`: AWS ALB-style ingress example; it is
+  not included in `kustomization.yaml` because ingress annotations are
+  customer-specific.
 - `postgres-refresh-cronjob.yaml`: optional scheduled operator refresh.
 - `postgres-deploy-smoke-job.yaml`: manual operator smoke that does not require
   business-user MCP host access; it is not included in the base Kustomize
@@ -45,8 +50,44 @@ kubectl -n gongctl-postgres-pilot create secret generic gongctl-postgres-pilot-s
   --from-literal=GONGCTL_MCP_DATABASE_URL='postgres://serving-writer:replace@postgres.example.com:5432/gongctl_mcp?sslmode=require' \
   --from-literal=GONGMCP_ANALYST_READER_URL='postgres://gongmcp_business_workbench_reader:replace@postgres.example.com:5432/gongctl_mcp?sslmode=require' \
   --from-literal=GONGMCP_BEARER_TOKEN=replace \
+  --from-literal=OIDC_CLIENT_ID=replace \
   --from-file=ai-governance.yaml=/secure/path/ai-governance.yaml
 ```
+
+For hosted Claude/ChatGPT deployments, first choose the path in
+[`docs/remote-mcp-deployment-requirements.md`](../../../docs/remote-mcp-deployment-requirements.md).
+The starter defaults to direct OIDC-style issuer/client settings. If the
+company explicitly chooses Cognito, also review the
+[`AWS Cognito MCP gateway starter`](../../remote-mcp-auth/aws-cognito-gateway/README.md)
+for Cognito app client, optional DCR fallback, and remote MCP smoke details.
+
+For JumpCloud, do not use a broad admin group as the production gate. Create
+one or more dedicated MCP groups and confirm at least one appears in the access
+token claim named by `OIDC_GROUP_CLAIM`. Use `OIDC_REQUIRED_GROUP` for a single
+group or `OIDC_REQUIRED_GROUPS` / `OIDC_ALLOWED_GROUPS` for any-match rollout
+policy across multiple groups. JumpCloud/Ory-shaped tokens may emit scopes as
+`scp` or place group/email claims under nested `ext`; use
+`OIDC_AUTH_PROFILE=direct-oidc` for that compatibility path.
+
+If DCR is enabled, the gateway pod also needs AWS identity for
+`cognito-idp:CreateUserPoolClient` and `cognito-idp:DescribeUserPoolClient` on
+the target user pool. Prefer IRSA or EKS Pod Identity instead of static AWS
+keys in Kubernetes Secrets. Copyable policy JSON and a ServiceAccount example
+live under
+[`deploy/remote-mcp-auth/aws-cognito-gateway/iam/`](../../remote-mcp-auth/aws-cognito-gateway/iam/).
+
+Support shims and validators:
+
+| Artifact | Purpose |
+| --- | --- |
+| `gongctl doctor mcp-gateway` | First public gateway validator before asking Claude users to retry; use `--profile cognito` only for Cognito fallback |
+| [`deploy/remote-mcp-auth/aws-cognito-gateway/lambda/`](../../remote-mcp-auth/aws-cognito-gateway/lambda/) | Cognito-only fallback: Pre Token Generation Lambda template for access-token group claims |
+| [`scripts/smoke-cognito-dcr.sh`](../../../scripts/smoke-cognito-dcr.sh) | Cognito-only fallback: DCR metadata smoke; optional `--create-client` registration test |
+| [`scripts/cognito-dcr-cleanup.sh`](../../../scripts/cognito-dcr-cleanup.sh) | Cognito-only fallback: list/delete DCR-created Cognito app clients by prefix |
+
+If the company explicitly chooses the Cognito fallback, see the Cognito gateway
+runbook for the recommended operator order:
+[`deploy/remote-mcp-auth/aws-cognito-gateway/README.md`](../../remote-mcp-auth/aws-cognito-gateway/README.md).
 
 ## Operator Flow
 
@@ -73,3 +114,25 @@ postgres-deploy`, `gongctl sync status --preset`, and a local stdio
 `gongmcp` `tools/list` probe against the scoped reader. It does not require a
 business user's MCP client, OAuth session, ChatGPT connector, or Claude MCP
 configuration.
+
+After the private Postgres smoke passes and the public ingress points at
+`gongmcp-gateway`, run the public auth validator from an operator machine:
+
+```bash
+gongctl doctor mcp-gateway \
+  --url https://mcp.customer.example.com \
+  --issuer https://issuer.customer.example.com \
+  --profile direct-oidc \
+  --origin https://claude.ai \
+  --required-scope gongmcp/read \
+  --group-claim memberOf \
+  --client-id <dedicated Claude app client ID> \
+  --required-group <one expected dedicated MCP group> \
+  --token-env GONGMCP_TEST_ACCESS_TOKEN
+```
+
+Add `--expect-dcr` only if the gateway DCR fallback is enabled. Use
+`--profile cognito` for Cognito fallback gateways. Use `--token-env ENV_NAME`
+with an operator-held test access token when you want untrusted token-shape
+diagnostics and authenticated `tools/list`; the token value, email values,
+group names, and tool bodies are never printed.

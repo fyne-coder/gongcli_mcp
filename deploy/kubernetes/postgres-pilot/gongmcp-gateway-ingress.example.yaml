@@ -1,0 +1,24 @@
+# Example only. Adjust annotations for the customer's ingress controller,
+# certificate, WAF, and DNS standards before applying.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gongmcp-gateway
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:123456789012:certificate/replace-me
+spec:
+  ingressClassName: alb
+  rules:
+    - host: mcp.customer.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gongmcp-gateway
+                port:
+                  name: http
