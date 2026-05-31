@@ -39,9 +39,12 @@ Important distinction:
 
 - `cloudflare-worker/` is the full MCP-facing OAuth broker example with Dynamic
   Client Registration.
-- `aws-cognito-gateway/` is the Kubernetes/Postgres customer path. It defaults
-  to a pre-registered Cognito app client and now includes optional Cognito app
-  client DCR for Claude fallback testing.
+- `tradecentric-jumpcloud/` is the current TC handoff and a reusable company
+  template for direct OIDC first. It uses the single TC branch
+  `codex/tc-jumpcloud-mcp-gateway`.
+- `aws-cognito-gateway/` is an AWS-specific fallback path. It defaults to a
+  pre-registered Cognito app client and includes optional Cognito app-client
+  DCR for Claude fallback testing.
 - `jumpcloud/` and `cognito/` are static-client/JWT-validation gateway
   examples. Their `/mcp` route is handled by a shim/broker that validates an
   incoming bearer JWT before forwarding to `gongmcp`; when adapting that shim to
@@ -60,17 +63,27 @@ Important distinction:
 
 | Example | Use when | Client-registration model |
 | --- | --- | --- |
-| `tradecentric-jumpcloud/` | TradeCentric needs one Claude-first JumpCloud deployment handoff branch. | Pre-registered Cognito app client with JumpCloud federated behind Cognito; optional Cognito DCR fallback. |
-| `aws-cognito-gateway/` | The customer uses Cognito, optionally federated to JumpCloud, and needs the Kubernetes/Postgres gateway path. | Pre-registered Cognito client by default; optional gateway-backed DCR that creates real Cognito app clients. |
+| `tradecentric-jumpcloud/` | TradeCentric, or another company, wants a Claude-first direct OIDC handoff that mirrors the Keycloak proof without making Cognito the default. | Pre-registered/static OIDC client first; Cognito only as fallback. |
+| `jumpcloud/` | JumpCloud is the company IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client direct OIDC gateway shape. |
 | `cloudflare-worker/` | The customer can deploy Cloudflare Workers and wants the recommended MCP-shaped broker. | Dynamic Client Registration through Cloudflare's OAuth Provider Library. |
-| `jumpcloud/` | JumpCloud is the customer IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client fallback. |
+| `aws-cognito-gateway/` | The customer explicitly chooses Cognito, optionally federated to JumpCloud, or needs Cognito DCR fallback testing. | Pre-registered Cognito client by default; optional gateway-backed DCR that creates real Cognito app clients. |
 | `cognito/` | AWS Cognito is the customer IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client fallback. |
 
-JumpCloud and Cognito are identity providers in these examples. They do not
-replace the MCP broker requirement for MCP metadata, protected-resource
-challenges, policy enforcement, and private upstream proxying. The Cognito
-gateway can now cover the DCR fallback by creating real Cognito app clients, but
-it should still be treated as a fallback after the pre-registered Claude path.
+JumpCloud, Okta, Entra, Auth0, Keycloak, and Cognito are identity providers in
+these examples. They do not replace the MCP gateway requirement for MCP
+metadata, protected-resource challenges, policy enforcement, and private
+upstream proxying. Use the
+[AWS Cognito MCP gateway starter](aws-cognito-gateway/README.md) only when the
+company explicitly chooses Cognito or when direct OIDC cannot satisfy the target
+hosted client's OAuth registration/token behavior. Optional Cognito DCR creates
+real Cognito app clients for compatibility testing; it is not the default
+JumpCloud or direct-OIDC path.
+
+Direct-OIDC provider support must be verified against the provider's actual
+access-token shape. In particular, JumpCloud/Ory tokens may differ from
+Cognito-style assumptions for `token_use`, `client_id`, `scope`, `aud`, and
+nested group/email claims. Treat those differences as gateway provider-profile
+compatibility work, not as a reason to make Cognito mandatory.
 
 For Claude custom connectors, a successful metadata probe followed by
 unauthenticated `/mcp` POSTs normally means Claude could not complete a supported
@@ -82,8 +95,8 @@ when the client needs a DCR-capable broker.
 ## Files
 
 - `cloudflare-worker/`: Worker scaffold for the recommended broker path.
-- `tradecentric-jumpcloud/`: TC-specific deployment handoff for the
-  JumpCloud-through-Cognito gateway path that mirrors the Keycloak proof.
+- `tradecentric-jumpcloud/`: TC-specific handoff plus reusable company template
+  for the direct OIDC gateway path that mirrors the Keycloak proof.
 - `aws-cognito-gateway/`: AWS/Cognito gateway starter for Claude custom
   connectors using pre-registered Cognito OAuth credentials, with optional DCR
   fallback.

@@ -14,12 +14,14 @@ type Config struct {
 	Upstream        *url.URL
 	InternalToken   string
 	PublicBaseURL   string
+	AuthProfile     string
 	Issuer          string
 	JWKSURL         string
 	ClientID        string
 	RequiredScope   string
 	ScopesSupported []string
 	RequiredGroup   string
+	RequiredGroups  []string
 	GroupClaim      string
 	AllowedSubjects map[string]struct{}
 	AllowedEmails   map[string]struct{}
@@ -40,6 +42,11 @@ type Config struct {
 	DCRClientCacheTTL      time.Duration
 }
 
+const (
+	AuthProfileCognito    = "cognito"
+	AuthProfileDirectOIDC = "direct-oidc"
+)
+
 func LoadConfig() (Config, error) {
 	upstream, err := url.Parse(envDefault("GATEWAY_UPSTREAM_URL", "http://gongmcp:8080"))
 	if err != nil {
@@ -54,11 +61,16 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 
-	issuer := strings.TrimRight(strings.TrimSpace(envFirst("COGNITO_ISSUER_URL", "OIDC_ISSUER_URL")), "/")
-	if issuer == "" {
-		return Config{}, errors.New("COGNITO_ISSUER_URL or OIDC_ISSUER_URL is required")
+	authProfile, err := normalizeAuthProfile(envDefaultFromFirst([]string{"OIDC_AUTH_PROFILE", "GATEWAY_AUTH_PROFILE"}, AuthProfileCognito))
+	if err != nil {
+		return Config{}, err
 	}
-	if err := validateHTTPSURL("COGNITO_ISSUER_URL", issuer); err != nil {
+
+	issuer := strings.TrimRight(strings.TrimSpace(envFirst("OIDC_ISSUER_URL", "COGNITO_ISSUER_URL")), "/")
+	if issuer == "" {
+		return Config{}, errors.New("OIDC_ISSUER_URL or COGNITO_ISSUER_URL is required")
+	}
+	if err := validateHTTPSURL("OIDC_ISSUER_URL or COGNITO_ISSUER_URL", issuer); err != nil {
 		return Config{}, err
 	}
 
@@ -70,28 +82,37 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 
-	clientID := strings.TrimSpace(envFirst("COGNITO_CLIENT_ID", "OIDC_CLIENT_ID"))
+	clientID := strings.TrimSpace(envFirst("OIDC_CLIENT_ID", "COGNITO_CLIENT_ID"))
 	if clientID == "" {
-		return Config{}, errors.New("COGNITO_CLIENT_ID or OIDC_CLIENT_ID is required")
+		return Config{}, errors.New("OIDC_CLIENT_ID or COGNITO_CLIENT_ID is required")
 	}
 
-	requiredScope := strings.TrimSpace(envDefault("COGNITO_REQUIRED_SCOPE", "gongmcp/read"))
-	scopesSupported := splitList(envDefault("COGNITO_SCOPES_SUPPORTED", requiredScope))
+	requiredScope := strings.TrimSpace(envDefaultFromFirst([]string{"OIDC_REQUIRED_SCOPE", "COGNITO_REQUIRED_SCOPE"}, "gongmcp/read"))
+	scopesSupported := splitList(envDefaultFromFirst([]string{"OIDC_SCOPES_SUPPORTED", "COGNITO_SCOPES_SUPPORTED"}, requiredScope))
 	if !contains(scopesSupported, requiredScope) {
 		scopesSupported = append([]string{requiredScope}, scopesSupported...)
 	}
 
-	jwksURL := strings.TrimSpace(envDefault("COGNITO_JWKS_URL", issuer+"/.well-known/jwks.json"))
-	if err := validateHTTPSURL("COGNITO_JWKS_URL", jwksURL); err != nil {
+	jwksURL := strings.TrimSpace(envDefaultFromFirst([]string{"OIDC_JWKS_URL", "COGNITO_JWKS_URL"}, issuer+"/.well-known/jwks.json"))
+	if err := validateHTTPSURL("OIDC_JWKS_URL or COGNITO_JWKS_URL", jwksURL); err != nil {
 		return Config{}, err
 	}
 
-	requiredGroup := strings.TrimSpace(os.Getenv("COGNITO_REQUIRED_GROUP"))
-	allowedSubjects := csvSet(os.Getenv("COGNITO_ALLOWED_SUBJECTS"))
-	allowedEmails := csvSet(os.Getenv("COGNITO_ALLOWED_EMAILS"))
-	if requiredGroup == "" && len(allowedSubjects) == 0 && len(allowedEmails) == 0 {
-		return Config{}, errors.New("at least one of COGNITO_REQUIRED_GROUP, COGNITO_ALLOWED_SUBJECTS, or COGNITO_ALLOWED_EMAILS is required")
+	requiredGroups := loadRequiredGroups()
+	requiredGroup := ""
+	if len(requiredGroups) == 1 {
+		requiredGroup = requiredGroups[0]
 	}
+	allowedSubjects := csvSet(envFirst("OIDC_ALLOWED_SUBJECTS", "COGNITO_ALLOWED_SUBJECTS"))
+	allowedEmails := csvSet(envFirst("OIDC_ALLOWED_EMAILS", "COGNITO_ALLOWED_EMAILS"))
+	if len(requiredGroups) == 0 && len(allowedSubjects) == 0 && len(allowedEmails) == 0 {
+		return Config{}, errors.New("at least one of OIDC_REQUIRED_GROUP, OIDC_REQUIRED_GROUPS, OIDC_ALLOWED_GROUPS, OIDC_ALLOWED_SUBJECTS, OIDC_ALLOWED_EMAILS, COGNITO_REQUIRED_GROUP, COGNITO_REQUIRED_GROUPS, COGNITO_ALLOWED_GROUPS, COGNITO_ALLOWED_SUBJECTS, or COGNITO_ALLOWED_EMAILS is required")
+	}
+	groupClaimDefault := "cognito:groups"
+	if authProfile == AuthProfileDirectOIDC {
+		groupClaimDefault = "groups"
+	}
+	groupClaim := envDefaultFromFirst([]string{"OIDC_GROUP_CLAIM", "COGNITO_GROUP_CLAIM"}, groupClaimDefault)
 
 	dcrEnabled := envBool("GATEWAY_DCR_ENABLED")
 	cognitoDomainURL := strings.TrimRight(strings.TrimSpace(os.Getenv("COGNITO_DOMAIN_URL")), "/")
@@ -141,13 +162,15 @@ func LoadConfig() (Config, error) {
 		Upstream:        upstream,
 		InternalToken:   token,
 		PublicBaseURL:   publicBaseURL,
+		AuthProfile:     authProfile,
 		Issuer:          issuer,
 		JWKSURL:         jwksURL,
 		ClientID:        clientID,
 		RequiredScope:   requiredScope,
 		ScopesSupported: scopesSupported,
 		RequiredGroup:   requiredGroup,
-		GroupClaim:      envDefault("COGNITO_GROUP_CLAIM", "cognito:groups"),
+		RequiredGroups:  requiredGroups,
+		GroupClaim:      groupClaim,
 		AllowedSubjects: allowedSubjects,
 		AllowedEmails:   allowedEmails,
 		AllowedOrigins:  splitList(os.Getenv("GATEWAY_ALLOWED_ORIGINS")),
@@ -231,6 +254,63 @@ func envDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envDefaultFromFirst(keys []string, fallback string) string {
+	if value := envFirst(keys...); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func loadRequiredGroups() []string {
+	for _, key := range []string{
+		"OIDC_REQUIRED_GROUPS",
+		"OIDC_ALLOWED_GROUPS",
+		"COGNITO_REQUIRED_GROUPS",
+		"COGNITO_ALLOWED_GROUPS",
+	} {
+		if groups := splitList(os.Getenv(key)); len(groups) > 0 {
+			return groups
+		}
+	}
+	if single := strings.TrimSpace(envFirst("OIDC_REQUIRED_GROUP", "COGNITO_REQUIRED_GROUP")); single != "" {
+		return []string{single}
+	}
+	return nil
+}
+
+func (c Config) configuredRequiredGroups() []string {
+	if len(c.RequiredGroups) > 0 {
+		return c.RequiredGroups
+	}
+	if c.RequiredGroup != "" {
+		return []string{c.RequiredGroup}
+	}
+	return nil
+}
+
+func (c Config) RequiredGroupLogValue() string {
+	groups := c.configuredRequiredGroups()
+	switch len(groups) {
+	case 0:
+		return ""
+	case 1:
+		return groups[0]
+	default:
+		return fmt.Sprintf("count=%d", len(groups))
+	}
+}
+
+func normalizeAuthProfile(value string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", AuthProfileCognito:
+		return AuthProfileCognito, nil
+	case AuthProfileDirectOIDC, "direct_oidc", "directoidc", "oidc", "jumpcloud":
+		return AuthProfileDirectOIDC, nil
+	default:
+		return "", fmt.Errorf("OIDC_AUTH_PROFILE or GATEWAY_AUTH_PROFILE must be %q or %q", AuthProfileCognito, AuthProfileDirectOIDC)
+	}
 }
 
 func envBool(key string) bool {

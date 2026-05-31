@@ -25,11 +25,11 @@ spec:
             - configMapRef:
                 name: gongctl-postgres-pilot-config
           env:
-            - name: COGNITO_CLIENT_ID
+            - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
                   name: gongctl-postgres-pilot-secrets
-                  key: COGNITO_CLIENT_ID
+                  key: OIDC_CLIENT_ID
             - name: GATEWAY_INTERNAL_BEARER_TOKEN
               valueFrom:
                 secretKeyRef:

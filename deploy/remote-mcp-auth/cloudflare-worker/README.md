@@ -1,7 +1,12 @@
 # Cloudflare Worker OAuth Broker Example
 
-This is the recommended first pilot broker shape for a production-style remote
-MCP endpoint.
+This is the recommended broker shape for a production-style remote MCP
+endpoint when the target hosted client cannot use the customer's direct
+static-client IdP setup, or when the customer wants a broker-owned OAuth
+surface. Direct JumpCloud can work with Claude when the custom connector and
+JumpCloud app are configured with the right static-client settings; use this
+Worker path as the broker fallback or as the preferred architecture when the
+customer wants OAuth/DCR separated from the IdP.
 
 It uses Cloudflare's OAuth Provider Library to handle MCP-facing OAuth metadata,
 PKCE, token issuance, and Dynamic Client Registration. The Worker then forwards
@@ -29,7 +34,9 @@ Create:
 - a KV namespace bound as `OAUTH_KV`
 - a reachable internal `gongmcp` HTTPS URL, for example through Cloudflare
   Tunnel, private service routing, or a customer gateway
-- a Cloudflare Access policy or equivalent auth layer protecting `/authorize`
+- a Cloudflare Access policy or equivalent auth layer protecting `/authorize`;
+  for a JumpCloud tenant, configure JumpCloud as the Access identity provider so
+  JumpCloud remains the human login and group source
 
 ## Configure
 
@@ -84,6 +91,8 @@ Expected implementation properties:
 - `tools/list` returns only the configured `gongmcp` tool preset
 
 This scaffold assumes Cloudflare Access, or an equivalent upstream auth check,
-sets `CF-Access-Authenticated-User-Email` before `/authorize` is reached. Replace
+sets `CF-Access-Authenticated-User-Email` before `/authorize` is reached. For
+JumpCloud pilots, keep JumpCloud behind Access for the user-facing login and let
+the Worker expose the MCP-facing OAuth/DCR surface to Claude. Replace
 `currentUserEmail()` with the customer's preferred login/SSO handler if Access is
 not the auth layer.

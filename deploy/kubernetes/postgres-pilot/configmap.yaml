@@ -13,10 +13,14 @@ data:
   PUBLIC_BASE_URL: https://mcp.customer.example.com
   GATEWAY_UPSTREAM_URL: http://gongmcp:8080
   GATEWAY_ADDR: :8090
-  COGNITO_ISSUER_URL: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_XXXXXXXXX
-  COGNITO_REQUIRED_SCOPE: gongmcp/read
-  COGNITO_SCOPES_SUPPORTED: gongmcp/read
-  COGNITO_REQUIRED_GROUP: gongmcp-users
-  COGNITO_GROUP_CLAIM: cognito:groups
+  OIDC_AUTH_PROFILE: direct-oidc
+  OIDC_ISSUER_URL: https://issuer.customer.example.com
+  OIDC_REQUIRED_SCOPE: gongmcp/read
+  OIDC_SCOPES_SUPPORTED: gongmcp/read
+  # Use one or more dedicated MCP groups. For multiple groups, replace
+  # OIDC_REQUIRED_GROUP with OIDC_REQUIRED_GROUPS: GroupA,GroupB. For
+  # JumpCloud/Ory-shaped tokens, verify the group claim is in the access token.
+  OIDC_REQUIRED_GROUP: GongMCP-Users
+  OIDC_GROUP_CLAIM: groups
   GATEWAY_DCR_ENABLED: "0"
   GATEWAY_ALLOWED_ORIGINS: https://claude.ai

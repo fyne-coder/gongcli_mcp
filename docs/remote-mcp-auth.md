@@ -92,7 +92,7 @@ consent application.
 | --- | --- | --- | --- |
 | Local stdio | One operator or desktop MCP host | Local OS/user account | Supported now |
 | Private bearer bridge | curl, MCP Inspector, internal service-to-service, gateway integration tests | Static bearer plus private network/proxy | Supported now for pilots |
-| End-user remote MCP | ChatGPT/Claude-style shared user access | Customer HTTPS plus OAuth/MCP broker | Required for production remote use |
+| End-user remote MCP | ChatGPT/Claude-style shared user access | Customer HTTPS plus direct OIDC gateway or OAuth/MCP broker | Required for production remote use |
 | Native OAuth in `gongmcp` | Direct OAuth resource-server deployment | `gongmcp` validates issuer/audience/scopes | Not implemented yet |
 
 ## Remote MCP Auth Decision
@@ -101,8 +101,8 @@ A customer-hosted remote MCP deployment has two separate auth decisions:
 
 | Decision | Owner | Recommended pilot choice |
 | --- | --- | --- |
-| Human login and SSO | Customer IT/security | Existing IdP such as JumpCloud, Cognito, Okta, Entra, or Cloudflare Access |
-| MCP-compatible token issuance and discovery | Customer platform/security | OAuth broker/gateway in front of `gongmcp`, or a future native OAuth layer |
+| Human login and SSO | Customer IT/security | Existing IdP such as JumpCloud, Okta, Entra, Auth0, Keycloak, Cognito, or Cloudflare Access |
+| MCP-compatible token validation, discovery, and forwarding | Customer platform/security | Direct OIDC gateway or OAuth broker in front of `gongmcp`, or a future native OAuth layer |
 
 Do not assume that an IdP login page alone is enough for ChatGPT or other
 remote MCP clients. Remote MCP clients need protocol-compatible authorization
@@ -132,8 +132,8 @@ client, confirm the endpoint provides:
 - refresh-token or offline-token policy that matches the target client behavior
 - tool-level authorization mapping, even if the first pilot maps all approved
   users to the same read-only tool preset
-- user identity plus group, role, or email claims in the access token when the
-  gateway enforces per-user access
+- user identity plus dedicated group, role, or temporary smoke-test email claims
+  in the access token when the gateway enforces per-user access
 - MCP protocol tolerance for extension fields such as `_meta`, while preserving
   strict validation for real tool arguments
 - no Gong credentials in the MCP client or OAuth broker
@@ -262,20 +262,18 @@ The broker owns:
   `GONGMCP_ALLOWED_ORIGINS` policy when browser clients are involved
 - audit logging for user/app/tool access
 
-For Claude-first AWS deployments where Cognito can use a pre-registered OAuth
-client, or where Claude requires DCR against Cognito, use the
-[AWS Cognito MCP gateway starter](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md).
-It provides a `gongmcp-gateway` service that owns MCP protected-resource
-metadata, `WWW-Authenticate` challenge behavior, Cognito access-token
-validation, optional Cognito app-client DCR, scope/group policy, and private
-proxying to `gongmcp`.
-In optional DCR mode, the gateway serves the authorization-server metadata so
-hosted MCP clients can discover `/register`, while Cognito still mints access
-tokens with the Cognito issuer. Treat that as a compatibility path that needs a
+For companies whose IdP can issue usable OIDC access tokens directly, prefer
+the direct OIDC gateway pattern first. It keeps the moving parts close to the
+Keycloak proof: the gateway publishes MCP metadata, validates the IdP token
+issuer/audience/scope/user policy, and forwards approved requests to private
+`gongmcp` with the internal bearer token.
+
+For AWS-first deployments where the company explicitly wants Cognito hosted UI,
+or where direct OIDC/static-client testing cannot satisfy the hosted client's
+registration or token behavior, use the
+[AWS Cognito MCP gateway starter](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md)
+as a fallback. Treat optional Cognito DCR as a compatibility path that needs a
 live Claude smoke before customer production rollout.
-The customer-facing runbook is Kubernetes/Postgres-first and includes an
-auth-only sequence for the case where `gongmcp`, Postgres, and ingress already
-work but Cognito/JumpCloud federation still needs to be finished.
 
 `gongmcp` owns:
 
@@ -289,26 +287,26 @@ work but Cognito/JumpCloud federation still needs to be finished.
 | Broker option | Fit | Notes |
 | --- | --- | --- |
 | Cloudflare Access plus Cloudflare OAuth Provider Library | Fastest public example path | Cloudflare documents Access, third-party OAuth providers, bring-your-own providers such as Stytch/Auth0/WorkOS, and self-handled auth patterns for MCP servers. |
-| JumpCloud-backed broker | Likely customer fit when JumpCloud is the IdP | JumpCloud handles identity; the broker still needs to implement MCP OAuth/resource metadata and issue MCP-compatible access tokens. |
-| AWS Cognito-backed broker | Likely customer fit on AWS | Cognito handles hosted UI and OIDC; the broker still needs MCP resource metadata, token audience/scope validation, and client registration strategy. |
-| Auth0, Stytch, WorkOS, Keycloak, Entra, Okta | Valid alternatives | Choose based on the customer's existing IdP, DCR/static-client support, audit requirements, and deployment platform. |
+| Direct OIDC gateway for JumpCloud, Okta, Entra, Auth0, Keycloak, or similar | Preferred first pilot when the IdP can issue access tokens the hosted client can obtain and the gateway can validate | The gateway owns MCP metadata, challenge behavior, scope/group policy, and private upstream proxying; Keycloak is the open-source surrogate proof. |
+| AWS Cognito-backed broker | AWS-specific fallback | Use when the company wants Cognito hosted UI/user pools or needs Cognito DCR compatibility; do not make it the default solely because JumpCloud is present. |
+| Cloudflare, Stytch, WorkOS, or custom broker | Valid alternatives | Choose based on DCR/static-client support, audit requirements, and deployment platform. |
 | Native `gongmcp --auth-mode oauth2` | Future repo work | Would reduce moving parts but needs careful implementation and interop testing across MCP clients. |
 
 Cloudflare reference:
 
 - <https://developers.cloudflare.com/agents/model-context-protocol/authorization/>
 
-## Recommended First Pilot Broker
+## Recommended First Pilot Path
 
-Use Cloudflare Workers with the Cloudflare OAuth Provider Library as the default
-first pilot broker. JumpCloud, Cognito, Okta, Entra, or another IdP can still
-own human login, but the broker should own the MCP-specific work:
+Use a direct OIDC gateway first when the company already has JumpCloud, Okta,
+Entra, Auth0, Keycloak, or another OIDC provider that can support the hosted
+client's OAuth flow. The gateway should own the MCP-specific work:
 
 - OAuth protected-resource metadata for the `/mcp` resource
 - authorization-server metadata/discovery
-- Dynamic Client Registration or a documented static-client fallback
+- Dynamic Client Registration, Client ID Metadata Document, or a documented
+  static-client fallback accepted by the target hosted client
 - PKCE-compatible authorization-code flow
-- MCP-scoped access-token issuance
 - issuer, audience/resource, expiry, scope, and user/group claim validation
 - forwarding approved requests to `gongmcp` with an internal bearer token
 
@@ -316,7 +314,12 @@ This keeps `gongmcp` simple and customer-controlled: it remains a read-only MCP
 server over SQLite or reviewed Postgres reader surfaces, with no Gong
 credentials and no native OAuth dependency.
 
-## Docker Compose Reference
+Use Cloudflare Workers with the Cloudflare OAuth Provider Library when the
+company wants a full MCP-shaped broker with Dynamic Client Registration. Use
+Cognito when the company explicitly wants AWS-managed hosted UI/user pools or
+when the direct OIDC path fails a live hosted-client OAuth proof.
+
+## Provider Starters
 
 For customers who want a concrete configurable example, use the provider-specific
 starters under `deploy/remote-mcp-auth/`:
@@ -324,33 +327,39 @@ starters under `deploy/remote-mcp-auth/`:
 - [Remote MCP auth examples](../deploy/remote-mcp-auth/README.md)
 - [JumpCloud Docker Compose](../deploy/remote-mcp-auth/jumpcloud/docker-compose.yml)
 - [JumpCloud env example](../deploy/remote-mcp-auth/jumpcloud/jumpcloud.env.example)
+- [TradeCentric / company direct OIDC handoff](../deploy/remote-mcp-auth/tradecentric-jumpcloud/README.md)
+- [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md)
+- [AWS Cognito gateway fallback](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md)
 - [AWS Cognito Docker Compose](../deploy/remote-mcp-auth/cognito/docker-compose.yml)
 - [AWS Cognito env example](../deploy/remote-mcp-auth/cognito/cognito.env.example)
-- [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md)
 
-The JumpCloud and Cognito Compose files are static-client/JWT-validation
-fallback examples, not full OAuth brokers. In those examples, `/mcp` is intended
-to be handled by a shim or broker that validates a bearer JWT and then forwards
-the request to `gongmcp` with the internal bearer token. Provider details still
-matter: a production adapter must read the provider's OIDC discovery document
-and use its `jwks_uri` instead of assuming a Keycloak-style certificate path.
-For JumpCloud, verify the issuer string, access-token format, audience/client
-claim, and JWKS endpoint before treating JWT validation as working. Trusted
-proxy identity headers are disabled by default; enable `TRUST_PROXY_HEADERS=1`
-only where a reviewed upstream gateway overwrites those headers, and set
-`TRUST_PROXY_CIDRS` to that exact gateway source range. The bundled Caddy `/mcp`
-route strips inbound proxy identity headers before forwarding. The included
-`oauth2-proxy` service is a browser/session helper for rehearsing the IdP login
-path; it does not add Dynamic Client Registration, Client ID Metadata Document
-support, or MCP-scoped access-token issuance for ChatGPT/Claude. Use these
-Compose examples only when the target MCP client can use a supported
+The JumpCloud and Cognito Compose files are static-client/JWT-validation shapes,
+not full OAuth brokers. In those examples, a shim or broker validates a bearer
+JWT at `/mcp` and forwards approved requests to `gongmcp` with the internal
+bearer token. Use them only when the target MCP client supports a
 pre-registered/static OAuth client path or when an upstream gateway already
-performs the MCP-compatible OAuth work.
+performs MCP-compatible OAuth work.
 
-For the fully MCP-shaped broker path, use the Cloudflare Worker example. It uses
-Cloudflare's OAuth Provider Library for Dynamic Client Registration, PKCE, token
-issuance, and MCP-facing metadata, then forwards authorized requests to the same
-internal `gongmcp` bearer-auth service.
+Hardening notes for static-client/JWT shims:
+
+- Read the provider's OIDC discovery document and validate against its
+  `jwks_uri`; do not assume a Keycloak-style certificate path.
+- For JumpCloud, verify issuer string, access-token format, audience/client
+  claim, and JWKS endpoint before treating JWT validation as working.
+- Trusted proxy identity headers are disabled by default. Enable
+  `TRUST_PROXY_HEADERS=1` only behind a reviewed upstream gateway that
+  overwrites those headers, and set `TRUST_PROXY_CIDRS` to that gateway's source
+  range.
+- The bundled Caddy `/mcp` route strips inbound proxy identity headers before
+  forwarding.
+- The included `oauth2-proxy` service rehearses browser/session login only; it
+  does not provide Dynamic Client Registration, Client ID Metadata Document
+  support, or MCP-scoped access-token issuance for ChatGPT/Claude.
+
+For the fully MCP-shaped DCR broker path, use the Cloudflare Worker example. It
+uses Cloudflare's OAuth Provider Library for Dynamic Client Registration, PKCE,
+token issuance, and MCP-facing metadata, then forwards authorized requests to
+the same internal `gongmcp` bearer-auth service.
 
 The older lab-auth stack remains useful as a disposable local rehearsal harness:
 
@@ -393,20 +402,27 @@ Worker using the Cloudflare OAuth Provider Library, and keep the same internal
 `gongmcp` bearer-auth service. Use a read-only SQLite mount for SQLite starters
 or `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres reader deployments.
 
-## JumpCloud Pattern
+## JumpCloud And Direct OIDC Pattern
 
-Use JumpCloud as the human identity provider, not as the whole MCP
-authorization layer.
+Use JumpCloud, Okta, Entra, Auth0, Keycloak, or a similar OIDC provider as the
+human identity provider and token issuer. The MCP gateway is still the public
+resource server boundary in front of private `gongmcp`.
 
 Recommended customer implementation:
 
-1. Configure JumpCloud OIDC/SAML for the customer's broker or gateway.
-2. Broker authenticates users through JumpCloud.
-3. Broker enforces group membership such as `gong-mcp-users`.
-4. Broker issues MCP-compatible access tokens for `https://gong-mcp.example.com/mcp`.
-5. Broker maps approved scopes to the internal `gongmcp` tool preset or
+1. Configure the company IdP OIDC app for the gateway or hosted MCP client.
+2. Configure the gateway with the IdP issuer, client ID, required scope, and
+   allowed group/email/subject policy. For the current gateway starter, set the
+   JWKS URL from the provider's OIDC discovery `jwks_uri` instead of relying on
+   an inferred provider-specific path.
+3. Gateway publishes MCP protected-resource metadata and `WWW-Authenticate`
+   challenges for `https://gong-mcp.example.com/mcp`.
+4. Hosted client completes OAuth and sends a bearer access token to `/mcp`.
+5. Gateway validates issuer, JWKS signature, audience/client ID, expiry, scope,
+   and approved user/group claim.
+6. Gateway maps approved scopes to the internal `gongmcp` tool preset or
    allowlist.
-6. Broker forwards only approved MCP requests to `gongmcp`.
+7. Gateway forwards only approved MCP requests to `gongmcp`.
 
 Minimum scopes to define for a first read-only pilot:
 
@@ -414,7 +430,7 @@ Minimum scopes to define for a first read-only pilot:
 - `gongmcp:aggregate`
 - `gongmcp:search`
 
-The broker enforces these scopes today and maps approved scopes to the internal
+The gateway enforces these scopes today and maps approved scopes to the internal
 `gongmcp` preset or allowlist. Keep sync/admin operations out of MCP scopes.
 
 If Claude probes `/.well-known/oauth-protected-resource` successfully and then
@@ -425,10 +441,28 @@ to a browser-session proxy instead of an MCP auth broker. `oauth2-proxy` can be
 useful for browser login rehearsal, especially with PKCE S256 enabled where the
 provider supports it, but it is not the full MCP OAuth broker.
 
+Direct OIDC providers do not all use Cognito-shaped access tokens. Before
+declaring the gateway compatible with a provider, decode a local test access
+token and check the exact claims the gateway will enforce.
+
+| Claim area | Cognito-shaped assumption | Direct OIDC / JumpCloud check |
+| --- | --- | --- |
+| Token type | `token_use=access` | Some providers omit this claim. Keep it required for Cognito, but make any relaxation provider-profile scoped. |
+| Client identity | top-level `client_id` | Some providers bind the client or resource through `aud`; validate exactly what the issuer documents and what Claude receives. |
+| Scope | space-delimited `scope` string | Some providers use `scp` as an array or alternate scope field. |
+| Group | top-level `cognito:groups` or configured top-level claim | JumpCloud/Ory-shaped tokens may use `groups`, `memberOf`, or nested `ext.memberOf`; production should use one or more dedicated MCP groups. |
+| Email | top-level `email` | Email can be absent from access tokens or nested under `ext`; do not use email allowlist as the final policy when groups are required. |
+
+The current product gateway has historical Cognito-oriented validation names
+and assumptions. JumpCloud/Ory compatibility should be implemented as an
+explicit direct-OIDC provider profile with tests, not as a broad weakening of
+the default Cognito checks.
+
 ## AWS Cognito Pattern
 
-Use Cognito when the customer wants AWS-managed hosted UI, user pools, and OIDC
-integration.
+Use Cognito only when the customer wants AWS-managed hosted UI, user pools, and
+OIDC integration, or when direct OIDC cannot satisfy the target hosted client's
+OAuth registration/token behavior.
 
 Recommended customer implementation:
 
@@ -501,12 +535,18 @@ fall into one of these buckets:
 | --- | --- | --- |
 | Dynamic client registration rejected | IdP/broker registration policy blocked the MCP client | trusted hosts, redirect URI policy, allowed scopes, client auth method |
 | Metadata probes succeed, then `/mcp` gets unauthenticated `401` or `403` | client could not complete a supported registration/token flow, or `/mcp` is still routed to a browser-session proxy such as `oauth2-proxy` | auth server metadata for DCR/CIMD/static client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
+| Gateway logs `missing bearer token` | hosted client reached `/mcp` without an Authorization bearer token | static client setup, redirect URI, token exchange, and whether `/mcp` is routed to the MCP gateway |
+| IdP reports `invalid client` during Claude auth | Claude and the IdP disagree on client ID, secret, redirect URI, or client authentication mode | recreate connector if needed, compare IdP app settings to Claude Advanced settings, verify `https://claude.ai/api/mcp/auth_callback` |
 | Browser login succeeds, token exchange fails | refresh/offline token policy or client grant policy is missing | `offline_access`, refresh-token grant, public/confidential client settings |
 | Authenticated `/mcp` gets 401 | token issuer, audience/resource, expiry, signature, or group claim is wrong | gateway/shim logs and decoded access token claims |
+| Gateway logs `required group "..." missing` or `required group membership missing` | bearer token is present, but the configured group claim or user membership does not match policy | decode the access token locally; check `groups`, `memberOf`, nested `ext`, and whether the user belongs to at least one dedicated MCP group |
 | Tools import but first tool call fails | MCP JSON payload compatibility problem | `_meta` tolerance, argument schema, result size, tool allowlist |
 
 For the step-by-step incident runbook, see
 [Remote MCP OAuth troubleshooting](runbooks/remote-mcp-oauth-troubleshooting.md).
+
+For the TC/JumpCloud incident notes and code follow-up decision, see
+[TradeCentric JumpCloud remote MCP RCA](runbooks/tc-jumpcloud-remote-mcp-rca-2026-05-29.md).
 
 ## Claude Remote Setup
 
@@ -517,6 +557,19 @@ Claude add-by-URL flows are remote-server flows and should receive an
 The OAuth checklist above applies to Claude remote MCP as well as ChatGPT. It
 does not apply to local Claude Desktop stdio MCP, where the trust boundary is
 the local host configuration and OS user account rather than browser OAuth.
+
+For Claude custom connectors using a pre-registered/static client, enter:
+
+```text
+MCP server URL: https://gong-mcp.example.com/mcp
+OAuth client ID: <company IdP app client ID>
+OAuth client secret: <client secret, if the app is confidential>
+Callback URL configured in IdP: https://claude.ai/api/mcp/auth_callback
+```
+
+The proof is not complete when the browser login page succeeds. The proof is
+complete when Claude can call `get_sync_status` through the connector and the
+gateway logs show an authenticated MCP request with the expected user policy.
 
 Use local stdio for quick desktop tests. Use remote HTTPS/OAuth only when the
 customer has decided who owns TLS, auth, logging, retention, and user access.

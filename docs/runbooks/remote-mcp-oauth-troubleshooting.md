@@ -33,21 +33,33 @@ Check the path in order:
 
 Browser login success alone is not enough.
 
-For the Cognito/JumpCloud gateway branch, run the bundled validator before
-asking a Claude user to retry:
+For the direct OIDC or Cognito gateway branch, run the bundled validator before
+asking a Claude user to retry. Use the issuer for the provider that actually
+minted the access token. For direct JumpCloud, that is the JumpCloud OIDC
+issuer, not a Cognito pool issuer.
 
 ```bash
 gongctl doctor mcp-gateway \
   --url https://mcp.customer.example.com \
-  --issuer https://cognito-idp.<region>.amazonaws.com/<pool> \
-  --origin https://claude.ai
+  --issuer https://issuer.customer.example.com \
+  --profile direct-oidc \
+  --origin https://claude.ai \
+  --required-scope gongmcp/read \
+  --group-claim memberOf \
+  --client-id <Claude app client ID> \
+  --required-group <one expected dedicated MCP group> \
+  --token-env GONGMCP_TEST_ACCESS_TOKEN
 ```
 
-Use `--expect-dcr` when the gateway DCR fallback is enabled. Use
-`--token-env ENV_NAME` only from an operator shell that already has a test
-Cognito access token; the doctor reports status and does not print the token or
-raw tool response body. For automation, inspect `.checks[]`; normal validation
-failures are reported as JSON checks rather than a nonzero process exit.
+Use `--profile cognito` for Cognito fallback gateways. Use `--expect-dcr` when
+the gateway DCR fallback is enabled. Use `--token-env ENV_NAME` only from an
+operator shell that already has a test access token; the doctor inspects JWT
+payload shape as untrusted diagnostics and does not print the token, email
+values, group names, or raw tool response bodies. Authenticated `tools/list`
+failures map `401` to missing/invalid bearer auth, `403` to scope/group/email
+policy, and `502`/`503`/`504` to private `gongmcp` reachability. For
+automation, inspect `.checks[]`; normal validation failures are reported as
+JSON checks rather than a nonzero process exit.
 
 ## Lab Commands
 
@@ -93,9 +105,12 @@ LAB_PUBLIC_BASE_URL=https://lab.example.com \
 | --- | --- | --- |
 | Dynamic client registration rejected | IdP or broker registration policy blocked the client | trusted hosts, redirect URI, client auth method, allowed scopes |
 | Metadata probes succeed, then Claude or another hosted client POSTs `/mcp` without auth and gets `401`/`403` | the client could not complete a supported registration/token flow, or `/mcp` is routed to a browser-session proxy instead of the MCP broker | authorization-server metadata for DCR/CIMD/static-client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
+| Gateway logs `missing bearer token` | the hosted client reached `/mcp` without an Authorization bearer token | static client setup, redirect URI, token exchange, client auth method, and `/mcp` route target |
+| IdP logs `invalid client` during Claude auth | Claude and the IdP disagree on client ID, secret, redirect URI, or client authentication mode | compare the IdP OIDC app to Claude Advanced settings; confirm `https://claude.ai/api/mcp/auth_callback`; recreate the connector if stale state is suspected |
 | Login succeeds but token exchange fails | refresh/offline token policy, grant type, or client type mismatch | IdP events around code-to-token exchange |
-| Authenticated `/mcp` gets 401 | token does not match gateway validation | issuer, audience/resource, expiry, signature, groups, email allowlist, OIDC `jwks_uri` discovery |
-| Browser login completes but Claude still gets 401 on `/mcp` | federated user is not in the Cognito group, or JumpCloud group/email claims are not present in the Cognito access token | decode the access token locally, check `token_use`, `client_id`, `scope`, `cognito:groups` or configured group claim, and verify any Pre Token Generation Lambda |
+| Authenticated `/mcp` gets 401 | token does not match gateway validation | issuer, audience/resource, expiry, signature, group claim shape, OIDC `jwks_uri` discovery |
+| Browser login completes but Claude still gets 401 on `/mcp` | access-token claims do not match gateway policy, or the gateway is still assuming a different provider's token shape | decode the access token locally; check `iss`, `aud`, `client_id`, `token_use` when applicable, `scope` or `scp`, and the configured group claim |
+| Gateway logs `required group "..." missing` or `required group membership missing` | bearer token is present and validated far enough to reach authorization, but the group claim or membership does not match | verify the user is in at least one dedicated MCP group; inspect `groups`, `memberOf`, configured group claim, and nested `ext` in the access token |
 | Tools import but `get_sync_status` fails | MCP JSON/tool-call compatibility issue | server logs for `_meta`, unknown fields, result size, or tool allowlist |
 | A tool is missing | preset or allowlist is narrower than expected | `tools/list`, `GONGMCP_TOOL_PRESET`, `GONGMCP_TOOL_ALLOWLIST` |
 | Connector worked before a deploy and now needs OAuth setup again | full lab deploy reset the disposable Keycloak volume and dynamic clients | reconnect once, then use `LAB_DEPLOY_MODE=app-only` for normal MCP changes |
@@ -111,6 +126,9 @@ For any IdP or broker, prove these final properties:
 - requested scopes and refresh/offline-token behavior are allowed
 - access tokens include the MCP resource audience
 - access tokens include the user/group/role/email claims the gateway validates
+- direct-OIDC tokens have provider-compatible claim extraction for `scope` or
+  `scp`, client binding through `client_id` or `aud`, and any nested claim
+  container such as JumpCloud/Ory `ext`
 - JWT validation uses the provider's OIDC discovery `jwks_uri`; do not assume a
   Keycloak-style certificate endpoint for JumpCloud, Cognito, Okta, Entra, or
   another IdP

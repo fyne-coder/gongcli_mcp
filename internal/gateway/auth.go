@@ -24,6 +24,8 @@ type Authorizer struct {
 	clientVerifier ClientVerifier
 }
 
+const maxAudienceClientIDChecks = 8
+
 type ClientVerifier interface {
 	VerifyClientID(ctx context.Context, clientID string) error
 }
@@ -107,7 +109,6 @@ func (a *Authorizer) Authenticate(ctx context.Context, authorization string) (Pr
 func (a *Authorizer) VerifyAccessToken(ctx context.Context, rawToken string) (Principal, error) {
 	claims := &cognitoClaims{}
 	parser := jwt.NewParser(
-		jwt.WithIssuer(a.cfg.Issuer),
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(a.cfg.AuthLeeway),
 		jwt.WithValidMethods([]string{"RS256"}),
@@ -119,32 +120,98 @@ func (a *Authorizer) VerifyAccessToken(ctx context.Context, rawToken string) (Pr
 	if !token.Valid {
 		return Principal{}, errors.New("invalid access token")
 	}
+	if !issuerMatches(claims.Issuer, a.cfg.Issuer) {
+		return Principal{}, errors.New("issuer mismatch")
+	}
 	if ctx.Err() != nil {
 		return Principal{}, ctx.Err()
 	}
-	if claims.TokenUse != "access" {
-		return Principal{}, errors.New("token_use is not access")
-	}
-	if err := a.clientVerifier.VerifyClientID(ctx, claims.ClientID); err != nil {
+	scopes := scopesFromClaims(claims, a.cfg.AuthProfile == AuthProfileDirectOIDC)
+	if err := a.validateTokenProfile(ctx, claims); err != nil {
 		return Principal{}, err
 	}
-	if !hasScope(claims.Scope, a.cfg.RequiredScope) {
+	if !hasScope(scopes, a.cfg.RequiredScope) {
 		return Principal{}, fmt.Errorf("required scope %q missing", a.cfg.RequiredScope)
 	}
-	// Cognito access tokens may omit aud; when present, bind it to the MCP resource.
-	if len(claims.Audience) > 0 && !audienceContains(claims.Audience, a.cfg.ResourceURL()) {
-		return Principal{}, errors.New("audience/resource mismatch")
-	}
-	groups := groupsFromClaims(claims, a.cfg.GroupClaim)
-	if err := a.authorizePrincipal(claims.Subject, claims.Email, groups); err != nil {
+	groups := groupsFromClaims(claims, a.cfg.GroupClaim, a.cfg.AuthProfile == AuthProfileDirectOIDC)
+	email := emailFromClaims(claims, a.cfg.AuthProfile == AuthProfileDirectOIDC)
+	if err := a.authorizePrincipal(claims.Subject, email, groups); err != nil {
 		return Principal{}, err
 	}
 	return Principal{
 		Subject: claims.Subject,
-		Email:   claims.Email,
+		Email:   email,
 		Groups:  groups,
-		Scopes:  strings.Fields(claims.Scope),
+		Scopes:  scopes,
 	}, nil
+}
+
+func (a *Authorizer) validateTokenProfile(ctx context.Context, claims *cognitoClaims) error {
+	switch a.cfg.AuthProfile {
+	case "", AuthProfileCognito:
+		return a.validateCognitoClaims(ctx, claims)
+	case AuthProfileDirectOIDC:
+		return a.validateDirectOIDCClaims(ctx, claims)
+	default:
+		return fmt.Errorf("unsupported auth profile %q", a.cfg.AuthProfile)
+	}
+}
+
+func (a *Authorizer) validateCognitoClaims(ctx context.Context, claims *cognitoClaims) error {
+	if claims.TokenUse != "access" {
+		return errors.New("token_use is not access")
+	}
+	if err := a.clientVerifier.VerifyClientID(ctx, claims.ClientID); err != nil {
+		return err
+	}
+	// Cognito access tokens may omit aud; when present, bind it to the MCP resource.
+	if len(claims.Audience) > 0 && !audienceContains(claims.Audience, a.cfg.ResourceURL()) {
+		return errors.New("audience/resource mismatch")
+	}
+	return nil
+}
+
+func (a *Authorizer) validateDirectOIDCClaims(ctx context.Context, claims *cognitoClaims) error {
+	if claims.TokenUse != "" && claims.TokenUse != "access" {
+		return errors.New("token_use is not access")
+	}
+	if claims.ClientID != "" {
+		if err := a.clientVerifier.VerifyClientID(ctx, claims.ClientID); err != nil {
+			return err
+		}
+	} else if err := a.verifyAudienceClientID(ctx, claims.Audience); err != nil {
+		return err
+	}
+	if len(claims.Audience) > 0 &&
+		!audienceContains(claims.Audience, a.cfg.ResourceURL()) &&
+		!audienceClientIDAllowed(ctx, a.clientVerifier, claims.Audience) {
+		return errors.New("audience/resource mismatch")
+	}
+	return nil
+}
+
+func (a *Authorizer) verifyAudienceClientID(ctx context.Context, audience jwt.ClaimStrings) error {
+	for i, value := range audience {
+		if i >= maxAudienceClientIDChecks {
+			break
+		}
+		if err := a.clientVerifier.VerifyClientID(ctx, value); err == nil {
+			return nil
+		}
+	}
+	return errors.New("client_id missing and audience client binding not allowed")
+}
+
+func audienceClientIDAllowed(ctx context.Context, verifier ClientVerifier, audience jwt.ClaimStrings) bool {
+	for i, value := range audience {
+		if i >= maxAudienceClientIDChecks {
+			break
+		}
+		if verifier.VerifyClientID(ctx, value) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) error {
@@ -158,15 +225,28 @@ func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) 
 			return errors.New("email is not allowed")
 		}
 	}
-	if a.cfg.RequiredGroup != "" {
-		for _, group := range groups {
-			if group == a.cfg.RequiredGroup {
-				return nil
-			}
+	requiredGroups := a.cfg.configuredRequiredGroups()
+	if len(requiredGroups) > 0 {
+		if hasAnyRequiredGroup(groups, requiredGroups) {
+			return nil
 		}
-		return fmt.Errorf("required group %q missing", a.cfg.RequiredGroup)
+		if len(requiredGroups) == 1 {
+			return fmt.Errorf("required group %q missing", requiredGroups[0])
+		}
+		return errors.New("required group membership missing")
 	}
 	return nil
+}
+
+func hasAnyRequiredGroup(groups, requiredGroups []string) bool {
+	for _, group := range groups {
+		for _, required := range requiredGroups {
+			if group == required {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func audienceContains(audience jwt.ClaimStrings, want string) bool {
@@ -178,8 +258,14 @@ func audienceContains(audience jwt.ClaimStrings, want string) bool {
 	return false
 }
 
-func hasScope(scopeValue, want string) bool {
-	for _, scope := range strings.Fields(scopeValue) {
+func issuerMatches(got, want string) bool {
+	got = strings.TrimRight(strings.TrimSpace(got), "/")
+	want = strings.TrimRight(strings.TrimSpace(want), "/")
+	return got != "" && got == want
+}
+
+func hasScope(scopeValues []string, want string) bool {
+	for _, scope := range scopeValues {
 		if scope == want {
 			return true
 		}
@@ -187,21 +273,81 @@ func hasScope(scopeValue, want string) bool {
 	return false
 }
 
-func groupsFromClaims(claims *cognitoClaims, groupClaim string) []string {
+func scopesFromClaims(claims *cognitoClaims, includeSCP bool) []string {
+	scopes := splitList(claims.Scope)
+	if includeSCP {
+		scopes = append(scopes, claimStringList(claimValue(claims.raw, "scp", false))...)
+	}
+	return scopes
+}
+
+func groupsFromClaims(claims *cognitoClaims, groupClaim string, allowNested bool) []string {
 	if groupClaim == "" || groupClaim == "cognito:groups" {
 		return claims.Groups
 	}
-	value, ok := claims.raw[groupClaim]
+	return claimStringList(claimValue(claims.raw, groupClaim, allowNested))
+}
+
+func emailFromClaims(claims *cognitoClaims, allowNested bool) string {
+	if claims.Email != "" {
+		return claims.Email
+	}
+	if !allowNested {
+		return ""
+	}
+	values := claimStringList(claimValue(claims.raw, "email", true))
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func claimValue(raw map[string]any, name string, allowNested bool) any {
+	if raw == nil || name == "" {
+		return nil
+	}
+	if value, ok := raw[name]; ok {
+		return value
+	}
+	if !allowNested {
+		return nil
+	}
+	if strings.Contains(name, ".") {
+		// Operator-supplied dotted names intentionally support nested provider
+		// claims like ext.memberOf while preserving literal dotted keys above.
+		parts := strings.Split(name, ".")
+		var current any = raw
+		for _, part := range parts {
+			next, ok := current.(map[string]any)
+			if !ok {
+				return nil
+			}
+			current, ok = next[part]
+			if !ok {
+				return nil
+			}
+		}
+		return current
+	}
+	ext, ok := raw["ext"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	return claimStringList(value)
+	return ext[name]
 }
 
 func claimStringList(value any) []string {
 	switch typed := value.(type) {
 	case string:
 		return splitList(typed)
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				out = append(out, strings.TrimSpace(item))
+			}
+		}
+		return out
 	case []any:
 		out := make([]string, 0, len(typed))
 		for _, item := range typed {

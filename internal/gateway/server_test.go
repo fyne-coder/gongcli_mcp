@@ -206,13 +206,17 @@ func TestAuthenticateRejectsMalformedOrOversizedAuthorization(t *testing.T) {
 
 func TestMCPValidTokenProxiesWithInternalBearerAndStripsIdentityHeaders(t *testing.T) {
 	key := mustKey(t)
-	var gotAuth, gotPrincipal, gotForwardedEmail, gotAccessJWT, gotForwardedAccessToken, gotPath, gotSession string
+	var gotAuth, gotPrincipal, gotForwardedEmail, gotAccessJWT, gotForwardedAccessToken, gotForwardedUser, gotEmail, gotAuthRequestEmail, gotInboundPrincipal, gotPath, gotSession string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPrincipal = r.Header.Get("X-Gongctl-Principal")
 		gotForwardedEmail = r.Header.Get("X-Forwarded-Email")
 		gotAccessJWT = r.Header.Get("CF-Access-Jwt-Assertion")
 		gotForwardedAccessToken = r.Header.Get("X-Forwarded-Access-Token")
+		gotForwardedUser = r.Header.Get("X-Forwarded-User")
+		gotEmail = r.Header.Get("X-Email")
+		gotAuthRequestEmail = r.Header.Get("X-Auth-Request-Email")
+		gotInboundPrincipal = r.Header.Get("X-Gongctl-Principal")
 		gotPath = r.URL.Path
 		gotSession = r.Header.Get("Mcp-Session-Id")
 		w.WriteHeader(http.StatusNoContent)
@@ -228,6 +232,10 @@ func TestMCPValidTokenProxiesWithInternalBearerAndStripsIdentityHeaders(t *testi
 	req.Header.Set("X-Forwarded-Email", "attacker@example.test")
 	req.Header.Set("CF-Access-Jwt-Assertion", "attacker-jwt")
 	req.Header.Set("X-Forwarded-Access-Token", "attacker-access-placeholder")
+	req.Header.Set("X-Forwarded-User", "attacker")
+	req.Header.Set("X-Email", "attacker@example.test")
+	req.Header.Set("X-Auth-Request-Email", "attacker@example.test")
+	req.Header.Set("X-Gongctl-Principal", "attacker@example.test")
 	rec := httptest.NewRecorder()
 
 	srv.Handler().ServeHTTP(rec, req)
@@ -247,8 +255,11 @@ func TestMCPValidTokenProxiesWithInternalBearerAndStripsIdentityHeaders(t *testi
 	if gotSession != "session-1" {
 		t.Fatalf("session header=%q", gotSession)
 	}
-	if gotForwardedEmail != "" || gotAccessJWT != "" || gotForwardedAccessToken != "" {
-		t.Fatalf("identity headers leaked forwarded_email=%q access_jwt=%q forwarded_access_token=%q", gotForwardedEmail, gotAccessJWT, gotForwardedAccessToken)
+	if gotInboundPrincipal != "approved@example.test" {
+		t.Fatalf("gateway principal header=%q", gotInboundPrincipal)
+	}
+	if gotForwardedEmail != "" || gotAccessJWT != "" || gotForwardedAccessToken != "" || gotForwardedUser != "" || gotEmail != "" || gotAuthRequestEmail != "" {
+		t.Fatalf("identity headers leaked forwarded_email=%q access_jwt=%q forwarded_access_token=%q forwarded_user=%q email=%q auth_request_email=%q", gotForwardedEmail, gotAccessJWT, gotForwardedAccessToken, gotForwardedUser, gotEmail, gotAuthRequestEmail)
 	}
 }
 
@@ -373,8 +384,14 @@ func TestVerifyAccessTokenRejectsBadClaims(t *testing.T) {
 	}{
 		{name: "wrong issuer", mutate: func(claims jwt.MapClaims) { claims["iss"] = "https://issuer.example.test" }},
 		{name: "wrong client", mutate: func(claims jwt.MapClaims) { claims["client_id"] = "other-client" }},
+		{name: "missing client", mutate: func(claims jwt.MapClaims) { delete(claims, "client_id") }},
 		{name: "wrong token use", mutate: func(claims jwt.MapClaims) { claims["token_use"] = "id" }},
+		{name: "missing token use", mutate: func(claims jwt.MapClaims) { delete(claims, "token_use") }},
 		{name: "missing scope", mutate: func(claims jwt.MapClaims) { claims["scope"] = "openid email" }},
+		{name: "scp only", mutate: func(claims jwt.MapClaims) {
+			delete(claims, "scope")
+			claims["scp"] = []string{"openid", "email", cfg.RequiredScope}
+		}},
 		{name: "missing group", mutate: func(claims jwt.MapClaims) { claims["cognito:groups"] = []string{"other"} }},
 		{name: "wrong audience", mutate: func(claims jwt.MapClaims) { claims["aud"] = "https://other.example.test/mcp" }},
 		{name: "expired", mutate: func(claims jwt.MapClaims) { claims["exp"] = time.Now().Add(-2 * time.Hour).Unix() }},
@@ -424,6 +441,255 @@ func TestVerifyAccessTokenAcceptsConfiguredGroupClaimString(t *testing.T) {
 	}
 	if !contains(principal.Groups, "gongmcp-users") {
 		t.Fatalf("groups=%v", principal.Groups)
+	}
+}
+
+func TestVerifyAccessTokenDirectOIDCAcceptsJumpCloudClaims(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.GroupClaim = "memberOf"
+	cfg.RequiredGroup = "GongMCP-Users"
+	cfg.RequiredGroups = []string{"GongMCP-Users"}
+	cfg.AllowedEmails = csvSet("approved@example.test")
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		delete(claims, "token_use")
+		delete(claims, "client_id")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+		claims["aud"] = []string{cfg.ClientID}
+		claims["scp"] = []string{"openid", "email", cfg.RequiredScope}
+		claims["ext"] = map[string]any{
+			"email":    "approved@example.test",
+			"memberOf": []any{"GongMCP-Users", "Other"},
+		}
+	})
+
+	principal, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+	if principal.Email != "approved@example.test" {
+		t.Fatalf("email=%q", principal.Email)
+	}
+	if !contains(principal.Groups, "GongMCP-Users") {
+		t.Fatalf("groups=%v", principal.Groups)
+	}
+	if !contains(principal.Scopes, cfg.RequiredScope) {
+		t.Fatalf("scopes=%v", principal.Scopes)
+	}
+}
+
+func TestVerifyAccessTokenDirectOIDCAcceptsJumpCloudAccessTokenShape(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.RequiredScope = "openid"
+	cfg.ScopesSupported = []string{"openid", "email", "profile"}
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = nil
+	cfg.AllowedSubjects = csvSet("6a1a0585f1a38a8d1ccfc7e6")
+	cfg.AllowedEmails = nil
+	cfg.GroupClaim = "groups"
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["iss"] = "https://oauth.id.jumpcloud.com/"
+		claims["sub"] = "6a1a0585f1a38a8d1ccfc7e6"
+		claims["aud"] = []string{}
+		claims["client_id"] = cfg.ClientID
+		claims["scp"] = []string{"openid", "email", "profile"}
+		delete(claims, "token_use")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	principal, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+	if principal.Subject != "6a1a0585f1a38a8d1ccfc7e6" {
+		t.Fatalf("subject=%q", principal.Subject)
+	}
+	if !contains(principal.Scopes, "openid") {
+		t.Fatalf("scopes=%v", principal.Scopes)
+	}
+}
+
+func TestVerifyAccessTokenDirectOIDCAcceptsTCJumpCloudCompositeShape(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.GroupClaim = "ext.memberOf"
+	cfg.RequiredGroup = "AWS-Admin"
+	cfg.RequiredGroups = []string{"AWS-Admin"}
+	cfg.AllowedEmails = csvSet("approved@example.test")
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["iss"] = "https://oauth.id.jumpcloud.com/"
+		claims["aud"] = []string{}
+		claims["client_id"] = cfg.ClientID
+		claims["scp"] = []string{"openid", "email", cfg.RequiredScope}
+		claims["ext"] = map[string]any{
+			"email":    "approved@example.test",
+			"memberOf": []any{"AWS-Admin", "Other"},
+		}
+		delete(claims, "token_use")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	principal, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+	if principal.Email != "approved@example.test" {
+		t.Fatalf("email=%q", principal.Email)
+	}
+	if !contains(principal.Groups, "AWS-Admin") {
+		t.Fatalf("groups=%v", principal.Groups)
+	}
+	if !contains(principal.Scopes, cfg.RequiredScope) {
+		t.Fatalf("scopes=%v", principal.Scopes)
+	}
+}
+
+func TestVerifyAccessTokenCognitoProfileIgnoresDirectOIDCNestedFallbacks(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.GroupClaim = "ext.memberOf"
+	cfg.RequiredGroup = "AWS-Admin"
+	cfg.RequiredGroups = []string{"AWS-Admin"}
+	cfg.AllowedEmails = csvSet("approved@example.test")
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["ext"] = map[string]any{
+			"email":    "approved@example.test",
+			"memberOf": []any{"AWS-Admin"},
+		}
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	_, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err == nil {
+		t.Fatal("expected Cognito profile to ignore nested ext email and group fallbacks")
+	}
+	if !strings.Contains(err.Error(), "email") && !strings.Contains(err.Error(), "required group") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerifyAccessTokenDirectOIDCRejectsUnsafeClaimShapes(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.GroupClaim = "memberOf"
+	cfg.RequiredGroup = "GongMCP-Users"
+	cfg.RequiredGroups = []string{"GongMCP-Users"}
+	authorizer := testAuthorizer(t, cfg, key)
+	tests := []struct {
+		name   string
+		mutate func(jwt.MapClaims)
+	}{
+		{name: "wrong token use", mutate: func(claims jwt.MapClaims) { claims["token_use"] = "id" }},
+		{name: "missing client binding", mutate: func(claims jwt.MapClaims) {
+			delete(claims, "client_id")
+			claims["aud"] = cfg.ResourceURL()
+		}},
+		{name: "wrong audience with client id", mutate: func(claims jwt.MapClaims) {
+			claims["aud"] = "https://other.example.test/mcp"
+		}},
+		{name: "missing scope", mutate: func(claims jwt.MapClaims) {
+			delete(claims, "scope")
+			claims["scp"] = []string{"openid", "email"}
+		}},
+		{name: "missing group", mutate: func(claims jwt.MapClaims) {
+			delete(claims, "cognito:groups")
+			claims["memberOf"] = []string{"Other"}
+		}},
+		{name: "expired", mutate: func(claims jwt.MapClaims) { claims["exp"] = time.Now().Add(-2 * time.Hour).Unix() }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+				delete(claims, "cognito:groups")
+				claims["memberOf"] = []string{"GongMCP-Users"}
+				tt.mutate(claims)
+			})
+			if principal, err := authorizer.VerifyAccessToken(t.Context(), token); err == nil {
+				t.Fatalf("expected token to fail, got principal %+v", principal)
+			}
+		})
+	}
+}
+
+func TestVerifyAccessTokenAcceptsAnyConfiguredRequiredGroup(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = []string{"gongmcp-users", "gongmcp-admins"}
+	authorizer := testAuthorizer(t, cfg, key)
+
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["cognito:groups"] = []string{"other", "gongmcp-admins"}
+	})
+	if _, err := authorizer.VerifyAccessToken(t.Context(), token); err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+}
+
+func TestVerifyAccessTokenRejectsWhenNoConfiguredGroupMatches(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = []string{"gongmcp-users", "gongmcp-admins"}
+	authorizer := testAuthorizer(t, cfg, key)
+
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["cognito:groups"] = []string{"other"}
+	})
+	_, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err == nil {
+		t.Fatal("expected token without configured group to fail")
+	}
+	if strings.Contains(err.Error(), "gongmcp-admins") || strings.Contains(err.Error(), "gongmcp-users") {
+		t.Fatalf("error leaked configured groups: %v", err)
+	}
+}
+
+func TestVerifyAccessTokenSingleRequiredGroupBackwardCompatible(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.RequiredGroups = nil
+	cfg.RequiredGroup = "gongmcp-users"
+	authorizer := testAuthorizer(t, cfg, key)
+
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["cognito:groups"] = []string{"gongmcp-users"}
+	})
+	if _, err := authorizer.VerifyAccessToken(t.Context(), token); err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+
+	badToken := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["cognito:groups"] = []string{"other"}
+	})
+	_, err := authorizer.VerifyAccessToken(t.Context(), badToken)
+	if err == nil {
+		t.Fatal("expected missing single required group to fail")
+	}
+	if !strings.Contains(err.Error(), `required group "gongmcp-users" missing`) {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -510,11 +776,104 @@ func TestLoadConfigRequiresHTTPSIssuerAndJWKS(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAcceptsProviderNeutralOIDCAliases(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := osWriteFile(tokenFile, "internal-upstream-placeholder"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GATEWAY_INTERNAL_BEARER_TOKEN_FILE", tokenFile)
+	t.Setenv("PUBLIC_BASE_URL", "https://mcp.example.test")
+	t.Setenv("OIDC_AUTH_PROFILE", "jumpcloud")
+	t.Setenv("OIDC_ISSUER_URL", "https://oauth.id.jumpcloud.com")
+	t.Setenv("OIDC_JWKS_URL", "https://oauth.id.jumpcloud.com/.well-known/jwks.json")
+	t.Setenv("OIDC_CLIENT_ID", "oidc-client")
+	t.Setenv("OIDC_REQUIRED_SCOPE", "gongmcp/read")
+	t.Setenv("OIDC_SCOPES_SUPPORTED", "openid email gongmcp/read")
+	t.Setenv("OIDC_REQUIRED_GROUP", "GongMCP-Users")
+	t.Setenv("OIDC_GROUP_CLAIM", "memberOf")
+	t.Setenv("OIDC_ALLOWED_SUBJECTS", "subject-1")
+	t.Setenv("OIDC_ALLOWED_EMAILS", "approved@example.test")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.AuthProfile != AuthProfileDirectOIDC {
+		t.Fatalf("auth profile=%q", cfg.AuthProfile)
+	}
+	if cfg.Issuer != "https://oauth.id.jumpcloud.com" || cfg.ClientID != "oidc-client" {
+		t.Fatalf("issuer=%q client_id=%q", cfg.Issuer, cfg.ClientID)
+	}
+	if cfg.GroupClaim != "memberOf" || cfg.RequiredGroup != "GongMCP-Users" {
+		t.Fatalf("group claim=%q required group=%q", cfg.GroupClaim, cfg.RequiredGroup)
+	}
+	if _, ok := cfg.AllowedSubjects["subject-1"]; !ok {
+		t.Fatalf("allowed subjects=%v", cfg.AllowedSubjects)
+	}
+	if _, ok := cfg.AllowedEmails["approved@example.test"]; !ok {
+		t.Fatalf("allowed emails=%v", cfg.AllowedEmails)
+	}
+}
+
+func TestLoadConfigAcceptsOIDCRequiredGroups(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	t.Setenv("COGNITO_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUPS", "GongMCP-Users, GongMCP-Admins")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.RequiredGroup != "" {
+		t.Fatalf("required group=%q want empty when multiple groups configured", cfg.RequiredGroup)
+	}
+	if len(cfg.RequiredGroups) != 2 || cfg.RequiredGroups[0] != "GongMCP-Users" || cfg.RequiredGroups[1] != "GongMCP-Admins" {
+		t.Fatalf("required groups=%v", cfg.RequiredGroups)
+	}
+}
+
+func TestLoadConfigAcceptsSingleOIDCRequiredGroupAlias(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	t.Setenv("COGNITO_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUP", "GongMCP-Users")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.RequiredGroup != "GongMCP-Users" {
+		t.Fatalf("required group=%q", cfg.RequiredGroup)
+	}
+	if len(cfg.RequiredGroups) != 1 || cfg.RequiredGroups[0] != "GongMCP-Users" {
+		t.Fatalf("required groups=%v", cfg.RequiredGroups)
+	}
+}
+
+func TestLogConfigRedactsMultipleRequiredGroups(t *testing.T) {
+	cfg := testConfig(t, nil)
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = []string{"gongmcp-users", "gongmcp-admins"}
+	logLine := NewServer(cfg, nil).LogConfig()
+	if !strings.Contains(logLine, "required_group=count=2") {
+		t.Fatalf("log line=%q", logLine)
+	}
+	if strings.Contains(logLine, "gongmcp-admins") || strings.Contains(logLine, "gongmcp-users") {
+		t.Fatalf("log line leaked group names: %q", logLine)
+	}
+}
+
 func TestLoadConfigRequiresAccessPolicyGate(t *testing.T) {
 	setLoadConfigBaseEnv(t)
 	t.Setenv("COGNITO_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUPS", "")
+	t.Setenv("OIDC_ALLOWED_GROUPS", "")
+	t.Setenv("COGNITO_REQUIRED_GROUPS", "")
+	t.Setenv("COGNITO_ALLOWED_GROUPS", "")
 	t.Setenv("COGNITO_ALLOWED_SUBJECTS", "")
+	t.Setenv("OIDC_ALLOWED_SUBJECTS", "")
 	t.Setenv("COGNITO_ALLOWED_EMAILS", "")
+	t.Setenv("OIDC_ALLOWED_EMAILS", "")
 
 	_, err := LoadConfig()
 	if err == nil {
@@ -564,6 +923,35 @@ func TestDynamicClientVerifierAcceptsConfiguredClientAndVerifierApprovedClient(t
 
 	if _, err := authorizer.VerifyAccessToken(t.Context(), token); err != nil {
 		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+}
+
+func TestDirectOIDCAudienceClientBindingUsesDynamicVerifier(t *testing.T) {
+	key := mustKey(t)
+	cfg := testDCRConfig(t)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	verifier := &fakeClientVerifier{allowed: map[string]struct{}{
+		cfg.ClientID:          {},
+		"generated-client-id": {},
+	}}
+	authorizer := NewAuthorizerWithClientVerifier(cfg, func(token *jwt.Token) (any, error) {
+		return &key.PublicKey, nil
+	}, verifier)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		delete(claims, "client_id")
+		claims["aud"] = []string{"generated-client-id"}
+	})
+
+	if _, err := authorizer.VerifyAccessToken(t.Context(), token); err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+
+	badToken := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		delete(claims, "client_id")
+		claims["aud"] = []string{"unknown-client-id"}
+	})
+	if principal, err := authorizer.VerifyAccessToken(t.Context(), badToken); err == nil {
+		t.Fatalf("expected unknown audience client to fail, got principal %+v", principal)
 	}
 }
 
@@ -691,12 +1079,14 @@ func testConfig(t *testing.T, upstream *url.URL) Config {
 		Upstream:        upstream,
 		InternalToken:   "internal-upstream-placeholder",
 		PublicBaseURL:   "https://mcp.example.test",
+		AuthProfile:     AuthProfileCognito,
 		Issuer:          "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool",
 		JWKSURL:         "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool/.well-known/jwks.json",
 		ClientID:        "client-id",
 		RequiredScope:   "gongmcp/read",
 		ScopesSupported: []string{"gongmcp/read"},
 		RequiredGroup:   "gongmcp-users",
+		RequiredGroups:  []string{"gongmcp-users"},
 		GroupClaim:      "cognito:groups",
 		AllowedEmails:   csvSet("approved@example.test"),
 		AllowedOrigins:  []string{"https://claude.ai"},

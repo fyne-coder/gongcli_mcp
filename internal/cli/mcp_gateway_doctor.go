@@ -15,6 +15,7 @@ import (
 	"time"
 
 	postgresdeploy "github.com/fyne-coder/gongcli_mcp/internal/deploy/postgres"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var newDoctorHTTPClient = func(timeout time.Duration) *http.Client {
@@ -26,6 +27,8 @@ type mcpGatewayDoctorResponse struct {
 	GatewayBaseURL       string                 `json:"gateway_base_url"`
 	MCPURL               string                 `json:"mcp_url"`
 	ExpectedIssuer       string                 `json:"expected_issuer,omitempty"`
+	ExpectedAuthServer   string                 `json:"expected_authorization_server,omitempty"`
+	DoctorProfile        string                 `json:"doctor_profile,omitempty"`
 	ExpectDCR            bool                   `json:"expect_dcr"`
 	AuthenticatedCheck   string                 `json:"authenticated_check"`
 	Checks               []postgresdeploy.Check `json:"checks"`
@@ -36,10 +39,15 @@ func (a *app) doctorMCPGateway(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("doctor mcp-gateway", flag.ContinueOnError)
 	fs.SetOutput(a.err)
 	rawURL := fs.String("url", "", "public MCP gateway base URL or /mcp URL")
-	expectedIssuer := fs.String("issuer", "", "expected Cognito issuer URL")
+	expectedIssuer := fs.String("issuer", "", "expected OIDC issuer URL")
+	expectedAuthServer := fs.String("authorization-server", "", "expected OAuth authorization server URL advertised by protected-resource metadata; defaults to --issuer, or gateway base URL with --expect-dcr")
 	requiredScope := fs.String("required-scope", "gongmcp/read", "required MCP OAuth scope expected in metadata")
+	profile := fs.String("profile", "cognito", "token-shape diagnostic profile: cognito or direct-oidc (jumpcloud aliases direct-oidc)")
+	groupClaim := fs.String("group-claim", "", "configured access-token group claim for token-shape diagnostics")
+	clientID := fs.String("client-id", "", "expected OAuth client ID for token-shape client-binding diagnostics")
+	requiredGroup := fs.String("required-group", "", "required group value for token-shape policy diagnostics without printing token group names")
 	expectDCR := fs.Bool("expect-dcr", false, "require gateway-advertised DCR authorization-server metadata")
-	tokenEnv := fs.String("token-env", "", "environment variable containing an optional Cognito access token for tools/list smoke")
+	tokenEnv := fs.String("token-env", "", "environment variable containing an optional access token for untrusted token-shape diagnostics and tools/list smoke")
 	origin := fs.String("origin", "", "optional Origin header for CORS/preflight validation")
 	timeout := fs.Duration("timeout", defaultHTTPTimeout, "HTTP timeout for gateway and metadata checks")
 	if err := fs.Parse(args); err != nil {
@@ -49,25 +57,40 @@ func (a *app) doctorMCPGateway(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
+	normalizedProfile, err := normalizeDoctorProfile(*profile)
+	if err != nil {
+		return err
+	}
+
 	client := newDoctorHTTPClient(*timeout)
 	response := runMCPGatewayDoctor(ctx, client, mcpGatewayDoctorOptions{
-		RawURL:         *rawURL,
-		ExpectedIssuer: strings.TrimRight(strings.TrimSpace(*expectedIssuer), "/"),
-		RequiredScope:  strings.TrimSpace(*requiredScope),
-		ExpectDCR:      *expectDCR,
-		TokenEnv:       strings.TrimSpace(*tokenEnv),
-		Origin:         strings.TrimSpace(*origin),
+		RawURL:                      *rawURL,
+		ExpectedIssuer:              strings.TrimRight(strings.TrimSpace(*expectedIssuer), "/"),
+		ExpectedAuthorizationServer: strings.TrimRight(strings.TrimSpace(*expectedAuthServer), "/"),
+		RequiredScope:               strings.TrimSpace(*requiredScope),
+		DoctorProfile:               normalizedProfile,
+		GroupClaim:                  strings.TrimSpace(*groupClaim),
+		ClientID:                    strings.TrimSpace(*clientID),
+		RequiredGroup:               strings.TrimSpace(*requiredGroup),
+		ExpectDCR:                   *expectDCR,
+		TokenEnv:                    strings.TrimSpace(*tokenEnv),
+		Origin:                      strings.TrimSpace(*origin),
 	})
 	return writeJSONValue(a.out, response)
 }
 
 type mcpGatewayDoctorOptions struct {
-	RawURL         string
-	ExpectedIssuer string
-	RequiredScope  string
-	ExpectDCR      bool
-	TokenEnv       string
-	Origin         string
+	RawURL                      string
+	ExpectedIssuer              string
+	ExpectedAuthorizationServer string
+	RequiredScope               string
+	DoctorProfile               string
+	GroupClaim                  string
+	ClientID                    string
+	RequiredGroup               string
+	ExpectDCR                   bool
+	TokenEnv                    string
+	Origin                      string
 }
 
 type protectedResourceMetadata struct {
@@ -82,6 +105,7 @@ type authorizationServerMetadata struct {
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
 	RegistrationEndpoint              string   `json:"registration_endpoint"`
+	ClientIDMetadataDocumentSupported bool     `json:"client_id_metadata_document_supported"`
 	JWKSURI                           string   `json:"jwks_uri"`
 	ScopesSupported                   []string `json:"scopes_supported"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
@@ -93,38 +117,55 @@ type authorizationServerMetadata struct {
 func runMCPGatewayDoctor(ctx context.Context, client *http.Client, opts mcpGatewayDoctorOptions) mcpGatewayDoctorResponse {
 	response := mcpGatewayDoctorResponse{
 		ExpectedIssuer:       opts.ExpectedIssuer,
+		DoctorProfile:        opts.DoctorProfile,
 		ExpectDCR:            opts.ExpectDCR,
 		AuthenticatedCheck:   "skipped",
-		SensitiveDataWarning: "This output contains gateway metadata, HTTP status checks, and sanitized evidence only. Do not paste bearer tokens or client secrets into support artifacts.",
+		SensitiveDataWarning: "This output contains gateway metadata, HTTP status checks, and sanitized token-shape evidence only. Do not paste bearer tokens, client secrets, or decoded JWT payloads into support artifacts.",
 	}
 	baseURL, mcpURL, err := normalizeMCPGatewayURL(opts.RawURL)
 	if err != nil {
-		response.Checks = append(response.Checks, failCheck("gateway_url", "invalid_gateway_url", "gateway URL is invalid", err.Error(), "pass an absolute https gateway base URL or /mcp URL"))
+		response.Checks = append(response.Checks, failCheck("gateway_url", "invalid_gateway_url", "gateway URL is invalid", "invalid_url", "pass an absolute https gateway base URL or /mcp URL"))
 		return response
 	}
 	response.GatewayBaseURL = baseURL
 	response.MCPURL = mcpURL
 	response.Target = mcpURL
+	expectedAuthServer := expectedDoctorAuthorizationServer(opts, baseURL)
+	response.ExpectedAuthServer = expectedAuthServer
 
 	rootMetadataURL := baseURL + "/.well-known/oauth-protected-resource"
-	endpointMetadataURL := baseURL + "/.well-known/oauth-protected-resource/mcp"
+	endpointMetadataURL := endpointProtectedResourceMetadataURL(baseURL, mcpURL)
 	var rootMetadata protectedResourceMetadata
 	if fetchJSONCheck(ctx, client, rootMetadataURL, &rootMetadata, &response.Checks, "protected_resource_metadata") {
-		response.Checks = append(response.Checks, validateProtectedResourceMetadata("protected_resource_metadata", rootMetadata, mcpURL, opts.ExpectedIssuer, baseURL, opts.RequiredScope, opts.ExpectDCR)...)
+		if mcpURL == baseURL+"/mcp" {
+			response.Checks = append(response.Checks, validateProtectedResourceMetadata("protected_resource_metadata", rootMetadata, mcpURL, expectedAuthServer, baseURL, opts.RequiredScope, opts.ExpectDCR)...)
+		} else {
+			response.Checks = append(response.Checks, postgresdeploy.Check{
+				Name:    "protected_resource_metadata_resource",
+				Status:  postgresdeploy.CheckWarn,
+				Message: "root protected-resource metadata was fetched but resource validation was skipped for an alternate MCP path",
+				Evidence: []postgresdeploy.Evidence{
+					{Key: "target_mcp_path", Value: mcpURL},
+				},
+			})
+		}
 	}
 
 	var endpointMetadata protectedResourceMetadata
 	if fetchJSONCheck(ctx, client, endpointMetadataURL, &endpointMetadata, &response.Checks, "endpoint_protected_resource_metadata") {
-		response.Checks = append(response.Checks, validateProtectedResourceMetadata("endpoint_protected_resource_metadata", endpointMetadata, mcpURL, opts.ExpectedIssuer, baseURL, opts.RequiredScope, opts.ExpectDCR)...)
+		response.Checks = append(response.Checks, validateProtectedResourceMetadata("endpoint_protected_resource_metadata", endpointMetadata, mcpURL, expectedAuthServer, baseURL, opts.RequiredScope, opts.ExpectDCR)...)
 	}
 
 	if opts.Origin != "" {
 		response.Checks = append(response.Checks, checkCORSPreflight(ctx, client, mcpURL, opts.Origin))
 	}
-	response.Checks = append(response.Checks, checkMCPChallenge(ctx, client, http.MethodGet, mcpURL, opts.Origin, opts.RequiredScope))
-	response.Checks = append(response.Checks, checkMCPChallenge(ctx, client, http.MethodPost, mcpURL, opts.Origin, opts.RequiredScope))
+	response.Checks = append(response.Checks, checkMCPChallenge(ctx, client, http.MethodGet, mcpURL, endpointMetadataURL, opts.Origin, opts.RequiredScope))
+	response.Checks = append(response.Checks, checkMCPChallenge(ctx, client, http.MethodPost, mcpURL, endpointMetadataURL, opts.Origin, opts.RequiredScope))
 
-	authServerURL := firstAuthorizationServer(rootMetadata, endpointMetadata)
+	authServerURL := firstAuthorizationServer(endpointMetadata, rootMetadata)
+	if authServerURL == "" {
+		authServerURL = expectedAuthServer
+	}
 	discoveryBase := authServerURL
 	if opts.ExpectedIssuer != "" {
 		discoveryBase = opts.ExpectedIssuer
@@ -137,6 +178,9 @@ func runMCPGatewayDoctor(ctx context.Context, client *http.Client, opts mcpGatew
 
 	if opts.ExpectDCR {
 		response.Checks = append(response.Checks, checkDCRAuthorizationServer(ctx, client, baseURL))
+	}
+	if authServerURL != "" {
+		response.Checks = append(response.Checks, checkOAuthAuthorizationServerMetadata(ctx, client, authServerURL, opts.RequiredScope))
 	}
 
 	if opts.TokenEnv != "" {
@@ -153,11 +197,36 @@ func runMCPGatewayDoctor(ctx context.Context, client *http.Client, opts mcpGatew
 			})
 		} else {
 			response.AuthenticatedCheck = "attempted"
+			response.Checks = append(response.Checks, tokenShapeDiagnostics(opts, token)...)
 			response.Checks = append(response.Checks, checkAuthenticatedToolsList(ctx, client, mcpURL, opts.Origin, opts.TokenEnv, token))
 		}
 	}
 
 	return response
+}
+
+func normalizeDoctorProfile(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "cognito":
+		return "cognito", nil
+	case "direct-oidc", "direct_oidc", "directoidc", "oidc", "jumpcloud":
+		return "direct-oidc", nil
+	default:
+		return "", fmt.Errorf("doctor mcp-gateway: --profile must be cognito or direct-oidc")
+	}
+}
+
+func expectedDoctorAuthorizationServer(opts mcpGatewayDoctorOptions, baseURL string) string {
+	switch {
+	case opts.ExpectedAuthorizationServer != "":
+		return opts.ExpectedAuthorizationServer
+	case opts.ExpectDCR:
+		return baseURL
+	case opts.ExpectedIssuer != "":
+		return opts.ExpectedIssuer
+	default:
+		return ""
+	}
 }
 
 func normalizeMCPGatewayURL(raw string) (string, string, error) {
@@ -179,10 +248,41 @@ func normalizeMCPGatewayURL(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("URL must not include a fragment")
 	}
 	base := trimmed
+	mcpURL := ""
 	if strings.HasSuffix(parsed.Path, "/mcp") {
 		base = strings.TrimSuffix(trimmed, "/mcp")
+		mcpURL = trimmed
 	}
-	return base, base + "/mcp", nil
+	if isAlternateMCPPath(parsed.Path) {
+		base = parsed.Scheme + "://" + parsed.Host
+		mcpURL = trimmed
+	}
+	if mcpURL == "" {
+		mcpURL = base + "/mcp"
+	}
+	return base, mcpURL, nil
+}
+
+func isAlternateMCPPath(path string) bool {
+	segment := strings.Trim(strings.TrimSpace(path), "/")
+	return strings.HasPrefix(segment, "mcp-") || strings.HasPrefix(segment, "mcp_")
+}
+
+func endpointProtectedResourceMetadataURL(baseURL, mcpURL string) string {
+	baseParsed, baseErr := url.Parse(baseURL)
+	mcpParsed, mcpErr := url.Parse(mcpURL)
+	if baseErr != nil || mcpErr != nil {
+		return strings.TrimRight(baseURL, "/") + "/.well-known/oauth-protected-resource/mcp"
+	}
+	mcpPath := strings.Trim(mcpParsed.EscapedPath(), "/")
+	basePath := strings.Trim(baseParsed.EscapedPath(), "/")
+	if basePath != "" && strings.HasPrefix(mcpPath, basePath+"/") {
+		mcpPath = strings.TrimPrefix(mcpPath, basePath+"/")
+	}
+	if mcpPath == "" {
+		mcpPath = "mcp"
+	}
+	return strings.TrimRight(baseURL, "/") + "/.well-known/oauth-protected-resource/" + mcpPath
 }
 
 func fetchJSONCheck(ctx context.Context, client *http.Client, rawURL string, target any, checks *[]postgresdeploy.Check, name string) bool {
@@ -215,7 +315,7 @@ func fetchJSONCheck(ctx context.Context, client *http.Client, rawURL string, tar
 	return true
 }
 
-func validateProtectedResourceMetadata(name string, metadata protectedResourceMetadata, expectedResource, expectedIssuer, baseURL, requiredScope string, expectDCR bool) []postgresdeploy.Check {
+func validateProtectedResourceMetadata(name string, metadata protectedResourceMetadata, expectedResource, expectedAuthServer, baseURL, requiredScope string, expectDCR bool) []postgresdeploy.Check {
 	checks := []postgresdeploy.Check{}
 	if metadata.Resource != expectedResource {
 		checks = append(checks, failCheck(name+"_resource", "resource_mismatch", "protected-resource metadata resource does not match /mcp URL", fmt.Sprintf("resource=%s", metadata.Resource), "set metadata resource to the exact public MCP URL entered in Claude"))
@@ -226,17 +326,14 @@ func validateProtectedResourceMetadata(name string, metadata protectedResourceMe
 	if len(metadata.AuthorizationServers) > 0 {
 		authServer = strings.TrimRight(metadata.AuthorizationServers[0], "/")
 	}
-	wantAuthServer := expectedIssuer
-	if expectDCR {
-		wantAuthServer = baseURL
-	}
+	wantAuthServer := expectedAuthServer
 	if authServer == "" {
 		checks = append(checks, failCheck(name+"_authorization_server", "authorization_server_missing", "metadata is missing authorization_servers", "", "publish the Cognito issuer URL or gateway auth-server URL for DCR mode"))
 	} else if err := requireHTTPSURL(authServer); err != nil {
 		checks = append(checks, failCheck(name+"_authorization_server", "authorization_server_not_https", "authorization server must be an absolute https URL", "", "fix authorization_servers[0]"))
 	} else if wantAuthServer != "" && authServer != strings.TrimRight(wantAuthServer, "/") {
-		checks = append(checks, failCheck(name+"_authorization_server", "authorization_server_mismatch", "authorization server does not match expected value", fmt.Sprintf("authorization_server=%s", authServer), "verify --issuer, DCR mode, and gateway metadata configuration"))
-	} else if !expectDCR && expectedIssuer == "" && authServer == baseURL {
+		checks = append(checks, failCheck(name+"_authorization_server", "authorization_server_mismatch", "authorization server does not match expected value", fmt.Sprintf("authorization_server=%s", authServer), "verify --authorization-server, --issuer, DCR mode, and gateway metadata configuration"))
+	} else if !expectDCR && expectedAuthServer == "" && authServer == baseURL {
 		checks = append(checks, postgresdeploy.Check{
 			Name:        name + "_authorization_server",
 			Status:      postgresdeploy.CheckWarn,
@@ -269,7 +366,7 @@ func validateProtectedResourceMetadata(name string, metadata protectedResourceMe
 	return checks
 }
 
-func checkMCPChallenge(ctx context.Context, client *http.Client, method, mcpURL, origin, requiredScope string) postgresdeploy.Check {
+func checkMCPChallenge(ctx context.Context, client *http.Client, method, mcpURL, expectedMetadataURL, origin, requiredScope string) postgresdeploy.Check {
 	var body io.Reader = http.NoBody
 	if method == http.MethodPost {
 		body = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
@@ -294,7 +391,6 @@ func checkMCPChallenge(ctx context.Context, client *http.Client, method, mcpURL,
 		return failCheck("unauthenticated_"+strings.ToLower(method)+"_challenge", "expected_401", "unauthenticated /mcp must return 401", fmt.Sprintf("status=%d", resp.StatusCode), "route /mcp to gongmcp-gateway and verify auth middleware runs before upstream proxying")
 	}
 	challenge := resp.Header.Get("WWW-Authenticate")
-	expectedMetadataURL := strings.TrimSuffix(mcpURL, "/mcp") + "/.well-known/oauth-protected-resource/mcp"
 	if !validBearerChallenge(challenge, expectedMetadataURL, requiredScope) {
 		return failCheck("unauthenticated_"+strings.ToLower(method)+"_challenge", "invalid_www_authenticate", "401 response is missing Bearer resource_metadata and scope challenge", "", "set WWW-Authenticate to Bearer with resource_metadata and scope")
 	}
@@ -333,6 +429,9 @@ func checkOIDCDiscovery(ctx context.Context, client *http.Client, issuer string)
 	var checks []postgresdeploy.Check
 	if !fetchJSONCheck(ctx, client, discoveryURL, &metadata, &checks, "oidc_discovery") {
 		return checks[len(checks)-1]
+	}
+	if strings.TrimRight(metadata.Issuer, "/") != issuer {
+		return failCheck("oidc_discovery", "issuer_mismatch", "OIDC discovery issuer does not match requested issuer", "", "verify --issuer points at the same provider issuer used by the gateway")
 	}
 	if metadata.JWKSURI == "" {
 		return failCheck("oidc_discovery", "jwks_uri_missing", "OIDC discovery metadata is missing jwks_uri", "", "verify the Cognito issuer URL")
@@ -399,6 +498,140 @@ func checkDCRAuthorizationServer(ctx context.Context, client *http.Client, baseU
 	}
 }
 
+func checkOAuthAuthorizationServerMetadata(ctx context.Context, client *http.Client, authServerURL, requiredScope string) postgresdeploy.Check {
+	authServerURL = strings.TrimRight(strings.TrimSpace(authServerURL), "/")
+	if err := requireHTTPSURL(authServerURL); err != nil {
+		return failCheck("oauth_authorization_server_metadata", "authorization_server_not_https", "authorization server must be an absolute https URL", "", "fix protected-resource metadata authorization_servers")
+	}
+	candidates, err := oauthAuthorizationServerMetadataURLs(authServerURL)
+	if err != nil {
+		return failCheck("oauth_authorization_server_metadata", "authorization_server_invalid", "authorization server URL could not be converted to metadata paths", "", "fix protected-resource metadata authorization_servers")
+	}
+	var metadata authorizationServerMetadata
+	selectedURL, failureEvidence, ok := fetchOAuthAuthorizationServerMetadata(ctx, client, candidates, &metadata)
+	if !ok {
+		return failCheck("oauth_authorization_server_metadata", "metadata_unreachable", "OAuth authorization-server metadata was not reachable at the RFC 8414 metadata paths", failureEvidence, "publish /.well-known/oauth-authorization-server metadata for the advertised authorization server, or advertise an authorization server that provides it")
+	}
+
+	issuer := strings.TrimRight(metadata.Issuer, "/")
+	authEndpoint, authErr := parseHTTPSMetadataEndpoint(metadata.AuthorizationEndpoint)
+	tokenEndpoint, tokenErr := parseHTTPSMetadataEndpoint(metadata.TokenEndpoint)
+	switch {
+	case issuer == "":
+		return failCheck("oauth_authorization_server_metadata", "issuer_missing", "OAuth authorization-server metadata is missing issuer", fmt.Sprintf("url=%s", selectedURL), "set issuer to the advertised authorization server URL")
+	case issuer != authServerURL:
+		return failCheck("oauth_authorization_server_metadata", "issuer_mismatch", "OAuth authorization-server metadata issuer does not match the advertised authorization server", fmt.Sprintf("issuer=%s", issuer), "set issuer to the advertised authorization server URL or advertise the provider issuer directly")
+	case authErr != nil || authEndpoint.Path == "":
+		return failCheck("oauth_authorization_server_metadata", "authorization_endpoint_invalid", "OAuth authorization-server metadata authorization_endpoint is invalid", "", "publish an absolute https authorization endpoint")
+	case tokenErr != nil || tokenEndpoint.Path == "":
+		return failCheck("oauth_authorization_server_metadata", "token_endpoint_invalid", "OAuth authorization-server metadata token_endpoint is invalid", "", "publish an absolute https token endpoint")
+	case !containsString(metadata.ResponseTypesSupported, "code"):
+		return failCheck("oauth_authorization_server_metadata", "authorization_code_response_missing", "OAuth authorization-server metadata must advertise response_types_supported containing code", "", "enable authorization-code flow for the client used by Claude")
+	case len(metadata.GrantTypesSupported) > 0 && !containsString(metadata.GrantTypesSupported, "authorization_code"):
+		return failCheck("oauth_authorization_server_metadata", "authorization_code_grant_missing", "OAuth authorization-server metadata grant_types_supported does not include authorization_code", "", "enable authorization-code grant for the client used by Claude")
+	case len(metadata.CodeChallengeMethodsSupported) > 0 && !containsString(metadata.CodeChallengeMethodsSupported, "S256"):
+		return failCheck("oauth_authorization_server_metadata", "pkce_s256_missing", "OAuth authorization-server metadata does not advertise PKCE S256", "", "enable PKCE S256 or omit the field only if the provider does not advertise PKCE methods")
+	case !hasCompatibleTokenEndpointAuthMethod(metadata.TokenEndpointAuthMethodsSupported):
+		return failCheck("oauth_authorization_server_metadata", "token_endpoint_auth_method_missing", "OAuth authorization-server metadata does not advertise a Claude-compatible token endpoint auth method", "", "advertise client_secret_post, client_secret_basic, or none for the configured client")
+	case requiredScope != "" && len(metadata.ScopesSupported) > 0 && !containsString(metadata.ScopesSupported, requiredScope):
+		return failCheck("oauth_authorization_server_metadata", "required_scope_missing", "OAuth authorization-server metadata scopes_supported does not include the required MCP scope", fmt.Sprintf("required_scope=%s", requiredScope), "advertise the same MCP scope in authorization-server and protected-resource metadata")
+	case metadata.RegistrationEndpoint == "" && !supportsClientIDMetadata(metadata):
+		return postgresdeploy.Check{
+			Name:        "oauth_authorization_server_metadata",
+			Status:      postgresdeploy.CheckWarn,
+			Message:     "OAuth authorization-server metadata is static-client only",
+			Remediation: "for hosted Claude, verify custom connector OAuth Client ID/secret token exchange evidence, use Anthropic-held credentials, or put a DCR/CIMD-capable broker in front of this IdP",
+			Evidence: []postgresdeploy.Evidence{
+				{Key: "url", Value: selectedURL},
+				{Key: "registration_endpoint", Value: "absent"},
+				{Key: "client_id_metadata_document_supported", Value: fmt.Sprintf("%t", metadata.ClientIDMetadataDocumentSupported)},
+			},
+		}
+	default:
+		return postgresdeploy.Check{
+			Name:    "oauth_authorization_server_metadata",
+			Status:  postgresdeploy.CheckPass,
+			Message: "OAuth authorization-server metadata is reachable and authorization-code shaped",
+			Evidence: []postgresdeploy.Evidence{
+				{Key: "url", Value: selectedURL},
+				{Key: "authorization_endpoint_host", Value: authEndpoint.Host},
+				{Key: "token_endpoint_host", Value: tokenEndpoint.Host},
+			},
+		}
+	}
+}
+
+func oauthAuthorizationServerMetadataURLs(authServerURL string) ([]string, error) {
+	parsed, err := url.Parse(authServerURL)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return nil, fmt.Errorf("authorization server must be absolute https without userinfo, query, or fragment")
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+	path := strings.TrimRight(parsed.EscapedPath(), "/")
+	if path == "" {
+		return []string{
+			origin + "/.well-known/oauth-authorization-server",
+			origin + "/.well-known/openid-configuration",
+		}, nil
+	}
+	return []string{
+		origin + "/.well-known/oauth-authorization-server" + path,
+		origin + path + "/.well-known/oauth-authorization-server",
+		origin + "/.well-known/openid-configuration" + path,
+		origin + path + "/.well-known/openid-configuration",
+	}, nil
+}
+
+func fetchOAuthAuthorizationServerMetadata(ctx context.Context, client *http.Client, urls []string, target *authorizationServerMetadata) (selectedURL, failureEvidence string, ok bool) {
+	var attempts []string
+	for _, rawURL := range urls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			attempts = append(attempts, "request_build_failed")
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			attempts = append(attempts, "request_failed")
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			attempts = append(attempts, fmt.Sprintf("status=%d", resp.StatusCode))
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			continue
+		}
+		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(target)
+		resp.Body.Close()
+		if err != nil {
+			attempts = append(attempts, "invalid_json")
+			continue
+		}
+		return rawURL, "", true
+	}
+	return "", strings.Join(attempts, ","), false
+}
+
+func hasCompatibleTokenEndpointAuthMethod(methods []string) bool {
+	if len(methods) == 0 {
+		return false
+	}
+	for _, method := range methods {
+		switch method {
+		case "client_secret_post", "client_secret_basic", "none":
+			return true
+		}
+	}
+	return false
+}
+
+func supportsClientIDMetadata(metadata authorizationServerMetadata) bool {
+	return metadata.ClientIDMetadataDocumentSupported && containsString(metadata.TokenEndpointAuthMethodsSupported, "none")
+}
+
 func parseHTTPSMetadataEndpoint(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -427,12 +660,13 @@ func checkAuthenticatedToolsList(ctx context.Context, client *http.Client, mcpUR
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
+		kind, message, remediation := authenticatedToolsListFailure(resp.StatusCode)
 		return postgresdeploy.Check{
 			Name:        "authenticated_tools_list",
 			Status:      postgresdeploy.CheckFail,
-			ErrorKind:   "unexpected_http_status",
-			Message:     "authenticated tools/list did not return 200",
-			Remediation: "verify token issuer, client_id, scope, group/allowlist, and private gongmcp reachability",
+			ErrorKind:   kind,
+			Message:     message,
+			Remediation: remediation,
 			Evidence: []postgresdeploy.Evidence{
 				{Key: "status", Value: fmt.Sprintf("%d", resp.StatusCode)},
 				{Key: "token_env", Value: tokenEnv},
@@ -455,13 +689,555 @@ func checkAuthenticatedToolsList(ctx context.Context, client *http.Client, mcpUR
 				}
 			}
 		}
-		return failCheck("authenticated_tools_list", "tools_missing", "authenticated tools/list response did not include tools", "", "verify MCP upstream is gongmcp")
+		return failCheck("authenticated_tools_list", "unexpected_mcp_shape", "authenticated tools/list returned 200 but did not include tools", "", "verify MCP upstream is gongmcp and returns JSON-RPC tools/list shape")
 	}
 	return postgresdeploy.Check{
 		Name:     "authenticated_tools_list",
 		Status:   postgresdeploy.CheckPass,
 		Message:  "authenticated tools/list reached upstream",
 		Evidence: []postgresdeploy.Evidence{{Key: "token_env", Value: tokenEnv}},
+	}
+}
+
+func authenticatedToolsListFailure(status int) (kind, message, remediation string) {
+	switch status {
+	case http.StatusUnauthorized:
+		return "auth_rejected", "authenticated tools/list was rejected before gateway authorization completed", "verify bearer token presence, issuer, signature, expiry, and gateway auth profile before group or email policy"
+	case http.StatusForbidden:
+		return "authorization_denied", "authenticated tools/list reached gateway auth but was denied by policy", "verify required scope, configured group claim, required group membership, and email allowlist"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return "upstream_unreachable", "authenticated tools/list could not reach private gongmcp", "verify GATEWAY_UPSTREAM_URL, private gongmcp health, service routing, and network policy"
+	default:
+		return "unexpected_http_status", "authenticated tools/list did not return 200", "verify token issuer, client binding, scope, group/allowlist, and private gongmcp reachability"
+	}
+}
+
+func tokenShapeDiagnostics(opts mcpGatewayDoctorOptions, rawToken string) []postgresdeploy.Check {
+	claims, err := parseUnverifiedDoctorClaims(rawToken)
+	if err != nil {
+		// Intentionally do not include parser errors; malformed JWT errors can
+		// expose user-provided token fragments in future library versions.
+		return []postgresdeploy.Check{postgresdeploy.Check{
+			Name:        "token_shape_parse",
+			Status:      postgresdeploy.CheckWarn,
+			ErrorKind:   "jwt_payload_unreadable",
+			Message:     "token env var is set but JWT payload could not be parsed for local shape diagnostics",
+			Remediation: "verify the env var contains a JWT access token; diagnostics are untrusted and do not replace gateway verification",
+			Evidence: []postgresdeploy.Evidence{
+				{Key: "doctor_profile", Value: opts.DoctorProfile},
+				{Key: "token_env", Value: opts.TokenEnv},
+			},
+		}}
+	}
+	directOIDC := opts.DoctorProfile == "direct-oidc"
+	checks := []postgresdeploy.Check{
+		checkTokenShapeTokenUse(claims, directOIDC),
+		checkTokenShapeScope(claims, opts.RequiredScope, directOIDC),
+		checkTokenShapeClientBinding(claims, opts.ClientID, directOIDC),
+		checkTokenShapeGroupClaim(claims, opts.GroupClaim, opts.RequiredGroup, directOIDC),
+		checkTokenShapeEmailClaim(claims, directOIDC),
+		checkTokenShapeExpiry(claims),
+	}
+	return checks
+}
+
+func parseUnverifiedDoctorClaims(rawToken string) (jwt.MapClaims, error) {
+	parser := jwt.NewParser()
+	token, _, err := parser.ParseUnverified(rawToken, jwt.MapClaims{})
+	if err != nil {
+		return nil, err
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("claims are not map claims")
+	}
+	return claims, nil
+}
+
+func checkTokenShapeTokenUse(claims jwt.MapClaims, directOIDC bool) postgresdeploy.Check {
+	raw, ok := claims["token_use"]
+	status := "missing"
+	if ok {
+		switch typed := raw.(type) {
+		case string:
+			switch strings.TrimSpace(typed) {
+			case "":
+				status = "missing"
+			case "access":
+				status = "access"
+			default:
+				status = "non_access"
+			}
+		default:
+			status = "non_access"
+		}
+	}
+	evidence := []postgresdeploy.Evidence{{Key: "token_use_status", Value: status}}
+	switch {
+	case directOIDC && status == "non_access":
+		return postgresdeploy.Check{
+			Name:        "token_shape_token_use",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "token_use_not_access",
+			Message:     "token_use is present but not access",
+			Remediation: "use an access token for MCP bearer auth; diagnostics are untrusted and do not replace gateway verification",
+			Evidence:    evidence,
+		}
+	case !directOIDC && status != "access":
+		return postgresdeploy.Check{
+			Name:        "token_shape_token_use",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "token_use_missing_or_not_access",
+			Message:     "Cognito profile expects token_use=access",
+			Remediation: "exchange or select a Cognito access token, not an ID token",
+			Evidence:    evidence,
+		}
+	case directOIDC && status == "missing":
+		return postgresdeploy.Check{
+			Name:     "token_shape_token_use",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "token_use is absent, which is expected for some direct-OIDC providers; unverified shape only",
+			Evidence: evidence,
+		}
+	default:
+		return postgresdeploy.Check{
+			Name:     "token_shape_token_use",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "token_use shape matches the selected doctor profile; unverified shape only",
+			Evidence: evidence,
+		}
+	}
+}
+
+func checkTokenShapeScope(claims jwt.MapClaims, requiredScope string, directOIDC bool) postgresdeploy.Check {
+	inScope, inSCP := requiredScopePresence(claims, requiredScope)
+	evidence := []postgresdeploy.Evidence{
+		{Key: "scope_claim", Value: scopeClaimStatus(claims["scope"])},
+		{Key: "scp_claim", Value: claimPresenceStatus(doctorClaimValue(claims, "scp", false))},
+	}
+	if requiredScope != "" {
+		evidence = append(evidence,
+			postgresdeploy.Evidence{Key: "required_scope_in_scope", Value: fmt.Sprintf("%t", inScope)},
+			postgresdeploy.Evidence{Key: "required_scope_in_scp", Value: fmt.Sprintf("%t", inSCP)},
+		)
+	}
+	switch {
+	case requiredScope == "":
+		return postgresdeploy.Check{
+			Name:     "token_shape_scope",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "required scope was not configured for token-shape diagnostics",
+			Evidence: evidence,
+		}
+	case directOIDC && (inScope || inSCP):
+		return postgresdeploy.Check{
+			Name:     "token_shape_scope",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "required scope appears in scope or scp; unverified shape only",
+			Evidence: evidence,
+		}
+	case !directOIDC && inScope:
+		return postgresdeploy.Check{
+			Name:     "token_shape_scope",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "required scope appears in scope; unverified shape only",
+			Evidence: evidence,
+		}
+	case !directOIDC && !inScope && inSCP:
+		return postgresdeploy.Check{
+			Name:        "token_shape_scope",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "scope_scp_not_sufficient_for_cognito",
+			Message:     "Cognito profile requires scope; scp alone is not sufficient",
+			Remediation: "ensure the Cognito access token includes the required scope in the scope claim",
+			Evidence:    evidence,
+		}
+	default:
+		return postgresdeploy.Check{
+			Name:        "token_shape_scope",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "required_scope_missing",
+			Message:     "required scope is missing from the expected token-shape claims",
+			Remediation: "verify provider scope grants and gateway OIDC_REQUIRED_SCOPE",
+			Evidence:    evidence,
+		}
+	}
+}
+
+func checkTokenShapeClientBinding(claims jwt.MapClaims, expectedClientID string, directOIDC bool) postgresdeploy.Check {
+	clientID := strings.TrimSpace(stringClaim(claims["client_id"]))
+	audience := audienceClaimValues(claims["aud"])
+	binding := "missing"
+	switch {
+	case clientID != "":
+		binding = "client_id"
+	case audienceMatchesExpected(audience, expectedClientID):
+		binding = "aud"
+	case len(audience) > 0:
+		binding = "aud_present"
+	}
+	evidence := []postgresdeploy.Evidence{
+		{Key: "client_id_claim", Value: claimPresenceStatus(clientID)},
+		{Key: "aud_claim", Value: claimPresenceStatus(len(audience) > 0)},
+		{Key: "aud_matches_client_id", Value: fmt.Sprintf("%t", expectedClientID != "" && audienceMatchesExpected(audience, expectedClientID))},
+		{Key: "client_binding", Value: binding},
+	}
+	if expectedClientID == "" {
+		return postgresdeploy.Check{
+			Name:     "token_shape_client_binding",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "client binding diagnostics skipped because --client-id was not set",
+			Evidence: evidence,
+		}
+	}
+	switch {
+	case binding == "client_id" && clientID == expectedClientID:
+		return postgresdeploy.Check{
+			Name:     "token_shape_client_binding",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "token payload includes expected client_id binding; unverified shape only",
+			Evidence: evidence,
+		}
+	case binding == "client_id":
+		return postgresdeploy.Check{
+			Name:        "token_shape_client_binding",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "client_id_mismatch",
+			Message:     "token includes client_id but it does not match --client-id",
+			Remediation: "verify the Claude connector client ID and gateway OIDC_CLIENT_ID",
+			Evidence:    evidence,
+		}
+	case binding == "aud" || (directOIDC && binding == "aud_present"):
+		if directOIDC && binding == "aud_present" && !audienceMatchesExpected(audience, expectedClientID) {
+			return postgresdeploy.Check{
+				Name:        "token_shape_client_binding",
+				Status:      postgresdeploy.CheckWarn,
+				ErrorKind:   "aud_client_binding_unverified",
+				Message:     "aud is present but does not match --client-id; gateway may still accept other audience bindings",
+				Remediation: "verify OIDC client ID and audience/resource binding against gateway policy",
+				Evidence:    evidence,
+			}
+		}
+		return postgresdeploy.Check{
+			Name:     "token_shape_client_binding",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "token payload appears to bind client identity through aud; unverified shape only",
+			Evidence: evidence,
+		}
+	case !directOIDC:
+		kind := "client_id_missing"
+		message := "Cognito profile expects client_id in the access token"
+		if len(audience) > 0 {
+			kind = "client_id_missing_aud_not_sufficient"
+			message = "Cognito profile expects client_id; aud alone is not sufficient"
+		}
+		return postgresdeploy.Check{
+			Name:        "token_shape_client_binding",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   kind,
+			Message:     message,
+			Remediation: "verify the Cognito app client and access-token grant",
+			Evidence:    evidence,
+		}
+	default:
+		return postgresdeploy.Check{
+			Name:        "token_shape_client_binding",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "client_binding_missing",
+			Message:     "token is missing client_id and aud client binding",
+			Remediation: "verify provider access-token format and gateway OIDC_CLIENT_ID",
+			Evidence:    evidence,
+		}
+	}
+}
+
+func checkTokenShapeGroupClaim(claims jwt.MapClaims, groupClaim, requiredGroup string, directOIDC bool) postgresdeploy.Check {
+	if groupClaim == "" {
+		return postgresdeploy.Check{
+			Name:    "token_shape_group_claim",
+			Status:  postgresdeploy.CheckPass,
+			Message: "group claim diagnostics skipped because --group-claim was not set",
+		}
+	}
+	topLevel := doctorClaimValue(claims, groupClaim, false)
+	nested := doctorClaimValue(claims, groupClaim, true)
+	location := "absent"
+	switch {
+	case topLevel != nil:
+		location = "top_level"
+	case nested != nil && nested != topLevel:
+		location = "nested_ext"
+	}
+	populated := len(doctorClaimStringList(topLevel)) > 0 || len(doctorClaimStringList(nested)) > 0
+	requiredPresent := true
+	if requiredGroup != "" {
+		requiredPresent = claimListContains(doctorClaimStringList(topLevel), requiredGroup) ||
+			claimListContains(doctorClaimStringList(nested), requiredGroup)
+	}
+	evidence := []postgresdeploy.Evidence{
+		{Key: "group_claim", Value: groupClaim},
+		{Key: "group_claim_location", Value: location},
+		{Key: "group_claim_populated", Value: fmt.Sprintf("%t", populated)},
+	}
+	if requiredGroup != "" {
+		evidence = append(evidence, postgresdeploy.Evidence{Key: "required_group_present", Value: fmt.Sprintf("%t", requiredPresent)})
+	}
+	switch {
+	case !populated:
+		status := postgresdeploy.CheckFail
+		if directOIDC && location == "nested_ext" {
+			status = postgresdeploy.CheckWarn
+		}
+		return postgresdeploy.Check{
+			Name:        "token_shape_group_claim",
+			Status:      status,
+			ErrorKind:   "group_claim_empty",
+			Message:     "configured group claim is absent or empty in the token payload",
+			Remediation: "verify IdP group mapping into the configured access-token claim",
+			Evidence:    evidence,
+		}
+	case requiredGroup != "" && !requiredPresent:
+		return postgresdeploy.Check{
+			Name:        "token_shape_group_claim",
+			Status:      postgresdeploy.CheckFail,
+			ErrorKind:   "required_group_missing",
+			Message:     "configured required group is not present in the token group claim",
+			Remediation: "verify dedicated MCP group membership and exact group-name case in the IdP",
+			Evidence:    evidence,
+		}
+	default:
+		return postgresdeploy.Check{
+			Name:     "token_shape_group_claim",
+			Status:   postgresdeploy.CheckPass,
+			Message:  "configured group claim is populated; unverified shape only",
+			Evidence: evidence,
+		}
+	}
+}
+
+func checkTokenShapeEmailClaim(claims jwt.MapClaims, directOIDC bool) postgresdeploy.Check {
+	topLevel := strings.TrimSpace(stringClaim(claims["email"]))
+	location := "absent"
+	switch {
+	case topLevel != "":
+		location = "top_level"
+	case doctorClaimValue(claims, "email", true) != nil:
+		location = "nested_ext"
+	}
+	evidence := []postgresdeploy.Evidence{{Key: "email_claim_location", Value: location}}
+	if location == "absent" {
+		if !directOIDC {
+			return postgresdeploy.Check{
+				Name:     "token_shape_email_claim",
+				Status:   postgresdeploy.CheckPass,
+				Message:  "email claim is absent, which is expected for the Cognito access-token profile",
+				Evidence: evidence,
+			}
+		}
+		return postgresdeploy.Check{
+			Name:     "token_shape_email_claim",
+			Status:   postgresdeploy.CheckWarn,
+			Message:  "email claim is absent from top-level and nested ext token-shape locations",
+			Evidence: evidence,
+		}
+	}
+	return postgresdeploy.Check{
+		Name:     "token_shape_email_claim",
+		Status:   postgresdeploy.CheckPass,
+		Message:  "email claim is present in an expected token-shape location; unverified shape only",
+		Evidence: evidence,
+	}
+}
+
+func checkTokenShapeExpiry(claims jwt.MapClaims) postgresdeploy.Check {
+	raw, ok := claims["exp"]
+	if !ok {
+		return postgresdeploy.Check{
+			Name:        "token_shape_expiry",
+			Status:      postgresdeploy.CheckWarn,
+			ErrorKind:   "exp_missing",
+			Message:     "exp claim is missing from token-shape diagnostics",
+			Remediation: "verify provider access-token lifetime settings",
+			Evidence:    []postgresdeploy.Evidence{{Key: "exp_status", Value: "missing"}},
+		}
+	}
+	exp, err := numericDateClaim(raw)
+	if err != nil {
+		return postgresdeploy.Check{
+			Name:      "token_shape_expiry",
+			Status:    postgresdeploy.CheckWarn,
+			ErrorKind: "exp_unreadable",
+			Message:   "exp claim is present but could not be interpreted for diagnostics",
+			Evidence:  []postgresdeploy.Evidence{{Key: "exp_status", Value: "unreadable"}},
+		}
+	}
+	now := time.Now()
+	status := "valid"
+	check := postgresdeploy.Check{
+		Name:     "token_shape_expiry",
+		Status:   postgresdeploy.CheckPass,
+		Message:  "exp claim indicates the token is not expired for local diagnostics",
+		Evidence: []postgresdeploy.Evidence{{Key: "exp_status", Value: status}},
+	}
+	if now.After(exp.Time) {
+		check.Status = postgresdeploy.CheckFail
+		check.ErrorKind = "token_expired"
+		check.Message = "exp claim indicates the token is already expired"
+		check.Remediation = "refresh or reissue the access token before retrying authenticated /mcp"
+		check.Evidence = []postgresdeploy.Evidence{{Key: "exp_status", Value: "expired"}}
+	}
+	return check
+}
+
+func requiredScopePresence(claims jwt.MapClaims, requiredScope string) (inScope, inSCP bool) {
+	if requiredScope == "" {
+		return true, true
+	}
+	scopeValue, _ := claims["scope"].(string)
+	inScope = containsString(strings.Fields(scopeValue), requiredScope)
+	inSCP = containsString(doctorClaimStringList(doctorClaimValue(claims, "scp", false)), requiredScope)
+	return inScope, inSCP
+}
+
+func scopeClaimStatus(raw any) string {
+	if strings.TrimSpace(stringClaim(raw)) == "" {
+		return "absent"
+	}
+	return "present"
+}
+
+func claimPresenceStatus(present any) string {
+	switch typed := present.(type) {
+	case bool:
+		if typed {
+			return "present"
+		}
+		return "absent"
+	case string:
+		if strings.TrimSpace(typed) == "" || typed == "false" {
+			return "absent"
+		}
+		return "present"
+	default:
+		if present == nil {
+			return "absent"
+		}
+		return "present"
+	}
+}
+
+func stringClaim(raw any) string {
+	value, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func audienceClaimValues(raw any) []string {
+	switch typed := raw.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		return []string{typed}
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+				out = append(out, value)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func audienceMatchesExpected(audience []string, expectedClientID string) bool {
+	if expectedClientID == "" {
+		return len(audience) > 0
+	}
+	return containsString(audience, expectedClientID)
+}
+
+func doctorClaimValue(raw jwt.MapClaims, name string, allowNested bool) any {
+	if raw == nil || name == "" {
+		return nil
+	}
+	if value, ok := raw[name]; ok {
+		return value
+	}
+	if !allowNested {
+		return nil
+	}
+	if strings.Contains(name, ".") {
+		parts := strings.Split(name, ".")
+		var current any = raw
+		for _, part := range parts {
+			next, ok := current.(map[string]any)
+			if !ok {
+				return nil
+			}
+			current, ok = next[part]
+			if !ok {
+				return nil
+			}
+		}
+		return current
+	}
+	ext, ok := raw["ext"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return ext[name]
+}
+
+func doctorClaimStringList(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		return strings.FieldsFunc(typed, func(r rune) bool {
+			return r == ',' || r == ' ' || r == ';'
+		})
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				out = append(out, strings.TrimSpace(item))
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func claimListContains(values []string, want string) bool {
+	return containsString(values, want)
+}
+
+func numericDateClaim(raw any) (*jwt.NumericDate, error) {
+	switch typed := raw.(type) {
+	case float64:
+		return jwt.NewNumericDate(time.Unix(int64(typed), 0)), nil
+	case json.Number:
+		unix, err := typed.Int64()
+		if err != nil {
+			return nil, err
+		}
+		return jwt.NewNumericDate(time.Unix(unix, 0)), nil
+	default:
+		return nil, fmt.Errorf("unsupported exp claim type")
 	}
 }
 
