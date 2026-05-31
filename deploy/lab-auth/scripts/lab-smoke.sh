@@ -227,7 +227,7 @@ case "$unauth_status" in
   *) echo "expected unauthenticated denial, got status=$unauth_status" >&2; exit 1 ;;
 esac
 tr -d '\r' <"$headers_file" | rg -i '^www-authenticate: Bearer ' >/dev/null
-tr -d '\r' <"$headers_file" | rg -F "resource_metadata=\"$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource\"" >/dev/null
+tr -d '\r' <"$headers_file" | rg -F "resource_metadata=\"$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource/mcp\"" >/dev/null
 rm -f "$headers_file"
 
 echo "== forged proxy identity header is denied =="

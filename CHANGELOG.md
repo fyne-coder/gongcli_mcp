@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-05-31
+
+- Added the customer-hosted remote MCP gateway (`gongmcp-gateway`) with
+  protected-resource metadata, bearer challenges, JWT validation, trusted
+  forwarding to private `gongmcp`, and an AWS Cognito Dynamic Client
+  Registration starter.
+- Added `gongctl doctor mcp-gateway`, remote-MCP smoke scripts, and Kubernetes,
+  Compose, and IAM examples for validating hosted Claude/ChatGPT connector
+  reachability before business users connect.
+- Added the direct JumpCloud/OIDC compatibility path for static-client Claude
+  connectors, keeping Cognito validation strict by default while supporting the
+  tested JumpCloud/Ory token shapes under `OIDC_AUTH_PROFILE=direct-oidc`.
+- Certified the remote MCP auth paths tested so far: Docker/Keycloak remained
+  intact, and the direct JumpCloud + Claude custom connector reached live
+  `get_sync_status` after using JumpCloud `Client Secret POST` and recreating
+  stale Claude connector state. The runbooks record the exact tested boundary
+  and evidence.
+- Added TradeCentric/JumpCloud RCA runbooks and updated operator docs with the
+  current Claude connector checklist, including canonical `/mcp`, callback URL,
+  client-auth method, stale-connector cleanup, and proof via first safe tool
+  call rather than browser login alone.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.5.2`, including the new `gongmcp-gateway` image.
+
 ## 0.5.1 - 2026-05-26
 
 - Added a DevOps-oriented remote MCP deployment requirements guide covering

@@ -536,7 +536,7 @@ fall into one of these buckets:
 | Dynamic client registration rejected | IdP/broker registration policy blocked the MCP client | trusted hosts, redirect URI policy, allowed scopes, client auth method |
 | Metadata probes succeed, then `/mcp` gets unauthenticated `401` or `403` | client could not complete a supported registration/token flow, or `/mcp` is still routed to a browser-session proxy such as `oauth2-proxy` | auth server metadata for DCR/CIMD/static client support, edge route for `/mcp`, `WWW-Authenticate` challenge, broker logs |
 | Gateway logs `missing bearer token` | hosted client reached `/mcp` without an Authorization bearer token | static client setup, redirect URI, token exchange, and whether `/mcp` is routed to the MCP gateway |
-| IdP reports `invalid client` during Claude auth | Claude and the IdP disagree on client ID, secret, redirect URI, or client authentication mode | recreate connector if needed, compare IdP app settings to Claude Advanced settings, verify `https://claude.ai/api/mcp/auth_callback` |
+| IdP reports `invalid client` during Claude auth | Claude and the IdP disagree on client ID, secret, redirect URI, or client authentication mode | recreate connector if needed, compare IdP app settings to Claude Advanced settings, verify `https://claude.ai/api/mcp/auth_callback`; for JumpCloud static clients used by Claude, verify Client Authentication Type is `Client Secret POST` |
 | Browser login succeeds, token exchange fails | refresh/offline token policy or client grant policy is missing | `offline_access`, refresh-token grant, public/confidential client settings |
 | Authenticated `/mcp` gets 401 | token issuer, audience/resource, expiry, signature, or group claim is wrong | gateway/shim logs and decoded access token claims |
 | Gateway logs `required group "..." missing` or `required group membership missing` | bearer token is present, but the configured group claim or user membership does not match policy | decode the access token locally; check `groups`, `memberOf`, nested `ext`, and whether the user belongs to at least one dedicated MCP group |
@@ -547,6 +547,10 @@ For the step-by-step incident runbook, see
 
 For the TC/JumpCloud incident notes and code follow-up decision, see
 [TradeCentric JumpCloud remote MCP RCA](runbooks/tc-jumpcloud-remote-mcp-rca-2026-05-29.md).
+
+For the 2026-05-31 direct JumpCloud + Claude lab success, including the
+`Client Secret POST` fix and the stale-connector cleanup, see
+[JumpCloud Claude direct MCP success RCA](runbooks/jumpcloud-claude-direct-success-rca-2026-05-31.md).
 
 ## Claude Remote Setup
 
@@ -566,6 +570,12 @@ OAuth client ID: <company IdP app client ID>
 OAuth client secret: <client secret, if the app is confidential>
 Callback URL configured in IdP: https://claude.ai/api/mcp/auth_callback
 ```
+
+For JumpCloud static-client tests, configure the app's token endpoint client
+authentication method as `Client Secret POST`. If you change the client ID,
+secret, callback URI, scopes, or client authentication method, delete the old
+Claude connector and recreate it before retrying. Reconnecting an old connector
+does not reliably refresh static-client resource state.
 
 The proof is not complete when the browser login page succeeds. The proof is
 complete when Claude can call `get_sync_status` through the connector and the

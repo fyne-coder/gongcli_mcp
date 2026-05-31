@@ -273,7 +273,7 @@ spec:
           serviceAccountName: gongctl
           containers:
             - name: gongctl
-              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.1
+              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.2
               args:
                 - |
                   set -eu

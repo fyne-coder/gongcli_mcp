@@ -12,6 +12,12 @@ Dynamic Client Registration are not required when Claude can use a
 pre-registered JumpCloud OIDC client through custom connector Advanced
 settings.
 
+2026-05-31 update: the lab direct JumpCloud + Claude path succeeded after
+changing the active JumpCloud app to `Client Secret POST`, deleting the stale
+Claude connector, and recreating it against the same clean `/mcp` URL. See
+[JumpCloud Claude Direct MCP Success RCA](jumpcloud-claude-direct-success-rca-2026-05-31.md)
+for the final evidence and revised operator checklist.
+
 The deployment still needs a public MCP gateway. JumpCloud handles human login
 and token issuance. The gateway handles MCP protected-resource metadata,
 `WWW-Authenticate` challenges, access-token validation, group policy, and
@@ -22,20 +28,19 @@ only when Claude sends a bearer access token to `/mcp`, the gateway accepts the
 configured group policy, and a safe tool call such as `get_sync_status`
 succeeds.
 
-As of the 2026-05-30 lab replay, the gateway and JumpCloud token-shape work is
-proven locally, but the Claude.ai lab connector is still not end-to-end. The
-latest clean direct-JumpCloud retry is `gong-jumpcloud-direct-r6` on
+As of the 2026-05-30 lab replay, the gateway and JumpCloud token-shape work was
+proven locally, but the Claude.ai lab connector was not yet end-to-end. The
+clean direct-JumpCloud retry at that time was `gong-jumpcloud-direct-r6` on
 `https://docker.transcripts.fyne-llc.com/mcp-jc-8a8eed`, with protected-resource
 metadata advertising JumpCloud's exact issuer
-`https://oauth.id.jumpcloud.com/`. Claude still returned `mcp_client_invalid`
-with reference `ofid_01270f5668fb0fa5`; VM logs for that retry show only
+`https://oauth.id.jumpcloud.com/`. Claude returned `mcp_client_invalid` with
+reference `ofid_01270f5668fb0fa5`; VM logs for that retry showed only
 unauthenticated MCP requests and `missing bearer token`. JumpCloud Directory
-Insights for the same window shows `sso_auth` with `sso_token_success=true`.
-That combination means the current blocker is before gateway bearer validation
-and before group/scope policy. Because TC has the same class of Claude
-connector working directly with JumpCloud and without DCR, this is not evidence
-that direct JumpCloud is impossible. It is evidence that the lab connector,
-JumpCloud app, or metadata shape still differs from the TC working setup.
+Insights for the same window showed `sso_auth` with `sso_token_success=true`.
+That combination meant the blocker was before gateway bearer validation and
+before group/scope policy. The 2026-05-31 success RCA supersedes that open lab
+status and identifies the remaining mismatch as JumpCloud client-auth method
+plus stale Claude connector state.
 
 ## Root Causes
 
@@ -81,7 +86,11 @@ JumpCloud app, or metadata shape still differs from the TC working setup.
 | Gateway rejects with required group missing | `reason=required group "..." missing` | A bearer token was present and validated far enough to reach authorization policy. | Decode the access token locally and check configured group claim, nested `ext`, and whether the user is in the dedicated JumpCloud MCP group. |
 | First safe tool succeeds | `get_sync_status` works through Claude | Remote MCP path is working end to end. | Move from test group to dedicated production group and keep raw `gongmcp` private. |
 
-## Decision Rule After The R6 Replay
+## Historical Decision Rule After The R6 Replay
+
+The following rule captures the 2026-05-30 stop condition before the
+2026-05-31 clean-host success. Use the 2026-05-31 success RCA as the current
+operator checklist.
 
 Stop running blind direct JumpCloud connector variants when all of these are
 true:
