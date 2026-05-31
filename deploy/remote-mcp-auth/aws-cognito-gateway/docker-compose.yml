@@ -12,7 +12,7 @@ services:
       - gongmcp
 
   gongmcp:
-    image: ${GONGMCP_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.2}
+    image: ${GONGMCP_IMAGE:-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.3}
     restart: unless-stopped
     environment:
       GONGMCP_BEARER_TOKEN_FILE: /run/secrets/gongmcp_token

@@ -65,11 +65,6 @@ Do not start from an IdP brand name alone.
 | AWS Cognito gateway fallback | The company explicitly wants Cognito hosted UI/user pools, or direct OIDC/static-client testing cannot satisfy the hosted client's registration/token behavior | [AWS Cognito MCP gateway starter](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md) |
 | Keycloak lab proof | Operators need a disposable open-source surrogate before spending IdP trial time or changing company IdP settings | [Lab auth deployment](lab-auth-deployment.md) |
 
-TradeCentric's current handoff uses the hosted remote MCP/direct OIDC path on
-branch `codex/tc-jumpcloud-mcp-gateway`. Cognito is not the default for that
-handoff; keep it as an AWS-specific fallback if direct OIDC cannot pass the
-Claude OAuth and first-tool-call proof.
-
 ## Required Infrastructure
 
 Network and TLS:
@@ -157,6 +152,18 @@ across multiple dedicated groups. Use subject/email allowlists only for
 temporary smoke tests. Legacy `COGNITO_*` policy names remain
 backward-compatible aliases for existing deployments and Cognito-specific
 fallback docs.
+
+If all approved customer users should have read access to the Gong MCP server,
+put those users in a dedicated IdP group such as `GongMCP-Users`, assign that
+group to the hosted-connector app, and configure the gateway to require that
+group plus the read-only scope, normally `gongmcp/read`. This grants the same
+read-only MCP tool surface to every approved user while keeping Gong API
+credentials, database credentials, sync/admin operations, and private
+`gongmcp` access limited to the operator path. Use
+`GONGMCP_TOOL_PRESET=business-workbench` for the recommended business-user
+surface, or `broad-public-redacted` only for an explicitly approved broad
+customer-test deployment over a physically redacted serving DB with scoped
+reader grants.
 
 ## Smoke Test Sequence
 
@@ -288,7 +295,7 @@ templates live under
 
 | Example | Role |
 | --- | --- |
-| [TradeCentric / company direct OIDC handoff](../deploy/remote-mcp-auth/tradecentric-jumpcloud/README.md) | Current TC handoff and reusable company template for direct OIDC with JumpCloud-style providers |
+| [Company direct OIDC gateway](../deploy/remote-mcp-auth/direct-oidc-jumpcloud/README.md) | Reusable direct OIDC gateway starter for hosted clients with JumpCloud-style providers |
 | [JumpCloud Compose starter](../deploy/remote-mcp-auth/jumpcloud/docker-compose.yml) | Direct OIDC/static-client gateway shape for JumpCloud-style providers; not a full hosted MCP broker by itself |
 | [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md) | Recommended MCP-shaped broker with Dynamic Client Registration |
 | [AWS Cognito MCP gateway starter](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md) | AWS-specific fallback/runbook for Cognito hosted UI, Cognito token validation, and optional Cognito DCR |

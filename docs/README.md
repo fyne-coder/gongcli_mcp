@@ -71,15 +71,6 @@ You review the data boundary, credential flow, and capability model.
 - [Remote MCP OAuth troubleshooting](runbooks/remote-mcp-oauth-troubleshooting.md)
   — hosted ChatGPT/OpenAI and Claude/Anthropic connector reachability,
   metadata, token, and first-tool-call failures
-- [TradeCentric JumpCloud remote MCP RCA](runbooks/tc-jumpcloud-remote-mcp-rca-2026-05-29.md)
-  — direct JumpCloud RCA, live failure ladder, and gateway compatibility
-  follow-up from the 2026-05-29 deployment debug
-- [JumpCloud Claude direct MCP success RCA](runbooks/jumpcloud-claude-direct-success-rca-2026-05-31.md)
-  — final lab evidence, `Client Secret POST` fix, stale connector cleanup,
-  and current operator checklist
-- [TC/lab JumpCloud direct OIDC review](runbooks/tc-jumpcloud-direct-oidc-review-2026-05-30.md)
-  — historical pre-success root-cause ranking, code/security findings, and
-  support packet for Claude plus JumpCloud escalation
 
 ## Pilot sponsor / RevOps owner
 

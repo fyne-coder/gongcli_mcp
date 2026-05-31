@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-05-31
+
+- Removed internal remote-MCP debug artifacts from the public docs surface
+  and replaced the deployment-specific direct OIDC handoff with a
+  company-generic operator starter.
+- Added public-surface guardrails to `make secret-scan` so customer names,
+  person names, support IDs, and lab hostnames from private debug loops cannot
+  be reintroduced into tracked public files.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.5.3`.
+
 ## 0.5.2 - 2026-05-31
 
 - Added the customer-hosted remote MCP gateway (`gongmcp-gateway`) with
@@ -17,12 +28,12 @@
 - Certified the remote MCP auth paths tested so far: Docker/Keycloak remained
   intact, and the direct JumpCloud + Claude custom connector reached live
   `get_sync_status` after using JumpCloud `Client Secret POST` and recreating
-  stale Claude connector state. The runbooks record the exact tested boundary
-  and evidence.
-- Added TradeCentric/JumpCloud RCA runbooks and updated operator docs with the
-  current Claude connector checklist, including canonical `/mcp`, callback URL,
-  client-auth method, stale-connector cleanup, and proof via first safe tool
-  call rather than browser login alone.
+  stale Claude connector state. Public docs record the tested operator
+  boundary without including internal debug notes.
+- Added a company-generic direct OIDC gateway starter and updated operator docs
+  with the current hosted connector checklist, including canonical `/mcp`,
+  callback URL, client-auth method, stale-connector cleanup, and proof via
+  first safe tool call rather than browser login alone.
 - Updated release-facing Docker image examples and deployment defaults to point
   at `v0.5.2`, including the new `gongmcp-gateway` image.
 

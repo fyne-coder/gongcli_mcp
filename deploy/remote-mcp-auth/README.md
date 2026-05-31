@@ -39,9 +39,8 @@ Important distinction:
 
 - `cloudflare-worker/` is the full MCP-facing OAuth broker example with Dynamic
   Client Registration.
-- `tradecentric-jumpcloud/` is the current TC handoff and a reusable company
-  template for direct OIDC first. It uses the single TC branch
-  `codex/tc-jumpcloud-mcp-gateway`.
+- `direct-oidc-jumpcloud/` is the company-generic direct OIDC starter for
+  hosted clients that can use a pre-registered/static OIDC client.
 - `aws-cognito-gateway/` is an AWS-specific fallback path. It defaults to a
   pre-registered Cognito app client and includes optional Cognito app-client
   DCR for Claude fallback testing.
@@ -63,7 +62,7 @@ Important distinction:
 
 | Example | Use when | Client-registration model |
 | --- | --- | --- |
-| `tradecentric-jumpcloud/` | TradeCentric, or another company, wants a Claude-first direct OIDC handoff that mirrors the Keycloak proof without making Cognito the default. | Pre-registered/static OIDC client first; Cognito only as fallback. |
+| `direct-oidc-jumpcloud/` | The company wants a hosted-client direct OIDC gateway without making Cognito the default. | Pre-registered/static OIDC client first; Cognito only as fallback. |
 | `jumpcloud/` | JumpCloud is the company IdP and the target MCP client can use a pre-registered/static OAuth client. | Static-client direct OIDC gateway shape. |
 | `cloudflare-worker/` | The customer can deploy Cloudflare Workers and wants the recommended MCP-shaped broker. | Dynamic Client Registration through Cloudflare's OAuth Provider Library. |
 | `aws-cognito-gateway/` | The customer explicitly chooses Cognito, optionally federated to JumpCloud, or needs Cognito DCR fallback testing. | Pre-registered Cognito client by default; optional gateway-backed DCR that creates real Cognito app clients. |
@@ -95,8 +94,7 @@ when the client needs a DCR-capable broker.
 ## Files
 
 - `cloudflare-worker/`: Worker scaffold for the recommended broker path.
-- `tradecentric-jumpcloud/`: TC-specific handoff plus reusable company template
-  for the direct OIDC gateway path that mirrors the Keycloak proof.
+- `direct-oidc-jumpcloud/`: company-generic direct OIDC gateway starter.
 - `aws-cognito-gateway/`: AWS/Cognito gateway starter for Claude custom
   connectors using pre-registered Cognito OAuth credentials, with optional DCR
   fallback.

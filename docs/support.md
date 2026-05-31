@@ -40,7 +40,7 @@ mkdir -p "$HOME/gongctl-data/support-bundle"
 docker run --rm \
   -v "$HOME/gongctl-data:/data:ro" \
   -v "$HOME/gongctl-data/support-bundle:/support" \
-  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.2 \
+  ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.3 \
   support bundle --db /data/gong-mcp-governed.db --out /support
 ```
 

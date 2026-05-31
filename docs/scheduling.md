@@ -49,6 +49,131 @@ reviewed shell wrapper with `GONG_DATABASE_URL` set to a writable operator URL.
   `gongctl sync status`; for scoped Postgres MCP presets, validate through
   `gongmcp` with the same reader URL and preset.
 
+## Historical Backfill + Nightly Incremental
+
+Use this pattern when an operator needs one approved historical load and then a
+nightly job for the previous day's calls.
+
+Before running either job, confirm the approved scope:
+
+- source window start date
+- nightly cadence runs after the business day has closed
+- call metadata preset is `business` unless the approved pilot only needs
+  `minimal`
+- transcript sync is enabled only when transcript-backed search or evidence is
+  approved
+- participant and highlight capture are enabled only after approval because
+  they cache additional personal and AI-generated data
+
+For a shared Postgres deployment, run the one-time source backfill with the
+writable source database URL. Set `TZ` to the company's Gong timezone
+when "the day's calls" should follow local business dates; otherwise use UTC
+consistently.
+
+```bash
+export GONGCTL_RESTRICTED=1
+export TZ=America/New_York
+export GONG_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL"
+
+BACKFILL_FROM="${BACKFILL_FROM:?set approved backfill start date}"
+BACKFILL_TO="$(date +%F)"
+
+gongctl --restricted sync calls \
+  --from "$BACKFILL_FROM" \
+  --to "$BACKFILL_TO" \
+  --preset business \
+  --include-parties \
+  --include-highlights \
+  --allow-sensitive-export
+
+gongctl --restricted sync users
+gongctl --restricted sync crm-integrations
+gongctl --restricted sync crm-schema \
+  --integration-id "$GONGCTL_APPROVED_CRM_INTEGRATION_ID" \
+  --object-type ACCOUNT \
+  --object-type DEAL
+gongctl --restricted sync transcripts \
+  --out-dir /transcripts \
+  --batch-size 100 \
+  --limit 5000 \
+  --allow-sensitive-export
+gongctl --restricted sync settings --kind trackers
+gongctl --restricted sync settings --kind scorecards
+gongctl --restricted sync scorecard-activity \
+  --call-from "$BACKFILL_FROM" \
+  --call-to "$BACKFILL_TO" \
+  --review-method BOTH
+gongctl --restricted sync read-model --rebuild
+```
+
+If the deployment uses a redacted MCP serving database, refresh serving data
+and reconcile the scoped reader grants after the source backfill:
+
+```bash
+GONGCTL_SOURCE_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL" \
+GONGCTL_MCP_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
+GONGCTL_AI_GOVERNANCE_CONFIG=/etc/gongctl/ai-governance.yaml \
+GONGMCP_TOOL_PRESET=business-workbench \
+gongctl deploy postgres-refresh
+```
+
+For the nightly Postgres incremental job, run one closed one-day window. This
+example runs after midnight in the business timezone and therefore loads the
+previous calendar day:
+
+```bash
+export GONGCTL_RESTRICTED=1
+export TZ=America/New_York
+export GONG_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL"
+
+FROM="$(date -d 'yesterday' +%F)"
+TO="$(date +%F)"
+
+gongctl --restricted sync calls \
+  --from "$FROM" \
+  --to "$TO" \
+  --preset business \
+  --include-parties \
+  --include-highlights \
+  --allow-sensitive-export
+gongctl --restricted sync users
+gongctl --restricted sync crm-integrations
+gongctl --restricted sync crm-schema \
+  --integration-id "$GONGCTL_APPROVED_CRM_INTEGRATION_ID" \
+  --object-type ACCOUNT \
+  --object-type DEAL
+gongctl --restricted sync transcripts \
+  --out-dir /transcripts \
+  --batch-size 100 \
+  --limit 200 \
+  --allow-sensitive-export
+gongctl --restricted sync settings --kind trackers
+gongctl --restricted sync settings --kind scorecards
+gongctl --restricted sync scorecard-activity \
+  --call-from "$FROM" \
+  --call-to "$TO" \
+  --review-method BOTH
+gongctl --restricted sync read-model --rebuild
+GONGCTL_SOURCE_DATABASE_URL="$GONGCTL_SOURCE_DATABASE_URL" \
+GONGCTL_MCP_DATABASE_URL="$GONGCTL_MCP_DATABASE_URL" \
+GONGCTL_AI_GOVERNANCE_CONFIG=/etc/gongctl/ai-governance.yaml \
+GONGMCP_TOOL_PRESET=business-workbench \
+gongctl deploy postgres-refresh
+```
+
+The `date -d 'yesterday'` form is the GNU/Linux form used by the Linux and
+Kubernetes examples. On macOS launchd pilots, compute yesterday with
+`date -v-1d +%F` instead.
+
+For SQLite single-host deployments, use the same date windows in
+`sync-run.yaml` or render them in a wrapper before calling `sync run`. A
+backfill config uses an approved static `from` date and `to` date; the nightly
+wrapper should render `from` as yesterday and `to` as today before invoking the
+approved config.
+
+Do not run the historical backfill every night. Keep it as a one-time Job or
+manual run, then leave only the incremental scheduler enabled.
+
 ## Pattern 1 — `cron`
 
 Use this for a single-host pilot or admin-workstation deployment.
@@ -273,7 +398,7 @@ spec:
           serviceAccountName: gongctl
           containers:
             - name: gongctl
-              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.2
+              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.3
               args:
                 - |
                   set -eu

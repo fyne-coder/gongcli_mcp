@@ -327,7 +327,7 @@ starters under `deploy/remote-mcp-auth/`:
 - [Remote MCP auth examples](../deploy/remote-mcp-auth/README.md)
 - [JumpCloud Docker Compose](../deploy/remote-mcp-auth/jumpcloud/docker-compose.yml)
 - [JumpCloud env example](../deploy/remote-mcp-auth/jumpcloud/jumpcloud.env.example)
-- [TradeCentric / company direct OIDC handoff](../deploy/remote-mcp-auth/tradecentric-jumpcloud/README.md)
+- [Company direct OIDC gateway](../deploy/remote-mcp-auth/direct-oidc-jumpcloud/README.md)
 - [Cloudflare Worker OAuth broker](../deploy/remote-mcp-auth/cloudflare-worker/README.md)
 - [AWS Cognito gateway fallback](../deploy/remote-mcp-auth/aws-cognito-gateway/README.md)
 - [AWS Cognito Docker Compose](../deploy/remote-mcp-auth/cognito/docker-compose.yml)
@@ -545,12 +545,8 @@ fall into one of these buckets:
 For the step-by-step incident runbook, see
 [Remote MCP OAuth troubleshooting](runbooks/remote-mcp-oauth-troubleshooting.md).
 
-For the TC/JumpCloud incident notes and code follow-up decision, see
-[TradeCentric JumpCloud remote MCP RCA](runbooks/tc-jumpcloud-remote-mcp-rca-2026-05-29.md).
-
-For the 2026-05-31 direct JumpCloud + Claude lab success, including the
-`Client Secret POST` fix and the stale-connector cleanup, see
-[JumpCloud Claude direct MCP success RCA](runbooks/jumpcloud-claude-direct-success-rca-2026-05-31.md).
+For a provider-neutral direct OIDC starter, see
+[Company direct OIDC gateway](../deploy/remote-mcp-auth/direct-oidc-jumpcloud/README.md).
 
 ## Claude Remote Setup
 
