@@ -49,6 +49,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	devAllowNoAuthLocalhost := flags.Bool("dev-allow-no-auth-localhost", false, "Allow unauthenticated HTTP only on localhost for local development")
 	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
+	noGovernanceExclusions := flags.Bool("no-governance-exclusions", false, "Declare that no customer governance exclusions exist; do not pass --ai-governance-config; defaults to GONGMCP_NO_GOVERNANCE_EXCLUSIONS when set")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
 	enforceToolScopedDBGrants := flags.Bool("enforce-tool-scoped-db-grants", false, "For Postgres MCP, validate reader function EXECUTE grants against the selected tool preset/allowlist; defaults to GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")
 	printPostgresReaderGrants := flags.Bool("print-postgres-reader-grants", false, "Compatibility helper: print reviewed Postgres reader grant SQL for --tool-preset business-pilot and exit; canonical operator command is gongctl mcp postgres-reader-sql")
@@ -187,13 +188,25 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		policySwitches = mcp.MergePolicySwitches(mcp.BroadPublicRedactedDefaultPolicySwitches(), parsedPolicySwitches)
 	}
 	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
-	if postgresMode && postgresBroadPublicRedactedPreset(selectedPreset) && governanceConfigPath == "" {
+	noGovernanceExclusionsMode := *noGovernanceExclusions || truthy(os.Getenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS"))
+	if noGovernanceExclusionsMode && governanceConfigPath != "" {
+		fmt.Fprintln(stderr, "invalid governance selection: --ai-governance-config and --no-governance-exclusions cannot be used together")
+		return 2
+	}
+	if postgresMode && postgresBroadPublicRedactedPreset(selectedPreset) && governanceConfigPath == "" && !noGovernanceExclusionsMode {
 		fmt.Fprintln(stderr, "invalid postgres tool selection: broad-public-redacted requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so the blocklist is enforced for client deployments")
 		return 2
 	}
-	if redactedServingDB && governanceConfigPath == "" {
-		fmt.Fprintln(stderr, "redacted Postgres serving DB mode requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so account-name probes can be gated by the same restricted-name policy used to build the serving DB")
+	if redactedServingDB && governanceConfigPath == "" && !noGovernanceExclusionsMode {
+		fmt.Fprintln(stderr, "redacted Postgres serving DB mode requires --ai-governance-config or GONGMCP_AI_GOVERNANCE_CONFIG so account-name probes can be gated by the same restricted-name policy used to build the serving DB, or pass --no-governance-exclusions when no customer exclusions exist")
 		return 2
+	}
+	if noGovernanceExclusionsMode {
+		if redactedServingDB {
+			fmt.Fprintln(stderr, "AI governance active: backend=postgres_redacted_serving no_governance_exclusions=1 suppressed_calls=0")
+		} else {
+			fmt.Fprintln(stderr, "AI governance active: no_governance_exclusions=1 suppressed_calls=0")
+		}
 	}
 
 	ctx := context.Background()
@@ -243,6 +256,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		closeStore = sqliteStore.Close
 	}
 	defer closeStore()
+
+	if postgresMode && redactedServingDB && noGovernanceExclusionsMode {
+		if err := validateNoGovernanceExclusionsPostgresPolicy(ctx, postgresStore); err != nil {
+			if validationErr, ok := err.(startupValidationError); ok {
+				fmt.Fprintln(stderr, validationErr.Error())
+				return validationErr.Code()
+			}
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+	}
 
 	buildInfo := version.Current()
 	serverOptions := []mcp.ServerOption{
@@ -529,6 +553,51 @@ func postgresRedactedAllReadonlyPreset(presetName string) bool {
 // IDs off by default and accepts customer-policy switches.
 func postgresBroadPublicRedactedPreset(presetName string) bool {
 	return mcp.IsBroadPublicRedactedPreset(presetName)
+}
+
+type noGovernanceExclusionsPolicyReader interface {
+	LoadGovernancePolicy(context.Context, string) (*postgres.GovernancePolicyState, error)
+	GovernanceDataFingerprint(context.Context) (string, error)
+}
+
+type startupValidationError struct {
+	code    int
+	message string
+}
+
+func (e startupValidationError) Error() string {
+	return e.message
+}
+
+func (e startupValidationError) Code() int {
+	return e.code
+}
+
+func validateNoGovernanceExclusionsPostgresPolicy(ctx context.Context, store noGovernanceExclusionsPolicyReader) error {
+	if store == nil {
+		return startupValidationError{code: 1, message: "open Postgres no-governance-exclusions state: failed"}
+	}
+	state, err := store.LoadGovernancePolicy(ctx, governance.NoExclusionsConfigFingerprint())
+	if err != nil {
+		return startupValidationError{code: 2, message: "load Postgres no-governance-exclusions policy: failed; run gongctl deploy postgres-refresh --source <source-db-url> --target <mcp-serving-db-url> --no-governance-exclusions, then restart gongmcp"}
+	}
+	if state == nil {
+		return startupValidationError{code: 2, message: "load Postgres no-governance-exclusions policy: failed; run gongctl deploy postgres-refresh --source <source-db-url> --target <mcp-serving-db-url> --no-governance-exclusions, then restart gongmcp"}
+	}
+	if state.ConfigSHA256 != "" && state.ConfigSHA256 != governance.NoExclusionsConfigFingerprint() {
+		return startupValidationError{code: 2, message: "Postgres no-governance-exclusions policy fingerprint mismatch; rerun gongctl deploy postgres-refresh --source <source-db-url> --target <mcp-serving-db-url> --no-governance-exclusions, then restart gongmcp"}
+	}
+	currentFingerprint, err := store.GovernanceDataFingerprint(ctx)
+	if err != nil {
+		return startupValidationError{code: 1, message: "snapshot Postgres no-governance-exclusions state: failed"}
+	}
+	if currentFingerprint != state.DataFingerprint {
+		return startupValidationError{code: 2, message: "Postgres no-governance-exclusions policy is stale; run gongctl deploy postgres-refresh --source <source-db-url> --target <mcp-serving-db-url> --no-governance-exclusions, then restart gongmcp"}
+	}
+	if state.SuppressedCallCount != 0 || len(state.SuppressedCallIDs) != 0 {
+		return startupValidationError{code: 2, message: "Postgres no-governance-exclusions policy contains suppressed calls; rerun gongctl deploy postgres-refresh --source <source-db-url> --target <mcp-serving-db-url> --no-governance-exclusions, then restart gongmcp"}
+	}
+	return nil
 }
 
 func postgresReviewedAnalystTools() []string {

@@ -17,6 +17,10 @@ import (
 const (
 	ListNoAI                 = "no_ai"
 	ListNotificationRequired = "notification_required"
+
+	// NoExclusionsConfigSHA256 is the stable fingerprint for the explicit
+	// operator contract that declares no customer governance exclusions.
+	NoExclusionsConfigSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
 
 type Config struct {
@@ -77,6 +81,21 @@ type RuntimeSnapshot struct {
 	ConfigSize    int64
 	ConfigModTime int64
 	Data          string
+}
+
+// NoExclusionsConfig returns the in-memory governance config used when an
+// operator explicitly declares that no customer exclusions exist.
+func NoExclusionsConfig() *Config {
+	return &Config{
+		Version: 1,
+		Lists:   map[string]List{},
+	}
+}
+
+// NoExclusionsConfigFingerprint returns the stable config fingerprint for the
+// explicit no-exclusions operator contract.
+func NoExclusionsConfigFingerprint() string {
+	return NoExclusionsConfigSHA256
 }
 
 func LoadFile(path string) (*Config, error) {

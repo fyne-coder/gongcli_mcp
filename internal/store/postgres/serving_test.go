@@ -75,6 +75,18 @@ func TestRefreshServingDBRequiresConfig(t *testing.T) {
 	}
 }
 
+func TestRefreshServingDBRejectsConfigWithNoExclusions(t *testing.T) {
+	_, err := RefreshServingDB(context.Background(), RefreshServingDBOptions{
+		SourceURL:              "postgres://h/a",
+		TargetURL:              "postgres://h/b",
+		Config:                 governance.NoExclusionsConfig(),
+		NoGovernanceExclusions: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("expected conflict error, got %v", err)
+	}
+}
+
 func TestServingRefreshLogMigrationExists(t *testing.T) {
 	var migration string
 	for _, candidate := range migrations {

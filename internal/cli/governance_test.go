@@ -377,12 +377,77 @@ lists:
 	}
 }
 
+func TestGovernanceRefreshServingDBNoExclusionsWorksWithoutConfig(t *testing.T) {
+	clearRefreshServingDBEnv(t)
+	sourceURL := "postgres://operator:source-secret@localhost:5432/gongctl_source"
+	targetURL := "postgres://operator:target-secret@localhost:5432/gongctl_mcp"
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", sourceURL)
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", targetURL)
+
+	var captured postgres.RefreshServingDBOptions
+	withRefreshServingDBFake(t, func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+		captured = opts
+		return &postgres.ServingDBRefreshResult{
+			Backend:                "postgres",
+			SuppressedCallCount:    0,
+			NoGovernanceExclusions: true,
+		}, nil
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--no-governance-exclusions",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(governance refresh-serving-db --no-governance-exclusions) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !captured.NoGovernanceExclusions || captured.Config != nil {
+		t.Fatalf("unexpected refresh opts: %+v", captured)
+	}
+	if !strings.Contains(stdout.String(), `"no_governance_exclusions": true`) || !strings.Contains(stdout.String(), `"suppressed_call_count": 0`) {
+		t.Fatalf("expected no-exclusions refresh JSON; got stdout=%q", stdout.String())
+	}
+}
+
+func TestGovernanceRefreshServingDBRejectsConfigWithNoExclusions(t *testing.T) {
+	clearRefreshServingDBEnv(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--source", "postgres://h/a",
+		"--target", "postgres://h/b",
+		"--config", configPath,
+		"--no-governance-exclusions",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected conflict failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String()+stderr.String(), "cannot be used together") {
+		t.Fatalf("expected conflict message; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
 func clearRefreshServingDBEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "")
 	t.Setenv("GONGCTL_MCP_DATABASE_URL", "")
 	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", "")
 	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+	t.Setenv("GONGCTL_NO_GOVERNANCE_EXCLUSIONS", "")
+	t.Setenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS", "")
 }
 
 func withRefreshServingDBFake(t *testing.T, fn func(context.Context, postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error)) {

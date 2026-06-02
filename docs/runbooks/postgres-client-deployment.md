@@ -68,7 +68,9 @@ Store these in the customer secret manager or root-only deployment env files:
 - `GONGCTL_MCP_DATABASE_URL`
 - `GONGMCP_ANALYST_READER_URL`
 - path to private governance config, for example
-  `/run/secrets/ai-governance.yaml`
+  `/run/secrets/ai-governance.yaml`; omit this and use
+  `--no-governance-exclusions` / `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` only when
+  no customer exclusions exist
 - auth gateway secrets such as OAuth client secrets, Keycloak credentials, or
   reverse-proxy bearer tokens
 
@@ -219,6 +221,22 @@ export GONGCTL_AI_GOVERNANCE_CONFIG=/run/secrets/ai-governance.yaml
 
 gongctl deploy postgres-refresh > refresh-serving-db.json
 ```
+
+When no customer exclusions exist, use the explicit contract instead of an
+`ai-governance.yaml`:
+
+```bash
+gongctl deploy postgres-refresh \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --no-governance-exclusions \
+  > refresh-serving-db.json
+```
+
+Expected sanitized evidence in this case includes `suppressed_call_count: 0`.
+The target remains an MCP serving database: the refresh copies all allowed
+serving-slice rows but still skips operator/global tables documented by the
+refresh output.
 
 For one-off runs, explicit flags still override the environment:
 
@@ -391,9 +409,13 @@ GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
 gongmcp
 ```
 
-For the broad redacted customer-test surface, the runtime preset must match the
-grant preset and must have the same governance config used to build the serving
-DB:
+When no customer exclusions exist, omit the governance YAML and pass
+`GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` (or `gongmcp --no-governance-exclusions`)
+for redacted-serving mode.
+
+For the broad redacted customer-test surface with customer exclusions, the
+runtime preset must match the grant preset and must have the same governance
+config used to build the serving DB:
 
 ```bash
 GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \

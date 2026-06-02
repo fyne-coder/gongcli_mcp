@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,10 +14,32 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
+
+type fakeNoGovernanceExclusionsPolicyReader struct {
+	state          *postgres.GovernancePolicyState
+	loadErr        error
+	fingerprint    string
+	fingerprintErr error
+}
+
+func (f fakeNoGovernanceExclusionsPolicyReader) LoadGovernancePolicy(context.Context, string) (*postgres.GovernancePolicyState, error) {
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
+	return f.state, nil
+}
+
+func (f fakeNoGovernanceExclusionsPolicyReader) GovernanceDataFingerprint(context.Context) (string, error) {
+	if f.fingerprintErr != nil {
+		return "", f.fingerprintErr
+	}
+	return f.fingerprint, nil
+}
 
 func TestRunRequiresDBFlag(t *testing.T) {
 	t.Parallel()
@@ -678,6 +701,155 @@ func TestPostgresToolAllowlistRejectsUnreviewedRedactedAllExpansion(t *testing.T
 	_, err = postgresToolAllowlist(expanded, true, "redacted-all-readonly")
 	if err == nil || !strings.Contains(err.Error(), "not been reviewed for the postgres redacted all-readonly preset") {
 		t.Fatalf("postgresToolAllowlist accepted unreviewed redacted all expansion: %v", err)
+	}
+}
+
+func TestRunRedactedAllReadonlyAllowsNoGovernanceExclusionsWithoutConfig(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://reader:pw@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("GONGMCP_TOOL_PRESET", "redacted-all-readonly")
+	t.Setenv("GONGMCP_HTTP_ADDR", "127.0.0.1:0")
+	t.Setenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB", "1")
+	t.Setenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS", "1")
+	t.Setenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS", "1")
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(nil, bytes.NewReader(nil), &stdout, &stderr)
+	if code == 2 {
+		if strings.Contains(stderr.String(), "requires --ai-governance-config") {
+			t.Fatalf("stderr still requires governance config: %q", stderr.String())
+		}
+	}
+	if !strings.Contains(stderr.String(), "no_governance_exclusions=1") {
+		t.Fatalf("stderr=%q missing no_governance_exclusions contract", stderr.String())
+	}
+}
+
+func TestRunRedactedAllReadonlyRejectsConfigWithNoExclusions(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://reader:pw@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("GONGMCP_TOOL_PRESET", "redacted-all-readonly")
+	t.Setenv("GONGMCP_HTTP_ADDR", "127.0.0.1:0")
+	t.Setenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB", "1")
+	t.Setenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS", "1")
+	t.Setenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS", "1")
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "/tmp/ai-governance.yaml")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(nil, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code=%d want 2 stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "cannot be used together") {
+		t.Fatalf("stderr=%q missing conflict message", stderr.String())
+	}
+}
+
+func TestRunBroadPublicRedactedAllowsNoGovernanceExclusionsWithoutConfig(t *testing.T) {
+	t.Setenv("GONG_DATABASE_URL", "postgres://reader:pw@127.0.0.1:1/gongctl?sslmode=disable")
+	t.Setenv("GONGMCP_TOOL_PRESET", "broad-public-redacted")
+	t.Setenv("GONGMCP_HTTP_ADDR", "127.0.0.1:0")
+	t.Setenv("GONGMCP_POSTGRES_REDACTED_SERVING_DB", "1")
+	t.Setenv("GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS", "1")
+	t.Setenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS", "1")
+	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run(nil, bytes.NewReader(nil), &stdout, &stderr)
+	if code == 2 && strings.Contains(stderr.String(), "requires --ai-governance-config") {
+		t.Fatalf("stderr still requires governance config: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "no_governance_exclusions=1") {
+		t.Fatalf("stderr=%q missing no_governance_exclusions contract", stderr.String())
+	}
+}
+
+func TestValidateNoGovernanceExclusionsPostgresPolicy(t *testing.T) {
+	ctx := context.Background()
+	fingerprint := "data-fingerprint"
+	freshState := &postgres.GovernancePolicyState{
+		ConfigSHA256:    governance.NoExclusionsConfigFingerprint(),
+		DataFingerprint: fingerprint,
+	}
+	tests := []struct {
+		name     string
+		store    fakeNoGovernanceExclusionsPolicyReader
+		wantErr  string
+		wantCode int
+	}{
+		{
+			name: "fresh no exclusions policy",
+			store: fakeNoGovernanceExclusionsPolicyReader{
+				state:       freshState,
+				fingerprint: fingerprint,
+			},
+		},
+		{
+			name: "missing no exclusions policy",
+			store: fakeNoGovernanceExclusionsPolicyReader{
+				loadErr: errors.New("not prepared"),
+			},
+			wantErr:  "load Postgres no-governance-exclusions policy: failed",
+			wantCode: 2,
+		},
+		{
+			name: "fingerprint snapshot failure",
+			store: fakeNoGovernanceExclusionsPolicyReader{
+				state:          freshState,
+				fingerprintErr: errors.New("snapshot failed"),
+			},
+			wantErr:  "snapshot Postgres no-governance-exclusions state: failed",
+			wantCode: 1,
+		},
+		{
+			name: "stale no exclusions policy",
+			store: fakeNoGovernanceExclusionsPolicyReader{
+				state:       freshState,
+				fingerprint: "new-data-fingerprint",
+			},
+			wantErr:  "Postgres no-governance-exclusions policy is stale",
+			wantCode: 2,
+		},
+		{
+			name: "suppressed calls are incompatible",
+			store: fakeNoGovernanceExclusionsPolicyReader{
+				state: &postgres.GovernancePolicyState{
+					ConfigSHA256:        governance.NoExclusionsConfigFingerprint(),
+					DataFingerprint:     fingerprint,
+					SuppressedCallCount: 1,
+					SuppressedCallIDs:   []string{"call-1"},
+				},
+				fingerprint: fingerprint,
+			},
+			wantErr:  "contains suppressed calls",
+			wantCode: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateNoGovernanceExclusionsPostgresPolicy(ctx, tt.store)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateNoGovernanceExclusionsPostgresPolicy returned error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error=%q missing %q", err.Error(), tt.wantErr)
+			}
+			validationErr, ok := err.(startupValidationError)
+			if !ok {
+				t.Fatalf("error type=%T want startupValidationError", err)
+			}
+			if validationErr.Code() != tt.wantCode {
+				t.Fatalf("code=%d want %d", validationErr.Code(), tt.wantCode)
+			}
+		})
 	}
 }
 

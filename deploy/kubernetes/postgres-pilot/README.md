@@ -54,6 +54,10 @@ kubectl -n gongctl-postgres-pilot create secret generic gongctl-postgres-pilot-s
   --from-file=ai-governance.yaml=/secure/path/ai-governance.yaml
 ```
 
+When no customer exclusions exist, use `deploy postgres-refresh
+--no-governance-exclusions` and `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` instead of
+mounting an `ai-governance.yaml`.
+
 For hosted Claude/ChatGPT deployments, first choose the path in
 [`docs/remote-mcp-deployment-requirements.md`](../../../docs/remote-mcp-deployment-requirements.md).
 The starter defaults to direct OIDC-style issuer/client settings. If the

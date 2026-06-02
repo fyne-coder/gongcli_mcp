@@ -74,6 +74,9 @@ spec:
                 secretKeyRef:
                   name: gongctl-postgres-pilot-secrets
                   key: GONGMCP_ANALYST_READER_URL
+            # When no customer exclusions exist, use deploy/gongmcp
+            # --no-governance-exclusions and GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1
+            # instead of mounting ai-governance.yaml.
             - name: GONGCTL_AI_GOVERNANCE_CONFIG
               value: /run/secrets/ai-governance.yaml
             - name: GONGMCP_AI_GOVERNANCE_CONFIG
