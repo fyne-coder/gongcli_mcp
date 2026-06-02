@@ -238,12 +238,12 @@ func (a *app) governanceRefreshServingDB(ctx context.Context, args []string) err
 	sourceURL := fs.String("source", "", "Postgres source (operator) database URL, e.g. $GONGCTL_SOURCE_DATABASE_URL")
 	targetURL := fs.String("target", "", "Postgres redacted MCP serving database URL, e.g. $GONGCTL_MCP_DATABASE_URL")
 	configPath := fs.String("config", "", "AI governance YAML config path")
+	noGovernanceExclusions := fs.Bool("no-governance-exclusions", false, "declare that no customer governance exclusions exist; do not pass --config")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
 	source := refreshServingDBInput(*sourceURL, "GONGCTL_SOURCE_DATABASE_URL")
 	target := refreshServingDBInput(*targetURL, "GONGCTL_MCP_DATABASE_URL")
-	config := refreshServingDBInput(*configPath, "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG")
 
 	if source == "" {
 		return fmt.Errorf("--source database URL is required; pass --source or set GONGCTL_SOURCE_DATABASE_URL")
@@ -251,27 +251,81 @@ func (a *app) governanceRefreshServingDB(ctx context.Context, args []string) err
 	if target == "" {
 		return fmt.Errorf("--target database URL is required; pass --target or set GONGCTL_MCP_DATABASE_URL")
 	}
-	if config == "" {
-		return fmt.Errorf("--config is required; pass --config or set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG")
-	}
 
-	cfg, err := governance.LoadFile(config)
+	contract, err := resolveGovernanceServingContract(*configPath, *noGovernanceExclusions)
 	if err != nil {
 		return err
 	}
 
 	result, err := refreshServingDB(ctx, postgres.RefreshServingDBOptions{
-		SourceURL: source,
-		TargetURL: target,
-		Config:    cfg,
+		SourceURL:              source,
+		TargetURL:              target,
+		Config:                 contract.Config,
+		NoGovernanceExclusions: contract.NoGovernanceExclusions,
 	})
 	if err != nil {
 		return sanitizeRefreshServingDBError(err)
 	}
 	return writeJSONValue(a.out, governanceRefreshServingDBResponse{
-		Result:               result,
-		SensitiveDataWarning: cacheSensitiveDataWarning,
+		Result:                 result,
+		NoGovernanceExclusions: result.NoGovernanceExclusions,
+		SensitiveDataWarning:   cacheSensitiveDataWarning,
 	})
+}
+
+type governanceServingContract struct {
+	Config                 *governance.Config
+	NoGovernanceExclusions bool
+}
+
+func resolveGovernanceServingContract(configPath string, noExclusionsFlag bool) (governanceServingContract, error) {
+	config := refreshServingDBInput(configPath, "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG")
+	noExclusions := noExclusionsFlag || governanceNoExclusionsFromEnv()
+	if noExclusions && config != "" {
+		return governanceServingContract{}, fmt.Errorf("--config and --no-governance-exclusions cannot be used together")
+	}
+	if !noExclusions && config == "" {
+		return governanceServingContract{}, fmt.Errorf("--config is required; pass --config or set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG, or pass --no-governance-exclusions when no customer exclusions exist")
+	}
+	if noExclusions {
+		return governanceServingContract{NoGovernanceExclusions: true}, nil
+	}
+	cfg, err := governance.LoadFile(config)
+	if err != nil {
+		return governanceServingContract{}, err
+	}
+	return governanceServingContract{Config: cfg}, nil
+}
+
+func isGovernanceConfigLoadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "read governance config") ||
+		strings.Contains(msg, "decode governance config") ||
+		strings.Contains(msg, "governance config version") ||
+		strings.Contains(msg, "governance config must contain") ||
+		strings.Contains(msg, "unknown governance list") ||
+		strings.Contains(msg, "name is required")
+}
+
+func governanceNoExclusionsFromEnv() bool {
+	for _, name := range []string{"GONGCTL_NO_GOVERNANCE_EXCLUSIONS", "GONGMCP_NO_GOVERNANCE_EXCLUSIONS"} {
+		if governanceTruthyEnv(os.Getenv(name)) {
+			return true
+		}
+	}
+	return false
+}
+
+func governanceTruthyEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func refreshServingDBInput(flagValue string, envNames ...string) string {
@@ -304,8 +358,9 @@ func sanitizeRefreshServingDBError(err error) error {
 }
 
 type governanceRefreshServingDBResponse struct {
-	Result               *postgres.ServingDBRefreshResult `json:"result"`
-	SensitiveDataWarning string                           `json:"sensitive_data_warning"`
+	Result                 *postgres.ServingDBRefreshResult `json:"result"`
+	NoGovernanceExclusions bool                             `json:"no_governance_exclusions,omitempty"`
+	SensitiveDataWarning   string                           `json:"sensitive_data_warning"`
 }
 
 type governanceExportFilteredDBResponse struct {

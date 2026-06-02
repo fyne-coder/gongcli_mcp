@@ -17,9 +17,10 @@ import (
 // serving cache. Config carries the private governance YAML used to determine
 // which call IDs must not appear on the target.
 type RefreshServingDBOptions struct {
-	SourceURL string
-	TargetURL string
-	Config    *governance.Config
+	SourceURL              string
+	TargetURL              string
+	Config                 *governance.Config
+	NoGovernanceExclusions bool
 }
 
 // ServingDBRefreshResult is the sanitized output of a serving-DB refresh.
@@ -56,6 +57,7 @@ type ServingDBRefreshResult struct {
 	RemovedScorecardActivity int64    `json:"removed_scorecard_activity"`
 	RemovedAIHighlights      int64    `json:"removed_ai_highlights"`
 	SuppressedCallCount      int      `json:"suppressed_call_count"`
+	NoGovernanceExclusions   bool     `json:"no_governance_exclusions,omitempty"`
 	PolicyConfigSHA256       string   `json:"policy_config_sha256"`
 	SourceDataFingerprint    string   `json:"source_data_fingerprint"`
 	TargetDataFingerprint    string   `json:"target_data_fingerprint"`
@@ -130,8 +132,15 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 	if err := validateRefreshServingDBURLs(opts.SourceURL, opts.TargetURL); err != nil {
 		return nil, err
 	}
-	if opts.Config == nil {
-		return nil, errors.New("governance config is required")
+	cfg := opts.Config
+	if opts.NoGovernanceExclusions {
+		if cfg != nil {
+			return nil, errors.New("governance config cannot be combined with no-governance-exclusions")
+		}
+		cfg = governance.NoExclusionsConfig()
+	}
+	if cfg == nil {
+		return nil, errors.New("governance config is required unless no-governance-exclusions is set")
 	}
 
 	source, err := Open(ctx, opts.SourceURL)
@@ -140,7 +149,7 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 	}
 	defer source.Close()
 
-	audit, err := governance.BuildAudit(ctx, source, opts.Config)
+	audit, err := governance.BuildAudit(ctx, source, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("build governance audit on source: %w", err)
 	}
@@ -175,8 +184,11 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		return nil, err
 	}
 
-	configSHA := opts.Config.Fingerprint()
-	if _, _, err := target.BuildAndSaveGovernancePolicy(ctx, configSHA, opts.Config); err != nil {
+	configSHA := cfg.Fingerprint()
+	if opts.NoGovernanceExclusions {
+		configSHA = governance.NoExclusionsConfigFingerprint()
+	}
+	if _, _, err := target.BuildAndSaveGovernancePolicy(ctx, configSHA, cfg); err != nil {
 		return nil, fmt.Errorf("apply governance policy on target: %w", err)
 	}
 
@@ -215,6 +227,7 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		RemovedScorecardActivity: counts.redactedScorecardActivity,
 		RemovedAIHighlights:      counts.redactedAIHighlights,
 		SuppressedCallCount:      audit.SuppressedCallCount,
+		NoGovernanceExclusions:   opts.NoGovernanceExclusions,
 		PolicyConfigSHA256:       configSHA,
 		SourceDataFingerprint:    sourceFingerprint,
 		TargetDataFingerprint:    targetFingerprint,

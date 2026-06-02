@@ -12,7 +12,6 @@ import (
 	"time"
 
 	postgresdeploy "github.com/fyne-coder/gongcli_mcp/internal/deploy/postgres"
-	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 )
@@ -45,6 +44,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 	sourceURL := fs.String("source", "", "Postgres source/operator database URL, e.g. $GONGCTL_SOURCE_DATABASE_URL")
 	targetURL := fs.String("target", "", "Postgres redacted serving database URL, e.g. $GONGCTL_MCP_DATABASE_URL")
 	configPath := fs.String("config", "", "AI governance YAML config path")
+	noGovernanceExclusions := fs.Bool("no-governance-exclusions", false, "declare that no customer governance exclusions exist; do not pass --config")
 	preset := fs.String("preset", "", "MCP tool preset for reader grant validation")
 	roleName := fs.String("role", "", "existing Postgres reader role name")
 	databaseName := fs.String("database", "", "Postgres database name for reader grants")
@@ -59,7 +59,6 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 
 	source := refreshServingDBInput(*sourceURL, "GONGCTL_SOURCE_DATABASE_URL")
 	target := refreshServingDBInput(*targetURL, "GONGCTL_MCP_DATABASE_URL")
-	config := refreshServingDBInput(*configPath, "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG")
 	selectedPreset := deployInputDefault(*preset, "business-workbench", "GONGMCP_TOOL_PRESET")
 	role := deployInputDefault(*roleName, "gongmcp_business_workbench_reader", "GONGMCP_READER_ROLE")
 	database := deployInputDefault(*databaseName, "gongctl_mcp", "GONGMCP_DATABASE_NAME", "GONGCTL_MCP_DB")
@@ -70,25 +69,26 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 	if target == "" {
 		return errors.New("deploy postgres-refresh failed before connect: --target is required or set GONGCTL_MCP_DATABASE_URL")
 	}
-	if config == "" {
-		return errors.New("deploy postgres-refresh failed before connect: --config is required or set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG")
+	contract, err := resolveGovernanceServingContract(*configPath, *noGovernanceExclusions)
+	if err != nil {
+		if isGovernanceConfigLoadError(err) {
+			return fmt.Errorf("deploy postgres-refresh failed before connect: governance config could not be loaded")
+		}
+		return fmt.Errorf("deploy postgres-refresh failed before connect: %w", err)
 	}
 	allowlist, err := mcp.ExpandToolPresetReaderGrantTools(selectedPreset)
 	if err != nil {
 		return fmt.Errorf("deploy postgres-refresh failed before connect: %w", err)
 	}
-	cfg, err := governance.LoadFile(config)
-	if err != nil {
-		return fmt.Errorf("deploy postgres-refresh failed before connect: governance config could not be loaded")
-	}
 
 	response := deployPostgresRefreshResponse{
-		Backend:              "postgres",
-		Preset:               selectedPreset,
-		Role:                 role,
-		Database:             database,
-		SensitiveDataWarning: deploySensitiveDataWarning,
-		Steps:                []deployStep{},
+		Backend:                "postgres",
+		Preset:                 selectedPreset,
+		Role:                   role,
+		Database:               database,
+		NoGovernanceExclusions: contract.NoGovernanceExclusions,
+		SensitiveDataWarning:   deploySensitiveDataWarning,
+		Steps:                  []deployStep{},
 	}
 
 	if *skipReadModel {
@@ -103,9 +103,10 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 	}
 
 	result, err := deployRefreshServingDB(ctx, postgres.RefreshServingDBOptions{
-		SourceURL: source,
-		TargetURL: target,
-		Config:    cfg,
+		SourceURL:              source,
+		TargetURL:              target,
+		Config:                 contract.Config,
+		NoGovernanceExclusions: contract.NoGovernanceExclusions,
 	})
 	if err != nil {
 		return deployPostgresRefreshFailure("serving_refresh", "serving database refresh failed", sanitizeRefreshServingDBError(err))
@@ -299,15 +300,16 @@ func presetCatalogCheck(preset string) (postgresdeploy.Check, error) {
 }
 
 type deployPostgresRefreshResponse struct {
-	Backend              string                           `json:"backend"`
-	Preset               string                           `json:"preset"`
-	Role                 string                           `json:"role"`
-	Database             string                           `json:"database"`
-	Steps                []deployStep                     `json:"steps"`
-	ReadModel            *postgres.ReadModelStatus        `json:"read_model,omitempty"`
-	Result               *postgres.ServingDBRefreshResult `json:"result,omitempty"`
-	GrantSQLSHA256       string                           `json:"grant_sql_sha256,omitempty"`
-	SensitiveDataWarning string                           `json:"sensitive_data_warning"`
+	Backend                string                           `json:"backend"`
+	Preset                 string                           `json:"preset"`
+	Role                   string                           `json:"role"`
+	Database               string                           `json:"database"`
+	NoGovernanceExclusions bool                             `json:"no_governance_exclusions,omitempty"`
+	Steps                  []deployStep                     `json:"steps"`
+	ReadModel              *postgres.ReadModelStatus        `json:"read_model,omitempty"`
+	Result                 *postgres.ServingDBRefreshResult `json:"result,omitempty"`
+	GrantSQLSHA256         string                           `json:"grant_sql_sha256,omitempty"`
+	SensitiveDataWarning   string                           `json:"sensitive_data_warning"`
 }
 
 type deployStep struct {

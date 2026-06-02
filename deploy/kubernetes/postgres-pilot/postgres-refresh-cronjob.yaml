@@ -26,6 +26,8 @@ spec:
               command:
                 - /usr/local/bin/gongctl
               args:
+                # When no customer exclusions exist, add --no-governance-exclusions
+                # and omit GONGCTL_AI_GOVERNANCE_CONFIG plus the governance volume.
                 - deploy
                 - postgres-refresh
                 - --preset

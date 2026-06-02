@@ -17,7 +17,7 @@ variable "name" {
 variable "gongmcp_image" {
   type        = string
   description = "Digest-pinned MCP-only image."
-  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.3"
+  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.5.4"
 }
 
 variable "vpc_id" {

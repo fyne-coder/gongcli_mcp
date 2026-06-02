@@ -30,6 +30,7 @@ On the VM:
 sudo mkdir -p /srv/gongctl/{config,secrets,transcripts}
 sudo cp deploy/single-vm-postgres/single-vm.env.example /srv/gongctl/single-vm.env
 sudo install -m 600 /dev/null /srv/gongctl/secrets/gongmcp_token
+# Only when customer exclusions exist:
 sudo install -m 600 /dev/null /srv/gongctl/secrets/ai-governance.yaml
 ```
 
@@ -37,6 +38,13 @@ Edit `/srv/gongctl/single-vm.env` and the secret files with customer-approved
 values. Keep the env file and secret files out of Git and out of shared support
 bundles. Replace the `vX.Y.Z` image placeholders with a pinned release tag or
 digest before running `docker compose pull` or starting services.
+
+When the customer has no customer exclusions, omit
+`/srv/gongctl/secrets/ai-governance.yaml`, run `gongctl deploy postgres-refresh
+--no-governance-exclusions`, and set `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` for
+the MCP runtime. In `/srv/gongctl/single-vm.env`, leave `AI_GOVERNANCE_CONFIG`
+unset and set both `GONGCTL_NO_GOVERNANCE_EXCLUSIONS=1` and
+`GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1`.
 
 Render the Compose config before starting containers:
 
@@ -109,9 +117,10 @@ docker compose \
 ```
 
 `gongmcp` receives only the scoped reader URL and bearer token. It does not
-receive Gong API credentials or the source DB URL. It does receive the private
-AI governance YAML read-only because redacted Postgres serving mode requires
-the same restricted-name policy used to build the serving DB.
+receive Gong API credentials or the source DB URL. It receives the private AI
+governance YAML read-only when customer exclusions exist; when no exclusions
+exist, use `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` and `gongctl deploy
+postgres-refresh --no-governance-exclusions` instead.
 
 Postgres runs `init/01-bootstrap.sh` only when the named Docker volume is first
 created. If you change database names or the scoped reader role after first

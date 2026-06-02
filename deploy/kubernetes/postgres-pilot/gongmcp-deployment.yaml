@@ -41,6 +41,8 @@ spec:
                 secretKeyRef:
                   name: gongctl-postgres-pilot-secrets
                   key: GONGMCP_BEARER_TOKEN
+            # Omit GONGMCP_AI_GOVERNANCE_CONFIG and the governance volume when no
+            # customer exclusions exist; set GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1 instead.
             - name: GONGMCP_AI_GOVERNANCE_CONFIG
               value: /run/secrets/ai-governance.yaml
           ports:

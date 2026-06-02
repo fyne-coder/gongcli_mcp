@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-06-02
+
+- Added an explicit no-governance-exclusions contract for Postgres MCP serving
+  refreshes. Operators can now run `gongctl deploy postgres-refresh` or
+  `gongctl governance refresh-serving-db` with `--no-governance-exclusions`
+  instead of mounting an empty AI governance YAML when no customer exclusions
+  exist.
+- Added matching `gongmcp --no-governance-exclusions` /
+  `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` runtime startup support. Redacted
+  serving mode now verifies that the serving DB was refreshed with the
+  no-exclusions policy fingerprint before startup.
+- Updated the Postgres deployment docs, Kubernetes starter, and single-VM
+  Compose starter so no-exclusions deployments omit `ai-governance.yaml` and
+  use the explicit flag/env contract.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.5.4`.
+
 ## 0.5.3 - 2026-05-31
 
 - Removed internal remote-MCP debug artifacts from the public docs surface

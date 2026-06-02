@@ -83,6 +83,9 @@ gongctl deploy postgres-refresh \
   --database DB
 ```
 
+When no customer exclusions exist, use `--no-governance-exclusions` instead of
+an `ai-governance.yaml`.
+
 ## 4. Review The Customer Profile
 
 Treat `gongctl profile discover` as a starter, not a deployable customer

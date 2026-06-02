@@ -203,6 +203,25 @@ gongctl governance refresh-serving-db \
   --config /run/secrets/ai-governance.yaml
 ```
 
+When no customer exclusions exist, use the explicit no-exclusions operator
+contract instead of an `ai-governance.yaml`. Do not mount an empty YAML with
+`customers: []`; that file is rejected by `gongctl` validation.
+
+```bash
+gongctl governance refresh-serving-db \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --no-governance-exclusions
+
+gongctl deploy postgres-refresh --no-governance-exclusions
+```
+
+Equivalent environment variables for automation are
+`GONGCTL_NO_GOVERNANCE_EXCLUSIONS=1` and `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1`.
+Sanitized refresh/deploy output records `no_governance_exclusions: true` and
+`suppressed_call_count: 0`. Passing both a governance config path and the
+no-exclusions flag is rejected.
+
 The serving refresh rebuilds the target database in place: it determines suppressed
 call IDs from the source via the existing governance audit logic, truncates the
 target call-scoped tables, copies allowed `calls`, `users`, `transcripts`,
@@ -230,6 +249,11 @@ enabled, pass the same private governance config with
 database should already be physically redacted, but the runtime config lets MCP
 deny configured restricted names and aliases before query execution so row
 counts or broad cohort metadata cannot become a membership-inference signal.
+
+When no customer exclusions exist, start redacted-serving `gongmcp` with
+`--no-governance-exclusions` or `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1` instead of
+a governance YAML path. That contract is fail-closed by default: missing both
+config and the explicit no-exclusions flag still fails startup.
 
 The serving refresh intentionally skips several global metadata tables on the
 target. The skipped list is included in the sanitized refresh output so a

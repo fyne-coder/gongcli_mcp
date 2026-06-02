@@ -71,6 +71,19 @@ lists:
 	}
 }
 
+func TestNoExclusionsConfigHasStableFingerprint(t *testing.T) {
+	cfg := NoExclusionsConfig()
+	if len(cfg.Targets()) != 0 {
+		t.Fatalf("targets=%d want 0", len(cfg.Targets()))
+	}
+	if got := cfg.Fingerprint(); got != NoExclusionsConfigSHA256 {
+		t.Fatalf("fingerprint=%q want %q", got, NoExclusionsConfigSHA256)
+	}
+	if got := NoExclusionsConfigFingerprint(); got != NoExclusionsConfigSHA256 {
+		t.Fatalf("NoExclusionsConfigFingerprint=%q want %q", got, NoExclusionsConfigSHA256)
+	}
+}
+
 func TestParseYAMLRejectsUnknownListAndEmptyTargets(t *testing.T) {
 	if _, err := ParseYAML([]byte(`
 version: 1

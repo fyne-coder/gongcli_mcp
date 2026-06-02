@@ -14,6 +14,89 @@ import (
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 )
 
+func TestDeployPostgresRefreshNoExclusionsWorksWithoutConfig(t *testing.T) {
+	clearDeployEnv(t)
+	sourceURL := "postgres://operator:source-secret@source.internal:5432/gongctl_source"
+	targetURL := "postgres://operator:target-secret@target.internal:5432/gongctl_mcp"
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", sourceURL)
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", targetURL)
+
+	var captured postgres.RefreshServingDBOptions
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			return &postgres.ReadModelStatus{ModelName: "call_facts", Ready: true}, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			captured = opts
+			return &postgres.ServingDBRefreshResult{
+				Backend:                "postgres",
+				SuppressedCallCount:    0,
+				NoGovernanceExclusions: true,
+			}, nil
+		},
+		func(ctx context.Context, databaseURL string, params postgres.ScopedReaderGrantSQLParams) (string, error) {
+			return "-- grant sql", nil
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"deploy", "postgres-refresh", "--no-governance-exclusions"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(deploy postgres-refresh --no-governance-exclusions) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !captured.NoGovernanceExclusions || captured.Config != nil {
+		t.Fatalf("unexpected refresh opts: %+v", captured)
+	}
+	if !strings.Contains(stdout.String(), `"no_governance_exclusions": true`) || !strings.Contains(stdout.String(), `"suppressed_call_count": 0`) {
+		t.Fatalf("expected no-exclusions deploy JSON; got stdout=%q", stdout.String())
+	}
+}
+
+func TestDeployPostgresRefreshRejectsConfigWithNoExclusions(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"deploy", "postgres-refresh",
+		"--config", configPath,
+		"--no-governance-exclusions",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected conflict failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String()+stderr.String(), "cannot be used together") {
+		t.Fatalf("expected conflict message; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestDeployPostgresRefreshSanitizesConfigLoadFailure(t *testing.T) {
+	clearDeployEnv(t)
+	configPath := filepath.Join(t.TempDir(), "missing-ai-governance.yaml")
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"deploy", "postgres-refresh"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected config load failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "governance config could not be loaded") {
+		t.Fatalf("expected sanitized config load message; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if strings.Contains(combined, configPath) || strings.Contains(combined, "source-secret") || strings.Contains(combined, "target-secret") {
+		t.Fatalf("config load failure leaked sensitive values: %s", combined)
+	}
+}
+
 func TestDeployPostgresRefreshUsesEnvDefaultsAndOmitsURLs(t *testing.T) {
 	clearDeployEnv(t)
 	dir := t.TempDir()
@@ -184,6 +267,8 @@ func clearDeployEnv(t *testing.T) {
 	t.Setenv("GONGCTL_MCP_DATABASE_URL", "")
 	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", "")
 	t.Setenv("GONGMCP_AI_GOVERNANCE_CONFIG", "")
+	t.Setenv("GONGCTL_NO_GOVERNANCE_EXCLUSIONS", "")
+	t.Setenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS", "")
 	t.Setenv("GONGMCP_TOOL_PRESET", "")
 	t.Setenv("GONGMCP_READER_ROLE", "")
 	t.Setenv("GONGMCP_DATABASE_NAME", "")
