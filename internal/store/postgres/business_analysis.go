@@ -497,6 +497,10 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	if err != nil {
 		return nil, err
 	}
+	dimensionFiltersJSON, err := postgresBusinessAnalysisDimensionFiltersArg(filter)
+	if err != nil {
+		return nil, err
+	}
 	limit := boundedLimit(firstPositivePostgres(params.Limit, filter.Limit), defaultBusinessAnalysisLimit, maxBusinessAnalysisLimit)
 	queryText := strings.TrimSpace(firstNonEmptyPostgres(params.Query, filter.Query))
 	if err := validatePostgresBusinessAnalysisSearchText(queryText, "query"); err != nil {
@@ -508,7 +512,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 	var rows *sql.Rows
 	if params.BroadDiscovery {
 		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
-  FROM `+s.postgresBusinessAnalysisThemeSeedFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+  FROM `+s.postgresBusinessAnalysisThemeSeedFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 			filter.TitleQuery,
 			filter.Query,
 			filter.FromDate,
@@ -527,10 +531,11 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 			excludeBucketsJSON,
 			filter.ExcludeLikelyVoicemail,
 			limit,
+			dimensionFiltersJSON,
 		)
 	} else {
 		rows, err = s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, lifecycle_bucket, account_industry, account_name, opportunity_name, opportunity_stage, opportunity_type, opportunity_probability, opportunity_close_date, participant_status, person_title_status, person_title_source, segment_index, start_ms, end_ms, snippet, context_excerpt, speaker_role, speaker_role_status
-  FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+  FROM `+s.postgresBusinessAnalysisEvidenceFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 			queryText,
 			filter.TitleQuery,
 			filter.Query,
@@ -550,6 +555,7 @@ func (s *Store) SearchBusinessAnalysisEvidence(ctx context.Context, params sqlit
 			excludeBucketsJSON,
 			filter.ExcludeLikelyVoicemail,
 			limit,
+			dimensionFiltersJSON,
 		)
 	}
 	if err != nil {
@@ -576,6 +582,10 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 	if err != nil {
 		return nil, err
 	}
+	dimensionFiltersJSON, err := postgresBusinessAnalysisDimensionFiltersArg(filter)
+	if err != nil {
+		return nil, err
+	}
 	dimension, err := postgresBusinessAnalysisDimension(params.Dimension)
 	if err != nil {
 		return nil, err
@@ -586,7 +596,7 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 	}
 	limit := boundedLimit(firstPositivePostgres(params.Limit, filter.Limit), defaultBusinessAnalysisLimit, maxBusinessAnalysisLimit)
 	rows, err := s.db.QueryContext(ctx, `SELECT dimension, value, call_count, transcript_count, missing_transcript_count, opportunity_call_count, account_call_count, external_call_count, latest_call_at
-  FROM gongmcp_business_analysis_dimension($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+  FROM gongmcp_business_analysis_dimension($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		dimension,
 		themeQuery,
 		filter.TitleQuery,
@@ -607,6 +617,7 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 		excludeBucketsJSON,
 		filter.ExcludeLikelyVoicemail,
 		limit,
+		dimensionFiltersJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -629,8 +640,12 @@ func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sql
 	if err != nil {
 		return nil, err
 	}
+	dimensionFiltersJSON, err := postgresBusinessAnalysisDimensionFiltersArg(filter)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT call_id, title, started_at, call_date, call_month, duration_seconds, lifecycle_bucket, likely_voicemail_or_ivr, scope, system, direction, transcript_status, account_industry, opportunity_stage, opportunity_type, forecast_category, opportunity_count, account_count, participant_status, person_title_status, person_title_source
-  FROM `+s.postgresBusinessAnalysisCallsFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+  FROM `+s.postgresBusinessAnalysisCallsFunction()+`($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
 		filter.TitleQuery,
 		filter.Query,
 		filter.FromDate,
@@ -649,6 +664,7 @@ func (s *Store) postgresBusinessAnalysisCallRows(ctx context.Context, filter sql
 		excludeBucketsJSON,
 		filter.ExcludeLikelyVoicemail,
 		limit,
+		dimensionFiltersJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -721,8 +737,12 @@ func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqli
 	if err != nil {
 		return sqlite.BusinessAnalysisCohortSummary{}, err
 	}
+	dimensionFiltersJSON, err := postgresBusinessAnalysisDimensionFiltersArg(filter)
+	if err != nil {
+		return sqlite.BusinessAnalysisCohortSummary{}, err
+	}
 	if err := s.db.QueryRowContext(ctx, `SELECT call_count, transcript_count, missing_transcript_count, account_industry_count, opportunity_stage_count, opportunity_call_count, account_call_count, external_call_count, participant_call_count, participant_title_call_count, earliest_call_at, latest_call_at, total_duration_seconds, average_duration_seconds
-  FROM gongmcp_business_analysis_summary($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+  FROM gongmcp_business_analysis_summary($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		filter.TitleQuery,
 		filter.Query,
 		filter.FromDate,
@@ -740,6 +760,7 @@ func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqli
 		filter.ParticipantTitleQuery,
 		excludeBucketsJSON,
 		filter.ExcludeLikelyVoicemail,
+		dimensionFiltersJSON,
 	).Scan(
 		&summary.CallCount,
 		&summary.TranscriptCount,
@@ -768,6 +789,7 @@ func (s *Store) postgresBusinessAnalysisSummary(ctx context.Context, filter sqli
 }
 
 func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAnalysisFilter) (sqlite.BusinessAnalysisFilter, error) {
+	var err error
 	filter.TitleQuery = strings.ToLower(strings.TrimSpace(filter.TitleQuery))
 	filter.Query = strings.TrimSpace(filter.Query)
 	filter.FromDate = strings.TrimSpace(filter.FromDate)
@@ -785,6 +807,9 @@ func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAn
 	filter.CRMObjectType = strings.TrimSpace(filter.CRMObjectType)
 	filter.CRMObjectID = strings.TrimSpace(filter.CRMObjectID)
 	filter.ParticipantTitleQuery = strings.TrimSpace(filter.ParticipantTitleQuery)
+	if filter.DimensionFilters, err = sqlite.NormalizeBusinessAnalysisDimensionFilters(filter.DimensionFilters); err != nil {
+		return sqlite.BusinessAnalysisFilter{}, err
+	}
 	if filter.Quarter != "" {
 		canonical, from, to, err := normalizePostgresBusinessAnalysisQuarter(filter.Quarter)
 		if err != nil {
@@ -798,7 +823,6 @@ func (s *Store) normalizePostgresBusinessAnalysisFilter(filter sqlite.BusinessAn
 			filter.ToDate = to
 		}
 	}
-	var err error
 	if filter.FromDate, err = normalizePostgresDateFilter(filter.FromDate, "from_date"); err != nil {
 		return sqlite.BusinessAnalysisFilter{}, err
 	}
@@ -865,6 +889,17 @@ func postgresBusinessAnalysisExcludeBucketsArg(filter sqlite.BusinessAnalysisFil
 		return "[]", nil
 	}
 	encoded, err := json.Marshal(filter.ExcludeLifecycleBuckets)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func postgresBusinessAnalysisDimensionFiltersArg(filter sqlite.BusinessAnalysisFilter) (string, error) {
+	if len(filter.DimensionFilters) == 0 {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal(filter.DimensionFilters)
 	if err != nil {
 		return "", err
 	}

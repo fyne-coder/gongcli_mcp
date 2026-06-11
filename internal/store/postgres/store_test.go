@@ -1437,11 +1437,64 @@ func TestPostgresBusinessAnalysisFunctionsApplyVoicemailExclusionsInSQL(t *testi
 		"exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean",
 		"jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb)",
 		"NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr",
-		"gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean)",
-		"gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, text)",
+		"gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)",
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Fatalf("postgres business-analysis SQL missing aggregate exclusion contract %q", want)
+		}
+	}
+}
+
+func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.T) {
+	t.Parallel()
+
+	sqlText := postgresBusinessAnalysisFunctionsSQL
+	for _, want := range []string{
+		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text",
+		"jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb)",
+		"WHEN 'account_revenue_range' THEN account_revenue_range_arg",
+		"WHEN 'quarter' THEN CASE",
+		"COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator",
+		"jsonb_array_elements_text(values_json)",
+		"jsonb_array_length(values_json) = 0",
+		"operator = 'equals' AND jsonb_array_length(values_json) <> 1",
+		"WHERE left(values.value, 160) = row_value",
+		"operator NOT IN ('equals', 'in')",
+		"dimension_filters_json text DEFAULT '[]'",
+		"COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date)",
+		"REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text) FROM PUBLIC",
+	} {
+		if !strings.Contains(sqlText, want) {
+			t.Fatalf("postgres business-analysis SQL missing dimension-filter contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"WHEN 'account_name'",
+		"WHEN 'crm_object_id'",
+		"WHEN 'loss_reason'",
+		"WHEN 'persona'",
+		"WHEN 'won_lost'",
+		"GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension_filters_match",
+	} {
+		helperSQL := sqlText
+		if idx := strings.Index(helperSQL, "CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls("); idx > 0 {
+			helperSQL = helperSQL[:idx]
+		}
+		if strings.Contains(helperSQL, forbidden) {
+			t.Fatalf("postgres dimension filters should not expose high-risk/computed dimension %q", forbidden)
+		}
+	}
+	latestMigration := migrations[len(migrations)-1]
+	for _, want := range []string{
+		"Business-workbench known-dimension filters",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"dimension_filters_json text DEFAULT '[]'",
+	} {
+		if !strings.Contains(latestMigration, want) {
+			t.Fatalf("latest migration missing dimension-filter rollout contract %q", want)
 		}
 	}
 }
@@ -1668,6 +1721,48 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	}
 	if got, want := businessAnalysisCallIDs(pgCalls.Rows), businessAnalysisCallIDs(sqliteCalls.Rows); !reflect.DeepEqual(got, want) {
 		t.Fatalf("postgres business call ids=%v want sqlite %v", got, want)
+	}
+	revenueFilter := sqlite.BusinessAnalysisFilter{
+		Quarter: "2026-Q1",
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "account_revenue_range", Operator: "in", Values: []string{"C: MM", "D: ENT"}},
+		},
+		Limit: 10,
+	}
+	pgRevenueCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: revenueFilter, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SearchBusinessAnalysisCalls dimension_filters revenue: %v", err)
+	}
+	sqliteRevenueCalls, err := sqliteStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: revenueFilter, Limit: 10})
+	if err != nil {
+		t.Fatalf("sqlite SearchBusinessAnalysisCalls dimension_filters revenue: %v", err)
+	}
+	if pgRevenueCalls.Summary.CallCount != sqliteRevenueCalls.Summary.CallCount || pgRevenueCalls.Summary.CallCount != 1 {
+		t.Fatalf("postgres revenue summary=%+v want sqlite %+v with one match", pgRevenueCalls.Summary, sqliteRevenueCalls.Summary)
+	}
+	if got, want := businessAnalysisCallIDs(pgRevenueCalls.Rows), businessAnalysisCallIDs(sqliteRevenueCalls.Rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("postgres revenue-filter business call ids=%v want sqlite %v", got, want)
+	}
+	injectionFilter := sqlite.BusinessAnalysisFilter{
+		Quarter: "2026-Q1",
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "account_revenue_range", Operator: "equals", Values: []string{"'); DROP TABLE call_facts;--"}},
+		},
+		Limit: 10,
+	}
+	pgInjectionCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: injectionFilter, Limit: 10})
+	if err != nil {
+		t.Fatalf("postgres SearchBusinessAnalysisCalls injection-shaped dimension filter: %v", err)
+	}
+	if pgInjectionCalls.Summary.CallCount != 0 || len(pgInjectionCalls.Rows) != 0 {
+		t.Fatalf("postgres injection-shaped dimension filter matched rows: summary=%+v rows=%+v", pgInjectionCalls.Summary, pgInjectionCalls.Rows)
+	}
+	var callFactsRegclass string
+	if err := pgStore.DB().QueryRowContext(ctx, `SELECT to_regclass('public.call_facts')::text`).Scan(&callFactsRegclass); err != nil {
+		t.Fatalf("check call_facts survives injection-shaped dimension filter: %v", err)
+	}
+	if callFactsRegclass != "call_facts" {
+		t.Fatalf("call_facts regclass=%q want call_facts", callFactsRegclass)
 	}
 	titleFilter := sqlite.BusinessAnalysisFilter{Quarter: "2026-Q1", ParticipantTitleQuery: "VP Operations", Limit: 10}
 	pgTitleCalls, err := pgStore.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{Filter: titleFilter, Limit: 10})
@@ -4182,6 +4277,7 @@ func seedPhase5BBusinessAnalysisFixtures(t *testing.T, ctx context.Context, stor
 					"fields": []any{
 						map[string]any{"name": "Name", "value": "Example Manufacturing"},
 						map[string]any{"name": "Industry", "value": "Manufacturing"},
+						map[string]any{"name": "Revenue_Range_f__c", "value": "D: ENT"},
 						map[string]any{"name": "Website", "value": "https://example.invalid"},
 					},
 				},

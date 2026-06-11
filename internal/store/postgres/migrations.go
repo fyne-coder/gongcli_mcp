@@ -1841,4 +1841,35 @@ CREATE TABLE IF NOT EXISTS serving_refresh_log (
 CREATE INDEX IF NOT EXISTS idx_pg_serving_refresh_log_refreshed_at
 	ON serving_refresh_log(refreshed_at DESC, id DESC);
 `,
+	// Business-workbench known-dimension filters: this must remain after
+	// previous business-analysis function migrations so already-deployed
+	// Postgres databases receive the dimension_filters_json signatures.
+	`-- Business-workbench known-dimension filters.
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

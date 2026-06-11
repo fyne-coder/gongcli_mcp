@@ -163,14 +163,14 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 		t.Fatalf("BuildScopedReaderGrantSQL returned error: %v", err)
 	}
 	for _, want := range []string{
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO "gongmcp_analyst_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO "gongmcp_analyst_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO "gongmcp_analyst_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO "gongmcp_analyst_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO "gongmcp_analyst_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_sanitized(text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_list_call_ai_highlights(text, integer) TO "gongmcp_analyst_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO "gongmcp_analyst_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO "gongmcp_analyst_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_crm_field_summary_sanitized(text, integer) TO "gongmcp_analyst_reader";`,
 	} {
 		if !strings.Contains(sql, want) {
@@ -178,9 +178,9 @@ func TestBuildScopedReaderGrantSQLAnalystUsesSanitizedBusinessAnalysisFunctions(
 		}
 	}
 	for _, forbidden := range []string{
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments(text, integer)`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer)`,
@@ -294,8 +294,8 @@ func TestBuildScopedReaderGrantSQLRedactedAllReadonlyGrantsBroadSearchSurface(t 
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_crm_field_value_search(text, text, text, integer, boolean, boolean) TO "gongmcp_redacted_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_scorecard_activity_summary(text, integer) TO "gongmcp_redacted_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO "gongmcp_redacted_reader";`,
-		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO "gongmcp_redacted_reader";`,
+		`GRANT EXECUTE ON FUNCTION public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO "gongmcp_redacted_reader";`,
 		`GRANT EXECUTE ON FUNCTION public.gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer) TO "gongmcp_redacted_reader";`,
 	} {
 		if !strings.Contains(sql, want) {

@@ -278,7 +278,14 @@ Required filter contract:
   `title_query`, `query`, `from_date`, `to_date`, `quarter`,
   `lifecycle_bucket`, `scope`, `system`, `direction`, `transcript_status`,
   `industry`, `account_query`, `opportunity_stage`, `crm_object_type`,
-  `crm_object_id`, `participant_title_query`, and `limit`.
+  `crm_object_id`, `participant_title_query`, `dimension_filters`, and `limit`.
+- `dimension_filters` may filter only reviewed known dimensions advertised by
+  `gong_discover_capabilities`, using `equals` or `in` over exact values. It is
+  not a generic CRM `field_name` / `field_value` search path. Multiple entries
+  are combined with AND semantics; `quarter` uses `YYYY-Q#`, and `call_month`
+  uses `YYYY-MM`. Dimension filters must not expose account names, CRM object
+  IDs, raw transcript text, loss-reason text, persona buckets, or won/lost
+  buckets.
 - Echo the normalized filter in every cohort response so a host can reproduce
   the same call set after process restart.
 - Treat `cohort_id` as a deterministic convenience handle, not as the only

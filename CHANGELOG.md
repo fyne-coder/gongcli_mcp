@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added governed `filter.dimension_filters` support for Business Workbench
+  business-analysis tools, starting with reviewed dimensions such as
+  `account_revenue_range`, so ICP-style segmentation can be expressed without
+  arbitrary CRM field probing.
+- Added matching SQLite/Postgres business-analysis filtering, capability
+  schema coverage, scoped-reader grant updates, and docs for the reviewed
+  dimension-filter contract.
+- Postgres upgrade note: superseded business-analysis SECURITY DEFINER
+  function signatures are dropped and recreated by the new trailing migration;
+  deploy the matching `gongctl`/`gongmcp` binaries with the migrated database.
+
 ## 0.5.4 - 2026-06-02
 
 - Added an explicit no-governance-exclusions contract for Postgres MCP serving

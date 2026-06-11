@@ -439,13 +439,16 @@ func TestPostgresReadOnlyOptionsForFilteredTranscriptSearchIncludesCallFactFunct
 func TestPostgresReadOnlyOptionsForBusinessAnalysisToolsIncludeCoreFunctions(t *testing.T) {
 	options := postgresReadOnlyOptionsForAllowlist([]string{"extract_theme_quotes"})
 	for _, want := range []string{
-		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
-		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean)",
-		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
+		"public.gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)",
+		"public.gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, text)",
+		"public.gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)",
 	} {
 		if !containsString(options.RequiredFunctionSignatures, want) {
 			t.Fatalf("extract_theme_quotes required functions=%v missing %s", options.RequiredFunctionSignatures, want)
 		}
+	}
+	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text)") {
+		t.Fatalf("extract_theme_quotes should not require direct grant on internal dimension filter helper: %v", options.RequiredFunctionSignatures)
 	}
 }
 

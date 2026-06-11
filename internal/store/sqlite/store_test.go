@@ -226,6 +226,7 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 					"name":       "BA Match Account",
 					"fields": []any{
 						map[string]any{"name": "Industry", "value": "Manufacturing"},
+						map[string]any{"name": "Revenue_Range_f__c", "value": "D: ENT"},
 					},
 				},
 				map[string]any{
@@ -272,6 +273,7 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 					"name":       "BA Escape Account",
 					"fields": []any{
 						map[string]any{"name": "Industry", "value": "Manufacturing"},
+						map[string]any{"name": "Revenue_Range_f__c", "value": "A: VSB"},
 					},
 				},
 				map[string]any{
@@ -334,9 +336,31 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 	if calls.Filter.FromDate != "2026-01-01" || calls.Filter.ToDate != "2026-03-31" || calls.Filter.Limit > maxBusinessAnalysisLimit {
 		t.Fatalf("filter was not normalized/bounded: %+v", calls.Filter)
 	}
+	dimensionFiltered := filter
+	dimensionFiltered.DimensionFilters = []BusinessAnalysisDimensionFilter{
+		{Dimension: "revenue_range", Operator: "in", Values: []string{"C: MM", "D: ENT"}},
+		{Dimension: "opportunity_stage", Operator: "equals", Values: []string{"Discovery"}},
+	}
+	filteredCalls, err := store.SearchBusinessAnalysisCalls(ctx, BusinessAnalysisCallSearchParams{Filter: dimensionFiltered, Limit: 1000})
+	if err != nil {
+		t.Fatalf("SearchBusinessAnalysisCalls dimension filters returned error: %v", err)
+	}
+	if filteredCalls.Summary.CallCount != 1 || len(filteredCalls.Rows) != 1 || filteredCalls.Rows[0].CallID != "call-ba-match" {
+		t.Fatalf("dimension filters should keep only revenue/stage matching call: summary=%+v rows=%+v", filteredCalls.Summary, filteredCalls.Rows)
+	}
+	if got := filteredCalls.Filter.DimensionFilters[0].Dimension; got != "account_revenue_range" {
+		t.Fatalf("dimension filter alias not normalized in returned filter: %+v", filteredCalls.Filter.DimensionFilters)
+	}
+	noBlankMatch := filter
+	noBlankMatch.DimensionFilters = []BusinessAnalysisDimensionFilter{
+		{Dimension: "account_revenue_range", Operator: "equals", Values: []string{""}},
+	}
+	if _, err := store.SearchBusinessAnalysisCalls(ctx, BusinessAnalysisCallSearchParams{Filter: noBlankMatch, Limit: 1000}); err == nil {
+		t.Fatalf("blank dimension filter value should be rejected")
+	}
 
 	evidence, err := store.SearchBusinessAnalysisEvidence(ctx, BusinessAnalysisEvidenceSearchParams{
-		Filter: filter,
+		Filter: dimensionFiltered,
 		Query:  "manual process",
 		Limit:  10,
 	})
@@ -348,7 +372,7 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 	}
 
 	summary, err := store.SummarizeBusinessAnalysisDimension(ctx, BusinessAnalysisDimensionSummaryParams{
-		Filter:     filter,
+		Filter:     dimensionFiltered,
 		Dimension:  "opportunity_stage",
 		ThemeQuery: "manual process",
 		Limit:      10,

@@ -91,25 +91,26 @@ func BusinessAnalysisToolNames() []string {
 }
 
 type callFilter struct {
-	TitleQuery              string   `json:"title_query"`
-	Query                   string   `json:"query"`
-	FromDate                string   `json:"from_date"`
-	ToDate                  string   `json:"to_date"`
-	Quarter                 string   `json:"quarter"`
-	LifecycleBucket         string   `json:"lifecycle_bucket"`
-	ExcludeLifecycleBuckets []string `json:"exclude_lifecycle_buckets"`
-	ExcludeLikelyVoicemail  bool     `json:"exclude_likely_voicemail"`
-	Scope                   string   `json:"scope"`
-	System                  string   `json:"system"`
-	Direction               string   `json:"direction"`
-	TranscriptStatus        string   `json:"transcript_status"`
-	Industry                string   `json:"industry"`
-	AccountQuery            string   `json:"account_query"`
-	OpportunityStage        string   `json:"opportunity_stage"`
-	CRMObjectType           string   `json:"crm_object_type"`
-	CRMObjectID             string   `json:"crm_object_id"`
-	ParticipantTitleQuery   string   `json:"participant_title_query"`
-	Limit                   int      `json:"limit"`
+	TitleQuery              string                                   `json:"title_query"`
+	Query                   string                                   `json:"query"`
+	FromDate                string                                   `json:"from_date"`
+	ToDate                  string                                   `json:"to_date"`
+	Quarter                 string                                   `json:"quarter"`
+	LifecycleBucket         string                                   `json:"lifecycle_bucket"`
+	ExcludeLifecycleBuckets []string                                 `json:"exclude_lifecycle_buckets"`
+	ExcludeLikelyVoicemail  bool                                     `json:"exclude_likely_voicemail"`
+	Scope                   string                                   `json:"scope"`
+	System                  string                                   `json:"system"`
+	Direction               string                                   `json:"direction"`
+	TranscriptStatus        string                                   `json:"transcript_status"`
+	Industry                string                                   `json:"industry"`
+	AccountQuery            string                                   `json:"account_query"`
+	OpportunityStage        string                                   `json:"opportunity_stage"`
+	CRMObjectType           string                                   `json:"crm_object_type"`
+	CRMObjectID             string                                   `json:"crm_object_id"`
+	ParticipantTitleQuery   string                                   `json:"participant_title_query"`
+	DimensionFilters        []sqlite.BusinessAnalysisDimensionFilter `json:"dimension_filters,omitempty"`
+	Limit                   int                                      `json:"limit"`
 }
 
 type businessAnalysisArgs struct {
@@ -302,8 +303,31 @@ func callFilterSchema(policy LimitPolicy) map[string]any {
 		"crm_object_type":           map[string]any{"type": "string"},
 		"crm_object_id":             map[string]any{"type": "string"},
 		"participant_title_query":   map[string]any{"type": "string"},
+		"dimension_filters":         dimensionFiltersSchema(),
 		"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": policy.BusinessAnalysisRows},
 	}, nil)
+}
+
+func dimensionFiltersSchema() map[string]any {
+	return map[string]any{
+		"type": "array",
+		"items": objectSchema(map[string]any{
+			"dimension": map[string]any{
+				"type":        "string",
+				"enum":        sqlite.AllowedBusinessAnalysisFilterDimensions(),
+				"description": "Reviewed known dimension backed by the business-analysis read model. Not arbitrary CRM field probing.",
+			},
+			"operator": map[string]any{
+				"type": "string",
+				"enum": []string{"equals", "in"},
+			},
+			"values": map[string]any{
+				"type":     "array",
+				"items":    map[string]any{"type": "string", "maxLength": sqlite.MaxBusinessAnalysisDimensionFilterValueLength},
+				"minItems": 1,
+			},
+		}, []string{"dimension", "values"}),
+	}
 }
 
 func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCallParams) (toolCallResult, error) {
@@ -864,6 +888,10 @@ func normalizeCallFilter(filter callFilter) (callFilter, error) {
 	filter.CRMObjectType = strings.TrimSpace(filter.CRMObjectType)
 	filter.CRMObjectID = strings.TrimSpace(filter.CRMObjectID)
 	filter.ParticipantTitleQuery = strings.TrimSpace(filter.ParticipantTitleQuery)
+	var err error
+	if filter.DimensionFilters, err = sqlite.NormalizeBusinessAnalysisDimensionFilters(filter.DimensionFilters); err != nil {
+		return callFilter{}, err
+	}
 	if filter.Quarter != "" {
 		canonical, fromDate, toDate, err := normalizeCallFilterQuarter(filter.Quarter)
 		if err != nil {
@@ -1053,6 +1081,9 @@ func businessAnalysisFilterIsSelective(filter callFilter) bool {
 	if filter.FromDate != "" && filter.ToDate != "" {
 		return true
 	}
+	if len(filter.DimensionFilters) > 0 {
+		return true
+	}
 	return firstNonBlank(
 		filter.Quarter,
 		filter.TitleQuery,
@@ -1138,6 +1169,7 @@ func sqliteBusinessAnalysisFilter(filter callFilter) sqlite.BusinessAnalysisFilt
 		CRMObjectType:           filter.CRMObjectType,
 		CRMObjectID:             filter.CRMObjectID,
 		ParticipantTitleQuery:   filter.ParticipantTitleQuery,
+		DimensionFilters:        filter.DimensionFilters,
 		Limit:                   filter.Limit,
 	}
 }
