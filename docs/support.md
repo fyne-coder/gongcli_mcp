@@ -69,6 +69,13 @@ Current `gongctl support bundle` files:
 - `redaction-policy.json`: excluded data classes and the default support policy
 - `environment.json`: optional `--include-env` file containing presence
   booleans for known environment variables, never values
+- `postgres-deployment.json` (Postgres bundles only): preset, deployment config
+  posture with presence-only environment-variable booleans, refresh progress
+  status, and sanitized Postgres deployment checks aligned with
+  `gongctl doctor postgres-deploy` (statement timeout input, scoped reader
+  role/database validation, grant SQL generation, serving refresh marker age,
+  and source read-model readiness when configured). SQLite bundles omit this
+  file.
 
 The bundle is customer-boundary operational metadata. It is designed to exclude
 raw customer content, direct customer-content identifiers, secrets, and local

@@ -247,6 +247,11 @@ gongctl cache purge --older-than 2026-04-01
 gongctl cache purge --config ./retention-policy.yaml --dry-run
 ```
 
+Postgres support bundles add `postgres-deployment.json` with sanitized deploy
+parity checks; see [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
+for `deploy postgres-refresh`, `doctor postgres-deploy`, and failed-step JSON
+details.
+
 Run an approved Postgres retention cleanup with the writable operator role:
 
 ```bash
