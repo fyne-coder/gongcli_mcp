@@ -854,17 +854,17 @@ SELECT call_id, raw_json::text, raw_sha256, segment_count, first_seen_at, update
 func copyServingTranscriptSegments(ctx context.Context, sourceDB *sql.DB, tx *sql.Tx, suppressed map[string]struct{}, counts *servingCopyCounts) error {
 	rows, err := sourceDB.QueryContext(ctx, `
 SELECT call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json::text
-  FROM transcript_segments
+ FROM transcript_segments
  ORDER BY call_id, segment_index`)
 	if err != nil {
-		return fmt.Errorf("read source transcript_segments: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO transcript_segments(
 	call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transcript_segments", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -875,18 +875,18 @@ SELECT call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json::tex
 			startMS, endMS                   int64
 		)
 		if err := rows.Scan(&callID, &segmentIndex, &speakerID, &startMS, &endMS, &text, &rawJSON); err != nil {
-			return fmt.Errorf("scan source transcript_segment: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, callID, segmentIndex, speakerID, startMS, endMS, text, rawJSON); err != nil {
-			return fmt.Errorf("insert target transcript_segment: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transcript_segments", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetTranscriptSegments = written
 	return nil

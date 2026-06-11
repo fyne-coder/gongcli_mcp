@@ -109,7 +109,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 		NoGovernanceExclusions: contract.NoGovernanceExclusions,
 	})
 	if err != nil {
-		return deployPostgresRefreshFailure("serving_refresh", "serving database refresh failed", sanitizeRefreshServingDBError(err))
+		return deployPostgresRefreshFailure("serving_refresh", "serving database refresh failed", err)
 	}
 	response.Result = result
 	response.Steps = append(response.Steps, deployStep{Name: "serving_refresh", Status: "pass", Message: "redacted serving database refreshed"})
@@ -139,7 +139,34 @@ func deployPostgresRefreshFailure(step, message string, err error) error {
 	if err == nil {
 		return fmt.Errorf("deploy postgres-refresh failed at %s: %s", step, message)
 	}
-	return fmt.Errorf("deploy postgres-refresh failed at %s: %s; detail: %s", step, message, sanitizeDeployStepError(err))
+	return fmt.Errorf("deploy postgres-refresh failed at %s: %s; detail: %s", step, message, deployPostgresRefreshFailureDetail(step, err))
+}
+
+func deployPostgresRefreshFailureDetail(step string, err error) string {
+	if detail := postgres.ServingRefreshOperatorDetail(err); detail != "" {
+		return detail
+	}
+	if step == "serving_refresh" {
+		if sanitized := sanitizeRefreshServingDBError(err); sanitized != nil {
+			return servingRefreshSanitizedDetail(sanitized)
+		}
+	}
+	return sanitizeDeployStepError(err)
+}
+
+func servingRefreshSanitizedDetail(err error) string {
+	if err == nil {
+		return "unknown deployment error"
+	}
+	msg := err.Error()
+	const prefix = "refresh serving database failed: "
+	if strings.HasPrefix(msg, prefix) {
+		return strings.TrimPrefix(msg, prefix)
+	}
+	if msg == "refresh serving database failed; inspect operator logs for details" {
+		return "inspect operator logs for details"
+	}
+	return msg
 }
 
 func sanitizeDeployStepError(err error) string {

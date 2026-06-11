@@ -170,6 +170,53 @@ func TestDeployPostgresRefreshUsesEnvDefaultsAndOmitsURLs(t *testing.T) {
 	}
 }
 
+func TestDeployPostgresRefreshReportsSourceTranscriptSegmentTimeout(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			return &postgres.ReadModelStatus{ModelName: "call_facts", Ready: true}, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			return nil, servingRefreshTranscriptSegmentTimeoutError()
+		},
+		nil,
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"deploy", "postgres-refresh"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected timeout failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	for _, want := range []string{
+		"deploy postgres-refresh failed at serving_refresh",
+		"source transcript_segments copy exceeded the Postgres statement_timeout",
+		"raise statement_timeout for the refresh role or session",
+	} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("expected %q in output; got %q", want, combined)
+		}
+	}
+	for _, leak := range []string{
+		"canceling statement due to statement timeout",
+		"57014",
+		"inspect operator logs for the sanitized underlying error",
+		"database connection, network path, or credentials are invalid",
+		"source-secret",
+		"target-secret",
+	} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("error output leaked or genericized %q: %s", leak, combined)
+		}
+	}
+}
+
 func TestDeployPostgresRefreshSanitizesFailures(t *testing.T) {
 	clearDeployEnv(t)
 	dir := t.TempDir()

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestGovernanceAuditReportsMatchedAndUnmatchedSyntheticNames(t *testing.T) {
@@ -339,6 +341,75 @@ lists:
 	}
 }
 
+func TestGovernanceRefreshServingDBReportsSourceTranscriptSegmentTimeout(t *testing.T) {
+	clearRefreshServingDBEnv(t)
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "ai-governance.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+version: 1
+lists:
+  no_ai:
+    customers:
+      - name: "Refresh Synthetic Corp"
+`), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	withRefreshServingDBFake(t, func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+		return nil, servingRefreshTranscriptSegmentTimeoutError()
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"governance", "refresh-serving-db",
+		"--source", "postgres://operator:source-secret@localhost:5432/gongctl_source",
+		"--target", "postgres://operator:target-secret@localhost:5432/gongctl_mcp",
+		"--config", configPath,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected timeout failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	for _, want := range []string{
+		"source transcript_segments copy exceeded the Postgres statement_timeout",
+		"raise statement_timeout for the refresh role or session",
+	} {
+		if !strings.Contains(combined, want) {
+			t.Fatalf("expected %q in output; got stdout=%q stderr=%q", want, stdout.String(), stderr.String())
+		}
+	}
+	for _, leak := range []string{
+		"canceling statement due to statement timeout",
+		"57014",
+		"inspect operator logs for details",
+		"source-secret",
+		"target-secret",
+	} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("error output leaked or genericized %q: %s", leak, combined)
+		}
+	}
+}
+
+func TestGovernanceRefreshServingDBDoesNotPassThroughRawSourceTargetErrors(t *testing.T) {
+	raw := fmt.Errorf("read source transcript_segments: %w", &pgconn.PgError{
+		Code:    "57014",
+		Message: "canceling statement due to statement timeout",
+	})
+	err := sanitizeRefreshServingDBError(raw)
+	if err == nil {
+		t.Fatal("expected sanitized error")
+	}
+	got := err.Error()
+	if strings.Contains(got, "read source transcript_segments") || strings.Contains(got, "57014") || strings.Contains(got, "canceling statement") {
+		t.Fatalf("raw source/target error leaked through sanitizer: %q", got)
+	}
+	if !strings.Contains(got, "inspect operator logs") {
+		t.Fatalf("expected generic sanitized fallback, got %q", got)
+	}
+}
+
 func TestGovernanceRefreshServingDBSanitizesMalformedURLs(t *testing.T) {
 	clearRefreshServingDBEnv(t)
 
@@ -457,6 +528,18 @@ func withRefreshServingDBFake(t *testing.T, fn func(context.Context, postgres.Re
 	t.Cleanup(func() {
 		refreshServingDB = original
 	})
+}
+
+func servingRefreshTranscriptSegmentTimeoutError() error {
+	pgErr := &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}
+	phaseErr := &postgres.ServingRefreshPhaseError{
+		Phase:  postgres.ServingRefreshPhaseCopy,
+		Side:   postgres.ServingRefreshSideSource,
+		Object: "transcript_segments",
+		Cause:  postgres.ServingRefreshCauseStatementTimeout,
+		Err:    pgErr,
+	}
+	return fmt.Errorf("copy filtered serving data: %w", phaseErr)
 }
 
 func TestGovernanceExportFilteredDBWritesPhysicalMCPDB(t *testing.T) {

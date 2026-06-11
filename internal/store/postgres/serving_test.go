@@ -3,12 +3,15 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestValidateRefreshServingDBURLs(t *testing.T) {
@@ -124,6 +127,43 @@ func TestRefreshServingDBCopyClearsPriorServingRefreshMarker(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "DELETE FROM serving_refresh_log") {
 		t.Fatal("refreshServingDBCopy must clear prior serving refresh markers before mutating target data")
+	}
+}
+
+func TestServingRefreshPhaseErrorClassifiesStatementTimeout(t *testing.T) {
+	pgErr := &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}
+	wrapped := wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, pgErr)
+
+	var phaseErr *ServingRefreshPhaseError
+	if !errors.As(wrapped, &phaseErr) {
+		t.Fatalf("expected ServingRefreshPhaseError, got %T", wrapped)
+	}
+	if phaseErr.Side != ServingRefreshSideSource || phaseErr.Object != "transcript_segments" || phaseErr.Cause != ServingRefreshCauseStatementTimeout {
+		t.Fatalf("unexpected phase error: %+v", phaseErr)
+	}
+	var recovered *pgconn.PgError
+	if !errors.As(wrapped, &recovered) || recovered.Code != "57014" {
+		t.Fatal("expected underlying pgconn.PgError to remain unwrap-visible")
+	}
+
+	detail := ServingRefreshOperatorDetail(fmt.Errorf("copy filtered serving data: %w", wrapped))
+	want := "source transcript_segments copy exceeded the Postgres statement_timeout; raise statement_timeout for the refresh role or session and rerun"
+	if detail != want {
+		t.Fatalf("operator detail=%q want=%q", detail, want)
+	}
+}
+
+func TestServingRefreshPhaseErrorAlwaysReturnsSanitizedDetail(t *testing.T) {
+	wrapped := &ServingRefreshPhaseError{
+		Phase: ServingRefreshPhaseCopy,
+		Err:   errors.New("raw driver payload with source customer text"),
+	}
+	detail := ServingRefreshOperatorDetail(fmt.Errorf("copy filtered serving data: %w", wrapped))
+	if detail == "" {
+		t.Fatal("expected sanitized detail for phase error with incomplete context")
+	}
+	if strings.Contains(detail, "raw driver payload") || strings.Contains(detail, "customer text") {
+		t.Fatalf("operator detail leaked raw error: %q", detail)
 	}
 }
 
