@@ -203,6 +203,26 @@ func TestDeployPostgresRefreshReportsSourceTranscriptSegmentTimeout(t *testing.T
 			t.Fatalf("expected %q in output; got %q", want, combined)
 		}
 	}
+	var response deployPostgresRefreshResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal deploy failure response: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if len(response.Steps) != 2 {
+		t.Fatalf("steps=%d want 2: %+v", len(response.Steps), response.Steps)
+	}
+	failed := response.Steps[1]
+	if failed.Name != "serving_refresh" || failed.Status != "fail" || !failed.RerunSafe {
+		t.Fatalf("unexpected failed step: %+v", failed)
+	}
+	if failed.Phase != "copy" || failed.Side != "source" || failed.Object != "transcript_segments" || failed.Kind != "statement_timeout" {
+		t.Fatalf("missing serving refresh metadata: %+v", failed)
+	}
+	if failed.Detail == "" || failed.ServingDBState == "" || len(failed.NextActions) == 0 {
+		t.Fatalf("missing operator guidance: %+v", failed)
+	}
+	if strings.Contains(stderr.String(), failed.Detail) {
+		t.Fatalf("stderr should stay short and leave detail in JSON: stderr=%q", stderr.String())
+	}
 	for _, leak := range []string{
 		"canceling statement due to statement timeout",
 		"57014",
@@ -246,6 +266,75 @@ func TestDeployPostgresRefreshSanitizesFailures(t *testing.T) {
 	}
 	if !strings.Contains(combined, "deploy postgres-refresh failed at source_read_model") {
 		t.Fatalf("expected step-specific failure, got %q", combined)
+	}
+	var response deployPostgresRefreshResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal deploy failure response: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if len(response.Steps) != 1 {
+		t.Fatalf("steps=%d want 1: %+v", len(response.Steps), response.Steps)
+	}
+	failed := response.Steps[0]
+	if failed.Name != "source_read_model" || failed.Status != "fail" || failed.Kind != "connection_failed" || !failed.RerunSafe {
+		t.Fatalf("unexpected source failed step: %+v", failed)
+	}
+	if failed.Detail == "" || len(failed.NextActions) == 0 {
+		t.Fatalf("missing source failure guidance: %+v", failed)
+	}
+}
+
+func TestDeployPostgresRefreshWritesFailedStepJSONForGrantFailure(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			return &postgres.ReadModelStatus{ModelName: "call_facts", Ready: true}, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			return &postgres.ServingDBRefreshResult{
+				Backend:               "postgres",
+				ServingRefreshID:      12,
+				SourceCalls:           4,
+				TargetCalls:           4,
+				SuppressedCallCount:   0,
+				PolicyConfigSHA256:    "policy-sha",
+				TargetDataFingerprint: "target-fingerprint",
+			}, nil
+		},
+		func(ctx context.Context, databaseURL string, params postgres.ScopedReaderGrantSQLParams) (string, error) {
+			return "", errors.New("permission denied for relation calls with target-secret")
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"deploy", "postgres-refresh"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected grant failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	for _, leak := range []string{"source-secret", "target-secret", "source.internal", "target.internal", "postgres://"} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("deploy grant failure leaked %q: %s", leak, combined)
+		}
+	}
+	var response deployPostgresRefreshResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal deploy failure response: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if response.Result == nil || len(response.Steps) != 3 {
+		t.Fatalf("expected result and 3 steps: %+v", response)
+	}
+	failed := response.Steps[2]
+	if failed.Name != "reader_grants" || failed.Status != "fail" || failed.Kind != "permission_denied" || !failed.RerunSafe {
+		t.Fatalf("unexpected grant failed step: %+v", failed)
+	}
+	if failed.Detail == "" || len(failed.NextActions) == 0 {
+		t.Fatalf("missing grant failure guidance: %+v", failed)
 	}
 }
 

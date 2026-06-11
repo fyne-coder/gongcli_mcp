@@ -96,7 +96,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 	} else {
 		readModel, err := deployRebuildReadModel(ctx, source)
 		if err != nil {
-			return deployPostgresRefreshFailure("source_read_model", "source database unavailable or read model rebuild failed", err)
+			return a.deployPostgresRefreshStepFailure(response, "source_read_model", "source database unavailable or read model rebuild failed", err)
 		}
 		response.ReadModel = readModel
 		response.Steps = append(response.Steps, deployStep{Name: "source_read_model", Status: "pass", Message: "source read model rebuilt"})
@@ -109,7 +109,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 		NoGovernanceExclusions: contract.NoGovernanceExclusions,
 	})
 	if err != nil {
-		return deployPostgresRefreshFailure("serving_refresh", "serving database refresh failed", err)
+		return a.deployPostgresRefreshStepFailure(response, "serving_refresh", "serving database refresh failed", err)
 	}
 	response.Result = result
 	response.Steps = append(response.Steps, deployStep{Name: "serving_refresh", Status: "pass", Message: "redacted serving database refreshed"})
@@ -125,7 +125,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 		}
 		appliedSQL, err := deployApplyScopedReaderGrants(ctx, target, params)
 		if err != nil {
-			return deployPostgresRefreshFailure("reader_grants", "scoped reader grants could not be reconciled", err)
+			return a.deployPostgresRefreshStepFailure(response, "reader_grants", "scoped reader grants could not be reconciled", err)
 		}
 		sum := sha256.Sum256([]byte(appliedSQL))
 		response.GrantSQLSHA256 = hex.EncodeToString(sum[:])
@@ -135,11 +135,148 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 	return writeJSONValue(a.out, response)
 }
 
-func deployPostgresRefreshFailure(step, message string, err error) error {
-	if err == nil {
-		return fmt.Errorf("deploy postgres-refresh failed at %s: %s", step, message)
+func (a *app) deployPostgresRefreshStepFailure(response deployPostgresRefreshResponse, step, message string, err error) error {
+	response.Steps = append(response.Steps, deployFailedStep(step, message, err))
+	if writeErr := writeJSONValue(a.out, response); writeErr != nil {
+		return writeErr
 	}
-	return fmt.Errorf("deploy postgres-refresh failed at %s: %s; detail: %s", step, message, deployPostgresRefreshFailureDetail(step, err))
+	return deployPostgresRefreshFailure(step, message, err)
+}
+
+func deployFailedStep(step, message string, err error) deployStep {
+	failed := deployStep{
+		Name:        step,
+		Status:      "fail",
+		Message:     message,
+		Detail:      deployPostgresRefreshFailureDetail(step, err),
+		RerunSafe:   true,
+		NextActions: deployStepNextActions(step, err),
+	}
+	var phaseErr *postgres.ServingRefreshPhaseError
+	if errors.As(err, &phaseErr) {
+		failed.Phase = string(phaseErr.Phase)
+		failed.Side = string(phaseErr.Side)
+		failed.Object = phaseErr.Object
+		failed.Kind = string(phaseErr.Cause)
+		failed.ServingDBState = servingRefreshFailureState(phaseErr)
+		return failed
+	}
+	failed.Kind = deployFailureKind(err)
+	return failed
+}
+
+func deployStepNextActions(step string, err error) []string {
+	var phaseErr *postgres.ServingRefreshPhaseError
+	if errors.As(err, &phaseErr) {
+		switch phaseErr.Cause {
+		case postgres.ServingRefreshCauseStatementTimeout:
+			return []string{
+				"raise statement_timeout for the refresh role or session",
+				"rerun gongctl deploy postgres-refresh after the database change",
+				"run gongctl doctor postgres-deploy if the rerun fails",
+			}
+		case postgres.ServingRefreshCausePermissionDenied:
+			return []string{
+				"grant the refresh role required source and target Postgres privileges",
+				"rerun gongctl deploy postgres-refresh after grants are corrected",
+				"run gongctl doctor postgres-deploy to verify deployment readiness",
+			}
+		case postgres.ServingRefreshCauseMigrationMissing:
+			return []string{
+				"apply the required Postgres migrations to the failing database",
+				"rerun gongctl deploy postgres-refresh after migrations complete",
+				"run gongctl doctor postgres-deploy to verify deployment readiness",
+			}
+		case postgres.ServingRefreshCauseConnectionFailed:
+			return []string{
+				"verify source and target database URLs, network access, credentials, and pg_hba rules",
+				"rerun gongctl deploy postgres-refresh after connectivity is fixed",
+				"run gongctl doctor postgres-deploy to verify deployment readiness",
+			}
+		case postgres.ServingRefreshCauseLockTimeout:
+			return []string{
+				"wait for contending Postgres work to finish or run the refresh during the maintenance window",
+				"rerun gongctl deploy postgres-refresh",
+				"run gongctl doctor postgres-deploy if the lock failure repeats",
+			}
+		case postgres.ServingRefreshCauseConfigInvalid:
+			return []string{
+				"fix the governance configuration",
+				"rerun gongctl deploy postgres-refresh after validation passes",
+				"run gongctl doctor postgres-deploy to verify deployment readiness",
+			}
+		case postgres.ServingRefreshCauseValidationFailed:
+			return []string{
+				"review the refresh validation counts and governance inputs",
+				"rerun gongctl deploy postgres-refresh after correcting the mismatch",
+				"run gongctl doctor postgres-deploy to verify deployment readiness",
+			}
+		case postgres.ServingRefreshCauseCanceled:
+			return []string{
+				"rerun gongctl deploy postgres-refresh when the maintenance window is available",
+				"run gongctl doctor postgres-deploy if cancellation repeats",
+			}
+		}
+	}
+	switch step {
+	case "source_read_model":
+		return []string{
+			"verify the source database URL, credentials, migrations, and read-model prerequisites",
+			"rerun gongctl deploy postgres-refresh after the source read model can rebuild",
+			"run gongctl doctor postgres-deploy to verify deployment readiness",
+		}
+	case "reader_grants":
+		return []string{
+			"verify the target database URL, reader role, database name, and grant privileges",
+			"rerun gongctl deploy postgres-refresh or reapply scoped reader grants after correction",
+			"run gongctl doctor postgres-deploy to verify preset and serving database readiness",
+		}
+	default:
+		return []string{
+			"review the failed step detail and sanitized operator logs",
+			"rerun gongctl deploy postgres-refresh after correcting the issue",
+			"run gongctl doctor postgres-deploy to verify deployment readiness",
+		}
+	}
+}
+
+func deployFailureKind(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	detail := sanitizeDeployStepError(err)
+	switch detail {
+	case "Postgres privileges are insufficient for this step":
+		return "permission_denied"
+	case "Postgres schema migrations are missing or stale":
+		return "migration_missing"
+	case "database connection, network path, or credentials are invalid":
+		return "connection_failed"
+	case "governance config could not be parsed or validated":
+		return "config_invalid"
+	default:
+		return "unknown"
+	}
+}
+
+func servingRefreshFailureState(err *postgres.ServingRefreshPhaseError) string {
+	if err == nil {
+		return ""
+	}
+	switch err.Phase {
+	case postgres.ServingRefreshPhaseConnect, postgres.ServingRefreshPhaseAudit, postgres.ServingRefreshPhaseCount:
+		return "serving database was not changed by this failing phase"
+	case postgres.ServingRefreshPhaseTransaction, postgres.ServingRefreshPhaseLock, postgres.ServingRefreshPhaseTruncate, postgres.ServingRefreshPhaseCopy:
+		return "previous serving data should remain available because target copy work rolls back unless the transaction commits"
+	case postgres.ServingRefreshPhaseReadModel, postgres.ServingRefreshPhaseGovernancePolicy, postgres.ServingRefreshPhaseValidation, postgres.ServingRefreshPhaseMarker:
+		return "serving data may have refreshed, but final validation or marker work did not complete; rerun before treating the deployment as complete"
+	default:
+		return "rerun the refresh before treating the deployment as complete"
+	}
+}
+
+func deployPostgresRefreshFailure(step, message string, err error) error {
+	return fmt.Errorf("deploy postgres-refresh failed at %s: %s", step, message)
 }
 
 func deployPostgresRefreshFailureDetail(step string, err error) string {
@@ -340,9 +477,17 @@ type deployPostgresRefreshResponse struct {
 }
 
 type deployStep struct {
-	Name    string `json:"name"`
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	Name           string   `json:"name"`
+	Status         string   `json:"status"`
+	Message        string   `json:"message"`
+	Detail         string   `json:"detail,omitempty"`
+	Phase          string   `json:"phase,omitempty"`
+	Side           string   `json:"side,omitempty"`
+	Object         string   `json:"object,omitempty"`
+	Kind           string   `json:"kind,omitempty"`
+	NextActions    []string `json:"next_actions,omitempty"`
+	RerunSafe      bool     `json:"rerun_safe,omitempty"`
+	ServingDBState string   `json:"serving_db_state,omitempty"`
 }
 
 type diagnosePostgresDeployResponse struct {
