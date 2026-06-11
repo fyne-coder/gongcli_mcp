@@ -142,7 +142,7 @@ func (a *app) usage() {
   gongctl mcp postgres-reader-sql --preset business-pilot --role ROLE --database DB
   gongctl mcp postgres-reader-apply --preset business-pilot --role ROLE --database DB [--dry-run|--apply]
   gongctl mcp ga-acceptance [--probes <file>|-] [--summary <file>]
-  gongctl deploy postgres-refresh [--source URL] [--target URL] [--config ai-governance.yaml] [--preset business-workbench] [--role ROLE] [--database DB] [--skip-read-model] [--skip-grants]
+  gongctl deploy postgres-refresh [--source URL] [--target URL] [--config ai-governance.yaml] [--preset business-workbench] [--role ROLE] [--database DB] [--statement-timeout DURATION] [--skip-read-model] [--skip-grants]
   gongctl doctor postgres-deploy [--target URL] [--preset business-workbench] [--max-marker-age DURATION]
   gongctl doctor mcp-gateway --url URL [--issuer URL] [--profile cognito|direct-oidc] [--required-scope gongmcp/read] [--group-claim CLAIM] [--client-id ID] [--required-group GROUP] [--expect-dcr] [--token-env ENV] [--origin ORIGIN] [--timeout DURATION]
   gongctl search transcripts --db gong.db --query TEXT [--limit N]

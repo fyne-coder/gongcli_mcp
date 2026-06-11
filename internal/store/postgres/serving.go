@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 )
@@ -21,6 +22,9 @@ type RefreshServingDBOptions struct {
 	TargetURL              string
 	Config                 *governance.Config
 	NoGovernanceExclusions bool
+	// StatementTimeout applies to every source database connection opened for
+	// the refresh via libpq startup options on the source URL.
+	StatementTimeout time.Duration
 }
 
 // ServingDBRefreshResult is the sanitized output of a serving-DB refresh.
@@ -143,7 +147,15 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		return nil, errors.New("governance config is required unless no-governance-exclusions is set")
 	}
 
-	source, err := Open(ctx, opts.SourceURL)
+	sourceURL := opts.SourceURL
+	if opts.StatementTimeout > 0 {
+		var err error
+		sourceURL, err = databaseURLWithStatementTimeout(opts.SourceURL, opts.StatementTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	source, err := Open(ctx, sourceURL)
 	if err != nil {
 		return nil, wrapServingRefreshPhaseError(ServingRefreshSideSource, "database", ServingRefreshPhaseConnect, err)
 	}

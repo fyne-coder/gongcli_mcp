@@ -50,6 +50,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 	databaseName := fs.String("database", "", "Postgres database name for reader grants")
 	skipReadModel := fs.Bool("skip-read-model", false, "skip rebuilding the source read model before serving refresh")
 	skipGrants := fs.Bool("skip-grants", false, "skip scoped reader grant reconciliation")
+	statementTimeout := fs.String("statement-timeout", "", "Postgres statement_timeout for the source serving refresh session, e.g. 30m")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
 	}
@@ -81,6 +82,15 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 		return fmt.Errorf("deploy postgres-refresh failed before connect: %w", err)
 	}
 
+	statementTimeoutInput := refreshServingDBInput(*statementTimeout, "GONGCTL_REFRESH_STATEMENT_TIMEOUT")
+	var parsedStatementTimeout time.Duration
+	if statementTimeoutInput != "" {
+		parsedStatementTimeout, err = postgres.ParseRefreshStatementTimeout(statementTimeoutInput)
+		if err != nil {
+			return fmt.Errorf("deploy postgres-refresh failed before connect: %s", err.Error())
+		}
+	}
+
 	response := deployPostgresRefreshResponse{
 		Backend:                "postgres",
 		Preset:                 selectedPreset,
@@ -89,6 +99,9 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 		NoGovernanceExclusions: contract.NoGovernanceExclusions,
 		SensitiveDataWarning:   deploySensitiveDataWarning,
 		Steps:                  []deployStep{},
+	}
+	if parsedStatementTimeout > 0 {
+		response.StatementTimeout = postgres.FormatRefreshStatementTimeout(parsedStatementTimeout)
 	}
 
 	if *skipReadModel {
@@ -107,6 +120,7 @@ func (a *app) deployPostgresRefresh(ctx context.Context, args []string) error {
 		TargetURL:              target,
 		Config:                 contract.Config,
 		NoGovernanceExclusions: contract.NoGovernanceExclusions,
+		StatementTimeout:       parsedStatementTimeout,
 	})
 	if err != nil {
 		return a.deployPostgresRefreshStepFailure(response, "serving_refresh", "serving database refresh failed", err)
@@ -468,6 +482,7 @@ type deployPostgresRefreshResponse struct {
 	Preset                 string                           `json:"preset"`
 	Role                   string                           `json:"role"`
 	Database               string                           `json:"database"`
+	StatementTimeout       string                           `json:"statement_timeout,omitempty"`
 	NoGovernanceExclusions bool                             `json:"no_governance_exclusions,omitempty"`
 	Steps                  []deployStep                     `json:"steps"`
 	ReadModel              *postgres.ReadModelStatus        `json:"read_model,omitempty"`

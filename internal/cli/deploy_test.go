@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	postgresdeploy "github.com/fyne-coder/gongcli_mcp/internal/deploy/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
@@ -97,6 +98,210 @@ func TestDeployPostgresRefreshSanitizesConfigLoadFailure(t *testing.T) {
 	}
 }
 
+func TestDeployPostgresRefreshPassesStatementTimeoutFromFlag(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	sourceURL := "postgres://operator:source-secret@source.internal:5432/gongctl_source"
+	targetURL := "postgres://operator:target-secret@target.internal:5432/gongctl_mcp"
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", sourceURL)
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", targetURL)
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+
+	var captured postgres.RefreshServingDBOptions
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			return &postgres.ReadModelStatus{ModelName: "call_facts", Ready: true}, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			captured = opts
+			return &postgres.ServingDBRefreshResult{Backend: "postgres"}, nil
+		},
+		func(ctx context.Context, databaseURL string, params postgres.ScopedReaderGrantSQLParams) (string, error) {
+			return "-- grant sql", nil
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"deploy", "postgres-refresh",
+		"--statement-timeout", "45m",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(deploy postgres-refresh --statement-timeout) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if captured.StatementTimeout != 45*time.Minute {
+		t.Fatalf("refresh StatementTimeout=%s want 45m", captured.StatementTimeout)
+	}
+	var response deployPostgresRefreshResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal deploy response: %v", err)
+	}
+	if response.StatementTimeout != "45m" {
+		t.Fatalf("response.StatementTimeout=%q want 45m", response.StatementTimeout)
+	}
+}
+
+func TestDeployPostgresRefreshPassesStatementTimeoutFromEnv(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+	t.Setenv("GONGCTL_REFRESH_STATEMENT_TIMEOUT", "20m")
+
+	var captured postgres.RefreshServingDBOptions
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			return &postgres.ReadModelStatus{ModelName: "call_facts", Ready: true}, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			captured = opts
+			return &postgres.ServingDBRefreshResult{Backend: "postgres"}, nil
+		},
+		func(ctx context.Context, databaseURL string, params postgres.ScopedReaderGrantSQLParams) (string, error) {
+			return "-- grant sql", nil
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"deploy", "postgres-refresh"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(deploy postgres-refresh) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if captured.StatementTimeout != 20*time.Minute {
+		t.Fatalf("refresh StatementTimeout=%s want 20m", captured.StatementTimeout)
+	}
+}
+
+func TestDeployPostgresRefreshStatementTimeoutFlagOverridesEnv(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+	t.Setenv("GONGCTL_REFRESH_STATEMENT_TIMEOUT", "20m")
+
+	var captured postgres.RefreshServingDBOptions
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			return &postgres.ReadModelStatus{ModelName: "call_facts", Ready: true}, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			captured = opts
+			return &postgres.ServingDBRefreshResult{Backend: "postgres"}, nil
+		},
+		func(ctx context.Context, databaseURL string, params postgres.ScopedReaderGrantSQLParams) (string, error) {
+			return "-- grant sql", nil
+		},
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"deploy", "postgres-refresh",
+		"--statement-timeout", "10m",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(deploy postgres-refresh) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if captured.StatementTimeout != 10*time.Minute {
+		t.Fatalf("refresh StatementTimeout=%s want 10m", captured.StatementTimeout)
+	}
+}
+
+func TestDeployPostgresRefreshRejectsInvalidStatementTimeoutBeforeRefresh(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+
+	refreshCalled := false
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			t.Fatal("read model rebuild should not run before timeout validation")
+			return nil, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			refreshCalled = true
+			return nil, nil
+		},
+		nil,
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"deploy", "postgres-refresh",
+		"--statement-timeout", "not-a-duration",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected invalid timeout failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if refreshCalled {
+		t.Fatal("refresh should not run for invalid timeout")
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "failed before connect") || !strings.Contains(combined, "not a valid duration") {
+		t.Fatalf("expected sanitized invalid timeout message; got %q", combined)
+	}
+	for _, leak := range []string{"source-secret", "target-secret", "source.internal", "target.internal", "postgres://"} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("invalid timeout error leaked %q: %s", leak, combined)
+		}
+	}
+}
+
+func TestDeployPostgresRefreshRejectsZeroStatementTimeoutBeforeRefresh(t *testing.T) {
+	clearDeployEnv(t)
+	dir := t.TempDir()
+	configPath := writeDeployGovernanceConfig(t, dir)
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", "postgres://operator:source-secret@source.internal:5432/gongctl_source")
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", "postgres://operator:target-secret@target.internal:5432/gongctl_mcp")
+	t.Setenv("GONGCTL_AI_GOVERNANCE_CONFIG", configPath)
+
+	refreshCalled := false
+	withDeployFakes(t,
+		func(ctx context.Context, databaseURL string) (*postgres.ReadModelStatus, error) {
+			t.Fatal("read model rebuild should not run before timeout validation")
+			return nil, nil
+		},
+		func(ctx context.Context, opts postgres.RefreshServingDBOptions) (*postgres.ServingDBRefreshResult, error) {
+			refreshCalled = true
+			return nil, nil
+		},
+		nil,
+	)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"deploy", "postgres-refresh",
+		"--statement-timeout", "0",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("expected zero timeout failure; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	if refreshCalled {
+		t.Fatal("refresh should not run for zero timeout")
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "greater than zero") {
+		t.Fatalf("expected zero timeout rejection; got %q", combined)
+	}
+	for _, leak := range []string{"source-secret", "target-secret", "source.internal", "postgres://"} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("zero timeout error leaked %q: %s", leak, combined)
+		}
+	}
+}
+
 func TestDeployPostgresRefreshUsesEnvDefaultsAndOmitsURLs(t *testing.T) {
 	clearDeployEnv(t)
 	dir := t.TempDir()
@@ -164,6 +369,9 @@ func TestDeployPostgresRefreshUsesEnvDefaultsAndOmitsURLs(t *testing.T) {
 	}
 	if response.Preset != "business-workbench" || response.Result.ServingRefreshID != 11 || response.GrantSQLSHA256 == "" {
 		t.Fatalf("unexpected deploy response: %+v", response)
+	}
+	if response.StatementTimeout != "" {
+		t.Fatalf("expected unset statement_timeout in backward-compatible output; got %q", response.StatementTimeout)
 	}
 	if len(response.Steps) != 3 {
 		t.Fatalf("steps=%d want 3: %+v", len(response.Steps), response.Steps)
@@ -411,6 +619,7 @@ func clearDeployEnv(t *testing.T) {
 	t.Setenv("GONGCTL_MCP_DB", "")
 	t.Setenv("GONG_DATABASE_URL", "")
 	t.Setenv("DATABASE_URL", "")
+	t.Setenv("GONGCTL_REFRESH_STATEMENT_TIMEOUT", "")
 }
 
 func withDeployFakes(
