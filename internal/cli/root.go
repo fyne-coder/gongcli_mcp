@@ -143,7 +143,7 @@ func (a *app) usage() {
   gongctl mcp postgres-reader-apply --preset business-pilot --role ROLE --database DB [--dry-run|--apply]
   gongctl mcp ga-acceptance [--probes <file>|-] [--summary <file>]
   gongctl deploy postgres-refresh [--source URL] [--target URL] [--config ai-governance.yaml] [--preset business-workbench] [--role ROLE] [--database DB] [--statement-timeout DURATION] [--skip-read-model] [--skip-grants]
-  gongctl doctor postgres-deploy [--target URL] [--preset business-workbench] [--max-marker-age DURATION]
+  gongctl doctor postgres-deploy [--source URL] [--target URL] [--preset business-workbench] [--role ROLE] [--database DB] [--statement-timeout DURATION] [--max-marker-age DURATION]
   gongctl doctor mcp-gateway --url URL [--issuer URL] [--profile cognito|direct-oidc] [--required-scope gongmcp/read] [--group-claim CLAIM] [--client-id ID] [--required-group GROUP] [--expect-dcr] [--token-env ENV] [--origin ORIGIN] [--timeout DURATION]
   gongctl search transcripts --db gong.db --query TEXT [--limit N]
   gongctl search calls --db gong.db [--crm-object-type TYPE] [--crm-object-id ID] [--limit N]
@@ -156,7 +156,7 @@ func (a *app) usage() {
   gongctl version
   gongctl api raw METHOD PATH [--body body.json] [--out response.json] [--allow-sensitive-export]
   gongctl diagnose [--live]
-  gongctl diagnose postgres-deploy [--target URL] [--preset business-workbench] [--max-marker-age DURATION]
+  gongctl diagnose postgres-deploy [--source URL] [--target URL] [--preset business-workbench] [--role ROLE] [--database DB] [--statement-timeout DURATION] [--max-marker-age DURATION]
 `)
 }
 

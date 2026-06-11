@@ -564,9 +564,149 @@ func TestDoctorPostgresDeployReportsPresetAndMissingMarkerInputs(t *testing.T) {
 	if !hasDeployCheck(response.Checks, "tool_preset", postgresdeploy.CheckPass) {
 		t.Fatalf("missing passing tool_preset check: %+v", response.Checks)
 	}
+	if !hasDeployCheck(response.Checks, "source_database_connectivity", postgresdeploy.CheckFail) {
+		t.Fatalf("missing source connectivity failure check: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "serving_database_connectivity", postgresdeploy.CheckFail) {
+		t.Fatalf("missing serving connectivity failure check: %+v", response.Checks)
+	}
 	if !hasDeployCheck(response.Checks, "serving_refresh_marker", postgresdeploy.CheckFail) {
 		t.Fatalf("missing marker failure check: %+v", response.Checks)
 	}
+	if !hasDeployCheck(response.Checks, "statement_timeout", postgresdeploy.CheckPass) {
+		t.Fatalf("missing statement_timeout pass check: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "scoped_reader_role_input", postgresdeploy.CheckPass) {
+		t.Fatalf("missing scoped_reader_role_input pass check: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "scoped_reader_grant_sql", postgresdeploy.CheckPass) {
+		t.Fatalf("missing scoped_reader_grant_sql pass check: %+v", response.Checks)
+	}
+	assertDoctorOutputSanitized(t, stdout.String()+stderr.String())
+}
+
+func TestDoctorPostgresDeployValidStatementTimeoutPassesWithoutConnecting(t *testing.T) {
+	clearDeployEnv(t)
+	t.Setenv("GONGCTL_REFRESH_STATEMENT_TIMEOUT", "45m")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"doctor", "postgres-deploy", "--preset", "business-workbench"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(doctor postgres-deploy) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var response diagnosePostgresDeployResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal doctor response: %v", err)
+	}
+	check := findDeployCheck(response.Checks, "statement_timeout")
+	if check == nil || check.Status != postgresdeploy.CheckPass {
+		t.Fatalf("expected passing statement_timeout check: %+v", check)
+	}
+	if check.Evidence == nil || len(check.Evidence) != 1 || check.Evidence[0].Value != "45m" {
+		t.Fatalf("expected normalized timeout evidence; check=%+v", check)
+	}
+	assertDoctorOutputSanitized(t, stdout.String()+stderr.String())
+}
+
+func TestDoctorPostgresDeployInvalidStatementTimeoutFailsWithoutConnecting(t *testing.T) {
+	clearDeployEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"doctor", "postgres-deploy",
+		"--preset", "business-workbench",
+		"--statement-timeout", "0",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(doctor postgres-deploy) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var response diagnosePostgresDeployResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal doctor response: %v", err)
+	}
+	check := findDeployCheck(response.Checks, "statement_timeout")
+	if check == nil || check.Status != postgresdeploy.CheckFail || check.ErrorKind != "statement_timeout_invalid" {
+		t.Fatalf("expected failing statement_timeout check: %+v", check)
+	}
+	if !hasDeployCheck(response.Checks, "scoped_reader_role_input", postgresdeploy.CheckPass) {
+		t.Fatalf("expected role/database checks to continue after timeout failure: %+v", response.Checks)
+	}
+	assertDoctorOutputSanitized(t, stdout.String()+stderr.String())
+}
+
+func TestDoctorPostgresDeployUnknownPresetStillReturnsActionableChecks(t *testing.T) {
+	clearDeployEnv(t)
+	t.Setenv("GONGCTL_REFRESH_STATEMENT_TIMEOUT", "30m")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"doctor", "postgres-deploy",
+		"--preset", "unknown-preset",
+		"--role", "gongmcp_business_workbench_reader",
+		"--database", "gongctl_mcp",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(doctor postgres-deploy) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var response diagnosePostgresDeployResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal doctor response: %v", err)
+	}
+	if !hasDeployCheck(response.Checks, "tool_preset", postgresdeploy.CheckFail) {
+		t.Fatalf("missing unknown preset failure: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "statement_timeout", postgresdeploy.CheckPass) {
+		t.Fatalf("missing statement_timeout pass for unknown preset: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "scoped_reader_role_input", postgresdeploy.CheckPass) {
+		t.Fatalf("missing scoped_reader_role_input pass for unknown preset: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "scoped_reader_grant_sql", postgresdeploy.CheckFail) {
+		t.Fatalf("missing scoped_reader_grant_sql failure for unknown preset: %+v", response.Checks)
+	}
+	assertDoctorOutputSanitized(t, stdout.String()+stderr.String())
+}
+
+func TestDoctorPostgresDeployChecksSourceReadModelWhenConnected(t *testing.T) {
+	clearDeployEnv(t)
+	sourceURL := "postgres://operator:source-secret@source.internal:5432/gongctl_source"
+	targetURL := "postgres://operator:target-secret@target.internal:5432/gongctl_mcp"
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", sourceURL)
+	t.Setenv("GONGCTL_MCP_DATABASE_URL", targetURL)
+
+	withDoctorFakes(t, func(ctx context.Context, databaseURL string) (doctorPostgresStatusStore, error) {
+		switch databaseURL {
+		case sourceURL:
+			return &fakeDoctorPostgresStore{
+				readModel: &postgres.ReadModelStatus{ModelName: "builtin_call_facts", Ready: true, CallCount: 12},
+			}, nil
+		case targetURL:
+			return &fakeDoctorPostgresStore{markerErr: errors.New("no marker in fake")}, nil
+		default:
+			return nil, errors.New("unexpected database URL")
+		}
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"doctor", "postgres-deploy", "--preset", "business-workbench"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(doctor postgres-deploy) code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var response diagnosePostgresDeployResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal doctor response: %v", err)
+	}
+	if !hasDeployCheck(response.Checks, "source_database_connectivity", postgresdeploy.CheckPass) {
+		t.Fatalf("missing source connectivity pass: %+v", response.Checks)
+	}
+	if !hasDeployCheck(response.Checks, "source_read_model", postgresdeploy.CheckPass) {
+		t.Fatalf("missing source read model pass: %+v", response.Checks)
+	}
+	assertDoctorOutputSanitized(t, stdout.String()+stderr.String())
 }
 
 func TestSyncStatusPresetValidationForSQLiteWarns(t *testing.T) {
@@ -655,4 +795,47 @@ func hasDeployCheck(checks []postgresdeploy.Check, name string, status postgresd
 		}
 	}
 	return false
+}
+
+func assertDoctorOutputSanitized(t *testing.T, combined string) {
+	t.Helper()
+	for _, leak := range []string{
+		"postgres://",
+		"source-secret",
+		"target-secret",
+		"source.internal",
+		"target.internal",
+		"GRANT CONNECT",
+		"BEGIN;",
+	} {
+		if strings.Contains(combined, leak) {
+			t.Fatalf("doctor output leaked %q: %s", leak, combined)
+		}
+	}
+}
+
+type fakeDoctorPostgresStore struct {
+	readModel *postgres.ReadModelStatus
+	readErr   error
+	marker    *postgres.ServingDBRefreshMarker
+	markerErr error
+}
+
+func (f *fakeDoctorPostgresStore) Close() error { return nil }
+
+func (f *fakeDoctorPostgresStore) ReadModelStatus(context.Context) (*postgres.ReadModelStatus, error) {
+	return f.readModel, f.readErr
+}
+
+func (f *fakeDoctorPostgresStore) LatestServingRefreshMarker(context.Context) (*postgres.ServingDBRefreshMarker, error) {
+	return f.marker, f.markerErr
+}
+
+func withDoctorFakes(t *testing.T, open func(context.Context, string) (doctorPostgresStatusStore, error)) {
+	t.Helper()
+	originalOpen := deployOpenPostgresStatus
+	deployOpenPostgresStatus = open
+	t.Cleanup(func() {
+		deployOpenPostgresStatus = originalOpen
+	})
 }

@@ -22,7 +22,16 @@ const deploySensitiveDataWarning = "This output contains sanitized deployment co
 var deployRefreshServingDB = postgres.RefreshServingDB
 var deployRebuildReadModel = rebuildPostgresReadModel
 var deployApplyScopedReaderGrants = postgres.ApplyScopedReaderGrants
-var deployOpenPostgresStatus = postgres.OpenStatus
+
+type doctorPostgresStatusStore interface {
+	Close() error
+	ReadModelStatus(context.Context) (*postgres.ReadModelStatus, error)
+	LatestServingRefreshMarker(context.Context) (*postgres.ServingDBRefreshMarker, error)
+}
+
+var deployOpenPostgresStatus = func(ctx context.Context, databaseURL string) (doctorPostgresStatusStore, error) {
+	return postgres.OpenStatus(ctx, databaseURL)
+}
 
 func (a *app) deploy(ctx context.Context, args []string) error {
 	if len(args) == 0 {
@@ -363,8 +372,12 @@ func rebuildPostgresReadModel(ctx context.Context, databaseURL string) (*postgre
 func (a *app) diagnosePostgresDeploy(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("doctor postgres-deploy", flag.ContinueOnError)
 	fs.SetOutput(a.err)
+	sourceURL := fs.String("source", "", "Postgres source/operator database URL, e.g. $GONGCTL_SOURCE_DATABASE_URL")
 	targetURL := fs.String("target", "", "Postgres redacted serving database URL, e.g. $GONGCTL_MCP_DATABASE_URL")
 	preset := fs.String("preset", "", "MCP tool preset to validate")
+	roleName := fs.String("role", "", "existing Postgres reader role name")
+	databaseName := fs.String("database", "", "Postgres database name for reader grants")
+	statementTimeout := fs.String("statement-timeout", "", "Postgres statement_timeout for the source serving refresh session, e.g. 30m")
 	maxMarkerAge := fs.Duration("max-marker-age", defaultPostgresDeployMarkerMaxAge, "maximum allowed age for the serving refresh marker")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -373,12 +386,17 @@ func (a *app) diagnosePostgresDeploy(ctx context.Context, args []string) error {
 		return errUsage
 	}
 
-	selectedPreset := deployInputDefault(*preset, "business-workbench", "GONGMCP_TOOL_PRESET")
+	source := refreshServingDBInput(*sourceURL, "GONGCTL_SOURCE_DATABASE_URL")
 	target := refreshServingDBInput(*targetURL, "GONGCTL_MCP_DATABASE_URL", "GONG_DATABASE_URL", "DATABASE_URL")
+	selectedPreset := deployInputDefault(*preset, "business-workbench", "GONGMCP_TOOL_PRESET")
+	role := deployInputDefault(*roleName, "gongmcp_business_workbench_reader", "GONGMCP_READER_ROLE")
+	database := deployInputDefault(*databaseName, "gongctl_mcp", "GONGMCP_DATABASE_NAME", "GONGCTL_MCP_DB")
+	statementTimeoutInput := refreshServingDBInput(*statementTimeout, "GONGCTL_REFRESH_STATEMENT_TIMEOUT")
+
 	checks := []postgresdeploy.Check{
-		envPresenceCheck("source_database_url", refreshServingDBInput("", "GONGCTL_SOURCE_DATABASE_URL"), "set GONGCTL_SOURCE_DATABASE_URL or pass --source to gongctl deploy postgres-refresh"),
-		envPresenceCheck("serving_database_url", target, "set GONGCTL_MCP_DATABASE_URL or pass --target"),
 		envPresenceCheck("governance_config", refreshServingDBInput("", "GONGCTL_AI_GOVERNANCE_CONFIG", "GONGMCP_AI_GOVERNANCE_CONFIG"), "set GONGCTL_AI_GOVERNANCE_CONFIG or GONGMCP_AI_GOVERNANCE_CONFIG"),
+		postgresdeploy.CheckStatementTimeout(statementTimeoutInput),
+		postgresdeploy.CheckScopedReaderRoleInput(role, database),
 	}
 
 	presetCheck, err := presetCatalogCheck(selectedPreset)
@@ -390,51 +408,78 @@ func (a *app) diagnosePostgresDeploy(ctx context.Context, args []string) error {
 			Message:     "selected MCP tool preset is not known",
 			Remediation: "use a reviewed preset such as business-workbench",
 		})
-		return writeJSONValue(a.out, diagnosePostgresDeployResponse{
-			Backend:              "postgres",
-			Preset:               selectedPreset,
-			Checks:               checks,
-			SensitiveDataWarning: deploySensitiveDataWarning,
-		})
-	}
-	checks = append(checks, presetCheck)
-
-	if target == "" {
 		checks = append(checks, postgresdeploy.Check{
-			Name:        "serving_refresh_marker",
+			Name:        "scoped_reader_grant_sql",
 			Status:      postgresdeploy.CheckFail,
-			ErrorKind:   "serving_database_url_missing",
-			Message:     "serving refresh marker could not be checked without a serving database URL",
-			Remediation: "set GONGCTL_MCP_DATABASE_URL or pass --target",
-		})
-		return writeJSONValue(a.out, diagnosePostgresDeployResponse{
-			Backend:              "postgres",
-			Preset:               selectedPreset,
-			Checks:               checks,
-			SensitiveDataWarning: deploySensitiveDataWarning,
-		})
-	}
-
-	store, err := deployOpenPostgresStatus(ctx, target)
-	if err != nil {
-		checks = append(checks, postgresdeploy.Check{
-			Name:        "serving_database_connectivity",
-			Status:      postgresdeploy.CheckFail,
-			ErrorKind:   "serving_database_unavailable",
-			Message:     "serving database could not be opened for diagnostics",
-			Remediation: "verify the serving database URL, network path, schema migrations, and reader privileges",
+			ErrorKind:   "unknown_tool_preset",
+			Message:     "scoped reader grant SQL could not be generated for an unknown preset",
+			Remediation: "use a reviewed preset such as business-workbench",
+			Evidence: []postgresdeploy.Evidence{
+				{Key: "role", Value: role},
+				{Key: "database", Value: database},
+			},
 		})
 	} else {
-		defer store.Close()
-		checks = append(checks, postgresdeploy.Check{
-			Name:    "serving_database_connectivity",
-			Status:  postgresdeploy.CheckPass,
-			Message: "serving database opened for diagnostics",
-		})
-		checks = append(checks, postgresdeploy.CheckServingRefreshMarker(ctx, store, postgresdeploy.ServingRefreshMarkerOptions{
-			MaxAge: *maxMarkerAge,
+		checks = append(checks, presetCheck)
+		allowlist, _ := mcp.ExpandToolPresetReaderGrantTools(selectedPreset)
+		checks = append(checks, postgresdeploy.CheckScopedReaderGrantSQL(postgres.ScopedReaderGrantSQLParams{
+			Allowlist:    allowlist,
+			RoleName:     role,
+			DatabaseName: database,
+			Generator:    "gongctl doctor postgres-deploy",
 		}))
 	}
+
+	var sourceStore doctorPostgresStatusStore
+	if source == "" {
+		checks = append(checks, postgresdeploy.CheckSourceDatabaseConnectivityMissing())
+		checks = append(checks, postgresdeploy.CheckSourceReadModelUnavailable("source_database_url_missing"))
+	} else {
+		var sourceErr error
+		sourceStore, sourceErr = deployOpenPostgresStatus(ctx, source)
+		checks = append(checks, postgresdeploy.CheckSourceDatabaseConnectivity(sourceErr))
+		if sourceErr != nil {
+			checks = append(checks, postgresdeploy.CheckSourceReadModelUnavailable("source_database_unavailable"))
+		} else {
+			checks = append(checks, postgresdeploy.CheckSourceReadModel(ctx, sourceStore))
+		}
+	}
+
+	var targetStore doctorPostgresStatusStore
+	if target == "" {
+		checks = append(checks, postgresdeploy.CheckServingDatabaseConnectivityMissing())
+		checks = append(checks, postgresdeploy.CheckServingRefreshMarkerUnavailable("serving_database_url_missing"))
+	} else {
+		var targetErr error
+		targetStore, targetErr = deployOpenPostgresStatus(ctx, target)
+		if targetErr != nil {
+			checks = append(checks, postgresdeploy.Check{
+				Name:        "serving_database_connectivity",
+				Status:      postgresdeploy.CheckFail,
+				ErrorKind:   "serving_database_unavailable",
+				Message:     "serving database could not be opened for diagnostics",
+				Remediation: "verify the serving database URL, network path, schema migrations, and reader privileges",
+			})
+			checks = append(checks, postgresdeploy.CheckServingRefreshMarkerUnavailable("serving_database_unavailable"))
+		} else {
+			checks = append(checks, postgresdeploy.Check{
+				Name:    "serving_database_connectivity",
+				Status:  postgresdeploy.CheckPass,
+				Message: "serving database opened for diagnostics",
+			})
+			checks = append(checks, postgresdeploy.CheckServingRefreshMarker(ctx, targetStore, postgresdeploy.ServingRefreshMarkerOptions{
+				MaxAge: *maxMarkerAge,
+			}))
+		}
+	}
+	defer func() {
+		if sourceStore != nil {
+			sourceStore.Close()
+		}
+		if targetStore != nil {
+			targetStore.Close()
+		}
+	}()
 
 	return writeJSONValue(a.out, diagnosePostgresDeployResponse{
 		Backend:              "postgres",

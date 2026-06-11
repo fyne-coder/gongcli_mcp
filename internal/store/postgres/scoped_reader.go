@@ -34,6 +34,18 @@ func ReadOnlyOptionsForToolAllowlist(allowlist []string) ReadOnlyOptions {
 	return options
 }
 
+// ValidateScopedReaderIdentifiers checks operator-supplied role and database names
+// without connecting to Postgres.
+func ValidateScopedReaderIdentifiers(role, database string) error {
+	if _, err := quotePostgresIdentifier(role); err != nil {
+		return fmt.Errorf("invalid role name: %w", err)
+	}
+	if _, err := quotePostgresIdentifier(database); err != nil {
+		return fmt.Errorf("invalid database name: %w", err)
+	}
+	return nil
+}
+
 func BuildScopedReaderGrantSQL(params ScopedReaderGrantSQLParams) (string, error) {
 	options := ReadOnlyOptionsForToolAllowlist(params.Allowlist)
 	if !options.EnforceAllowedColumnBoundary || !isReviewedScopedReaderSurface(params.Allowlist) {
