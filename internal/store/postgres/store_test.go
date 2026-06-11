@@ -263,6 +263,13 @@ func TestPostgresCacheInventoryAndDiagnostics(t *testing.T) {
 	if _, err := store.UpsertCall(ctx, json.RawMessage(`{"id":"pg-cache-001","title":"Postgres cache inventory","started":"2026-04-20T14:00:00Z","duration":1200,"parties":[{"id":"seller-1"}]}`)); err != nil {
 		t.Fatalf("UpsertCall returned error: %v", err)
 	}
+	if _, err := store.DB().ExecContext(ctx, `
+INSERT INTO call_ai_highlights(call_id, highlight_index, highlight_type, highlight_text, updated_at)
+VALUES
+	('pg-cache-001', 0, 'summary', 'Cache inventory safe summary.', now()::text),
+	('pg-cache-001', 1, 'next_steps', 'Cache inventory safe next step.', now()::text)`); err != nil {
+		t.Fatalf("insert call_ai_highlights returned error: %v", err)
+	}
 	if _, err := store.UpsertTranscript(ctx, json.RawMessage(`{"callId":"pg-cache-001","transcript":[{"speakerId":"seller-1","sentences":[{"start":0,"end":1000,"text":"Inventory diagnostics should count transcript segments."}]}]}`)); err != nil {
 		t.Fatalf("UpsertTranscript returned error: %v", err)
 	}
@@ -294,12 +301,27 @@ func TestPostgresCacheInventoryAndDiagnostics(t *testing.T) {
 	if inventory.Summary.TotalCalls != 1 || inventory.Summary.TotalUsers != 1 || inventory.Summary.TotalTranscripts != 1 || inventory.Summary.TotalTranscriptSegments != 1 {
 		t.Fatalf("unexpected summary counts: %+v", inventory.Summary)
 	}
-	if inventory.Summary.TotalCRMIntegrations != 1 || inventory.Summary.TotalCRMSchemaObjects != 1 || inventory.Summary.TotalCRMSchemaFields != 2 || inventory.Summary.TotalGongSettings != 1 || inventory.Summary.TotalScorecardActivity != 1 {
+	if inventory.Summary.TotalCRMIntegrations != 1 || inventory.Summary.TotalCRMSchemaObjects != 1 || inventory.Summary.TotalCRMSchemaFields != 2 || inventory.Summary.TotalGongSettings != 1 || inventory.Summary.TotalScorecardActivity != 1 || inventory.Summary.TotalAIHighlights != 2 {
 		t.Fatalf("unexpected inventory extension counts: %+v", inventory.Summary)
 	}
 	counts := postgresTableCounts(inventory.TableCounts)
-	if counts["calls"] != 1 || counts["users"] != 1 || counts["transcript_segments"] != 1 || counts["crm_schema_fields"] != 2 || counts["gong_settings"] != 1 || counts["scorecard_activity"] != 1 {
+	if counts["calls"] != 1 || counts["users"] != 1 || counts["transcript_segments"] != 1 || counts["crm_schema_fields"] != 2 || counts["gong_settings"] != 1 || counts["scorecard_activity"] != 1 || counts["call_ai_highlights"] != 2 {
 		t.Fatalf("unexpected table counts: %+v", counts)
+	}
+	readOnlyScopedView := &Store{
+		db:       store.DB(),
+		readOnly: true,
+		readOnlyOptions: ReadOnlyOptions{
+			EnforceAllowedColumnBoundary: true,
+		},
+	}
+	readOnlyInventory, err := readOnlyScopedView.CacheInventory(ctx)
+	if err != nil {
+		t.Fatalf("read-only scoped CacheInventory returned error: %v", err)
+	}
+	readOnlyCounts := postgresTableCounts(readOnlyInventory.TableCounts)
+	if readOnlyCounts["call_ai_highlights"] != 2 {
+		t.Fatalf("read-only scoped call_ai_highlights count=%d want 2 counts=%+v", readOnlyCounts["call_ai_highlights"], readOnlyCounts)
 	}
 
 	diagnostics, err := store.CacheDiagnostics(ctx)

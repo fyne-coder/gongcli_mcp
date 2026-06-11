@@ -172,6 +172,7 @@ func TestPostgresReadOnlyOptionsForBusinessPilotAllowlist(t *testing.T) {
 		"public.gongmcp_profile_call_fact_cache_sanitized_limited(bigint, text, integer)",
 		"public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint)",
 		"public.gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer)",
+		"public.gongmcp_profile_data_fingerprint()",
 		"public.gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text)",
 		"public.gongmcp_profile_transcript_backlog_sanitized(bigint, text, text, text, text, text, text, text, integer)",
 		"public.gongmcp_scorecard_activity_totals()",
@@ -185,9 +186,6 @@ func TestPostgresReadOnlyOptionsForBusinessPilotAllowlist(t *testing.T) {
 	}
 	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_profile_call_fact_cache_meta(bigint, text)") {
 		t.Fatalf("business-pilot required functions included canonical profile cache metadata helper: %v", options.RequiredFunctionSignatures)
-	}
-	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_profile_data_fingerprint()") {
-		t.Fatalf("business-pilot required functions included raw profile data fingerprint helper: %v", options.RequiredFunctionSignatures)
 	}
 	if containsString(options.RequiredFunctionSignatures, "public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)") {
 		t.Fatalf("business-pilot required functions included CRM-value profile summary helper: %v", options.RequiredFunctionSignatures)

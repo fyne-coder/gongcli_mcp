@@ -3095,6 +3095,7 @@ func postgresInventoryFallbackCounts(summary *sqlite.SyncStatusSummary) map[stri
 		"crm_schema_fields":    summary.TotalCRMSchemaFields,
 		"gong_settings":        summary.TotalGongSettings,
 		"scorecard_activity":   summary.TotalScorecardActivity,
+		"call_ai_highlights":   summary.TotalAIHighlights,
 	}
 }
 

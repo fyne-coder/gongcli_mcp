@@ -344,9 +344,6 @@ func scopedReaderFunctionSignatures(signatures []string, redactedAll bool) []str
 		if signature == "public.gongmcp_profile_call_fact_cache_meta(bigint, text)" {
 			signature = "public.gongmcp_profile_call_fact_cache_meta_sanitized(bigint)"
 		}
-		if signature == "public.gongmcp_profile_data_fingerprint()" && !redactedAll {
-			continue
-		}
 		if signature == "public.gongmcp_profile_call_fact_summary(bigint, text, text, text, text, text, text, text, integer)" {
 			signature = "public.gongmcp_profile_call_fact_summary_sanitized(bigint, text, text, text, text, text, text, text, integer)"
 		}

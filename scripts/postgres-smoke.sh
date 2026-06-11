@@ -284,6 +284,7 @@ rm -rf /tmp/gongctl-postgres-support-bundle
 GONG_DATABASE_URL="$READER_URL" go run ./cmd/gongctl support bundle --out /tmp/gongctl-postgres-support-bundle >/tmp/gongctl-postgres-support-bundle.json
 grep -q '"path_policy": "local_path_not_exported"' /tmp/gongctl-postgres-support-bundle.json
 grep -q '"contains_raw_customer_data": false' /tmp/gongctl-postgres-support-bundle.json
+grep -q '"postgres-deployment.json"' /tmp/gongctl-postgres-support-bundle.json
 grep -q '"backend": "postgres"' /tmp/gongctl-postgres-support-bundle/manifest.json
 grep -q '"path_policy": "database_url_not_exported"' /tmp/gongctl-postgres-support-bundle/manifest.json
 grep -q '"reader_privilege_status": "valid_reader"' /tmp/gongctl-postgres-support-bundle/diagnostics.json
@@ -291,6 +292,11 @@ grep -q '"read_model_status": "current"' /tmp/gongctl-postgres-support-bundle/di
 grep -q '"schema_version":' /tmp/gongctl-postgres-support-bundle/diagnostics.json
 grep -q '"total_crm_schema_fields": 5' /tmp/gongctl-postgres-support-bundle/cache-summary.json
 grep -q '"table": "crm_schema_fields"' /tmp/gongctl-postgres-support-bundle/cache-summary.json
+grep -q '"refresh_progress"' /tmp/gongctl-postgres-support-bundle/postgres-deployment.json
+grep -q '"status": "not_available"' /tmp/gongctl-postgres-support-bundle/postgres-deployment.json
+grep -q '"statement_timeout"' /tmp/gongctl-postgres-support-bundle/postgres-deployment.json
+grep -q '"scoped_reader_grant_sql"' /tmp/gongctl-postgres-support-bundle/postgres-deployment.json
+grep -q '"serving_refresh_marker"' /tmp/gongctl-postgres-support-bundle/postgres-deployment.json
 if grep -R -q 'postgres://\|gongctl_dev_password\|gongmcp_reader_dev_password\|127.0.0.1\|/tmp/gongctl-postgres-support-bundle\|synthetic-call-\|speaker-1\|crmObjects\|raw_json\|raw_sha256\|raw_payload\|Proposal\|Manufacturing\|Profile Account\|Synthetic Postgres profile\|canonical_sha256\|unavailable_concepts' /tmp/gongctl-postgres-support-bundle /tmp/gongctl-postgres-support-bundle.json; then
   echo "Postgres support bundle exposed DB URL, paths, secrets, raw fields, or customer-like fixture values" >&2
   exit 1
@@ -583,6 +589,9 @@ grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_cache_meta_s
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary_sanitized' /tmp/gongctl-postgres-business-pilot-reader-grants.sql
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary_sanitized' /tmp/gongctl-postgres-business-pilot-reader-grants-gongctl.sql
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_call_fact_summary_sanitized' /tmp/gongctl-postgres-business-pilot-reader-apply-dry-run.sql
+grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_data_fingerprint()' /tmp/gongctl-postgres-business-pilot-reader-grants.sql
+grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_data_fingerprint()' /tmp/gongctl-postgres-business-pilot-reader-grants-gongctl.sql
+grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_data_fingerprint()' /tmp/gongctl-postgres-business-pilot-reader-apply-dry-run.sql
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text)' /tmp/gongctl-postgres-business-pilot-reader-grants.sql
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text)' /tmp/gongctl-postgres-business-pilot-reader-grants-gongctl.sql
 grep -q 'GRANT EXECUTE ON FUNCTION public.gongmcp_profile_lifecycle_summary_sanitized(bigint, text, text)' /tmp/gongctl-postgres-business-pilot-reader-apply-dry-run.sql
@@ -598,7 +607,7 @@ for generated_sql in /tmp/gongctl-postgres-business-pilot-reader-grants.sql /tmp
   grep -q 'REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public"' "$generated_sql"
   grep -q 'not an analyst SQL login' "$generated_sql"
   grep -q 'minimized operational metadata' "$generated_sql"
-  grep -q 'reviewed business-pilot and analyst scoped readers' "$generated_sql"
+  grep -q 'reviewed business-workbench/facade, business-pilot, analyst, and redacted-all-readonly scoped readers' "$generated_sql"
   if grep -q 'PASSWORD\|postgres://\|GONG_DATABASE_URL' "$generated_sql"; then
     echo "generated business-pilot reader grant SQL unexpectedly contains secret or connection-url marker: $generated_sql" >&2
     exit 1
@@ -1441,7 +1450,7 @@ grep -q 'gongmcp_search_transcript_segments_by_crm_context' /tmp/gongctl-postgre
 grep -q 'gongmcp_missing_transcripts' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_missing_transcript_count' /tmp/gongctl-postgres-reader-function-public-drift.txt
 grep -q 'gongmcp_crm_object_type_summary' /tmp/gongctl-postgres-reader-function-public-drift.txt
-docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_missing_transcript_count() FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_missing_transcript_count() TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader" >/tmp/gongctl-postgres-reader-function-public-drift-repaired.txt
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "REVOKE EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_missing_transcript_count() FROM PUBLIC; REVOKE EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() FROM PUBLIC; GRANT EXECUTE ON FUNCTION gongmcp_opportunities_missing_transcripts(text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_opportunity_call_summary(text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_crm_field_population_matrix(text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_compare_lifecycle_crm_fields(text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_crm_context(text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_missing_transcripts(text, text, text, text, text, text, text, text, integer) TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_missing_transcript_count() TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_crm_object_type_summary() TO gongmcp_reader; GRANT EXECUTE ON FUNCTION gongmcp_call_ai_highlights_count() TO gongmcp_reader" >/tmp/gongctl-postgres-reader-function-public-drift-repaired.txt
 analyst_generated_sql="/tmp/gongctl-postgres-analyst-reader-grants.sql"
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl mcp postgres-reader-sql --preset analyst --role gongmcp_analyst_reader --database gongctl > "$analyst_generated_sql"
 for required_grant in \
@@ -1494,7 +1503,7 @@ if analyst_reader_psql -c "SELECT call_id FROM calls LIMIT 1" >/tmp/gongctl-post
   exit 1
 fi
 grep -q 'permission denied' /tmp/gongctl-postgres-analyst-reader-calls-call-id-denied.txt
-if analyst_reader_psql -c "SELECT * FROM gongmcp_business_analysis_calls('', 'shared Postgres', '', '', '', '', '', '', '', '', '', '', '', '', '', 1)" >/tmp/gongctl-postgres-analyst-reader-raw-business-calls-denied.txt 2>&1; then
+if analyst_reader_psql -c "SELECT * FROM gongmcp_business_analysis_calls('', 'shared Postgres', '', '', '', '', '', '', '', '', '', '', '', '', '', '[]', false, 1, '[]')" >/tmp/gongctl-postgres-analyst-reader-raw-business-calls-denied.txt 2>&1; then
   echo "analyst scoped reader unexpectedly executed raw business-analysis call helper" >&2
   exit 1
 fi
@@ -1504,7 +1513,7 @@ if analyst_reader_psql -c "SELECT * FROM gongmcp_search_transcript_segments('sha
   exit 1
 fi
 grep -q 'permission denied' /tmp/gongctl-postgres-analyst-reader-raw-transcript-search-denied.txt
-analyst_reader_psql -tA -c "SELECT row_to_json(r)::text FROM gongmcp_business_analysis_calls_sanitized('', 'shared Postgres', '', '', '', '', '', '', '', '', '', '', '', '', '', 1) r" >/tmp/gongctl-postgres-analyst-reader-business-calls-sanitized.json
+analyst_reader_psql -tA -c "SELECT row_to_json(r)::text FROM gongmcp_business_analysis_calls_sanitized('', 'shared Postgres', '', '', '', '', '', '', '', '', '', '', '', '', '', '[]', false, 1, '[]') r" >/tmp/gongctl-postgres-analyst-reader-business-calls-sanitized.json
 if grep -q 'synthetic-call-001\|CustomerA\|Shared Postgres pilot kickoff' /tmp/gongctl-postgres-analyst-reader-business-calls-sanitized.json; then
   echo "analyst scoped reader sanitized business-analysis helper exposed raw call identifier or title" >&2
   exit 1
@@ -1597,9 +1606,10 @@ if GONG_DATABASE_URL="$READER_URL" GONGMCP_TOOL_PRESET=all-readonly go run ./cmd
   echo "postgres unexpectedly accepted all-readonly preset" >&2
   exit 1
 fi
-grep -q 'all-readonly is not supported by the postgres vertical slice' /tmp/gongctl-postgres-all-readonly-rejected.txt
+grep -q 'all-readonly is not supported by the postgres backend' /tmp/gongctl-postgres-all-readonly-rejected.txt
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-post-analyst-read-model-rebuild.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-post-analyst-read-model-rebuild.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_call_ai_highlights_count() TO gongmcp_reader" >/tmp/gongctl-postgres-post-analyst-reader-repair.txt
 
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -1632,6 +1642,7 @@ docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl
 grep -q 'profile read model is missing or stale' /tmp/gongctl-postgres-profile-stale-reader.jsonl
 GONG_DATABASE_URL="$WRITER_URL" go run ./cmd/gongctl sync read-model --rebuild >/tmp/gongctl-postgres-profile-cache-rewarm.json
 grep -q '"status": "rebuilt"' /tmp/gongctl-postgres-profile-cache-rewarm.json
+docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres psql -U gongctl -d gongctl -v ON_ERROR_STOP=1 -c "GRANT EXECUTE ON FUNCTION gongmcp_call_ai_highlights_count() TO gongmcp_business_pilot_reader" >/tmp/gongctl-postgres-business-pilot-reader-profile-repair.txt
 {
   printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"summarize_call_facts","arguments":{"group_by":"scope","lifecycle_source":"profile","limit":5}}}'
