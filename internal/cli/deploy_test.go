@@ -196,7 +196,7 @@ func TestDeployPostgresRefreshReportsSourceTranscriptSegmentTimeout(t *testing.T
 	combined := stdout.String() + stderr.String()
 	for _, want := range []string{
 		"deploy postgres-refresh failed at serving_refresh",
-		"source transcript_segments copy exceeded the Postgres statement_timeout",
+		"source transcript_segments copy timed out",
 		"raise statement_timeout for the refresh role or session",
 	} {
 		if !strings.Contains(combined, want) {

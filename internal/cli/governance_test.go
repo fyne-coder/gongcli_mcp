@@ -331,7 +331,8 @@ lists:
 		t.Fatalf("expected non-zero exit for unavailable source; stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	combined := stdout.String() + stderr.String()
-	if !strings.Contains(combined, "source database is unavailable or invalid") {
+	if !strings.Contains(combined, "source database connect failed") ||
+		!strings.Contains(combined, "database connection, network path, or credentials are unavailable") {
 		t.Fatalf("expected sanitized source database error; got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	for _, leak := range []string{"operator", "synthetic-secret", "gongctl_source", "gongctl_mcp", sourceURL, targetURL} {
@@ -372,7 +373,7 @@ lists:
 	}
 	combined := stdout.String() + stderr.String()
 	for _, want := range []string{
-		"source transcript_segments copy exceeded the Postgres statement_timeout",
+		"source transcript_segments copy timed out",
 		"raise statement_timeout for the refresh role or session",
 	} {
 		if !strings.Contains(combined, want) {

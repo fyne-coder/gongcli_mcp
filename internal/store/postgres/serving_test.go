@@ -131,7 +131,7 @@ func TestRefreshServingDBCopyClearsPriorServingRefreshMarker(t *testing.T) {
 }
 
 func TestServingRefreshPhaseErrorClassifiesStatementTimeout(t *testing.T) {
-	pgErr := &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"}
+	pgErr := &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout for customer query"}
 	wrapped := wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, pgErr)
 
 	var phaseErr *ServingRefreshPhaseError
@@ -147,9 +147,137 @@ func TestServingRefreshPhaseErrorClassifiesStatementTimeout(t *testing.T) {
 	}
 
 	detail := ServingRefreshOperatorDetail(fmt.Errorf("copy filtered serving data: %w", wrapped))
-	want := "source transcript_segments copy exceeded the Postgres statement_timeout; raise statement_timeout for the refresh role or session and rerun"
+	want := "source transcript_segments copy timed out; raise statement_timeout for the refresh role or session when Postgres canceled the statement, then rerun"
 	if detail != want {
 		t.Fatalf("operator detail=%q want=%q", detail, want)
+	}
+	rendered := wrapped.Error()
+	for _, leak := range []string{"canceling statement", "57014", "customer query"} {
+		if strings.Contains(rendered, leak) {
+			t.Fatalf("ServingRefreshPhaseError.Error leaked %q in %q", leak, rendered)
+		}
+	}
+}
+
+func TestServingRefreshPhaseErrorClassifiesContextAndNetworkErrors(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantCause  ServingRefreshCause
+		wantDetail string
+	}{
+		{
+			name:       "context canceled",
+			err:        context.Canceled,
+			wantCause:  ServingRefreshCauseCanceled,
+			wantDetail: "was canceled before completing",
+		},
+		{
+			name:       "context deadline",
+			err:        context.DeadlineExceeded,
+			wantCause:  ServingRefreshCauseStatementTimeout,
+			wantDetail: "timed out",
+		},
+		{
+			name:       "network error",
+			err:        servingRefreshTestNetError{},
+			wantCause:  ServingRefreshCauseConnectionFailed,
+			wantDetail: "database connection, network path, or credentials are unavailable",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := wrapServingRefreshPhaseError(ServingRefreshSideSource, "database", ServingRefreshPhaseConnect, tc.err)
+			var phaseErr *ServingRefreshPhaseError
+			if !errors.As(wrapped, &phaseErr) {
+				t.Fatalf("expected phase error")
+			}
+			if phaseErr.Cause != tc.wantCause {
+				t.Fatalf("cause=%q want %q", phaseErr.Cause, tc.wantCause)
+			}
+			detail := ServingRefreshOperatorDetail(wrapped)
+			if !strings.Contains(detail, tc.wantDetail) {
+				t.Fatalf("detail=%q did not contain %q", detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestServingRefreshPhaseErrorClassifiesPostgresCauses(t *testing.T) {
+	cases := []struct {
+		name       string
+		code       string
+		wantCause  ServingRefreshCause
+		wantDetail string
+	}{
+		{
+			name:       "lock timeout",
+			code:       "55P03",
+			wantCause:  ServingRefreshCauseLockTimeout,
+			wantDetail: "blocked by a Postgres lock timeout or deadlock",
+		},
+		{
+			name:       "deadlock",
+			code:       "40P01",
+			wantCause:  ServingRefreshCauseLockTimeout,
+			wantDetail: "blocked by a Postgres lock timeout or deadlock",
+		},
+		{
+			name:       "permission denied",
+			code:       "42501",
+			wantCause:  ServingRefreshCausePermissionDenied,
+			wantDetail: "privileges are insufficient",
+		},
+		{
+			name:       "undefined table",
+			code:       "42P01",
+			wantCause:  ServingRefreshCauseMigrationMissing,
+			wantDetail: "schema objects are missing or stale",
+		},
+		{
+			name:       "undefined column",
+			code:       "42703",
+			wantCause:  ServingRefreshCauseMigrationMissing,
+			wantDetail: "schema objects are missing or stale",
+		},
+		{
+			name:       "undefined function",
+			code:       "42883",
+			wantCause:  ServingRefreshCauseMigrationMissing,
+			wantDetail: "schema objects are missing or stale",
+		},
+		{
+			name:       "invalid password",
+			code:       "28P01",
+			wantCause:  ServingRefreshCauseConnectionFailed,
+			wantDetail: "database connection, network path, or credentials are unavailable",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pgErr := &pgconn.PgError{Code: tc.code, Message: "raw driver detail with customer name and SELECT * FROM calls"}
+			wrapped := wrapServingRefreshPhaseError(ServingRefreshSideTarget, "calls", ServingRefreshPhaseCopy, pgErr)
+			var phaseErr *ServingRefreshPhaseError
+			if !errors.As(wrapped, &phaseErr) {
+				t.Fatalf("expected phase error")
+			}
+			if phaseErr.Cause != tc.wantCause {
+				t.Fatalf("cause=%q want %q", phaseErr.Cause, tc.wantCause)
+			}
+			detail := ServingRefreshOperatorDetail(fmt.Errorf("refresh: %w", wrapped))
+			if !strings.Contains(detail, tc.wantDetail) {
+				t.Fatalf("detail=%q did not contain %q", detail, tc.wantDetail)
+			}
+			var recovered *pgconn.PgError
+			if !errors.As(wrapped, &recovered) || recovered.Code != tc.code {
+				t.Fatalf("underlying pg error was not unwrap-visible")
+			}
+			for _, leak := range []string{"raw driver detail", "customer name", "SELECT * FROM calls", tc.code} {
+				if strings.Contains(wrapped.Error(), leak) || strings.Contains(detail, leak) {
+					t.Fatalf("sanitized output leaked %q: error=%q detail=%q", leak, wrapped.Error(), detail)
+				}
+			}
+		})
 	}
 }
 
@@ -165,7 +293,46 @@ func TestServingRefreshPhaseErrorAlwaysReturnsSanitizedDetail(t *testing.T) {
 	if strings.Contains(detail, "raw driver payload") || strings.Contains(detail, "customer text") {
 		t.Fatalf("operator detail leaked raw error: %q", detail)
 	}
+	if strings.Contains(detail, "operator logs") {
+		t.Fatalf("operator detail should not reference nonexistent operator logs: %q", detail)
+	}
 }
+
+func TestServingRefreshPhaseErrorStringHeuristicsAreTight(t *testing.T) {
+	validation := wrapServingRefreshPhaseError(
+		ServingRefreshSideServing,
+		"copy_counts",
+		ServingRefreshPhaseValidation,
+		errors.New("redacted serving database validation failed: calls target=1 want=2"),
+	)
+	var validationPhase *ServingRefreshPhaseError
+	if !errors.As(validation, &validationPhase) {
+		t.Fatalf("expected phase error")
+	}
+	if validationPhase.Cause != ServingRefreshCauseValidationFailed {
+		t.Fatalf("validation cause=%q", validationPhase.Cause)
+	}
+
+	yamlOnly := wrapServingRefreshPhaseError(
+		ServingRefreshSideSource,
+		"calls",
+		ServingRefreshPhaseCopy,
+		errors.New("source row mentioned yaml payload marker only"),
+	)
+	var yamlPhase *ServingRefreshPhaseError
+	if !errors.As(yamlOnly, &yamlPhase) {
+		t.Fatalf("expected phase error")
+	}
+	if yamlPhase.Cause == ServingRefreshCauseConfigInvalid {
+		t.Fatalf("plain yaml mention should not classify as config invalid")
+	}
+}
+
+type servingRefreshTestNetError struct{}
+
+func (servingRefreshTestNetError) Error() string   { return "dial tcp customer.internal:5432" }
+func (servingRefreshTestNetError) Timeout() bool   { return false }
+func (servingRefreshTestNetError) Temporary() bool { return true }
 
 // TestRefreshServingDBVerticalSliceCopiesAllowedRows is the integration test
 // for Phase 13e4. It requires two synthetic Postgres databases:
