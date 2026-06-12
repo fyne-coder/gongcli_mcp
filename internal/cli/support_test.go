@@ -3,12 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/postgres"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -108,6 +112,14 @@ func TestSupportBundleWritesMetadataOnlyBundle(t *testing.T) {
 			t.Fatalf("expected bundle file %s: %v", name, err)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(outDir, "postgres-deployment.json")); !os.IsNotExist(err) {
+		t.Fatalf("sqlite bundle should not write postgres-deployment.json: %v", err)
+	}
+	for _, name := range response.Files {
+		if name == "postgres-deployment.json" {
+			t.Fatalf("sqlite bundle response listed postgres-deployment.json: %+v", response.Files)
+		}
+	}
 
 	body := readSupportBundleBody(t, outDir)
 	for _, forbidden := range []string{
@@ -166,6 +178,187 @@ func TestSupportBundleRequiresEmptyOutputDirectory(t *testing.T) {
 	if !strings.Contains(stderr.String(), "empty directory") {
 		t.Fatalf("stderr=%q want empty-directory guidance", stderr.String())
 	}
+}
+
+func TestSupportBundlePostgresWritesDeploymentArtifact(t *testing.T) {
+	clearDeployEnv(t)
+	outDir := filepath.Join(t.TempDir(), "support-bundle")
+	readerURL := "postgres://gongmcp_reader:reader-secret@127.0.0.1:5432/gongctl?sslmode=disable"
+	sourceURL := "postgres://gongctl:source-secret@source.internal:5432/gongctl_source?sslmode=disable"
+	t.Setenv("GONG_DATABASE_URL", readerURL)
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("GONGCTL_SOURCE_DATABASE_URL", sourceURL)
+	t.Setenv("GONGCTL_REFRESH_STATEMENT_TIMEOUT", "45m")
+	t.Setenv("GONGMCP_TOOL_PRESET", "business-workbench")
+
+	markerTime := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339Nano)
+	withSupportBundleStoreFakes(t, func(ctx context.Context, path string) (cacheInventoryStore, string, string, error) {
+		if strings.TrimSpace(path) != "" {
+			return defaultOpenCacheInventoryStore(ctx, path)
+		}
+		return &fakeSupportPostgresStore{
+			inventory: &sqlite.CacheInventory{
+				Summary: &sqlite.SyncStatusSummary{},
+			},
+			diagnostics: &postgres.CacheDiagnostics{
+				Backend:                "postgres",
+				SchemaVersion:          1,
+				SupportedSchemaVersion: 1,
+				ReadModelReady:         true,
+				ReadModelStatus:        "current",
+				ProfileCacheStatus:     "fresh",
+				ReaderPrivilegeStatus:  "valid_reader",
+			},
+			marker: &postgres.ServingDBRefreshMarker{
+				ID:                    7,
+				RefreshedAt:           markerTime,
+				SourceDataFingerprint: "source-fingerprint-sha256",
+				TargetDataFingerprint: "target-fingerprint-sha256",
+				PolicyConfigSHA256:    "policy-config-sha256",
+			},
+		}, "postgres", "", nil
+	})
+	withDoctorFakes(t, func(ctx context.Context, databaseURL string) (doctorPostgresStatusStore, error) {
+		if databaseURL != sourceURL {
+			return nil, errors.New("unexpected source database URL")
+		}
+		return &fakeDoctorPostgresStore{
+			readModel: &postgres.ReadModelStatus{ModelName: "builtin_call_facts", Ready: true, CallCount: 3},
+		}, nil
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"support", "bundle", "--out", outDir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(support bundle) code=%d stderr=%q", code, stderr.String())
+	}
+
+	var response struct {
+		Files []string `json:"files"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !supportBundleFilesContains(response.Files, "postgres-deployment.json") {
+		t.Fatalf("postgres bundle missing postgres-deployment.json in files: %+v", response.Files)
+	}
+	if !supportBundleFilesContains(response.Files, "diagnostics.json") {
+		t.Fatalf("postgres bundle missing diagnostics.json in files: %+v", response.Files)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "postgres-deployment.json")); err != nil {
+		t.Fatalf("expected postgres-deployment.json: %v", err)
+	}
+
+	body := readSupportBundleBody(t, outDir)
+	if !strings.Contains(body, `"status": "pass"`) || !strings.Contains(body, `"name": "serving_refresh_marker"`) {
+		t.Fatalf("postgres deployment artifact missing serving refresh marker pass:\n%s", body)
+	}
+	if !strings.Contains(body, `"status": "not_available"`) || !strings.Contains(body, `"refresh_progress"`) {
+		t.Fatalf("postgres deployment artifact missing deferred refresh progress:\n%s", body)
+	}
+	if !strings.Contains(body, `"GONGCTL_REFRESH_STATEMENT_TIMEOUT": true`) || !strings.Contains(body, `"GONGCTL_SOURCE_DATABASE_URL": true`) {
+		t.Fatalf("postgres deployment artifact missing deployment config posture:\n%s", body)
+	}
+	if !strings.Contains(body, `"statement_timeout"`) || !strings.Contains(body, `"45m"`) {
+		t.Fatalf("postgres deployment artifact missing statement timeout evidence:\n%s", body)
+	}
+	assertSupportBundleSanitized(t, body, []string{
+		readerURL,
+		sourceURL,
+		"reader-secret",
+		"source-secret",
+		"127.0.0.1",
+		"source.internal",
+		"postgres://",
+		"GRANT CONNECT",
+		"BEGIN;",
+		outDir,
+	})
+}
+
+func TestSupportBundlePostgresDeploymentOmitsForbiddenValues(t *testing.T) {
+	clearDeployEnv(t)
+	outDir := filepath.Join(t.TempDir(), "support-bundle")
+	t.Setenv("GONG_DATABASE_URL", "postgres://gongmcp_reader:bundle-secret@db.example:5432/gongctl?sslmode=require")
+
+	withSupportBundleStoreFakes(t, func(ctx context.Context, path string) (cacheInventoryStore, string, string, error) {
+		return &fakeSupportPostgresStore{
+			inventory: &sqlite.CacheInventory{Summary: &sqlite.SyncStatusSummary{}},
+			diagnostics: &postgres.CacheDiagnostics{
+				Backend:         "postgres",
+				ReadModelStatus: "current",
+			},
+			markerErr: sql.ErrNoRows,
+		}, "postgres", "", nil
+	})
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(context.Background(), []string{"support", "bundle", "--out", outDir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run(support bundle) code=%d stderr=%q", code, stderr.String())
+	}
+
+	body := readSupportBundleBody(t, outDir) + stdout.String()
+	assertSupportBundleSanitized(t, body, []string{
+		"postgres://",
+		"bundle-secret",
+		"db.example",
+		"GRANT ",
+		"CREATE ROLE",
+	})
+}
+
+func supportBundleFilesContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func assertSupportBundleSanitized(t *testing.T, body string, forbidden []string) {
+	t.Helper()
+	for _, leak := range forbidden {
+		if strings.Contains(body, leak) {
+			t.Fatalf("support bundle leaked %q in:\n%s", leak, body)
+		}
+	}
+}
+
+type fakeSupportPostgresStore struct {
+	inventory   *sqlite.CacheInventory
+	diagnostics *postgres.CacheDiagnostics
+	marker      *postgres.ServingDBRefreshMarker
+	markerErr   error
+}
+
+func (f *fakeSupportPostgresStore) Close() error { return nil }
+
+func (f *fakeSupportPostgresStore) CacheInventory(context.Context) (*sqlite.CacheInventory, error) {
+	return f.inventory, nil
+}
+
+func (f *fakeSupportPostgresStore) CacheDiagnostics(context.Context) (*postgres.CacheDiagnostics, error) {
+	return f.diagnostics, nil
+}
+
+func (f *fakeSupportPostgresStore) LatestServingRefreshMarker(context.Context) (*postgres.ServingDBRefreshMarker, error) {
+	if f.markerErr != nil {
+		return nil, f.markerErr
+	}
+	return f.marker, nil
+}
+
+func withSupportBundleStoreFakes(t *testing.T, open func(context.Context, string) (cacheInventoryStore, string, string, error)) {
+	t.Helper()
+	original := openCacheInventoryStoreFn
+	openCacheInventoryStoreFn = open
+	t.Cleanup(func() {
+		openCacheInventoryStoreFn = original
+	})
 }
 
 func readSupportBundleBody(t *testing.T, dir string) string {

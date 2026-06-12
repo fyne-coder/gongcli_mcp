@@ -530,7 +530,7 @@ if GONG_DATABASE_URL="$ANALYST_READER_URL" GONGMCP_TOOL_PRESET=all-readonly GONG
   cat "$ALL_READONLY_REJECTED_OUT" >&2
   exit 1
 fi
-grep -q 'all-readonly is not supported by the postgres vertical slice' "$ALL_READONLY_REJECTED_OUT"
+grep -q 'all-readonly is not supported by the postgres backend' "$ALL_READONLY_REJECTED_OUT"
 assert_no_leak "all-readonly rejection" "$ALL_READONLY_REJECTED_OUT"
 
 # Step 9: direct SQL denial as the scoped analyst role on the serving DB.

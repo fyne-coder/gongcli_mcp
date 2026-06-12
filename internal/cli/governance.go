@@ -344,13 +344,16 @@ func sanitizeRefreshServingDBError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if detail := postgres.ServingRefreshOperatorDetail(err); detail != "" {
+		return fmt.Errorf("refresh serving database failed: %s", detail)
+	}
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "parse source database URL") || strings.Contains(msg, "open source database"):
 		return fmt.Errorf("refresh serving database failed: source database is unavailable or invalid")
 	case strings.Contains(msg, "parse target database URL") || strings.Contains(msg, "open target database"):
 		return fmt.Errorf("refresh serving database failed: target database is unavailable or invalid")
-	case strings.Contains(msg, "source") || strings.Contains(msg, "target"):
+	case strings.Contains(msg, "source and target database URLs must point to different databases"):
 		return fmt.Errorf("refresh serving database failed: %s", msg)
 	default:
 		return fmt.Errorf("refresh serving database failed; inspect operator logs for details")

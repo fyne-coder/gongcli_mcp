@@ -33,6 +33,16 @@ type FacadeOperation struct {
 	Examples       []any          `json:"examples,omitempty"`
 }
 
+func facadeCallFilterSchema() map[string]any {
+	return callFilterSchema(LimitPolicy{})
+}
+
+func facadeCallFilterSchemaWithDescription(description string) map[string]any {
+	schema := facadeCallFilterSchema()
+	schema["description"] = description
+	return schema
+}
+
 // Stable facade tool names. They must remain stable across versions even as
 // operations are added or evolve.
 const (
@@ -103,7 +113,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"business-workbench", "analyst-facade", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":              map[string]any{"type": "object"},
+				"filter":              facadeCallFilterSchema(),
 				"limit":               map[string]any{"type": "integer"},
 				"include_call_titles": map[string]any{"type": "boolean", "description": "Legacy compatibility flag. Call titles are included by default where backend and policy permit; field_profile=limited or hide_call_titles suppresses them."},
 				"include_account_names": map[string]any{
@@ -178,7 +188,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter": map[string]any{"type": "object"},
+				"filter": facadeCallFilterSchema(),
 				"limit":  map[string]any{"type": "integer"},
 			}, nil),
 			Examples: []any{
@@ -202,7 +212,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter": map[string]any{"type": "object"},
+				"filter": facadeCallFilterSchema(),
 				"limit":  map[string]any{"type": "integer"},
 			}, nil),
 		},
@@ -215,7 +225,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":        map[string]any{"type": "object"},
+				"filter":        facadeCallFilterSchema(),
 				"theme_query":   map[string]any{"type": "string"},
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
@@ -230,7 +240,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter": map[string]any{"type": "object"},
+				"filter": facadeCallFilterSchema(),
 			}, nil),
 		},
 		{
@@ -243,7 +253,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":        map[string]any{"type": "object"},
+				"filter":        facadeCallFilterSchema(),
 				"theme_query":   map[string]any{"type": "string"},
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
@@ -258,7 +268,7 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter":        map[string]any{"type": "object"},
+				"filter":        facadeCallFilterSchema(),
 				"theme_query":   map[string]any{"type": "string"},
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
@@ -346,7 +356,7 @@ func FacadeOperations() []FacadeOperation {
 				"broad-public-redacted",
 			},
 			InputSchema: objectSchema(map[string]any{
-				"filter":        map[string]any{"type": "object"},
+				"filter":        facadeCallFilterSchema(),
 				"from_date":     map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.from_date."},
 				"to_date":       map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.to_date."},
 				"quarter":       map[string]any{"type": "string", "description": "Calendar quarter such as 2026-Q1; alias for filter.quarter."},
@@ -450,7 +460,7 @@ func FacadeOperations() []FacadeOperation {
 			},
 			InputSchema: objectSchema(map[string]any{
 				"question":              map[string]any{"type": "string", "maxLength": maxQuestionAnswerQuestionLength},
-				"filter":                map[string]any{"type": "object", "description": "Must include account_query and a selective date/title/lifecycle/stage constraint when possible."},
+				"filter":                facadeCallFilterSchemaWithDescription("Must include account_query and a selective date/title/lifecycle/stage constraint when possible."),
 				"query":                 map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional transcript quote search seed. Defaults to a bounded derivation from question."},
 				"theme_query":           map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for query."},
 				"role_context":          map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
@@ -494,7 +504,7 @@ func FacadeOperations() []FacadeOperation {
 			},
 			InputSchema: objectSchema(map[string]any{
 				"question":              map[string]any{"type": "string", "maxLength": maxQuestionAnswerQuestionLength},
-				"filter":                map[string]any{"type": "object"},
+				"filter":                facadeCallFilterSchema(),
 				"role_context":          map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
 				"output_intent":         map[string]any{"type": "string", "enum": []string{"", "brief", "quotes", "risks", "themes", "next_steps"}},
 				"field_profile":         fieldProfileSchema(),

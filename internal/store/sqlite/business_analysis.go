@@ -41,33 +41,63 @@ const (
 )
 
 const (
-	defaultBusinessAnalysisLimit       = 25
-	maxBusinessAnalysisLimit           = 1000
-	maxBusinessAnalysisFTSQueryLength  = 160
-	maxBusinessAnalysisFTSQueryTerms   = 12
-	maxBusinessAnalysisFTSQueryTermLen = 48
+	defaultBusinessAnalysisLimit                  = 25
+	maxBusinessAnalysisLimit                      = 1000
+	maxBusinessAnalysisFTSQueryLength             = 160
+	maxBusinessAnalysisFTSQueryTerms              = 12
+	maxBusinessAnalysisFTSQueryTermLen            = 48
+	MaxBusinessAnalysisDimensionFilterValueLength = 160
 )
 
+var businessAnalysisFilterDimensionAliases = map[string]string{
+	"account_revenue_range":         "account_revenue_range",
+	"revenue_range":                 "account_revenue_range",
+	"account_type":                  "account_type",
+	"account_industry":              "account_industry",
+	"industry":                      "account_industry",
+	"opportunity_stage":             "opportunity_stage",
+	"stage":                         "opportunity_stage",
+	"opportunity_type":              "opportunity_type",
+	"forecast_category":             "forecast_category",
+	"opportunity_forecast_category": "forecast_category",
+	"scope":                         "scope",
+	"system":                        "system",
+	"direction":                     "direction",
+	"transcript_status":             "transcript_status",
+	"lifecycle":                     "lifecycle_bucket",
+	"lifecycle_bucket":              "lifecycle_bucket",
+	"month":                         "call_month",
+	"call_month":                    "call_month",
+	"quarter":                       "quarter",
+}
+
 type BusinessAnalysisFilter struct {
-	TitleQuery              string   `json:"title_query,omitempty"`
-	Query                   string   `json:"query,omitempty"`
-	FromDate                string   `json:"from_date,omitempty"`
-	ToDate                  string   `json:"to_date,omitempty"`
-	Quarter                 string   `json:"quarter,omitempty"`
-	LifecycleBucket         string   `json:"lifecycle_bucket,omitempty"`
-	ExcludeLifecycleBuckets []string `json:"exclude_lifecycle_buckets,omitempty"`
-	ExcludeLikelyVoicemail  bool     `json:"exclude_likely_voicemail,omitempty"`
-	Scope                   string   `json:"scope,omitempty"`
-	System                  string   `json:"system,omitempty"`
-	Direction               string   `json:"direction,omitempty"`
-	TranscriptStatus        string   `json:"transcript_status,omitempty"`
-	Industry                string   `json:"industry,omitempty"`
-	AccountQuery            string   `json:"account_query,omitempty"`
-	OpportunityStage        string   `json:"opportunity_stage,omitempty"`
-	CRMObjectType           string   `json:"crm_object_type,omitempty"`
-	CRMObjectID             string   `json:"crm_object_id,omitempty"`
-	ParticipantTitleQuery   string   `json:"participant_title_query,omitempty"`
-	Limit                   int      `json:"limit,omitempty"`
+	TitleQuery              string                            `json:"title_query,omitempty"`
+	Query                   string                            `json:"query,omitempty"`
+	FromDate                string                            `json:"from_date,omitempty"`
+	ToDate                  string                            `json:"to_date,omitempty"`
+	Quarter                 string                            `json:"quarter,omitempty"`
+	LifecycleBucket         string                            `json:"lifecycle_bucket,omitempty"`
+	ExcludeLifecycleBuckets []string                          `json:"exclude_lifecycle_buckets,omitempty"`
+	ExcludeLikelyVoicemail  bool                              `json:"exclude_likely_voicemail,omitempty"`
+	Scope                   string                            `json:"scope,omitempty"`
+	System                  string                            `json:"system,omitempty"`
+	Direction               string                            `json:"direction,omitempty"`
+	TranscriptStatus        string                            `json:"transcript_status,omitempty"`
+	Industry                string                            `json:"industry,omitempty"`
+	AccountQuery            string                            `json:"account_query,omitempty"`
+	OpportunityStage        string                            `json:"opportunity_stage,omitempty"`
+	CRMObjectType           string                            `json:"crm_object_type,omitempty"`
+	CRMObjectID             string                            `json:"crm_object_id,omitempty"`
+	ParticipantTitleQuery   string                            `json:"participant_title_query,omitempty"`
+	DimensionFilters        []BusinessAnalysisDimensionFilter `json:"dimension_filters,omitempty"`
+	Limit                   int                               `json:"limit,omitempty"`
+}
+
+type BusinessAnalysisDimensionFilter struct {
+	Dimension string   `json:"dimension"`
+	Operator  string   `json:"operator"`
+	Values    []string `json:"values,omitempty"`
 }
 
 type BusinessAnalysisCallSearchParams struct {
@@ -1112,7 +1142,36 @@ func businessAnalysisCallFromWhere(filter BusinessAnalysisFilter, includeFilterQ
 		where = append(where, businessAnalysisParticipantTitleLikeSQL("c", "?"))
 		args = append(args, value, value, value)
 	}
+	var err error
+	where, args, err = businessAnalysisAppendDimensionFilters(where, args, filter.DimensionFilters)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	return from, where, args, nil
+}
+
+func businessAnalysisAppendDimensionFilters(where []string, args []any, filters []BusinessAnalysisDimensionFilter) ([]string, []any, error) {
+	for _, filter := range filters {
+		_, expr, err := businessAnalysisFilterDimensionExpr(filter.Dimension)
+		if err != nil {
+			return nil, nil, err
+		}
+		switch filter.Operator {
+		case "equals":
+			where = append(where, expr+` = ?`)
+			args = append(args, filter.Values[0])
+		case "in":
+			placeholders := make([]string, 0, len(filter.Values))
+			for _, value := range filter.Values {
+				placeholders = append(placeholders, "?")
+				args = append(args, value)
+			}
+			where = append(where, expr+` IN (`+strings.Join(placeholders, ",")+`)`)
+		default:
+			return nil, nil, fmt.Errorf("dimension filter operator %q is not supported", filter.Operator)
+		}
+	}
+	return where, args, nil
 }
 
 func businessAnalysisLikelyVoicemailSQL() string {
@@ -1217,6 +1276,10 @@ func normalizeBusinessAnalysisFilter(filter BusinessAnalysisFilter) (BusinessAna
 	filter.CRMObjectType = strings.TrimSpace(filter.CRMObjectType)
 	filter.CRMObjectID = strings.TrimSpace(filter.CRMObjectID)
 	filter.ParticipantTitleQuery = strings.TrimSpace(filter.ParticipantTitleQuery)
+	var err error
+	if filter.DimensionFilters, err = NormalizeBusinessAnalysisDimensionFilters(filter.DimensionFilters); err != nil {
+		return BusinessAnalysisFilter{}, err
+	}
 
 	if filter.Quarter != "" {
 		canonical, from, to, err := normalizeBusinessAnalysisQuarter(filter.Quarter)
@@ -1231,7 +1294,6 @@ func normalizeBusinessAnalysisFilter(filter BusinessAnalysisFilter) (BusinessAna
 			filter.ToDate = to
 		}
 	}
-	var err error
 	if filter.FromDate, err = normalizeDateFilter(filter.FromDate, "from_date"); err != nil {
 		return BusinessAnalysisFilter{}, err
 	}
@@ -1291,6 +1353,96 @@ func normalizeBusinessAnalysisLifecycleExclusions(values []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func AllowedBusinessAnalysisFilterDimensions() []string {
+	out := make([]string, 0, len(businessAnalysisFilterDimensionAliases))
+	seen := make(map[string]struct{}, len(businessAnalysisFilterDimensionAliases))
+	for _, canonical := range businessAnalysisFilterDimensionAliases {
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		out = append(out, canonical)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func NormalizeBusinessAnalysisDimensionFilters(filters []BusinessAnalysisDimensionFilter) ([]BusinessAnalysisDimensionFilter, error) {
+	if len(filters) == 0 {
+		return nil, nil
+	}
+	out := make([]BusinessAnalysisDimensionFilter, 0, len(filters))
+	for i, filter := range filters {
+		dimension, err := BusinessAnalysisFilterDimensionCanonical(filter.Dimension)
+		if err != nil {
+			return nil, err
+		}
+		operator := strings.ToLower(strings.TrimSpace(filter.Operator))
+		if operator == "" {
+			operator = "equals"
+		}
+		switch operator {
+		case "equals", "in":
+		default:
+			return nil, fmt.Errorf("dimension_filters[%d].operator must be equals or in", i)
+		}
+		values, err := normalizeBusinessAnalysisDimensionFilterValues(filter.Values, i)
+		if err != nil {
+			return nil, err
+		}
+		if operator == "equals" && len(values) != 1 {
+			return nil, fmt.Errorf("dimension_filters[%d].values must include exactly one value for equals", i)
+		}
+		out = append(out, BusinessAnalysisDimensionFilter{
+			Dimension: dimension,
+			Operator:  operator,
+			Values:    values,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Dimension != out[j].Dimension {
+			return out[i].Dimension < out[j].Dimension
+		}
+		if out[i].Operator != out[j].Operator {
+			return out[i].Operator < out[j].Operator
+		}
+		return strings.Join(out[i].Values, "\x00") < strings.Join(out[j].Values, "\x00")
+	})
+	return out, nil
+}
+
+func normalizeBusinessAnalysisDimensionFilterValues(values []string, filterIndex int) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if len(value) > MaxBusinessAnalysisDimensionFilterValueLength {
+			return nil, fmt.Errorf("dimension_filters[%d].values entries must be %d characters or fewer", filterIndex, MaxBusinessAnalysisDimensionFilterValueLength)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("dimension_filters[%d].values must include at least one non-blank value", filterIndex)
+	}
+	return out, nil
+}
+
+func BusinessAnalysisFilterDimensionCanonical(dimension string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(dimension))
+	if canonical, ok := businessAnalysisFilterDimensionAliases[normalized]; ok {
+		return canonical, nil
+	}
+	return "", fmt.Errorf("unsupported dimension filter %q; use a reviewed known dimension", dimension)
 }
 
 func normalizeBusinessAnalysisQuarter(value string) (string, string, string, error) {
@@ -1364,6 +1516,43 @@ func businessAnalysisDimensionExpr(dimension string) (string, string, error) {
 		return "loss_reason", businessAnalysisLossReasonBucketSQL(), nil
 	default:
 		return "", "", fmt.Errorf("unsupported business-analysis dimension %q", dimension)
+	}
+}
+
+func businessAnalysisFilterDimensionExpr(dimension string) (string, string, error) {
+	canonical, err := BusinessAnalysisFilterDimensionCanonical(dimension)
+	if err != nil {
+		return "", "", err
+	}
+	switch canonical {
+	case "account_revenue_range":
+		return canonical, "cf.account_revenue_range", nil
+	case "account_type":
+		return canonical, "cf.account_type", nil
+	case "account_industry":
+		return canonical, "cf.account_industry", nil
+	case "opportunity_stage":
+		return canonical, "cf.opportunity_stage", nil
+	case "opportunity_type":
+		return canonical, "cf.opportunity_type", nil
+	case "forecast_category":
+		return canonical, "cf.opportunity_forecast_category", nil
+	case "scope":
+		return canonical, "cf.scope", nil
+	case "system":
+		return canonical, "cf.system", nil
+	case "direction":
+		return canonical, "cf.direction", nil
+	case "transcript_status":
+		return canonical, "cf.transcript_status", nil
+	case "lifecycle_bucket":
+		return canonical, "cf.lifecycle_bucket", nil
+	case "call_month":
+		return canonical, "cf.call_month", nil
+	case "quarter":
+		return canonical, businessAnalysisQuarterExpr("cf.call_date"), nil
+	default:
+		return "", "", fmt.Errorf("unsupported dimension filter %q; use a reviewed known dimension", dimension)
 	}
 }
 

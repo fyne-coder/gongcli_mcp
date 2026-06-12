@@ -99,13 +99,23 @@ func (a *app) supportBundle(ctx context.Context, args []string) error {
 			return err
 		}
 	}
+	includePostgresDeployment := backend == "postgres"
+	if includePostgresDeployment {
+		postgresDeployment, err := buildSupportPostgresDeployment(ctx, store)
+		if err != nil {
+			return err
+		}
+		if err := writeSupportBundleJSON(filepath.Join(absOutDir, "postgres-deployment.json"), postgresDeployment); err != nil {
+			return err
+		}
+	}
 
 	return writeJSONValue(a.out, supportBundleResponse{
 		OutputDirectory: supportOutputDirectoryInfo{
 			PathPolicy: "local_path_not_exported",
 		},
 		SchemaVersion:                       supportBundleSchemaVersion,
-		Files:                               supportBundleFiles(*includeEnv, diagnostics != nil),
+		Files:                               supportBundleFiles(*includeEnv, diagnostics != nil, includePostgresDeployment),
 		ContainsRawCustomerData:             false,
 		ContainsCustomerOperationalMetadata: true,
 		Sensitivity:                         "customer_operational_metadata",
@@ -137,7 +147,7 @@ func requireEmptySupportBundleDir(path string) error {
 	return nil
 }
 
-func supportBundleFiles(includeEnv bool, includeDiagnostics bool) []string {
+func supportBundleFiles(includeEnv bool, includeDiagnostics bool, includePostgresDeployment bool) []string {
 	files := []string{
 		"manifest.json",
 		"cache-summary.json",
@@ -146,6 +156,9 @@ func supportBundleFiles(includeEnv bool, includeDiagnostics bool) []string {
 	}
 	if includeDiagnostics {
 		files = append(files, "diagnostics.json")
+	}
+	if includePostgresDeployment {
+		files = append(files, "postgres-deployment.json")
 	}
 	if includeEnv {
 		files = append(files, "environment.json")

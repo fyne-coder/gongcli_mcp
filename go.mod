@@ -1,6 +1,6 @@
 module github.com/fyne-coder/gongcli_mcp
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/MicahParks/keyfunc/v3 v3.8.0

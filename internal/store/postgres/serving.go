@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 )
@@ -21,6 +22,9 @@ type RefreshServingDBOptions struct {
 	TargetURL              string
 	Config                 *governance.Config
 	NoGovernanceExclusions bool
+	// StatementTimeout applies to every source database connection opened for
+	// the refresh via libpq startup options on the source URL.
+	StatementTimeout time.Duration
 }
 
 // ServingDBRefreshResult is the sanitized output of a serving-DB refresh.
@@ -143,15 +147,23 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		return nil, errors.New("governance config is required unless no-governance-exclusions is set")
 	}
 
-	source, err := Open(ctx, opts.SourceURL)
+	sourceURL := opts.SourceURL
+	if opts.StatementTimeout > 0 {
+		var err error
+		sourceURL, err = databaseURLWithStatementTimeout(opts.SourceURL, opts.StatementTimeout)
+		if err != nil {
+			return nil, err
+		}
+	}
+	source, err := Open(ctx, sourceURL)
 	if err != nil {
-		return nil, fmt.Errorf("open source database: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideSource, "database", ServingRefreshPhaseConnect, err)
 	}
 	defer source.Close()
 
 	audit, err := governance.BuildAudit(ctx, source, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build governance audit on source: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideSource, "governance_audit", ServingRefreshPhaseAudit, err)
 	}
 	suppressed := make(map[string]struct{}, len(audit.SuppressedCallIDs))
 	for _, callID := range audit.SuppressedCallIDs {
@@ -160,12 +172,12 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 
 	sourceFingerprint, err := source.GovernanceDataFingerprint(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read source data fingerprint: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideSource, "data_fingerprint", ServingRefreshPhaseCount, err)
 	}
 
 	target, err := Open(ctx, opts.TargetURL)
 	if err != nil {
-		return nil, fmt.Errorf("open target database: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "database", ServingRefreshPhaseConnect, err)
 	}
 	defer target.Close()
 
@@ -175,13 +187,13 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 	}
 
 	if _, err := target.RebuildReadModel(ctx); err != nil {
-		return nil, fmt.Errorf("rebuild read model on target: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "read_model", ServingRefreshPhaseReadModel, err)
 	}
 	if err := readServingTargetCounts(ctx, target.db, &counts); err != nil {
-		return nil, fmt.Errorf("read target serving counts: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "serving_counts", ServingRefreshPhaseCount, err)
 	}
 	if err := validateServingCopyCounts(counts); err != nil {
-		return nil, err
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideServing, "copy_counts", ServingRefreshPhaseValidation, err)
 	}
 
 	configSHA := cfg.Fingerprint()
@@ -189,16 +201,16 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 		configSHA = governance.NoExclusionsConfigFingerprint()
 	}
 	if _, _, err := target.BuildAndSaveGovernancePolicy(ctx, configSHA, cfg); err != nil {
-		return nil, fmt.Errorf("apply governance policy on target: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "governance_policy", ServingRefreshPhaseGovernancePolicy, err)
 	}
 
 	targetPolicy, err := target.LoadGovernancePolicy(ctx, configSHA)
 	if err != nil {
-		return nil, fmt.Errorf("load governance policy on target: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "governance_policy", ServingRefreshPhaseGovernancePolicy, err)
 	}
 	targetFingerprint, err := target.GovernanceDataFingerprint(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read target data fingerprint: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "data_fingerprint", ServingRefreshPhaseCount, err)
 	}
 
 	result := &ServingDBRefreshResult{
@@ -236,7 +248,7 @@ func RefreshServingDB(ctx context.Context, opts RefreshServingDBOptions) (*Servi
 	}
 	marker, err := target.RecordServingRefreshMarker(ctx, result)
 	if err != nil {
-		return nil, fmt.Errorf("record serving refresh marker: %w", err)
+		return nil, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "serving_refresh_log", ServingRefreshPhaseMarker, err)
 	}
 	result.ServingRefreshID = marker.ID
 	result.RefreshedAt = marker.RefreshedAt
@@ -429,27 +441,28 @@ type servingCopyCounts struct {
 func refreshServingDBCopy(ctx context.Context, sourceDB, targetDB *sql.DB, suppressed map[string]struct{}) (servingCopyCounts, error) {
 	var counts servingCopyCounts
 	for _, count := range []struct {
-		query string
-		dest  *int64
+		object string
+		query  string
+		dest   *int64
 	}{
-		{`SELECT COUNT(*) FROM calls`, &counts.sourceCalls},
-		{`SELECT COUNT(*) FROM users`, &counts.sourceUsers},
-		{`SELECT COUNT(*) FROM transcripts`, &counts.sourceTranscripts},
-		{`SELECT COUNT(*) FROM transcript_segments`, &counts.sourceTranscriptSegments},
-		{`SELECT COUNT(*) FROM call_context_objects`, &counts.sourceContextObjects},
-		{`SELECT COUNT(*) FROM call_context_fields`, &counts.sourceContextFields},
-		{`SELECT COUNT(*) FROM gong_settings`, &counts.sourceGongSettings},
-		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &counts.sourceScorecards},
-		{`SELECT COUNT(*) FROM scorecard_activity`, &counts.sourceScorecardActivity},
+		{"calls", `SELECT COUNT(*) FROM calls`, &counts.sourceCalls},
+		{"users", `SELECT COUNT(*) FROM users`, &counts.sourceUsers},
+		{"transcripts", `SELECT COUNT(*) FROM transcripts`, &counts.sourceTranscripts},
+		{"transcript_segments", `SELECT COUNT(*) FROM transcript_segments`, &counts.sourceTranscriptSegments},
+		{"call_context_objects", `SELECT COUNT(*) FROM call_context_objects`, &counts.sourceContextObjects},
+		{"call_context_fields", `SELECT COUNT(*) FROM call_context_fields`, &counts.sourceContextFields},
+		{"gong_settings", `SELECT COUNT(*) FROM gong_settings`, &counts.sourceGongSettings},
+		{"scorecards", `SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &counts.sourceScorecards},
+		{"scorecard_activity", `SELECT COUNT(*) FROM scorecard_activity`, &counts.sourceScorecardActivity},
 	} {
 		if err := sourceDB.QueryRowContext(ctx, count.query).Scan(count.dest); err != nil {
-			return counts, fmt.Errorf("count source: %w", err)
+			return counts, wrapServingRefreshPhaseError(ServingRefreshSideSource, count.object, ServingRefreshPhaseCount, err)
 		}
 	}
 	var err error
 	counts.sourceAIHighlights, err = countServingSourceAIHighlights(ctx, sourceDB, nil)
 	if err != nil {
-		return counts, fmt.Errorf("count source AI highlights: %w", err)
+		return counts, wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_ai_highlights", ServingRefreshPhaseCount, err)
 	}
 	if err := countServingRedactedRows(ctx, sourceDB, suppressed, &counts); err != nil {
 		return counts, err
@@ -457,11 +470,11 @@ func refreshServingDBCopy(ctx context.Context, sourceDB, targetDB *sql.DB, suppr
 
 	tx, err := targetDB.BeginTx(ctx, nil)
 	if err != nil {
-		return counts, err
+		return counts, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transaction", ServingRefreshPhaseTransaction, err)
 	}
 	defer tx.Rollback()
 	if err := lockPostgresWriterTx(ctx, tx); err != nil {
-		return counts, err
+		return counts, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "writer_lock", ServingRefreshPhaseLock, err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `TRUNCATE TABLE
@@ -480,10 +493,10 @@ governance_policy_state,
 governance_suppressed_calls,
 governance_ingest_skipped_calls
 RESTART IDENTITY CASCADE`); err != nil {
-		return counts, fmt.Errorf("truncate target serving tables: %w", err)
+		return counts, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "serving_tables", ServingRefreshPhaseTruncate, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM serving_refresh_log`); err != nil {
-		return counts, fmt.Errorf("clear prior serving refresh marker: %w", err)
+		return counts, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "serving_refresh_log", ServingRefreshPhaseTruncate, err)
 	}
 
 	if err := copyServingUsers(ctx, sourceDB, tx, &counts); err != nil {
@@ -512,29 +525,30 @@ RESTART IDENTITY CASCADE`); err != nil {
 	}
 
 	if err := tx.Commit(); err != nil {
-		return counts, err
+		return counts, wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transaction", ServingRefreshPhaseTransaction, err)
 	}
 	return counts, nil
 }
 
 func readServingTargetCounts(ctx context.Context, targetDB *sql.DB, counts *servingCopyCounts) error {
 	for _, count := range []struct {
-		query string
-		dest  *int64
+		object string
+		query  string
+		dest   *int64
 	}{
-		{`SELECT COUNT(*) FROM calls`, &counts.targetCalls},
-		{`SELECT COUNT(*) FROM users`, &counts.targetUsers},
-		{`SELECT COUNT(*) FROM transcripts`, &counts.targetTranscripts},
-		{`SELECT COUNT(*) FROM transcript_segments`, &counts.targetTranscriptSegments},
-		{`SELECT COUNT(*) FROM call_context_objects`, &counts.targetContextObjects},
-		{`SELECT COUNT(*) FROM call_context_fields`, &counts.targetContextFields},
-		{`SELECT COUNT(*) FROM gong_settings`, &counts.targetGongSettings},
-		{`SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &counts.targetScorecards},
-		{`SELECT COUNT(*) FROM scorecard_activity`, &counts.targetScorecardActivity},
-		{`SELECT COUNT(*) FROM call_ai_highlights`, &counts.targetAIHighlights},
+		{"calls", `SELECT COUNT(*) FROM calls`, &counts.targetCalls},
+		{"users", `SELECT COUNT(*) FROM users`, &counts.targetUsers},
+		{"transcripts", `SELECT COUNT(*) FROM transcripts`, &counts.targetTranscripts},
+		{"transcript_segments", `SELECT COUNT(*) FROM transcript_segments`, &counts.targetTranscriptSegments},
+		{"call_context_objects", `SELECT COUNT(*) FROM call_context_objects`, &counts.targetContextObjects},
+		{"call_context_fields", `SELECT COUNT(*) FROM call_context_fields`, &counts.targetContextFields},
+		{"gong_settings", `SELECT COUNT(*) FROM gong_settings`, &counts.targetGongSettings},
+		{"scorecards", `SELECT COUNT(*) FROM gong_settings WHERE kind = 'scorecards'`, &counts.targetScorecards},
+		{"scorecard_activity", `SELECT COUNT(*) FROM scorecard_activity`, &counts.targetScorecardActivity},
+		{"call_ai_highlights", `SELECT COUNT(*) FROM call_ai_highlights`, &counts.targetAIHighlights},
 	} {
 		if err := targetDB.QueryRowContext(ctx, count.query).Scan(count.dest); err != nil {
-			return fmt.Errorf("count target: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, count.object, ServingRefreshPhaseCount, err)
 		}
 	}
 	return nil
@@ -558,14 +572,14 @@ func countServingRedactedRows(ctx context.Context, sourceDB *sql.DB, suppressed 
 	} {
 		value, err := countServingSuppressedTableRows(ctx, sourceDB, count.table, count.column, suppressed)
 		if err != nil {
-			return fmt.Errorf("count source redacted %s rows: %w", count.table, err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, count.table, ServingRefreshPhaseCount, err)
 		}
 		*count.dest = value
 	}
 	var err error
 	counts.redactedAIHighlights, err = countServingSourceAIHighlights(ctx, sourceDB, suppressed)
 	if err != nil {
-		return fmt.Errorf("count source redacted AI highlights: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_ai_highlights", ServingRefreshPhaseCount, err)
 	}
 	return nil
 }
@@ -701,14 +715,14 @@ SELECT kind, object_id, name, active, raw_json::text, raw_sha256, first_seen_at,
   FROM gong_settings
  ORDER BY kind, object_id`)
 	if err != nil {
-		return fmt.Errorf("read source gong_settings: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "gong_settings", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO gong_settings(
 	kind, object_id, name, active, raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "gong_settings", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -716,15 +730,15 @@ SELECT kind, object_id, name, active, raw_json::text, raw_sha256, first_seen_at,
 		var kind, objectID, name, rawJSON, rawSHA, firstSeenAt, updatedAt string
 		var active bool
 		if err := rows.Scan(&kind, &objectID, &name, &active, &rawJSON, &rawSHA, &firstSeenAt, &updatedAt); err != nil {
-			return fmt.Errorf("scan source gong_setting: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "gong_settings", ServingRefreshPhaseCopy, err)
 		}
 		if _, err := stmt.ExecContext(ctx, kind, objectID, name, active, rawJSON, rawSHA, firstSeenAt, updatedAt); err != nil {
-			return fmt.Errorf("insert target gong_setting: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "gong_settings", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "gong_settings", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetGongSettings = written
 	return nil
@@ -736,7 +750,7 @@ SELECT user_id, email, first_name, last_name, display_name, title, active,
        raw_json::text, raw_sha256, first_seen_at, updated_at
   FROM users`)
 	if err != nil {
-		return fmt.Errorf("read source users: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "users", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO users(
@@ -744,7 +758,7 @@ SELECT user_id, email, first_name, last_name, display_name, title, active,
 	raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "users", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -755,15 +769,15 @@ SELECT user_id, email, first_name, last_name, display_name, title, active,
 			rawJSON, rawSHA, firstSeenAt, updatedAt                string
 		)
 		if err := rows.Scan(&userID, &email, &firstName, &lastName, &displayName, &title, &active, &rawJSON, &rawSHA, &firstSeenAt, &updatedAt); err != nil {
-			return fmt.Errorf("scan source user: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "users", ServingRefreshPhaseCopy, err)
 		}
 		if _, err := stmt.ExecContext(ctx, userID, email, firstName, lastName, displayName, title, active, rawJSON, rawSHA, firstSeenAt, updatedAt); err != nil {
-			return fmt.Errorf("insert target user: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "users", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "users", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetUsers = written
 	return nil
@@ -775,7 +789,7 @@ SELECT call_id, title, started_at, duration_seconds, parties_count, context_pres
        raw_json::text, raw_sha256, first_seen_at, updated_at
   FROM calls`)
 	if err != nil {
-		return fmt.Errorf("read source calls: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "calls", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO calls(
@@ -783,7 +797,7 @@ SELECT call_id, title, started_at, duration_seconds, parties_count, context_pres
 	raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "calls", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -795,18 +809,18 @@ SELECT call_id, title, started_at, duration_seconds, parties_count, context_pres
 			rawJSON, rawSHA, firstSeenAt, updatedAt string
 		)
 		if err := rows.Scan(&callID, &title, &startedAt, &durationSeconds, &partiesCount, &contextPresent, &rawJSON, &rawSHA, &firstSeenAt, &updatedAt); err != nil {
-			return fmt.Errorf("scan source call: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "calls", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, callID, title, startedAt, durationSeconds, partiesCount, contextPresent, rawJSON, rawSHA, firstSeenAt, updatedAt); err != nil {
-			return fmt.Errorf("insert target call: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "calls", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "calls", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetCalls = written
 	return nil
@@ -817,14 +831,14 @@ func copyServingTranscripts(ctx context.Context, sourceDB *sql.DB, tx *sql.Tx, s
 SELECT call_id, raw_json::text, raw_sha256, segment_count, first_seen_at, updated_at
   FROM transcripts`)
 	if err != nil {
-		return fmt.Errorf("read source transcripts: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcripts", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO transcripts(
 	call_id, raw_json, raw_sha256, segment_count, first_seen_at, updated_at
 ) VALUES($1, $2::jsonb, $3, $4, $5, $6)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transcripts", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -834,18 +848,18 @@ SELECT call_id, raw_json::text, raw_sha256, segment_count, first_seen_at, update
 			segmentCount                                    int
 		)
 		if err := rows.Scan(&callID, &rawJSON, &rawSHA, &segmentCount, &firstSeenAt, &updatedAt); err != nil {
-			return fmt.Errorf("scan source transcript: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcripts", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, callID, rawJSON, rawSHA, segmentCount, firstSeenAt, updatedAt); err != nil {
-			return fmt.Errorf("insert target transcript: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transcripts", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcripts", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetTranscripts = written
 	return nil
@@ -857,14 +871,14 @@ SELECT call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json::tex
   FROM transcript_segments
  ORDER BY call_id, segment_index`)
 	if err != nil {
-		return fmt.Errorf("read source transcript_segments: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO transcript_segments(
 	call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transcript_segments", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -875,18 +889,18 @@ SELECT call_id, segment_index, speaker_id, start_ms, end_ms, text, raw_json::tex
 			startMS, endMS                   int64
 		)
 		if err := rows.Scan(&callID, &segmentIndex, &speakerID, &startMS, &endMS, &text, &rawJSON); err != nil {
-			return fmt.Errorf("scan source transcript_segment: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, callID, segmentIndex, speakerID, startMS, endMS, text, rawJSON); err != nil {
-			return fmt.Errorf("insert target transcript_segment: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "transcript_segments", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "transcript_segments", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetTranscriptSegments = written
 	return nil
@@ -898,32 +912,32 @@ SELECT call_id, object_key, object_type, object_id, object_name, raw_json::text
   FROM call_context_objects
  ORDER BY call_id, object_key`)
 	if err != nil {
-		return fmt.Errorf("read source call_context_objects: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_context_objects", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO call_context_objects(
 	call_id, object_key, object_type, object_id, object_name, raw_json
 ) VALUES($1, $2, $3, $4, $5, $6::jsonb)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "call_context_objects", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
 	for rows.Next() {
 		var callID, objectKey, objectType, objectID, objectName, rawJSON string
 		if err := rows.Scan(&callID, &objectKey, &objectType, &objectID, &objectName, &rawJSON); err != nil {
-			return fmt.Errorf("scan source call_context_object: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_context_objects", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, callID, objectKey, objectType, objectID, objectName, rawJSON); err != nil {
-			return fmt.Errorf("insert target call_context_object: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "call_context_objects", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_context_objects", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetContextObjects = written
 	return nil
@@ -938,7 +952,7 @@ SELECT answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_starte
   FROM scorecard_activity
  ORDER BY answered_scorecard_id`)
 	if err != nil {
-		return fmt.Errorf("read source scorecard_activity: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "scorecard_activity", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO scorecard_activity(
@@ -948,7 +962,7 @@ SELECT answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_starte
 	raw_json, raw_sha256, first_seen_at, updated_at
 ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "scorecard_activity", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
@@ -966,7 +980,7 @@ SELECT answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_starte
 			&visibilityType, &overallScore, &averageScore, &answerCount,
 			&rawJSON, &rawSHA, &firstSeenAt, &updatedAt,
 		); err != nil {
-			return fmt.Errorf("scan source scorecard_activity: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "scorecard_activity", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
@@ -978,12 +992,12 @@ SELECT answered_scorecard_id, scorecard_id, scorecard_name, call_id, call_starte
 			visibilityType, overallScore, averageScore, answerCount,
 			rawJSON, rawSHA, firstSeenAt, updatedAt,
 		); err != nil {
-			return fmt.Errorf("insert target scorecard_activity: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "scorecard_activity", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "scorecard_activity", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetScorecardActivity = written
 	return nil
@@ -995,32 +1009,32 @@ SELECT call_id, object_key, field_name, field_label, field_type, field_value_tex
   FROM call_context_fields
  ORDER BY call_id, object_key, field_name`)
 	if err != nil {
-		return fmt.Errorf("read source call_context_fields: %w", err)
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_context_fields", ServingRefreshPhaseCopy, err)
 	}
 	defer rows.Close()
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO call_context_fields(
 	call_id, object_key, field_name, field_label, field_type, field_value_text, raw_json
 ) VALUES($1, $2, $3, $4, $5, $6, $7::jsonb)`)
 	if err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "call_context_fields", ServingRefreshPhaseCopy, err)
 	}
 	defer stmt.Close()
 	var written int64
 	for rows.Next() {
 		var callID, objectKey, fieldName, fieldLabel, fieldType, fieldValue, rawJSON string
 		if err := rows.Scan(&callID, &objectKey, &fieldName, &fieldLabel, &fieldType, &fieldValue, &rawJSON); err != nil {
-			return fmt.Errorf("scan source call_context_field: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_context_fields", ServingRefreshPhaseCopy, err)
 		}
 		if _, blocked := suppressed[strings.TrimSpace(callID)]; blocked {
 			continue
 		}
 		if _, err := stmt.ExecContext(ctx, callID, objectKey, fieldName, fieldLabel, fieldType, fieldValue, rawJSON); err != nil {
-			return fmt.Errorf("insert target call_context_field: %w", err)
+			return wrapServingRefreshPhaseError(ServingRefreshSideTarget, "call_context_fields", ServingRefreshPhaseCopy, err)
 		}
 		written++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return wrapServingRefreshPhaseError(ServingRefreshSideSource, "call_context_fields", ServingRefreshPhaseCopy, err)
 	}
 	counts.targetContextFields = written
 	return nil
