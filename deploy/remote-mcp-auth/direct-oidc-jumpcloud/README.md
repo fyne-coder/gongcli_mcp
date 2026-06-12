@@ -96,6 +96,42 @@ GONGMCP_ALLOWED_ORIGINS: https://mcp.company.example.com
 Set `OIDC_REQUIRED_GROUPS` instead of `OIDC_REQUIRED_GROUP` when the rollout
 allows any one of several dedicated groups. Group matching is case-sensitive.
 
+Groups are optional only when another explicit access gate is present. For a
+non-prod smoke or a short rollout window where JumpCloud group mapping is not
+ready, leave the group settings empty and use a narrow subject or email
+allowlist:
+
+```yaml
+OIDC_REQUIRED_GROUP: ""
+OIDC_REQUIRED_GROUPS: ""
+OIDC_ALLOWED_GROUPS: ""
+OIDC_ALLOWED_SUBJECTS: <one or more approved access-token sub values>
+OIDC_ALLOWED_EMAILS: ""
+```
+
+or, only if the access token includes email, including nested `ext.email` for
+direct OIDC:
+
+```yaml
+OIDC_REQUIRED_GROUP: ""
+OIDC_REQUIRED_GROUPS: ""
+OIDC_ALLOWED_GROUPS: ""
+OIDC_ALLOWED_SUBJECTS: ""
+OIDC_ALLOWED_EMAILS: approved.user@example.com
+```
+
+Use the email fallback only when the IdP controls and verifies the email value
+in the access token; otherwise prefer `OIDC_ALLOWED_SUBJECTS` because `sub` is
+the stable OIDC subject identifier.
+
+Do not leave every group, subject, and email access gate empty. The gateway
+rejects that configuration at startup because it would allow any valid token
+for the configured IdP client.
+
+When more than one gate is configured, the checks combine with AND semantics.
+For example, setting both `OIDC_REQUIRED_GROUPS` and `OIDC_ALLOWED_EMAILS`
+narrows access to users who match an allowed group and an allowed email.
+
 ## Give All Approved Users The Same Read-Only MCP Access
 
 When the customer wants every approved business user to have read access to the
