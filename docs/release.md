@@ -20,7 +20,7 @@ bin/gongmcp --db /path/to/gong.db
 For production-readiness checks:
 
 ```bash
-go version  # must be go1.26.3 or newer
+go version  # must be go1.26.4 or newer
 go test -count=1 ./...
 go vet ./...
 make secret-scan
@@ -42,7 +42,7 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
 
 1. Update `VERSION`.
 2. Update `CHANGELOG.md`.
-3. Confirm `go version` is `go1.26.3` or newer. Do not build release
+3. Confirm `go version` is `go1.26.4` or newer. Do not build release
    artifacts with an older Go toolchain.
 4. Run `go test -count=1 ./...`.
 5. Run `go vet ./...`.
@@ -68,7 +68,7 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z`
 19. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-20. Run GoReleaser from the tag with Go 1.26.3 or newer.
+20. Run GoReleaser from the tag with Go 1.26.4 or newer.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they
