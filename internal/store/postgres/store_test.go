@@ -1475,28 +1475,31 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	for _, want := range []string{
 		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text",
 		"jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb)",
+		"row_ctx AS",
+		"SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS",
 		"WHEN 'account_revenue_range' THEN account_revenue_range_arg",
-		"WHEN 'quarter' THEN CASE",
+		"WHEN 'persona' THEN gongmcp_business_analysis_persona_bucket",
+		"WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket",
+		"WHEN 'person_title_status' THEN CASE WHEN cf.party_title_count > 0 THEN 'available'",
+		"WHEN 'person_title_source' THEN CASE WHEN cf.party_title_count > 0 THEN 'call_parties'",
+		"dimension IN ('duration_seconds', 'opportunity_count', 'account_count')",
+		"dimension = 'participant_email'",
+		"dimension = 'account_name'",
+		"dimension = 'crm_object_id'",
+		"duration_seconds_arg bigint, call_id_arg text",
+		"operator = 'between'",
+		"operator IN ('equals', 'in', 'gte', 'lte', 'between')",
 		"COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator",
 		"jsonb_array_elements_text(values_json)",
-		"jsonb_array_length(values_json) = 0",
-		"operator = 'equals' AND jsonb_array_length(values_json) <> 1",
-		"WHERE left(values.value, 160) = row_value",
-		"operator NOT IN ('equals', 'in')",
 		"dimension_filters_json text DEFAULT '[]'",
-		"COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date)",
-		"REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text) FROM PUBLIC",
+		"COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id)",
+		"REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text) FROM PUBLIC",
 	} {
 		if !strings.Contains(sqlText, want) {
 			t.Fatalf("postgres business-analysis SQL missing dimension-filter contract %q", want)
 		}
 	}
 	for _, forbidden := range []string{
-		"WHEN 'account_name'",
-		"WHEN 'crm_object_id'",
-		"WHEN 'loss_reason'",
-		"WHEN 'persona'",
-		"WHEN 'won_lost'",
 		"GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension_filters_match",
 	} {
 		helperSQL := sqlText
@@ -1504,15 +1507,23 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 			helperSQL = helperSQL[:idx]
 		}
 		if strings.Contains(helperSQL, forbidden) {
-			t.Fatalf("postgres dimension filters should not expose high-risk/computed dimension %q", forbidden)
+			t.Fatalf("postgres dimension filters should not grant helper directly: %q", forbidden)
 		}
+	}
+	filterHelperIndex := strings.Index(sqlText, "CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(")
+	personaHelperIndex := strings.Index(sqlText, "CREATE OR REPLACE FUNCTION gongmcp_business_analysis_persona_bucket(")
+	lossReasonHelperIndex := strings.Index(sqlText, "CREATE OR REPLACE FUNCTION gongmcp_business_analysis_loss_reason_bucket(")
+	if personaHelperIndex < 0 || lossReasonHelperIndex < 0 || filterHelperIndex < 0 {
+		t.Fatalf("missing helper function indexes: persona=%d loss_reason=%d filter=%d", personaHelperIndex, lossReasonHelperIndex, filterHelperIndex)
+	}
+	if personaHelperIndex > filterHelperIndex || lossReasonHelperIndex > filterHelperIndex {
+		t.Fatalf("derived bucket helpers must be created before dimension filter helper: persona=%d loss_reason=%d filter=%d", personaHelperIndex, lossReasonHelperIndex, filterHelperIndex)
 	}
 	latestMigration := migrations[len(migrations)-1]
 	for _, want := range []string{
-		"Business-workbench known-dimension filters",
-		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer)",
-		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text)",
+		"Package-2 business-analysis dimension filters",
 		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text)",
 		"dimension_filters_json text DEFAULT '[]'",
 	} {
 		if !strings.Contains(latestMigration, want) {

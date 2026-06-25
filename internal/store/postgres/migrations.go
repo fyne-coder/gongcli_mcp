@@ -1872,4 +1872,19 @@ DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, 
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	// Package-2 dimension filters: expand helper signature for duration_seconds
+	// and participant_email while keeping the disallow-list posture.
+	`-- Package-2 business-analysis dimension filters.
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
+` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

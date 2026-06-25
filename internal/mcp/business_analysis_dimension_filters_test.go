@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -30,15 +29,64 @@ func TestNormalizeCallFilterDimensionFilters(t *testing.T) {
 	}
 }
 
+func TestNormalizeCallFilterDimensionFiltersAcceptsBackedDurationAndEmail(t *testing.T) {
+	filter, err := normalizeCallFilter(callFilter{
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "call_length", Operator: "gte", Values: []string{"900"}},
+			{Dimension: "participant_email", Operator: "equals", Values: []string{"Buyer@Example.COM"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCallFilter backed duration/email filters: %v", err)
+	}
+	if len(filter.DimensionFilters) != 2 {
+		t.Fatalf("dimension filter count=%d want 2: %+v", len(filter.DimensionFilters), filter.DimensionFilters)
+	}
+	if filter.DimensionFilters[0].Dimension != "duration_seconds" || filter.DimensionFilters[0].Operator != "gte" || filter.DimensionFilters[0].Values[0] != "900" {
+		t.Fatalf("unexpected duration filter: %+v", filter.DimensionFilters[0])
+	}
+	if filter.DimensionFilters[1].Dimension != "participant_email" || filter.DimensionFilters[1].Operator != "equals" || filter.DimensionFilters[1].Values[0] != "buyer@example.com" {
+		t.Fatalf("unexpected participant email filter: %+v", filter.DimensionFilters[1])
+	}
+}
+
+func TestNormalizeCallFilterDimensionFiltersAcceptsBackedIdentifiersAndDerivedDimensions(t *testing.T) {
+	filter, err := normalizeCallFilter(callFilter{
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "account_name", Operator: "equals", Values: []string{"Example Co"}},
+			{Dimension: "crm_object_id", Operator: "in", Values: []string{"opp-1", "acct-1"}},
+			{Dimension: "loss_reason", Operator: "equals", Values: []string{"price"}},
+			{Dimension: "participant_title", Operator: "equals", Values: []string{"procurement"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCallFilter backed identifier/derived filters: %v", err)
+	}
+	got := make(map[string]sqlite.BusinessAnalysisDimensionFilter, len(filter.DimensionFilters))
+	for _, dimensionFilter := range filter.DimensionFilters {
+		got[dimensionFilter.Dimension] = dimensionFilter
+	}
+	for _, want := range []string{"account_name", "crm_object_id", "loss_reason", "persona"} {
+		if _, ok := got[want]; !ok {
+			t.Fatalf("normalized filters missing %q: %+v", want, filter.DimensionFilters)
+		}
+	}
+	if disallowed := sqlite.DisallowedBusinessAnalysisFilterDimensions(); len(disallowed) != 0 {
+		t.Fatalf("package-2 disallow list must be empty, got %v", disallowed)
+	}
+}
+
 func TestNormalizeCallFilterDimensionFiltersRejectsUnsafeInputs(t *testing.T) {
 	longValue := strings.Repeat("x", sqlite.MaxBusinessAnalysisDimensionFilterValueLength+1)
 	tests := []struct {
 		name   string
 		filter sqlite.BusinessAnalysisDimensionFilter
 	}{
-		{name: "unknown dimension", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "account_name", Operator: "equals", Values: []string{"Acme"}}},
-		{name: "computed bucket", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "loss_reason", Operator: "equals", Values: []string{"price"}}},
+		{name: "unknown dimension", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "account_nam", Operator: "equals", Values: []string{"Acme"}}},
 		{name: "bad operator", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "account_revenue_range", Operator: "contains", Values: []string{"ENT"}}},
+		{name: "duration bad operator", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "duration_seconds", Operator: "contains", Values: []string{"900"}}},
+		{name: "duration non-numeric", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "duration_seconds", Operator: "gte", Values: []string{"long"}}},
+		{name: "between wrong arity", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "duration_seconds", Operator: "between", Values: []string{"600"}}},
 		{name: "blank values", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "account_revenue_range", Operator: "in", Values: []string{" "}}},
 		{name: "equals many values", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "account_revenue_range", Operator: "equals", Values: []string{"C: MM", "D: ENT"}}},
 		{name: "value too long", filter: sqlite.BusinessAnalysisDimensionFilter{Dimension: "account_revenue_range", Operator: "equals", Values: []string{longValue}}},
@@ -53,13 +101,9 @@ func TestNormalizeCallFilterDimensionFiltersRejectsUnsafeInputs(t *testing.T) {
 }
 
 func TestFacadeBusinessAnalysisFilterSchemaAdvertisesDimensionFilters(t *testing.T) {
-	allowed := sqlite.AllowedBusinessAnalysisFilterDimensions()
-	highRisk := map[string]bool{
-		"account_name":  true,
-		"crm_object_id": true,
-		"loss_reason":   true,
-		"persona":       true,
-		"won_lost":      true,
+	disallowed := map[string]bool{}
+	for _, name := range sqlite.DisallowedBusinessAnalysisFilterDimensions() {
+		disallowed[name] = true
 	}
 	checked := 0
 	for _, op := range FacadeOperations() {
@@ -91,17 +135,8 @@ func TestFacadeBusinessAnalysisFilterSchemaAdvertisesDimensionFilters(t *testing
 		if !ok {
 			t.Fatalf("%s dimension_filters item missing dimension schema", op.Name)
 		}
-		dimensionEnum, ok := dimension["enum"].([]string)
-		if !ok {
-			t.Fatalf("%s dimension enum has type %T", op.Name, dimension["enum"])
-		}
-		if !reflect.DeepEqual(dimensionEnum, allowed) {
-			t.Fatalf("%s dimension enum=%v want %v", op.Name, dimensionEnum, allowed)
-		}
-		for _, name := range dimensionEnum {
-			if highRisk[name] {
-				t.Fatalf("%s dimension enum exposes high-risk field %q", op.Name, name)
-			}
+		if _, hasEnum := dimension["enum"]; hasEnum {
+			t.Fatalf("%s dimension schema must not advertise a closed enum", op.Name)
 		}
 		operator, ok := itemProps["operator"].(map[string]any)
 		if !ok {
@@ -111,8 +146,13 @@ func TestFacadeBusinessAnalysisFilterSchemaAdvertisesDimensionFilters(t *testing
 		if !ok {
 			t.Fatalf("%s operator enum has type %T", op.Name, operator["enum"])
 		}
-		if !reflect.DeepEqual(operatorEnum, []string{"equals", "in"}) {
-			t.Fatalf("%s operator enum=%v want [equals in]", op.Name, operatorEnum)
+		if !strings.Contains(strings.Join(operatorEnum, ","), "gte") || !strings.Contains(strings.Join(operatorEnum, ","), "between") {
+			t.Fatalf("%s operator enum=%v want numeric operators documented", op.Name, operatorEnum)
+		}
+		for _, name := range sqlite.BackedBusinessAnalysisFilterDimensions() {
+			if disallowed[name] {
+				t.Fatalf("backed dimension list includes disallowed field %q", name)
+			}
 		}
 		checked++
 	}

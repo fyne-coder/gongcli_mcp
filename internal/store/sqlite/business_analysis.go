@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -50,25 +51,89 @@ const (
 )
 
 var businessAnalysisFilterDimensionAliases = map[string]string{
-	"account_revenue_range":         "account_revenue_range",
-	"revenue_range":                 "account_revenue_range",
-	"account_type":                  "account_type",
-	"account_industry":              "account_industry",
-	"industry":                      "account_industry",
-	"opportunity_stage":             "opportunity_stage",
-	"stage":                         "opportunity_stage",
-	"opportunity_type":              "opportunity_type",
-	"forecast_category":             "forecast_category",
-	"opportunity_forecast_category": "forecast_category",
-	"scope":                         "scope",
-	"system":                        "system",
-	"direction":                     "direction",
-	"transcript_status":             "transcript_status",
-	"lifecycle":                     "lifecycle_bucket",
-	"lifecycle_bucket":              "lifecycle_bucket",
-	"month":                         "call_month",
-	"call_month":                    "call_month",
-	"quarter":                       "quarter",
+	"call_id":                            "call_id",
+	"title":                              "title",
+	"call_title":                         "title",
+	"started_at":                         "started_at",
+	"call_date":                          "call_date",
+	"account_revenue_range":              "account_revenue_range",
+	"revenue_range":                      "account_revenue_range",
+	"account_type":                       "account_type",
+	"account_industry":                   "account_industry",
+	"industry":                           "account_industry",
+	"account_id":                         "account_id",
+	"account_name":                       "account_name",
+	"account_primary_procurement_system": "account_primary_procurement_system",
+	"account_procurement_system":         "account_primary_procurement_system",
+	"opportunity_stage":                  "opportunity_stage",
+	"stage":                              "opportunity_stage",
+	"opportunity_type":                   "opportunity_type",
+	"opportunity_id":                     "opportunity_id",
+	"crm_object_id":                      "crm_object_id",
+	"opportunity_amount":                 "opportunity_amount",
+	"opportunity_probability":            "opportunity_probability",
+	"forecast_category":                  "forecast_category",
+	"opportunity_forecast_category":      "forecast_category",
+	"opportunity_primary_lead_source":    "opportunity_primary_lead_source",
+	"primary_lead_source":                "opportunity_primary_lead_source",
+	"opportunity_procurement_system":     "opportunity_procurement_system",
+	"scope":                              "scope",
+	"system":                             "system",
+	"direction":                          "direction",
+	"purpose":                            "purpose",
+	"primary_user_id":                    "primary_user_id",
+	"calendar_event_present":             "calendar_event_present",
+	"calendar_event_status":              "calendar_event_status",
+	"sdr_disposition":                    "sdr_disposition",
+	"transcript_present":                 "transcript_present",
+	"transcript_status":                  "transcript_status",
+	"lifecycle":                          "lifecycle_bucket",
+	"lifecycle_bucket":                   "lifecycle_bucket",
+	"lifecycle_confidence":               "lifecycle_confidence",
+	"lifecycle_reason":                   "lifecycle_reason",
+	"lifecycle_evidence_fields":          "lifecycle_evidence_fields",
+	"month":                              "call_month",
+	"call_month":                         "call_month",
+	"quarter":                            "quarter",
+	"duration_seconds":                   "duration_seconds",
+	"call_length":                        "duration_seconds",
+	"duration":                           "duration_seconds",
+	"duration_bucket":                    "duration_bucket",
+	"opportunity_count":                  "opportunity_count",
+	"account_count":                      "account_count",
+	"persona":                            "persona",
+	"participant_title":                  "persona",
+	"won_lost":                           "won_lost",
+	"outcome":                            "won_lost",
+	"loss_reason":                        "loss_reason",
+	"likely_voicemail_or_ivr":            "likely_voicemail_or_ivr",
+	"participant_status":                 "participant_status",
+	"person_title_status":                "person_title_status",
+	"person_title_source":                "person_title_source",
+	"participant_email":                  "participant_email",
+	"email":                              "participant_email",
+}
+
+// disallowedBusinessAnalysisFilterDimensions is the explicit hook for
+// dimensions that must not be used in dimension_filters even though backed
+// fields are open by default. Package 2 intentionally ships this empty.
+var disallowedBusinessAnalysisFilterDimensions = map[string]struct{}{}
+
+type businessAnalysisFilterDimensionKind int
+
+const (
+	businessAnalysisFilterDimensionString businessAnalysisFilterDimensionKind = iota
+	businessAnalysisFilterDimensionNumeric
+	businessAnalysisFilterDimensionBoolean
+	businessAnalysisFilterDimensionParticipantEmail
+	businessAnalysisFilterDimensionAccountName
+	businessAnalysisFilterDimensionCRMObjectID
+)
+
+type baFilterDimensionSpec struct {
+	Canonical string
+	Kind      businessAnalysisFilterDimensionKind
+	Expr      string
 }
 
 type BusinessAnalysisFilter struct {
@@ -1152,26 +1217,236 @@ func businessAnalysisCallFromWhere(filter BusinessAnalysisFilter, includeFilterQ
 
 func businessAnalysisAppendDimensionFilters(where []string, args []any, filters []BusinessAnalysisDimensionFilter) ([]string, []any, error) {
 	for _, filter := range filters {
-		_, expr, err := businessAnalysisFilterDimensionExpr(filter.Dimension)
+		spec, err := lookupBAFilterDimensionSpec(filter.Dimension)
 		if err != nil {
 			return nil, nil, err
 		}
-		switch filter.Operator {
-		case "equals":
-			where = append(where, expr+` = ?`)
-			args = append(args, filter.Values[0])
-		case "in":
-			placeholders := make([]string, 0, len(filter.Values))
-			for _, value := range filter.Values {
-				placeholders = append(placeholders, "?")
-				args = append(args, value)
+		switch spec.Kind {
+		case businessAnalysisFilterDimensionParticipantEmail:
+			clause, clauseArgs, err := businessAnalysisParticipantEmailFilterSQL(filter)
+			if err != nil {
+				return nil, nil, err
 			}
-			where = append(where, expr+` IN (`+strings.Join(placeholders, ",")+`)`)
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
+		case businessAnalysisFilterDimensionAccountName:
+			clause, clauseArgs, err := businessAnalysisAccountNameFilterSQL(filter)
+			if err != nil {
+				return nil, nil, err
+			}
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
+		case businessAnalysisFilterDimensionCRMObjectID:
+			clause, clauseArgs, err := businessAnalysisCRMObjectIDFilterSQL(filter)
+			if err != nil {
+				return nil, nil, err
+			}
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
+		case businessAnalysisFilterDimensionNumeric:
+			clause, clauseArgs, err := businessAnalysisNumericDimensionFilterSQL(spec.Expr, filter)
+			if err != nil {
+				return nil, nil, err
+			}
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
+		case businessAnalysisFilterDimensionBoolean:
+			clause, clauseArgs, err := businessAnalysisBooleanDimensionFilterSQL(spec.Expr, filter)
+			if err != nil {
+				return nil, nil, err
+			}
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
 		default:
-			return nil, nil, fmt.Errorf("dimension filter operator %q is not supported", filter.Operator)
+			switch filter.Operator {
+			case "equals":
+				where = append(where, spec.Expr+` = ?`)
+				args = append(args, filter.Values[0])
+			case "in":
+				placeholders := make([]string, 0, len(filter.Values))
+				for _, value := range filter.Values {
+					placeholders = append(placeholders, "?")
+					args = append(args, value)
+				}
+				where = append(where, spec.Expr+` IN (`+strings.Join(placeholders, ",")+`)`)
+			default:
+				return nil, nil, fmt.Errorf("dimension filter operator %q is not supported for %s", filter.Operator, filter.Dimension)
+			}
 		}
 	}
 	return where, args, nil
+}
+
+func businessAnalysisNumericDimensionFilterSQL(expr string, filter BusinessAnalysisDimensionFilter) (string, []any, error) {
+	nums, err := businessAnalysisNumericDimensionFilterValues(filter)
+	if err != nil {
+		return "", nil, err
+	}
+	switch filter.Operator {
+	case "equals":
+		return expr + ` = ?`, []any{nums[0]}, nil
+	case "in":
+		placeholders := make([]string, 0, len(nums))
+		args := make([]any, 0, len(nums))
+		for _, value := range nums {
+			placeholders = append(placeholders, "?")
+			args = append(args, value)
+		}
+		return expr + ` IN (` + strings.Join(placeholders, ",") + `)`, args, nil
+	case "gte":
+		return expr + ` >= ?`, []any{nums[0]}, nil
+	case "lte":
+		return expr + ` <= ?`, []any{nums[0]}, nil
+	case "between":
+		low, high := nums[0], nums[1]
+		if low > high {
+			low, high = high, low
+		}
+		return expr + ` BETWEEN ? AND ?`, []any{low, high}, nil
+	default:
+		return "", nil, fmt.Errorf("dimension filter operator %q is not supported for %s", filter.Operator, filter.Dimension)
+	}
+}
+
+func businessAnalysisBooleanDimensionFilterSQL(expr string, filter BusinessAnalysisDimensionFilter) (string, []any, error) {
+	bools, err := businessAnalysisBooleanDimensionFilterValues(filter)
+	if err != nil {
+		return "", nil, err
+	}
+	switch filter.Operator {
+	case "equals":
+		return expr + ` = ?`, []any{bools[0]}, nil
+	case "in":
+		placeholders := make([]string, 0, len(bools))
+		args := make([]any, 0, len(bools))
+		for _, value := range bools {
+			placeholders = append(placeholders, "?")
+			args = append(args, value)
+		}
+		return expr + ` IN (` + strings.Join(placeholders, ",") + `)`, args, nil
+	default:
+		return "", nil, fmt.Errorf("dimension filter operator %q is not supported for %s", filter.Operator, filter.Dimension)
+	}
+}
+
+func businessAnalysisBooleanDimensionFilterValues(filter BusinessAnalysisDimensionFilter) ([]bool, error) {
+	out := make([]bool, 0, len(filter.Values))
+	for _, raw := range filter.Values {
+		value, err := parseBusinessAnalysisBoolFilterValue(raw)
+		if err != nil {
+			return nil, fmt.Errorf("dimension_filters for %s require boolean values", filter.Dimension)
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+func businessAnalysisNumericDimensionFilterValues(filter BusinessAnalysisDimensionFilter) ([]int64, error) {
+	out := make([]int64, 0, len(filter.Values))
+	for _, raw := range filter.Values {
+		value, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("dimension_filters for %s require numeric values", filter.Dimension)
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+func businessAnalysisAccountNameFilterSQL(filter BusinessAnalysisDimensionFilter) (string, []any, error) {
+	return businessAnalysisContextObjectTextFilterSQL(filter, "account_name", `account_o.object_type = 'Account'`, []string{"account_o.object_name", "account_f.field_value_text"}, `
+			  FROM call_context_objects account_o
+			  LEFT JOIN call_context_fields account_f
+			    ON account_f.call_id = account_o.call_id
+			   AND account_f.object_key = account_o.object_key
+			   AND account_f.field_name = 'Name'
+			 WHERE account_o.call_id = cf.call_id`)
+}
+
+func businessAnalysisCRMObjectIDFilterSQL(filter BusinessAnalysisDimensionFilter) (string, []any, error) {
+	return businessAnalysisContextObjectTextFilterSQL(filter, "crm_object_id", `1 = 1`, []string{"object_o.object_id"}, `
+			  FROM call_context_objects object_o
+			 WHERE object_o.call_id = cf.call_id`)
+}
+
+func businessAnalysisContextObjectTextFilterSQL(filter BusinessAnalysisDimensionFilter, dimension string, extraPredicate string, valueExprs []string, fromWhere string) (string, []any, error) {
+	if filter.Operator != "equals" && filter.Operator != "in" {
+		return "", nil, fmt.Errorf("dimension filter operator %q is not supported for %s", filter.Operator, dimension)
+	}
+	values := make([]string, 0, len(filter.Values))
+	for _, raw := range filter.Values {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	if len(values) == 0 {
+		return "", nil, fmt.Errorf("dimension_filters for %s require at least one value", dimension)
+	}
+	placeholders := make([]string, 0, len(values))
+	args := make([]any, 0, len(values)*len(valueExprs))
+	for range values {
+		placeholders = append(placeholders, "?")
+	}
+	valuePredicates := make([]string, 0, len(valueExprs))
+	for _, expr := range valueExprs {
+		valuePredicates = append(valuePredicates, `LOWER(TRIM(COALESCE(`+expr+`, ''))) IN (`+strings.Join(placeholders, ",")+`)`)
+		for _, value := range values {
+			args = append(args, value)
+		}
+	}
+	return `EXISTS (
+		SELECT 1` + fromWhere + `
+		   AND ` + extraPredicate + `
+		   AND (` + strings.Join(valuePredicates, ` OR `) + `)
+	)`, args, nil
+}
+
+func businessAnalysisParticipantEmailFilterSQL(filter BusinessAnalysisDimensionFilter) (string, []any, error) {
+	emails := make([]string, 0, len(filter.Values))
+	for _, raw := range filter.Values {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		if value == "" {
+			continue
+		}
+		emails = append(emails, value)
+	}
+	if len(emails) == 0 {
+		return "", nil, fmt.Errorf("dimension_filters for participant_email require at least one email value")
+	}
+	emailExpr := `LOWER(TRIM(COALESCE(json_extract(p.value, '$.emailAddress'), json_extract(p.value, '$.email'), '')))`
+	matchParties := func(operator string, placeholders string) string {
+		return `EXISTS (
+			SELECT 1
+			  FROM json_each(c.raw_json, '$.parties') p
+			 WHERE ` + emailExpr + ` <> ''
+			   AND ` + emailExpr + ` ` + operator + ` ` + placeholders + `
+		)
+		OR EXISTS (
+			SELECT 1
+			  FROM json_each(c.raw_json, '$.metaData.parties') p
+			 WHERE ` + emailExpr + ` <> ''
+			   AND ` + emailExpr + ` ` + operator + ` ` + placeholders + `
+		)`
+	}
+	switch filter.Operator {
+	case "equals":
+		return `(` + matchParties("=", "?") + `)`, []any{emails[0], emails[0]}, nil
+	case "in":
+		placeholders := make([]string, 0, len(emails))
+		args := make([]any, 0, len(emails)*2)
+		for _, email := range emails {
+			placeholders = append(placeholders, "?")
+			args = append(args, email)
+		}
+		inClause := "(" + strings.Join(placeholders, ",") + ")"
+		for _, email := range emails {
+			args = append(args, email)
+		}
+		return `(` + matchParties("IN", inClause) + `)`, args, nil
+	default:
+		return "", nil, fmt.Errorf("dimension filter operator %q is not supported for participant_email", filter.Operator)
+	}
 }
 
 func businessAnalysisLikelyVoicemailSQL() string {
@@ -1356,10 +1631,69 @@ func normalizeBusinessAnalysisLifecycleExclusions(values []string) []string {
 }
 
 func AllowedBusinessAnalysisFilterDimensions() []string {
-	out := make([]string, 0, len(businessAnalysisFilterDimensionAliases))
-	seen := make(map[string]struct{}, len(businessAnalysisFilterDimensionAliases))
-	for _, canonical := range businessAnalysisFilterDimensionAliases {
+	return BackedBusinessAnalysisFilterDimensions()
+}
+
+func BackedBusinessAnalysisFilterDimensions() []string {
+	candidates := []string{
+		"account_count",
+		"account_id",
+		"account_industry",
+		"account_name",
+		"account_primary_procurement_system",
+		"account_revenue_range",
+		"account_type",
+		"call_date",
+		"call_id",
+		"call_month",
+		"calendar_event_present",
+		"calendar_event_status",
+		"crm_object_id",
+		"direction",
+		"duration_bucket",
+		"duration_seconds",
+		"forecast_category",
+		"lifecycle_bucket",
+		"lifecycle_confidence",
+		"lifecycle_evidence_fields",
+		"lifecycle_reason",
+		"likely_voicemail_or_ivr",
+		"loss_reason",
+		"opportunity_amount",
+		"opportunity_count",
+		"opportunity_id",
+		"opportunity_primary_lead_source",
+		"opportunity_probability",
+		"opportunity_procurement_system",
+		"opportunity_stage",
+		"opportunity_type",
+		"participant_email",
+		"participant_status",
+		"persona",
+		"person_title_source",
+		"person_title_status",
+		"primary_user_id",
+		"purpose",
+		"quarter",
+		"scope",
+		"sdr_disposition",
+		"started_at",
+		"system",
+		"title",
+		"transcript_present",
+		"transcript_status",
+		"won_lost",
+	}
+	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{})
+	for _, canonical := range candidates {
 		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		if _, disallowed := disallowedBusinessAnalysisFilterDimensions[canonical]; disallowed {
+			continue
+		}
+		if !isBackedBusinessAnalysisFilterDimension(canonical) {
 			continue
 		}
 		seen[canonical] = struct{}{}
@@ -1367,6 +1701,28 @@ func AllowedBusinessAnalysisFilterDimensions() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func DisallowedBusinessAnalysisFilterDimensions() []string {
+	out := make([]string, 0, len(disallowedBusinessAnalysisFilterDimensions))
+	for dimension := range disallowedBusinessAnalysisFilterDimensions {
+		out = append(out, dimension)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func SupportedBusinessAnalysisDimensionFilterOperators(dimension string) []string {
+	spec, err := lookupBAFilterDimensionSpec(dimension)
+	if err != nil {
+		return nil
+	}
+	switch spec.Kind {
+	case businessAnalysisFilterDimensionNumeric:
+		return []string{"equals", "in", "gte", "lte", "between"}
+	default:
+		return []string{"equals", "in"}
+	}
 }
 
 func NormalizeBusinessAnalysisDimensionFilters(filters []BusinessAnalysisDimensionFilter) ([]BusinessAnalysisDimensionFilter, error) {
@@ -1383,17 +1739,19 @@ func NormalizeBusinessAnalysisDimensionFilters(filters []BusinessAnalysisDimensi
 		if operator == "" {
 			operator = "equals"
 		}
-		switch operator {
-		case "equals", "in":
-		default:
-			return nil, fmt.Errorf("dimension_filters[%d].operator must be equals or in", i)
+		supported := SupportedBusinessAnalysisDimensionFilterOperators(dimension)
+		if !containsString(supported, operator) {
+			return nil, fmt.Errorf("dimension_filters[%d].operator must be one of %s for %s", i, strings.Join(supported, ", "), dimension)
 		}
-		values, err := normalizeBusinessAnalysisDimensionFilterValues(filter.Values, i)
+		values, err := normalizeBusinessAnalysisDimensionFilterValues(filter.Values, i, dimension)
 		if err != nil {
 			return nil, err
 		}
 		if operator == "equals" && len(values) != 1 {
 			return nil, fmt.Errorf("dimension_filters[%d].values must include exactly one value for equals", i)
+		}
+		if operator == "between" && len(values) != 2 {
+			return nil, fmt.Errorf("dimension_filters[%d].values must include exactly two values for between", i)
 		}
 		out = append(out, BusinessAnalysisDimensionFilter{
 			Dimension: dimension,
@@ -1413,7 +1771,11 @@ func NormalizeBusinessAnalysisDimensionFilters(filters []BusinessAnalysisDimensi
 	return out, nil
 }
 
-func normalizeBusinessAnalysisDimensionFilterValues(values []string, filterIndex int) ([]string, error) {
+func normalizeBusinessAnalysisDimensionFilterValues(values []string, filterIndex int, dimension string) ([]string, error) {
+	spec, err := lookupBAFilterDimensionSpec(dimension)
+	if err != nil {
+		return nil, err
+	}
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for _, raw := range values {
@@ -1423,6 +1785,28 @@ func normalizeBusinessAnalysisDimensionFilterValues(values []string, filterIndex
 		}
 		if len(value) > MaxBusinessAnalysisDimensionFilterValueLength {
 			return nil, fmt.Errorf("dimension_filters[%d].values entries must be %d characters or fewer", filterIndex, MaxBusinessAnalysisDimensionFilterValueLength)
+		}
+		if spec.Kind == businessAnalysisFilterDimensionNumeric {
+			if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+				return nil, fmt.Errorf("dimension_filters[%d].values for %s require numeric values", filterIndex, dimension)
+			}
+		}
+		if spec.Kind == businessAnalysisFilterDimensionBoolean {
+			boolValue, err := parseBusinessAnalysisBoolFilterValue(value)
+			if err != nil {
+				return nil, fmt.Errorf("dimension_filters[%d].values for %s require boolean values", filterIndex, dimension)
+			}
+			if boolValue {
+				value = "true"
+			} else {
+				value = "false"
+			}
+		}
+		if spec.Kind == businessAnalysisFilterDimensionParticipantEmail {
+			value = strings.ToLower(value)
+		}
+		if spec.Kind == businessAnalysisFilterDimensionAccountName {
+			value = strings.ToLower(value)
 		}
 		if _, ok := seen[value]; ok {
 			continue
@@ -1437,12 +1821,162 @@ func normalizeBusinessAnalysisDimensionFilterValues(values []string, filterIndex
 	return out, nil
 }
 
+func parseBusinessAnalysisBoolFilterValue(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "1", "yes", "y":
+		return true, nil
+	case "false", "0", "no", "n":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean value %q", raw)
+	}
+}
+
 func BusinessAnalysisFilterDimensionCanonical(dimension string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(dimension))
-	if canonical, ok := businessAnalysisFilterDimensionAliases[normalized]; ok {
-		return canonical, nil
+	if normalized == "" {
+		return "", fmt.Errorf("dimension filter dimension is required")
 	}
-	return "", fmt.Errorf("unsupported dimension filter %q; use a reviewed known dimension", dimension)
+	canonical := normalized
+	if alias, ok := businessAnalysisFilterDimensionAliases[normalized]; ok {
+		canonical = alias
+	}
+	if _, disallowed := disallowedBusinessAnalysisFilterDimensions[canonical]; disallowed {
+		return "", fmt.Errorf("dimension filter %q is not available for filtering", dimension)
+	}
+	if !isBackedBusinessAnalysisFilterDimension(canonical) {
+		return "", fmt.Errorf("unsupported dimension filter %q; use a backed business-analysis field", dimension)
+	}
+	return canonical, nil
+}
+
+func isBackedBusinessAnalysisFilterDimension(dimension string) bool {
+	_, err := lookupBAFilterDimensionSpec(dimension)
+	return err == nil
+}
+
+func lookupBAFilterDimensionSpec(dimension string) (baFilterDimensionSpec, error) {
+	canonical, err := businessAnalysisFilterDimensionCanonicalWithoutBackedCheck(dimension)
+	if err != nil {
+		return baFilterDimensionSpec{}, err
+	}
+	if _, disallowed := disallowedBusinessAnalysisFilterDimensions[canonical]; disallowed {
+		return baFilterDimensionSpec{}, fmt.Errorf("dimension filter %q is not available for filtering", dimension)
+	}
+	switch canonical {
+	case "call_id":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.call_id"}, nil
+	case "title":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.title"}, nil
+	case "started_at":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.started_at"}, nil
+	case "call_date":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.call_date"}, nil
+	case "call_month":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.call_month"}, nil
+	case "quarter":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: businessAnalysisQuarterExpr("cf.call_date")}, nil
+	case "duration_seconds":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionNumeric, Expr: "cf.duration_seconds"}, nil
+	case "duration_bucket":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.duration_bucket"}, nil
+	case "system":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.system"}, nil
+	case "direction":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.direction"}, nil
+	case "scope":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.scope"}, nil
+	case "purpose":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.purpose"}, nil
+	case "primary_user_id":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.primary_user_id"}, nil
+	case "calendar_event_present":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionBoolean, Expr: "cf.calendar_event_present"}, nil
+	case "calendar_event_status":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.calendar_event_status"}, nil
+	case "sdr_disposition":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.sdr_disposition"}, nil
+	case "transcript_present":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionBoolean, Expr: "cf.transcript_present"}, nil
+	case "transcript_status":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.transcript_status"}, nil
+	case "lifecycle_bucket":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.lifecycle_bucket"}, nil
+	case "lifecycle_confidence":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.lifecycle_confidence"}, nil
+	case "lifecycle_reason":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.lifecycle_reason"}, nil
+	case "lifecycle_evidence_fields":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.lifecycle_evidence_fields"}, nil
+	case "account_id":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.account_id"}, nil
+	case "account_name":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionAccountName}, nil
+	case "account_type":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.account_type"}, nil
+	case "account_industry":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.account_industry"}, nil
+	case "account_revenue_range":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.account_revenue_range"}, nil
+	case "account_primary_procurement_system":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.account_primary_procurement_system"}, nil
+	case "opportunity_id":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_id"}, nil
+	case "crm_object_id":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionCRMObjectID}, nil
+	case "opportunity_stage":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_stage"}, nil
+	case "opportunity_type":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_type"}, nil
+	case "opportunity_amount":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_amount"}, nil
+	case "opportunity_probability":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_probability"}, nil
+	case "forecast_category":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_forecast_category"}, nil
+	case "opportunity_primary_lead_source":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_primary_lead_source"}, nil
+	case "opportunity_procurement_system":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: "cf.opportunity_procurement_system"}, nil
+	case "opportunity_count":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionNumeric, Expr: "cf.opportunity_count"}, nil
+	case "account_count":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionNumeric, Expr: "cf.account_count"}, nil
+	case "persona":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: businessAnalysisPersonaBucketSQL("c", "cf")}, nil
+	case "won_lost":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: `CASE
+			WHEN LOWER(cf.opportunity_stage) = 'closed won' THEN 'closed_won'
+			WHEN LOWER(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost'
+			WHEN TRIM(cf.opportunity_stage) <> '' THEN 'open_or_in_progress'
+			ELSE 'unknown'
+		END`}, nil
+	case "loss_reason":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: businessAnalysisLossReasonBucketSQL()}, nil
+	case "likely_voicemail_or_ivr":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionBoolean, Expr: `(` + businessAnalysisLikelyVoicemailSQL() + `)`}, nil
+	case "participant_status":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: `CASE WHEN c.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END`}, nil
+	case "person_title_status":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: businessAnalysisPersonTitleStatusSQL("c")}, nil
+	case "person_title_source":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionString, Expr: businessAnalysisPersonTitleSourceSQL("c")}, nil
+	case "participant_email":
+		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionParticipantEmail}, nil
+	default:
+		return baFilterDimensionSpec{}, fmt.Errorf("unsupported dimension filter %q; use a backed business-analysis field", dimension)
+	}
+}
+
+func businessAnalysisFilterDimensionCanonicalWithoutBackedCheck(dimension string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(dimension))
+	if normalized == "" {
+		return "", fmt.Errorf("dimension filter dimension is required")
+	}
+	if alias, ok := businessAnalysisFilterDimensionAliases[normalized]; ok {
+		return alias, nil
+	}
+	return normalized, nil
 }
 
 func normalizeBusinessAnalysisQuarter(value string) (string, string, string, error) {
@@ -1520,40 +2054,11 @@ func businessAnalysisDimensionExpr(dimension string) (string, string, error) {
 }
 
 func businessAnalysisFilterDimensionExpr(dimension string) (string, string, error) {
-	canonical, err := BusinessAnalysisFilterDimensionCanonical(dimension)
+	spec, err := lookupBAFilterDimensionSpec(dimension)
 	if err != nil {
 		return "", "", err
 	}
-	switch canonical {
-	case "account_revenue_range":
-		return canonical, "cf.account_revenue_range", nil
-	case "account_type":
-		return canonical, "cf.account_type", nil
-	case "account_industry":
-		return canonical, "cf.account_industry", nil
-	case "opportunity_stage":
-		return canonical, "cf.opportunity_stage", nil
-	case "opportunity_type":
-		return canonical, "cf.opportunity_type", nil
-	case "forecast_category":
-		return canonical, "cf.opportunity_forecast_category", nil
-	case "scope":
-		return canonical, "cf.scope", nil
-	case "system":
-		return canonical, "cf.system", nil
-	case "direction":
-		return canonical, "cf.direction", nil
-	case "transcript_status":
-		return canonical, "cf.transcript_status", nil
-	case "lifecycle_bucket":
-		return canonical, "cf.lifecycle_bucket", nil
-	case "call_month":
-		return canonical, "cf.call_month", nil
-	case "quarter":
-		return canonical, businessAnalysisQuarterExpr("cf.call_date"), nil
-	default:
-		return "", "", fmt.Errorf("unsupported dimension filter %q; use a reviewed known dimension", dimension)
-	}
+	return spec.Canonical, spec.Expr, nil
 }
 
 func businessAnalysisQuarterExpr(callDateExpr string) string {

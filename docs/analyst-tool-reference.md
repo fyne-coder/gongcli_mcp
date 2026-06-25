@@ -68,7 +68,7 @@ gong_discover_capabilities
 over MCP from your host. It returns the live registry with input schemas,
 examples, and per-operation `routed_tool_available` flags.
 
-## `call_filter` allowlist
+## `call_filter`
 
 Every cohort, search, and analysis tool accepts only these filter fields:
 
@@ -90,7 +90,7 @@ Every cohort, search, and analysis tool accepts only these filter fields:
 | `crm_object_type` | e.g. `Account`, `Opportunity` | Constrain to a CRM record |
 | `crm_object_id` | string | Specific CRM record |
 | `participant_title_query` | string | Substring match on participant title |
-| `dimension_filters` | array | Exact-match filters over reviewed known dimensions only; not arbitrary CRM field lookup |
+| `dimension_filters` | array | Filters over backed business-analysis fields and dimensions. String fields use `equals`/`in`; numeric fields such as `duration_seconds` also support `gte`/`lte`/`between`. The default disallow list is empty. |
 | `limit` | integer | Per-tool result cap. Always provide. |
 
 `dimension_filters` entries use:
@@ -103,17 +103,19 @@ Every cohort, search, and analysis tool accepts only these filter fields:
 }
 ```
 
-Allowed operators are `equals` and `in`. Multiple entries are combined with AND
-semantics; values inside one `in` entry are OR alternatives. `quarter` values
-must use `YYYY-Q#`, and `call_month` values must use `YYYY-MM`. Allowed
-dimensions are advertised by `gong_discover_capabilities` and are limited to
-reviewed low-cardinality read-model fields such as `account_revenue_range`,
-`account_type`,
-`account_industry`, `opportunity_stage`, `opportunity_type`,
-`forecast_category`, `scope`, `system`, `direction`, `transcript_status`,
-`lifecycle_bucket`, `call_month`, and `quarter`. Do not use this field for raw
-CRM field probing, account/customer names, CRM object IDs, participant titles,
-loss reasons, personas, won/lost buckets, or transcript text.
+Other common `dimension_filters` dimensions include `duration_seconds`,
+`participant_email`, `account_name`, `crm_object_id`, `persona`, `loss_reason`,
+and `won_lost`. Participant email and identifier filters narrow the call set;
+returned fields still follow the tool's normal redaction and opt-in behavior.
+
+Multiple entries are combined with AND semantics; values inside one `in` entry
+are OR alternatives. `quarter` values must use `YYYY-Q#`, and `call_month`
+values must use `YYYY-MM`. The server accepts backed business-analysis fields
+and dimensions unless an operator policy disallows them; this package ships
+with an empty disallow list. `gong_discover_capabilities` advertises the
+current backed set and operator support. Use the `query` and
+`transcript_query` fields for transcript text search; `dimension_filters`
+remain structured field predicates.
 
 ### Using `limit` deliberately
 
