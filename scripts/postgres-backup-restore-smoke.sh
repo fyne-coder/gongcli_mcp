@@ -67,9 +67,15 @@ if [[ ! "$PROJECT" =~ ^gongctl-postgres-restore-smoke[-a-zA-Z0-9_]*$ ]]; then
   exit 1
 fi
 
+if [[ ! "$RESTORE_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+  echo "refusing unsafe restore database name: $RESTORE_DB" >&2
+  echo "use an unquoted PostgreSQL identifier for GONGCTL_POSTGRES_RESTORE_DB" >&2
+  exit 1
+fi
+
 cleanup() {
   if [ "$USE_TEST_POSTGRES_URL" = "1" ]; then
-    docker_postgres_client psql "$WRITER_URL" -v restore_db="$RESTORE_DB" -c 'DROP DATABASE IF EXISTS :"restore_db"' >/dev/null 2>&1 || true
+    docker_postgres_client psql "$WRITER_URL" -c "DROP DATABASE IF EXISTS \"$RESTORE_DB\"" >/dev/null 2>&1 || true
   else
     docker compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
   fi
@@ -159,10 +165,10 @@ SQL
 
 create_restore_database() {
   if [ "$USE_TEST_POSTGRES_URL" = "1" ]; then
-    docker_postgres_client psql "$WRITER_URL" -v ON_ERROR_STOP=1 -v restore_db="$RESTORE_DB" <<'SQL'
-DROP DATABASE IF EXISTS :"restore_db";
-CREATE DATABASE :"restore_db";
-GRANT CONNECT ON DATABASE :"restore_db" TO gongmcp_reader;
+    docker_postgres_client psql "$WRITER_URL" -v ON_ERROR_STOP=1 <<SQL
+DROP DATABASE IF EXISTS "$RESTORE_DB";
+CREATE DATABASE "$RESTORE_DB";
+GRANT CONNECT ON DATABASE "$RESTORE_DB" TO gongmcp_reader;
 SQL
   else
     docker compose -p "$PROJECT" -f "$COMPOSE_FILE" exec -T postgres dropdb -h 127.0.0.1 -U "$GONGCTL_POSTGRES_USER" --if-exists "$RESTORE_DB" >/dev/null
