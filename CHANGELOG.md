@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-06-25
+
 - Added governed `filter.dimension_filters` support for Business Workbench
   business-analysis tools, starting with reviewed dimensions such as
   `account_revenue_range`, so ICP-style segmentation can be expressed without
@@ -12,6 +14,17 @@
 - Postgres upgrade note: superseded business-analysis SECURITY DEFINER
   function signatures are dropped and recreated by the new trailing migration;
   deploy the matching `gongctl`/`gongmcp` binaries with the migrated database.
+- Added typed Postgres serving-refresh error classification, failed-step JSON,
+  and `--statement-timeout` / `GONGCTL_REFRESH_STATEMENT_TIMEOUT` controls for
+  `gongctl deploy postgres-refresh`.
+- Extended `gongctl doctor postgres-deploy` and Postgres support bundles with
+  sanitized deployment checks, serving-refresh marker freshness, read-model
+  readiness, and `postgres-deployment.json` evidence.
+- Documented the optional direct-OIDC group fallback for app-assignment-only
+  deployments and added gateway tests for the fallback behavior.
+- Updated the required local/release Go toolchain to 1.26.4.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.5.5`.
 
 ## 0.5.4 - 2026-06-02
 

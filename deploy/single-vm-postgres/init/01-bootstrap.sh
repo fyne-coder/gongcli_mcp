@@ -18,7 +18,7 @@ fi
 
 create_database_if_missing() {
   db_name="$1"
-  if ! psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$db_name'" | grep -qx 1; then
+  if ! psql -v ON_ERROR_STOP=1 --set=db_name="$db_name" --username "$POSTGRES_USER" --dbname postgres -tAc "SELECT 1 FROM pg_database WHERE datname = :'db_name'" | grep -qx 1; then
     createdb --username "$POSTGRES_USER" "$db_name"
   fi
 }
@@ -26,18 +26,24 @@ create_database_if_missing() {
 create_database_if_missing "$GONGCTL_SOURCE_DB"
 create_database_if_missing "$GONGCTL_MCP_DB"
 
-reader_password=$(printf "%s" "$GONGMCP_READER_PASSWORD" | sed "s/'/''/g")
-
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres <<SQL
-DO \$\$
+psql -v ON_ERROR_STOP=1 \
+  --set=reader_role="$GONGMCP_READER_ROLE" \
+  --set=reader_password="$GONGMCP_READER_PASSWORD" \
+  --set=mcp_db="$GONGCTL_MCP_DB" \
+  --username "$POSTGRES_USER" \
+  --dbname postgres <<'SQL'
+DO $$
+DECLARE
+  target_role text := :'reader_role';
+  target_password text := :'reader_password';
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${GONGMCP_READER_ROLE}') THEN
-    CREATE ROLE "${GONGMCP_READER_ROLE}" LOGIN NOINHERIT PASSWORD '${reader_password}';
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
+    EXECUTE format('CREATE ROLE %I LOGIN NOINHERIT PASSWORD %L', target_role, target_password);
   ELSE
-    ALTER ROLE "${GONGMCP_READER_ROLE}" WITH LOGIN NOINHERIT PASSWORD '${reader_password}';
+    EXECUTE format('ALTER ROLE %I WITH LOGIN NOINHERIT PASSWORD %L', target_role, target_password);
   END IF;
 END
-\$\$;
+$$;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-GRANT CONNECT ON DATABASE "${GONGCTL_MCP_DB}" TO "${GONGMCP_READER_ROLE}";
+GRANT CONNECT ON DATABASE :"mcp_db" TO :"reader_role";
 SQL

@@ -654,6 +654,7 @@ for generated_sql in /tmp/gongctl-postgres-business-pilot-reader-grants.sql /tmp
     echo "generated business-pilot reader grant SQL unexpectedly grants generic active profile helper: $generated_sql" >&2
     exit 1
   fi
+  # shellcheck disable=SC2016
   if ! grep -Fq 'DO $gongctl_scoped_reader_reconcile$' "$generated_sql"; then
     echo "generated business-pilot reader grant SQL missing reconcile block: $generated_sql" >&2
     exit 1
@@ -1055,8 +1056,9 @@ if grep -q 'synthetic-call-001\|speaker-1\|Pulsaris implementation kickoff\|opp-
   exit 1
 fi
 for column in call_id title object_id object_name object_key speaker_id field_value_text raw_json raw_sha256 text; do
-  if reader_psql -c "SELECT ${column} FROM gongmcp_search_transcript_segments_by_crm_context('shared Postgres', 'Opportunity', 'opp-crm-context-private', 5)" >/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-${column}.txt 2>&1; then
-    echo "Postgres CRM-context transcript function exposed ${column} column" >&2
+  column_probe="/tmp/gongctl-postgres-reader-search-transcripts-by-crm-context-${column}.txt"
+  if reader_psql --set=column="$column" -c 'SELECT :"column" FROM gongmcp_search_transcript_segments_by_crm_context('"'shared Postgres'"', '"'Opportunity'"', '"'opp-crm-context-private'"', 5)' >"$column_probe" 2>&1; then
+    echo "Postgres CRM-context transcript function exposed $column column" >&2
     exit 1
   fi
 done
@@ -1345,7 +1347,8 @@ if grep -q 'synthetic-lifecycle-crm\|Lifecycle CRM\|opp-lifecycle-crm\|Lifecycle
   exit 1
 fi
 for column in call_id title object_id object_name object_key field_value_text raw_json raw_sha256 text; do
-  if reader_psql -c "SELECT $column FROM gongmcp_compare_lifecycle_crm_fields('renewal', 'active_sales_pipeline', 'Opportunity', 5)" >/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-"$column".txt 2>&1; then
+  column_probe="/tmp/gongctl-postgres-reader-compare-lifecycle-crm-fields-$column.txt"
+  if reader_psql --set=column="$column" -c 'SELECT :"column" FROM gongmcp_compare_lifecycle_crm_fields('"'renewal'"', '"'active_sales_pipeline'"', '"'Opportunity'"', 5)' >"$column_probe" 2>&1; then
     echo "Postgres lifecycle CRM comparison function exposed $column column" >&2
     exit 1
   fi

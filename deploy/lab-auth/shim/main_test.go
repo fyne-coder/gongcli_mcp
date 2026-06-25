@@ -42,7 +42,7 @@ func TestMCPRewritePreservesInternalBearerAgainstHopByHopHeader(t *testing.T) {
 	}
 	app := &app{cfg: config{
 		upstream:          upstreamURL,
-		internalToken:     "internal-token-0123456789abcdef",
+		internalToken:     "test-token",
 		allowedEmails:     csvSet("approved@example.test"),
 		trustProxyHeaders: true,
 		trustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
@@ -62,7 +62,7 @@ func TestMCPRewritePreservesInternalBearerAgainstHopByHopHeader(t *testing.T) {
 	if gotPath != "/mcp" {
 		t.Fatalf("upstream path=%q want /mcp", gotPath)
 	}
-	if gotAuth != "Bearer internal-token-0123456789abcdef" {
+	if gotAuth != "Bearer test-token" {
 		t.Fatalf("upstream auth=%q", gotAuth)
 	}
 	if gotPrincipal != "approved@example.test" {

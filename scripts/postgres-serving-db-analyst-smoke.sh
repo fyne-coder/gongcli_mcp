@@ -342,14 +342,23 @@ PY
 
 # Step 6: create the scoped analyst reader role on the Postgres server. Roles
 # are server-wide; we create it once and apply scoped grants on the target DB.
-analyst_password_sql="$(printf "%s" "$GONGMCP_ANALYST_READER_PASSWORD" | python3 -c "import sys; v=sys.stdin.read(); print(\"'\" + v.replace(\"'\", \"''\") + \"'\")")"
-operator_psql "$TARGET_DB" >/dev/null <<SQL
+operator_psql "$TARGET_DB" \
+  --set=scoped_role="$SCOPED_ROLE" \
+  --set=analyst_password="$GONGMCP_ANALYST_READER_PASSWORD" \
+  >/dev/null <<'SQL'
 SELECT pg_terminate_backend(pid)
   FROM pg_stat_activity
- WHERE usename = '${SCOPED_ROLE}'
+ WHERE usename = :'scoped_role'
    AND pid <> pg_backend_pid();
-DROP ROLE IF EXISTS ${SCOPED_ROLE};
-CREATE ROLE ${SCOPED_ROLE} LOGIN NOINHERIT PASSWORD ${analyst_password_sql};
+DO $$
+DECLARE
+  target_role text := :'scoped_role';
+  target_password text := :'analyst_password';
+BEGIN
+  EXECUTE format('DROP ROLE IF EXISTS %I', target_role);
+  EXECUTE format('CREATE ROLE %I LOGIN NOINHERIT PASSWORD %L', target_role, target_password);
+END
+$$;
 SQL
 
 # Step 7: apply analyst-expansion scoped reader grants on the redacted serving

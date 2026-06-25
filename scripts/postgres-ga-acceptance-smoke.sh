@@ -222,6 +222,7 @@ QA_ARGS="$(jq -n \
   '{operation:$op, arguments:{question:$q, filter:{query:$filter_query, transcript_status:"present", limit:25}, theme_query:$theme, limit:5}}')"
 call_tool "gong_analyze" "$QA_ARGS" >"$QA_RAW" || true
 QA_JSON="$(extract_text_payload <"$QA_RAW" | jq 'if has("facade_status") and has("result") then .result else . end' 2>/dev/null || echo 'null')"
+qa_json_payload="${QA_JSON:-null}"
 QA_HAS_PACK="$(jq -r '
   def count_items:
     ((.items? // []) | length)
@@ -230,7 +231,7 @@ QA_HAS_PACK="$(jq -r '
     + ((.quotes? // []) | length)
     + ((.rows? // []) | length);
   if (.status? == "evidence_pack_ready") or ((.evidence_count? // 0) > 0) or (count_items > 0) then true else false end
-' <<<"${QA_JSON:-null}")"
+' <<<"$qa_json_payload")"
 QA_ITEM_COUNT="$(jq -r '[
   ((.items? // []) | length),
   ((.evidence_pack?.items? // []) | length),
@@ -238,14 +239,14 @@ QA_ITEM_COUNT="$(jq -r '[
   ((.quotes? // []) | length),
   ((.rows? // []) | length),
   (.evidence_count? // 0)
-] | max // 0' <<<"${QA_JSON:-null}")"
+] | max // 0' <<<"$qa_json_payload")"
 QA_CALL_REFS="$(jq '[
   .items[]?.call_ref,
   .evidence_pack?.items[]?.call_ref,
   .evidence[]?.call_ref,
   .quotes[]?.call_ref,
   .rows[]?.call_ref
-] | map(select(type == "string" and length > 0)) | unique' <<<"${QA_JSON:-null}")"
+] | map(select(type == "string" and length > 0)) | unique' <<<"$qa_json_payload")"
 if [[ -z "$QA_CALL_REFS" || "$QA_CALL_REFS" == "null" ]]; then
   QA_CALL_REFS="[]"
 fi
@@ -265,6 +266,7 @@ if [[ -n "$QA_FIRST_CALL_REF" && "$QA_FIRST_CALL_REF" != "null" ]]; then
   call_tool "gong_get_evidence" "$DD_ARGS" >"$DD_RAW" || true
   DRILLDOWN_JSON="$(extract_text_payload <"$DD_RAW" | jq 'if has("facade_status") and has("result") then .result else . end' 2>/dev/null || echo 'null')"
 fi
+drilldown_json_payload="${DRILLDOWN_JSON:-null}"
 DRILLDOWN_PROBE='null'
 if [[ "$DRILLDOWN_JSON" != "null" ]]; then
   DRILLDOWN_PROBE="$(jq --arg ref "$QA_FIRST_CALL_REF" '{
@@ -306,10 +308,10 @@ ACCT_OPTIN_PROBE="$(jq -n \
 # for any field literally named "call_id". Because business-workbench is
 # expected to redact raw call IDs, the heuristic flags any non-empty value.
 RAW_ID_HIDDEN="true"
-if jq -e '.. | objects | .call_id? | select((type == "string" and length > 0) or (type == "number"))' <<<"${QA_JSON:-null}" >/dev/null 2>&1; then
+if jq -e '.. | objects | .call_id? | select((type == "string" and length > 0) or (type == "number"))' <<<"$qa_json_payload" >/dev/null 2>&1; then
   RAW_ID_HIDDEN="false"
 fi
-if jq -e '.. | objects | .call_id? | select((type == "string" and length > 0) or (type == "number"))' <<<"${DRILLDOWN_JSON:-null}" >/dev/null 2>&1; then
+if jq -e '.. | objects | .call_id? | select((type == "string" and length > 0) or (type == "number"))' <<<"$drilldown_json_payload" >/dev/null 2>&1; then
   RAW_ID_HIDDEN="false"
 fi
 
@@ -318,13 +320,20 @@ fi
 RO_PROBE='{"provided": false}'
 if [[ -n "${READER_DB_URL:-}" ]]; then
   require psql
+  reader_db_url="$READER_DB_URL"
   RAW_TABLE="${RAW_TABLE_PROBE:-calls_raw}"
-  WRITE_DETAIL="$(psql "${READER_DB_URL}" -v ON_ERROR_STOP=0 -X -tAc "UPDATE public.calls SET call_id = call_id WHERE false;" 2>&1 || true)"
+  case "$RAW_TABLE" in
+    ''|*[!A-Za-z0-9_]*)
+      echo "RAW_TABLE_PROBE must contain only letters, numbers, and underscores" >&2
+      exit 1
+      ;;
+  esac
+  WRITE_DETAIL="$(psql "$reader_db_url" -v ON_ERROR_STOP=0 -X -tAc "UPDATE public.calls SET call_id = call_id WHERE false;" 2>&1 || true)"
   WRITE_DENIED="false"
   if grep -qiE 'permission denied|read.only|cannot execute UPDATE|must be owner|relation .* does not exist' <<<"$WRITE_DETAIL"; then
     WRITE_DENIED="true"
   fi
-  RAW_DETAIL="$(psql "${READER_DB_URL}" -v ON_ERROR_STOP=0 -X -tAc "SELECT 1 FROM public.${RAW_TABLE} LIMIT 1;" 2>&1 || true)"
+  RAW_DETAIL="$(psql "$reader_db_url" -v ON_ERROR_STOP=0 -X --set=raw_table="$RAW_TABLE" -tAc 'SELECT 1 FROM public.:"raw_table" LIMIT 1;' 2>&1 || true)"
   RAW_DENIED="false"
   if grep -qiE 'permission denied|relation .* does not exist' <<<"$RAW_DETAIL"; then
     RAW_DENIED="true"

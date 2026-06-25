@@ -352,7 +352,7 @@ Point an MCP host at `docker run` with stdin kept open:
         "--network",
         "none",
         "-v",
-        "/Users/YOU/gongctl-data:/data:ro",
+        "/path/to/gongctl-data:/data:ro",
         "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z",
         "--db",
         "/data/gong.db",
@@ -364,7 +364,7 @@ Point an MCP host at `docker run` with stdin kept open:
 }
 ```
 
-Replace `/Users/YOU/gongctl-data` with the absolute host path that contains `gong.db`.
+Replace `/path/to/gongctl-data` with the absolute host path that contains `gong.db`.
 
 The MCP container does not need Gong API credentials because it only reads the configured cache store. Use `gongctl sync ...` commands to refresh that cache.
 
