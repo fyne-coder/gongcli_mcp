@@ -251,6 +251,29 @@ gongctl deploy postgres-refresh \
   > refresh-serving-db.json
 ```
 
+### Statement timeout
+
+Large refreshes may need a longer Postgres `statement_timeout` for the source
+session that copies operator tables into the serving database. Set a positive
+duration with `--statement-timeout` or `GONGCTL_REFRESH_STATEMENT_TIMEOUT`,
+for example `30m` or `2h`. Zero, negative, and disabled sentinels such as `0`,
+`off`, or `none` are rejected. When unset, the refresh uses the source
+database session default.
+
+```bash
+export GONGCTL_REFRESH_STATEMENT_TIMEOUT=45m
+
+gongctl deploy postgres-refresh \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
+  --target "$GONGCTL_MCP_DATABASE_URL" \
+  --statement-timeout 45m \
+  > refresh-serving-db.json
+```
+
+Successful refresh JSON includes `statement_timeout` when a custom timeout was
+applied. `gongctl doctor postgres-deploy` validates the same operator input
+without running a refresh.
+
 Review `refresh-serving-db.json`. It should contain sanitized counts,
 fingerprints, removed-call counts, skipped-table notes, the refresh marker ID,
 and the scoped-grant SQL hash. It must not contain database URLs, customer
@@ -261,21 +284,56 @@ serving refresh, and scoped reader grant reconciliation in one operator command.
 The older `gongctl governance refresh-serving-db` command remains available for
 low-level refresh/debug work, but it does not reconcile scoped reader grants.
 
-After refresh, validate the deployment surface:
+### Failed-step JSON
+
+When `deploy postgres-refresh` fails, stdout still contains sanitized JSON with
+a `steps` array. Earlier steps remain `pass` or `skipped`; the final step is
+`fail`. Each failed step includes:
+
+- `name`: `source_read_model`, `serving_refresh`, or `reader_grants`
+- `message`: short operator summary
+- `detail`: sanitized failure detail without database URLs, credentials, or raw
+  Postgres error text
+- `next_actions`: ordered remediation hints, such as raising
+  `statement_timeout` or rerunning `doctor postgres-deploy`
+- `rerun_safe`: whether a corrected rerun is expected to be safe
+
+Serving-refresh failures may also include `phase`, `side`, `object`, and `kind`
+when available, for example `phase=copy`, `side=source`, `object=transcript_segments`,
+`kind=statement_timeout`. Some failures also include `serving_db_state` to
+describe whether the prior serving data should still be available. Stderr stays
+short; use the JSON artifact for triage and support handoff.
+
+### Doctor and reader validation
+
+After refresh, validate the deployment surface with deploy-parity inputs. Use the
+same `--source`, `--target`, `--preset`, `--role`, `--database`, and
+`--statement-timeout` values that the refresh job used, plus
+`--max-marker-age` for marker freshness:
 
 ```bash
 gongctl doctor postgres-deploy \
+  --source "$GONGCTL_SOURCE_DATABASE_URL" \
   --target "$GONGCTL_MCP_DATABASE_URL" \
   --preset business-workbench \
+  --role gongmcp_business_workbench_reader \
+  --database gongctl_mcp \
+  --statement-timeout 45m \
   --max-marker-age 24h > doctor-postgres-deploy.json
 
 GONG_DATABASE_URL="$GONGMCP_ANALYST_READER_URL" \
 gongctl sync status --preset business-workbench > sync-status.json
 ```
 
-Both outputs are designed for operator evidence: they include pass/warn/fail
-checks, preset validation, marker freshness, and sanitized fingerprints, not
+`doctor postgres-deploy` returns a `checks` array with pass/fail status,
+sanitized evidence such as normalized `statement_timeout`, preset validation,
+scoped reader grant SQL generation, source read-model readiness, serving
+database connectivity, and serving refresh marker age. It does not export
 database URLs or secret values.
+
+Both doctor and refresh outputs are designed for operator evidence: they
+include pass/warn/fail checks, preset validation, marker freshness, and
+sanitized fingerprints, not database URLs or secret values.
 
 Use the operator-held serving writer/admin URL for
 `gongctl doctor postgres-deploy --target`. The scoped MCP reader role is not
@@ -309,6 +367,21 @@ serving database. Restart or redeploy `gongmcp` when changing
 `GONG_DATABASE_URL`, the reader role or grants, auth/gateway settings, the
 binary/image version, the tool preset/allowlist, or when cutting over to a
 different serving database URL.
+
+### Postgres support bundle deployment artifact
+
+For Postgres shared deployments, `gongctl support bundle` adds
+`postgres-deployment.json` to the sanitized bundle. SQLite bundles do not
+include this file. The artifact is operator metadata only: selected preset,
+deployment config posture (`presence_only_values_not_exported` booleans for
+keys such as `GONGCTL_SOURCE_DATABASE_URL` and
+`GONGCTL_REFRESH_STATEMENT_TIMEOUT`), refresh progress status, and the same
+family of deploy/doctor checks as `doctor postgres-deploy` (statement timeout
+validation, scoped reader role input, grant SQL generation, serving refresh
+marker age, and source read-model readiness when a source URL is configured).
+It does not export database URLs, hostnames, credentials, grant SQL text, or
+customer content. Use it as the default Postgres deployment diagnostic for
+support intake; see [Support](../support.md).
 
 ## 8. Reconcile Scoped Reader Grants
 

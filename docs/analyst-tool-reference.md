@@ -90,7 +90,30 @@ Every cohort, search, and analysis tool accepts only these filter fields:
 | `crm_object_type` | e.g. `Account`, `Opportunity` | Constrain to a CRM record |
 | `crm_object_id` | string | Specific CRM record |
 | `participant_title_query` | string | Substring match on participant title |
+| `dimension_filters` | array | Exact-match filters over reviewed known dimensions only; not arbitrary CRM field lookup |
 | `limit` | integer | Per-tool result cap. Always provide. |
+
+`dimension_filters` entries use:
+
+```json
+{
+  "dimension": "account_revenue_range",
+  "operator": "in",
+  "values": ["C: MM", "D: ENT"]
+}
+```
+
+Allowed operators are `equals` and `in`. Multiple entries are combined with AND
+semantics; values inside one `in` entry are OR alternatives. `quarter` values
+must use `YYYY-Q#`, and `call_month` values must use `YYYY-MM`. Allowed
+dimensions are advertised by `gong_discover_capabilities` and are limited to
+reviewed low-cardinality read-model fields such as `account_revenue_range`,
+`account_type`,
+`account_industry`, `opportunity_stage`, `opportunity_type`,
+`forecast_category`, `scope`, `system`, `direction`, `transcript_status`,
+`lifecycle_bucket`, `call_month`, and `quarter`. Do not use this field for raw
+CRM field probing, account/customer names, CRM object IDs, participant titles,
+loss reasons, personas, won/lost buckets, or transcript text.
 
 ### Using `limit` deliberately
 

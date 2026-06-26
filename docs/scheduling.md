@@ -328,7 +328,7 @@ user-level job or `/Library/LaunchDaemons/` for a system-level job.
         <string>sync</string>
         <string>run</string>
         <string>--config</string>
-        <string>/Users/operator/gongctl/sync-run.yaml</string>
+        <string>/opt/gongctl/sync-run.yaml</string>
     </array>
 
     <key>EnvironmentVariables</key>
@@ -346,9 +346,9 @@ user-level job or `/Library/LaunchDaemons/` for a system-level job.
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/operator/gongctl/logs/sync.out</string>
+    <string>/var/log/gongctl/sync.out</string>
     <key>StandardErrorPath</key>
-    <string>/Users/operator/gongctl/logs/sync.err</string>
+    <string>/var/log/gongctl/sync.err</string>
 </dict>
 </plist>
 ```
@@ -398,7 +398,7 @@ spec:
           serviceAccountName: gongctl
           containers:
             - name: gongctl
-              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.4
+              image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.5.5
               args:
                 - |
                   set -eu

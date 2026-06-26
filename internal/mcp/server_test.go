@@ -4338,7 +4338,7 @@ methodology:
 		t.Fatalf("canonical profile json: %v", err)
 	}
 	if _, err := store.ImportProfile(ctx, sqlite.ProfileImportParams{
-		SourcePath:      "/Users/example/private/mcp-profile.yaml",
+		SourcePath:      "profile-fixtures/private/mcp-profile.yaml",
 		SourceSHA256:    validation.SourceSHA256,
 		CanonicalSHA256: validation.CanonicalSHA256,
 		RawYAML:         body,

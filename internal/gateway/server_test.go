@@ -522,6 +522,96 @@ func TestVerifyAccessTokenDirectOIDCAcceptsJumpCloudAccessTokenShape(t *testing.
 	}
 }
 
+func TestVerifyAccessTokenDirectOIDCAcceptsEmailAllowlistWithoutGroup(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.RequiredScope = "openid"
+	cfg.ScopesSupported = []string{"openid", "email", "profile"}
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = nil
+	cfg.GroupClaim = "memberOf"
+	cfg.AllowedEmails = csvSet("approved@example.test")
+	cfg.AllowedSubjects = nil
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["iss"] = "https://oauth.id.jumpcloud.com/"
+		claims["aud"] = []string{}
+		claims["client_id"] = cfg.ClientID
+		claims["scp"] = []string{"openid", "email", "profile"}
+		claims["ext"] = map[string]any{
+			"email": "approved@example.test",
+		}
+		delete(claims, "token_use")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	principal, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+	if principal.Email != "approved@example.test" {
+		t.Fatalf("email=%q", principal.Email)
+	}
+	if len(principal.Groups) != 0 {
+		t.Fatalf("groups=%v want none for email-only fallback", principal.Groups)
+	}
+}
+
+func TestVerifyAccessTokenDirectOIDCEmailAllowlistWithoutGroupDeniesUnlistedEmail(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.RequiredScope = "openid"
+	cfg.ScopesSupported = []string{"openid", "email", "profile"}
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = nil
+	cfg.GroupClaim = "memberOf"
+	cfg.AllowedEmails = csvSet("approved@example.test")
+	cfg.AllowedSubjects = nil
+	authorizer := testAuthorizer(t, cfg, key)
+
+	tests := []struct {
+		name        string
+		email       string
+		includeMail bool
+	}{
+		{name: "wrong email", email: "other@example.test", includeMail: true},
+		{name: "missing email", includeMail: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+				claims["iss"] = "https://oauth.id.jumpcloud.com/"
+				claims["aud"] = []string{}
+				claims["client_id"] = cfg.ClientID
+				claims["scp"] = []string{"openid", "email", "profile"}
+				if tt.includeMail {
+					claims["ext"] = map[string]any{"email": tt.email}
+				}
+				delete(claims, "token_use")
+				delete(claims, "scope")
+				delete(claims, "email")
+				delete(claims, "cognito:groups")
+			})
+
+			_, err := authorizer.VerifyAccessToken(t.Context(), token)
+			if err == nil {
+				t.Fatal("expected email allowlist denial")
+			}
+			if !strings.Contains(err.Error(), "email is not allowed") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestVerifyAccessTokenDirectOIDCAcceptsTCJumpCloudCompositeShape(t *testing.T) {
 	key := mustKey(t)
 	cfg := testConfig(t, nil)
@@ -846,6 +936,28 @@ func TestLoadConfigAcceptsSingleOIDCRequiredGroupAlias(t *testing.T) {
 	}
 	if len(cfg.RequiredGroups) != 1 || cfg.RequiredGroups[0] != "GongMCP-Users" {
 		t.Fatalf("required groups=%v", cfg.RequiredGroups)
+	}
+}
+
+func TestLoadConfigAcceptsOIDCEmailAllowlistWithoutRequiredGroup(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	t.Setenv("COGNITO_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUPS", "")
+	t.Setenv("OIDC_ALLOWED_GROUPS", "")
+	t.Setenv("COGNITO_REQUIRED_GROUPS", "")
+	t.Setenv("COGNITO_ALLOWED_GROUPS", "")
+	t.Setenv("OIDC_ALLOWED_EMAILS", "approved@example.test")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.RequiredGroup != "" || len(cfg.RequiredGroups) != 0 {
+		t.Fatalf("required group=%q groups=%v want no group gate", cfg.RequiredGroup, cfg.RequiredGroups)
+	}
+	if _, ok := cfg.AllowedEmails["approved@example.test"]; !ok {
+		t.Fatalf("allowed emails=%v", cfg.AllowedEmails)
 	}
 }
 

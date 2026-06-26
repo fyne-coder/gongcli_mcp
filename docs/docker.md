@@ -247,6 +247,11 @@ gongctl cache purge --older-than 2026-04-01
 gongctl cache purge --config ./retention-policy.yaml --dry-run
 ```
 
+Postgres support bundles add `postgres-deployment.json` with sanitized deploy
+parity checks; see [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
+for `deploy postgres-refresh`, `doctor postgres-deploy`, and failed-step JSON
+details.
+
 Run an approved Postgres retention cleanup with the writable operator role:
 
 ```bash
@@ -347,7 +352,7 @@ Point an MCP host at `docker run` with stdin kept open:
         "--network",
         "none",
         "-v",
-        "/Users/YOU/gongctl-data:/data:ro",
+        "/path/to/gongctl-data:/data:ro",
         "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z",
         "--db",
         "/data/gong.db",
@@ -359,7 +364,7 @@ Point an MCP host at `docker run` with stdin kept open:
 }
 ```
 
-Replace `/Users/YOU/gongctl-data` with the absolute host path that contains `gong.db`.
+Replace `/path/to/gongctl-data` with the absolute host path that contains `gong.db`.
 
 The MCP container does not need Gong API credentials because it only reads the configured cache store. Use `gongctl sync ...` commands to refresh that cache.
 

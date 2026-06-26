@@ -323,7 +323,68 @@ SELECT m.call_id,
  ORDER BY m.rank DESC, m.started_at DESC, m.call_id, m.segment_index
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text, account_revenue_range_arg text, account_type_arg text, account_industry_arg text, opportunity_stage_arg text, opportunity_type_arg text, forecast_category_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, lifecycle_bucket_arg text, call_month_arg text, call_date_arg text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH filters AS (
+	SELECT item.value AS filter_json
+	  FROM jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb) AS item(value)
+),
+normalized AS (
+	SELECT lower(trim(filter_json->>'dimension')) AS dimension,
+	       COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator,
+	       CASE lower(trim(filter_json->>'dimension'))
+		       WHEN 'account_revenue_range' THEN account_revenue_range_arg
+		       WHEN 'account_type' THEN account_type_arg
+		       WHEN 'account_industry' THEN account_industry_arg
+		       WHEN 'opportunity_stage' THEN opportunity_stage_arg
+		       WHEN 'opportunity_type' THEN opportunity_type_arg
+		       WHEN 'forecast_category' THEN forecast_category_arg
+		       WHEN 'scope' THEN scope_arg
+		       WHEN 'system' THEN system_arg
+		       WHEN 'direction' THEN direction_arg
+		       WHEN 'transcript_status' THEN transcript_status_arg
+		       WHEN 'lifecycle_bucket' THEN lifecycle_bucket_arg
+		       WHEN 'call_month' THEN call_month_arg
+		       WHEN 'quarter' THEN CASE
+			       WHEN substring(call_date_arg from 6 for 2) IN ('01','02','03') THEN left(call_date_arg, 4) || '-Q1'
+			       WHEN substring(call_date_arg from 6 for 2) IN ('04','05','06') THEN left(call_date_arg, 4) || '-Q2'
+			       WHEN substring(call_date_arg from 6 for 2) IN ('07','08','09') THEN left(call_date_arg, 4) || '-Q3'
+			       WHEN substring(call_date_arg from 6 for 2) IN ('10','11','12') THEN left(call_date_arg, 4) || '-Q4'
+			       ELSE ''
+		       END
+		       ELSE NULL
+	       END AS row_value,
+	       filter_json->'values' AS values_json
+	  FROM filters
+)
+SELECT NOT EXISTS (
+	SELECT 1
+	  FROM normalized
+	 WHERE row_value IS NULL
+	    OR values_json IS NULL
+	    OR jsonb_typeof(values_json) <> 'array'
+	    OR CASE
+		    WHEN jsonb_typeof(values_json) = 'array'
+		    THEN jsonb_array_length(values_json) = 0
+		      OR (operator = 'equals' AND jsonb_array_length(values_json) <> 1)
+		    ELSE false
+	    END
+	    OR NOT EXISTS (
+		    SELECT 1
+		      FROM jsonb_array_elements_text(values_json) AS values(value)
+		     WHERE left(values.value, 160) = row_value
+	    )
+	    OR operator NOT IN ('equals', 'in')
+)
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text) FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, duration_seconds bigint, lifecycle_bucket text, likely_voicemail_or_ivr boolean, scope text, system text, direction text, transcript_status text, account_industry text, opportunity_stage text, opportunity_type text, forecast_category text, opportunity_count bigint, account_count bigint, participant_status text, person_title_status text, person_title_source text)
 LANGUAGE sql
 STABLE
@@ -344,6 +405,7 @@ WITH filtered AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -406,7 +468,7 @@ SELECT call_id,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_summary(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_summary(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_count bigint, transcript_count bigint, missing_transcript_count bigint, account_industry_count bigint, opportunity_stage_count bigint, opportunity_call_count bigint, account_call_count bigint, external_call_count bigint, participant_call_count bigint, participant_title_call_count bigint, earliest_call_at text, latest_call_at text, total_duration_seconds bigint, average_duration_seconds double precision)
 LANGUAGE sql
 STABLE
@@ -427,6 +489,7 @@ WITH rows AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -471,7 +534,7 @@ SELECT COUNT(*) AS call_count,
   FROM rows
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
@@ -513,6 +576,7 @@ matched AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -620,7 +684,7 @@ SELECT m.call_id,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
@@ -656,6 +720,7 @@ WITH sampled AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -810,7 +875,7 @@ REVOKE ALL ON FUNCTION gongmcp_business_analysis_persona_bucket(text, boolean) F
 
 -- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension(dimension_arg text, theme_query_arg text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension(dimension_arg text, theme_query_arg text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(dimension text, value text, call_count bigint, transcript_count bigint, missing_transcript_count bigint, opportunity_call_count bigint, account_call_count bigint, external_call_count bigint, latest_call_at text)
 LANGUAGE sql
 STABLE
@@ -858,6 +923,7 @@ WITH rows AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -936,7 +1002,7 @@ SELECT md5(raw.call_id) AS call_id,
   FROM gongmcp_search_transcript_quotes_with_attribution(search_text, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, row_limit) raw
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, duration_seconds bigint, lifecycle_bucket text, likely_voicemail_or_ivr boolean, scope text, system text, direction text, transcript_status text, account_industry text, opportunity_stage text, opportunity_type text, forecast_category text, opportunity_count bigint, account_count bigint, participant_status text, person_title_status text, person_title_source text)
 LANGUAGE sql
 STABLE
@@ -964,10 +1030,10 @@ SELECT md5(raw.call_id) AS call_id,
        raw.participant_status,
        raw.person_title_status,
        raw.person_title_source
-  FROM gongmcp_business_analysis_calls(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, exclude_lifecycle_buckets_json, exclude_likely_voicemail_arg, row_limit) raw
+  FROM gongmcp_business_analysis_calls(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, exclude_lifecycle_buckets_json, exclude_likely_voicemail_arg, row_limit, dimension_filters_json) raw
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence_sanitized(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_evidence_sanitized(search_text text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
@@ -997,10 +1063,10 @@ SELECT md5(raw.call_id) AS call_id,
        raw.context_excerpt,
        raw.speaker_role,
        raw.speaker_role_status
-  FROM gongmcp_business_analysis_evidence(search_text, title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, exclude_lifecycle_buckets_json, exclude_likely_voicemail_arg, row_limit) raw
+  FROM gongmcp_business_analysis_evidence(search_text, title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, exclude_lifecycle_buckets_json, exclude_likely_voicemail_arg, row_limit, dimension_filters_json) raw
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, lifecycle_bucket text, account_industry text, account_name text, opportunity_name text, opportunity_stage text, opportunity_type text, opportunity_probability text, opportunity_close_date text, participant_status text, person_title_status text, person_title_source text, segment_index integer, start_ms bigint, end_ms bigint, snippet text, context_excerpt text, speaker_role text, speaker_role_status text)
 LANGUAGE sql
 STABLE
@@ -1030,7 +1096,7 @@ SELECT md5(raw.call_id) AS call_id,
        raw.context_excerpt,
        raw.speaker_role,
        raw.speaker_role_status
-  FROM gongmcp_business_analysis_theme_seed_sample(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, exclude_lifecycle_buckets_json, exclude_likely_voicemail_arg, row_limit) raw
+  FROM gongmcp_business_analysis_theme_seed_sample(title_query_arg, transcript_query_arg, from_date_arg, to_date_arg, lifecycle_bucket_arg, scope_arg, system_arg, direction_arg, transcript_status_arg, industry_arg, account_query_arg, opportunity_stage_arg, crm_object_type_arg, crm_object_id_arg, participant_title_query_arg, exclude_lifecycle_buckets_json, exclude_likely_voicemail_arg, row_limit, dimension_filters_json) raw
 $function$;
 
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_sanitized(search_text text, row_limit integer)
@@ -1077,15 +1143,15 @@ $function$;
 
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_quotes_with_attribution_sanitized(text, text, text, text, text, text, text, text, text, text, text, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_calls_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_evidence_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_sanitized(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts_sanitized(text, text, text, text, text, text, text, integer) FROM PUBLIC;
 `
@@ -1093,11 +1159,11 @@ REVOKE ALL ON FUNCTION gongmcp_search_transcript_segments_by_call_facts_sanitize
 const postgresBusinessAnalysisReaderGrantStatementsSQL = `
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_segments_by_call_facts(text, text, text, text, text, text, text, integer) TO gongmcp_reader';
 		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_search_transcript_quotes_with_attribution(text, text, text, text, text, text, text, text, text, text, text, integer) TO gongmcp_reader';
-		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO gongmcp_reader';
-		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean) TO gongmcp_reader';
-		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO gongmcp_reader';
-		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO gongmcp_reader';
-		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_calls(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_summary(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_evidence(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO gongmcp_reader';
+		EXECUTE 'GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text) TO gongmcp_reader';
 `
 
 const postgresBusinessAnalysisReaderGrantsSQL = `

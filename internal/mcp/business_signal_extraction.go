@@ -35,7 +35,7 @@ type businessSignalBucket struct {
 
 func businessSignalExtractionSchema() map[string]any {
 	return objectSchema(map[string]any{
-		"filter":                    map[string]any{"type": "object"},
+		"filter":                    facadeCallFilterSchema(),
 		"topics":                    map[string]any{"type": "array", "items": map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength}, "maxItems": maxBusinessSignalTopics},
 		"query":                     map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional single topic seed."},
 		"theme_query":               map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for query."},

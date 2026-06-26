@@ -95,10 +95,13 @@ Default enterprise posture:
    tools; analyst operations remain routed behind the facade.
 8. Expose HTTPS `/mcp` through the customer gateway/OAuth broker, or connect a
    local approved MCP host.
-9. Run `gongctl doctor postgres-deploy --preset business-workbench` and
-   `gongctl sync status --preset business-workbench` against the scoped reader.
-   Kubernetes operators can use the starter smoke Job without a business-user
-   MCP host session.
+9. Run `gongctl doctor postgres-deploy` with the same deploy-parity flags as
+   the refresh job and `gongctl sync status --preset business-workbench`
+   against the scoped reader. See
+   [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
+   for `--source`, `--target`, `--role`, `--database`, `--statement-timeout`,
+   and `--max-marker-age`. Kubernetes operators can use the starter smoke Job
+   without a business-user MCP host session.
 10. Run `scripts/postgres-ga-acceptance-smoke.sh` with `READER_DB_URL` and
    `REDACTION_AUDIT_JSON` or compact `REDACTION_AUDIT_*` fields. Save the JSON
    report and Markdown summary.

@@ -125,7 +125,13 @@ type cacheDiagnosticsStore interface {
 	CacheDiagnostics(context.Context) (*postgres.CacheDiagnostics, error)
 }
 
+var openCacheInventoryStoreFn = defaultOpenCacheInventoryStore
+
 func openCacheInventoryStore(ctx context.Context, path string) (cacheInventoryStore, string, string, error) {
+	return openCacheInventoryStoreFn(ctx, path)
+}
+
+func defaultOpenCacheInventoryStore(ctx context.Context, path string) (cacheInventoryStore, string, string, error) {
 	if strings.TrimSpace(path) != "" {
 		absPath, err := filepath.Abs(path)
 		if err != nil {
