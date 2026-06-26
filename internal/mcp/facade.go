@@ -1354,6 +1354,9 @@ func (s *Server) executeFacadeDimensionCounts(ctx context.Context, raw json.RawM
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
+	if s.governanceActive() {
+		return toolCallResult{}, governanceFilteredAggregateError(OpQueryDimensionCounts)
+	}
 	dimension := strings.TrimSpace(args.Dimension)
 	if dimension == "" {
 		return toolCallResult{}, fmt.Errorf("%s requires dimension", OpQueryDimensionCounts)

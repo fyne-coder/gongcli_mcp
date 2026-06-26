@@ -192,6 +192,37 @@ func TestFacadeQueryDimensionCountsRejectsNonSelectiveFilter(t *testing.T) {
 	}
 }
 
+func TestFacadeQueryDimensionCountsRejectsGovernanceActiveAggregates(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolQuery}),
+		WithFacadeRoutedToolAllowlist([]string{internalRoutedToolDimensionCounts}),
+		WithSuppressedCallIDs([]string{"synthetic-call-1"}),
+	)
+	_, err := server.executeFacadeDispatch(t.Context(), FacadeToolQuery, mustFacadeArgs(t, OpQueryDimensionCounts, map[string]any{
+		"filter": map[string]any{
+			"dimension_filters": []any{
+				map[string]any{
+					"dimension": "duration_seconds",
+					"operator":  "gte",
+					"values":    []string{"300"},
+				},
+			},
+		},
+		"dimension": "participant_email",
+		"limit":     10,
+	}))
+	if err == nil {
+		t.Fatal("expected governance-active aggregate rejection")
+	}
+	if !strings.Contains(err.Error(), OpQueryDimensionCounts) || !strings.Contains(err.Error(), "AI governance filtering is active") {
+		t.Fatalf("unexpected governance error: %v", err)
+	}
+}
+
 func TestFacadeQueryDimensionCountsSparseReadinessWarning(t *testing.T) {
 	t.Parallel()
 
