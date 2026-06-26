@@ -371,6 +371,14 @@ func FacadeOperations() []FacadeOperation {
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
 			}, nil),
+			Examples: []any{
+				map[string]any{
+					"cohort_token":  "cohort_token_example",
+					"theme_query":   "pricing",
+					"limit":         5,
+					"field_profile": "limited",
+				},
+			},
 		},
 		{
 			Name:           OpEvidenceQuotePackBuild,
@@ -387,6 +395,14 @@ func FacadeOperations() []FacadeOperation {
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
 			}, nil),
+			Examples: []any{
+				map[string]any{
+					"cohort_token":  "cohort_token_example",
+					"theme_query":   "manual order entry",
+					"limit":         5,
+					"field_profile": "attribution",
+				},
+			},
 		},
 		{
 			Name:           OpEvidenceHighlightsList,
@@ -697,8 +713,18 @@ func facadeTools(_ LimitPolicy) []tool {
 		},
 		{
 			Name:        FacadeToolDiscoverCapabilities,
-			Description: "Return the stable MCP facade operation registry: each operation's name, version, description, facade tool, routed tool, exposure level, allowed presets, input schema, and examples. Top-level individual tools remain for operator/analyst testing.",
-			InputSchema: objectSchema(nil, nil),
+			Description: "Return the stable MCP facade operation registry. Default output is compact (no per-operation input_schema). Pass detail:\"full\" or include_schemas:true for the full schema registry. Includes business-intent examples, field_profile guidance, and quote-evidence guidance.",
+			InputSchema: objectSchema(map[string]any{
+				"detail": map[string]any{
+					"type":        "string",
+					"enum":        []string{"", "compact", "full"},
+					"description": "Discovery detail level. Default compact omits per-operation input_schema; full includes input_schema for every operation.",
+				},
+				"include_schemas": map[string]any{
+					"type":        "boolean",
+					"description": "When true, include per-operation input_schema (same as detail:\"full\").",
+				},
+			}, nil),
 		},
 		{
 			Name:        FacadeToolQuery,
@@ -799,36 +825,26 @@ func (s *Server) executeFacadeStatus(ctx context.Context, raw json.RawMessage) (
 }
 
 func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCallResult, error) {
-	var args struct{}
+	var args facadeDiscoverCapabilitiesArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return toolCallResult{}, err
 	}
+	includeSchemas := facadeDiscoverCapabilitiesIncludeSchemas(args)
 	ops := FacadeOperations()
 	enriched := make([]map[string]any, 0, len(ops))
 	for _, op := range ops {
-		entry := map[string]any{
-			"operation":             op.Name,
-			"version":               op.Version,
-			"description":           op.Description,
-			"facade_tool":           op.FacadeTool,
-			"routed_tool":           op.RoutedTool,
-			"exposure_level":        op.ExposureLevel,
-			"allowed_presets":       op.AllowedPresets,
-			"input_schema":          op.InputSchema,
-			"routed_tool_available": s.facadeRoutedToolAvailable(op),
-		}
-		if op.RoutedFallback != "" {
-			entry["routed_tool_fallback"] = op.RoutedFallback
-		}
-		if len(op.Examples) > 0 {
-			entry["examples"] = op.Examples
-		}
-		enriched = append(enriched, entry)
+		enriched = append(enriched, facadeDiscoverOperationEntry(op, s.facadeRoutedToolAvailable(op), includeSchemas))
 	}
 	payload := map[string]any{
 		"facade_version": "v1",
-		"mcp_server":     s.publicRuntimeInfo(),
-		"operations":     enriched,
+		"discovery_detail": func() string {
+			if includeSchemas {
+				return "full"
+			}
+			return "compact"
+		}(),
+		"mcp_server": s.publicRuntimeInfo(),
+		"operations": enriched,
 		"dimension_filters": map[string]any{
 			"supported_dimensions": sqlite.BackedBusinessAnalysisFilterDimensions(),
 			"operators_by_dimension": func() map[string][]string {
@@ -849,9 +865,164 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 			FacadeToolGetEvidence,
 			FacadeToolExplainLimitations,
 		},
-		"note": "Top-level individual tools (search_calls, build_call_cohort, search_transcript_segments, build_quote_pack, etc.) remain available for operator and analyst testing alongside this facade.",
+		"business_intent_examples": facadeBusinessIntentExamples(),
+		"field_profile_guidance":   facadeFieldProfileGuidance(),
+		"quote_evidence_guidance":  facadeQuoteEvidenceGuidance(),
+		"full_schema_escape_hatch": "Pass {\"detail\":\"full\"} or {\"include_schemas\":true} to include per-operation input_schema.",
+		"note":                     "Top-level individual tools (search_calls, build_call_cohort, search_transcript_segments, build_quote_pack, etc.) remain available for operator and analyst testing alongside this facade.",
 	}
 	return newToolResult(payload)
+}
+
+type facadeDiscoverCapabilitiesArgs struct {
+	Detail         string `json:"detail"`
+	IncludeSchemas *bool  `json:"include_schemas"`
+}
+
+func facadeDiscoverCapabilitiesIncludeSchemas(args facadeDiscoverCapabilitiesArgs) bool {
+	if args.IncludeSchemas != nil {
+		return *args.IncludeSchemas
+	}
+	switch strings.ToLower(strings.TrimSpace(args.Detail)) {
+	case "full":
+		return true
+	default:
+		return false
+	}
+}
+
+func facadeDiscoverOperationEntry(op FacadeOperation, routedAvailable bool, includeSchemas bool) map[string]any {
+	entry := map[string]any{
+		"operation":             op.Name,
+		"version":               op.Version,
+		"description":           op.Description,
+		"facade_tool":           op.FacadeTool,
+		"routed_tool":           op.RoutedTool,
+		"exposure_level":        op.ExposureLevel,
+		"allowed_presets":       op.AllowedPresets,
+		"routed_tool_available": routedAvailable,
+	}
+	if includeSchemas {
+		entry["input_schema"] = op.InputSchema
+	}
+	if op.RoutedFallback != "" {
+		entry["routed_tool_fallback"] = op.RoutedFallback
+	}
+	if len(op.Examples) > 0 {
+		entry["examples"] = op.Examples
+	}
+	return entry
+}
+
+func facadeBusinessIntentExamples() []map[string]any {
+	return []map[string]any{
+		{
+			"business_intent": "number of calls greater than 5 minutes",
+			"facade_tool":     FacadeToolQuery,
+			"operation":       OpQueryCallCount,
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"dimension_filters": []any{
+						map[string]any{
+							"dimension": "duration_seconds",
+							"operator":  "gte",
+							"values":    []string{"300"},
+						},
+					},
+				},
+			},
+		},
+		{
+			"business_intent": "recent Business Discovery themes",
+			"facade_tool":     FacadeToolAnalyze,
+			"operation":       OpAnalyzeDiscoverySummary,
+			"arguments": map[string]any{
+				"filter": map[string]any{
+					"title_query": "business discovery",
+				},
+				"from_date": "2026-01-01",
+				"to_date":   "2026-03-31",
+				"limit":     25,
+			},
+		},
+		{
+			"business_intent": "quote evidence for a theme inside a cohort",
+			"facade_tool":     FacadeToolGetEvidence,
+			"operation":       OpEvidenceQuotesSearch,
+			"arguments": map[string]any{
+				"cohort_token":  "cohort_token_from_analyze.cohort.build",
+				"theme_query":   "pricing",
+				"limit":         5,
+				"field_profile": "limited",
+			},
+			"alternatives": []map[string]any{
+				{
+					"operation": OpEvidenceQuotePackBuild,
+					"arguments": map[string]any{
+						"cohort_token":  "cohort_token_from_analyze.cohort.build",
+						"theme_query":   "pricing",
+						"limit":         5,
+						"field_profile": "attribution",
+					},
+				},
+			},
+		},
+	}
+}
+
+func facadeFieldProfileGuidance() map[string]any {
+	return map[string]any{
+		"canonical_profiles": []string{fieldProfileCustom, fieldProfileLimited, fieldProfileAttribution, fieldProfileFull},
+		"aliases": map[string]string{
+			"quote_compact":    "limited",
+			"redacted":         "limited",
+			"business_limited": "limited",
+		},
+		"limited_profile_caveat": "field_profile=limited (alias quote_compact) suppresses structured call/account/opportunity metadata such as call titles, account names, and raw IDs. It does not redact names or customer terms embedded inside transcript snippet excerpts or Gong AI evidence text.",
+		"usage": map[string]string{
+			"limited":     "Minimal structured metadata for quote/search payloads; use when only snippet text matters.",
+			"attribution": "Business-safe attribution fields without raw call IDs.",
+			"full":        "Operator/internal path when policy switches permit every governed field.",
+		},
+	}
+}
+
+func facadeQuoteEvidenceGuidance() map[string]any {
+	return map[string]any{
+		"operations": []map[string]any{
+			{
+				"operation":   OpEvidenceQuotesSearch,
+				"facade_tool": FacadeToolGetEvidence,
+				"when_to_use": "Bounded quote search inside an existing cohort_token or filter.",
+				"example_arguments": map[string]any{
+					"cohort_token":  "cohort_token_example",
+					"theme_query":   "implementation effort",
+					"limit":         5,
+					"field_profile": "limited",
+				},
+			},
+			{
+				"operation":   OpEvidenceQuotePackBuild,
+				"facade_tool": FacadeToolGetEvidence,
+				"when_to_use": "Sales-ready bounded quote bundle with explicit attribution controls.",
+				"example_arguments": map[string]any{
+					"cohort_token":  "cohort_token_example",
+					"theme_query":   "manual order entry",
+					"limit":         5,
+					"field_profile": "attribution",
+				},
+			},
+		},
+		"no_evidence_followups": []string{
+			"Try a broader or alternate theme_query (synonyms such as rollout for implementation).",
+			"Run analyze.cohort.inspect on the cohort_token to confirm transcript coverage and filter breadth.",
+			"If a call_ref is already known from a theme report, use evidence.call_drilldown with that call_ref and the exact drilldown_term.",
+		},
+		"warnings_when_empty": []string{
+			"no_quote_evidence_for_theme: theme_query matched no transcript snippets in the cohort",
+			"empty_cohort: no calls matched the normalized filter",
+		},
+	}
 }
 
 func (s *Server) executeFacadeDispatch(ctx context.Context, facadeTool string, raw json.RawMessage) (toolCallResult, error) {

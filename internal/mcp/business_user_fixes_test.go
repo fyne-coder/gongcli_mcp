@@ -38,6 +38,27 @@ func TestFieldProfilePresetsControlExposureFlags(t *testing.T) {
 	}
 }
 
+func TestFieldProfileQuoteCompactAliasesToLimited(t *testing.T) {
+	t.Parallel()
+
+	got, err := normalizeFieldProfile("quote_compact")
+	if err != nil {
+		t.Fatalf("normalize quote_compact: %v", err)
+	}
+	if got != fieldProfileLimited {
+		t.Fatalf("quote_compact=%q want %s", got, fieldProfileLimited)
+	}
+}
+
+func TestFieldProfileSchemaMentionsLimitedEvidenceTextCaveat(t *testing.T) {
+	t.Parallel()
+
+	desc, _ := fieldProfileSchema()["description"].(string)
+	if !strings.Contains(desc, "does not redact") || !strings.Contains(desc, "transcript") {
+		t.Fatalf("field_profile schema missing limited evidence-text caveat: %q", desc)
+	}
+}
+
 func TestBusinessEvidencePolicyIncludesHostDisplayDefaults(t *testing.T) {
 	t.Parallel()
 

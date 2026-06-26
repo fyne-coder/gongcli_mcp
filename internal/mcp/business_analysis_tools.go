@@ -589,6 +589,10 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		if params.Name == "build_quote_pack" && response.FieldProfile != "" {
 			response.Warnings = append(response.Warnings, "field_profile_controls_structured_quote_metadata_not_names_inside_quote_text")
 		}
+		if len(quotes) == 0 && response.Count > 0 && strings.TrimSpace(themeQuery) != "" {
+			response.Warnings = append(response.Warnings, "no_quote_evidence_for_theme: theme_query matched no transcript snippets in the cohort")
+			response.Refinements = append(response.Refinements, quoteEvidenceNoResultsFollowups(themeQuery)...)
+		}
 	case "compare_theme_outcomes":
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, "won_lost", themeQuery, limit)
 		if err != nil {
@@ -1215,6 +1219,15 @@ func businessAnalysisWarnings(toolName string, filter callFilter) []string {
 		)
 	}
 	return warnings
+}
+
+func quoteEvidenceNoResultsFollowups(themeQuery string) []string {
+	_ = themeQuery
+	return []string{
+		"Try a broader or alternate theme_query (synonyms such as rollout for implementation).",
+		"Run analyze.cohort.inspect on the cohort_token to confirm transcript coverage and filter breadth.",
+		"If a call_ref is already known from a theme report, use evidence.call_drilldown with that call_ref and the exact drilldown_term.",
+	}
 }
 
 func businessAnalysisLimitations(toolName string) []string {

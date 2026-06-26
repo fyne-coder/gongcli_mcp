@@ -58,7 +58,7 @@ func normalizeFieldProfile(profile string) (string, error) {
 		return "", nil
 	case "custom":
 		return fieldProfileCustom, nil
-	case "limited", "redacted", "redacted_business", "business_limited", "business-limited":
+	case "limited", "redacted", "redacted_business", "business_limited", "business-limited", "quote_compact", "quote-compact":
 		return fieldProfileLimited, nil
 	case "attribution", "business_attribution", "business-attribution":
 		return fieldProfileAttribution, nil
@@ -73,6 +73,6 @@ func fieldProfileSchema() map[string]any {
 	return map[string]any{
 		"type":        "string",
 		"enum":        []string{"", fieldProfileCustom, fieldProfileLimited, fieldProfileAttribution, fieldProfileFull},
-		"description": "Optional exposure preset for structured call/account/opportunity fields. limited disables call titles, account/opportunity names, stable speaker refs, and raw call IDs; attribution enables account/opportunity names and stable speaker refs but not raw call IDs; full enables every governed field subject to active policy switches. Call titles are included by default outside limited when hide_call_titles is not active. Raw speaker_id visibility is controlled separately by the hide_speaker_ids policy. Field profiles do not redact names embedded inside evidence text such as Gong AI briefs or transcript snippets.",
+		"description": "Optional exposure preset for structured call/account/opportunity fields. limited (alias: quote_compact) disables call titles, account/opportunity names, stable speaker refs, and raw call IDs; attribution enables account/opportunity names and stable speaker refs but not raw call IDs; full enables every governed field subject to active policy switches. Call titles are included by default outside limited when hide_call_titles is not active. Raw speaker_id visibility is controlled separately by the hide_speaker_ids policy. field_profile=limited suppresses structured metadata only; it does not redact names embedded inside evidence text such as Gong AI briefs or transcript snippet excerpts.",
 	}
 }
