@@ -391,13 +391,11 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 			FieldProfile:        args.FieldProfile,
 			SpeakerRole:         speakerRoleFilter,
 		}
-		var previewItems []businessAnalysisItem
 		var previewErr error
-		seededPreview, previewItems, previewErr = s.buildBoundedSeededThemeSummaries(ctx, normalized, previewSeeds, maxDiscoverySummaryQuotesPerTheme, previewBAArgs, includeRaw, includeTitles, includeAccounts, includeSpeakerRefs, "directional_seeded_preview_not_exhaustive_theme_ranking")
+		seededPreview, _, previewErr = s.buildBoundedSeededThemeSummaries(ctx, normalized, previewSeeds, maxDiscoverySummaryQuotesPerTheme, previewBAArgs, includeRaw, includeTitles, includeAccounts, includeSpeakerRefs, "directional_seeded_preview_not_exhaustive_theme_ranking")
 		if previewErr != nil {
 			return toolCallResult{}, previewErr
 		}
-		evidenceItems = append(evidenceItems, previewItems...)
 		if len(seededPreview) > 0 {
 			warnings = append(warnings, "seeded_preview_directional: bounded seeded_preview is directional and not an exhaustive or frequency-ranked theme analysis")
 		} else if len(themeCandidates) == 0 {
