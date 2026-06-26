@@ -314,12 +314,12 @@ func dimensionFiltersSchema() map[string]any {
 		"items": objectSchema(map[string]any{
 			"dimension": map[string]any{
 				"type":        "string",
-				"enum":        sqlite.AllowedBusinessAnalysisFilterDimensions(),
-				"description": "Reviewed known dimension backed by the business-analysis read model. Not arbitrary CRM field probing.",
+				"description": "Backed business-analysis field or dimension. A disallow-list policy hook exists, but this package defaults to no disallowed dimensions. String fields support equals/in; numeric fields such as duration_seconds also support gte, lte, and between.",
 			},
 			"operator": map[string]any{
-				"type": "string",
-				"enum": []string{"equals", "in"},
+				"type":        "string",
+				"enum":        []string{"equals", "in", "gte", "lte", "between"},
+				"description": "String-backed dimensions support equals and in. duration_seconds also supports gte, lte, and between.",
 			},
 			"values": map[string]any{
 				"type":     "array",

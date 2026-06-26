@@ -145,14 +145,22 @@ to call, and it prevents you from building an analysis on empty cells.
 For SQLite operator/admin sessions, `gongctl analyze coverage` and
 `gongctl analyze transcript-backlog` give the same answers from the CLI.
 
-## The `call_filter` allowlist
+## The `call_filter`
 
 The analyst tools accept only these filter fields:
 
 `title_query`, `query`, `from_date`, `to_date`, `quarter`,
 `lifecycle_bucket`, `scope`, `system`, `direction`, `transcript_status`,
 `industry`, `account_query`, `opportunity_stage`, `crm_object_type`,
-`crm_object_id`, `participant_title_query`, `limit`.
+`crm_object_id`, `participant_title_query`, `dimension_filters`, `limit`.
+
+Use `dimension_filters` for exact predicates over backed business-analysis
+fields and dimensions such as `duration_seconds`, `participant_email`,
+`account_revenue_range`, `account_name`, `crm_object_id`, `persona`,
+`loss_reason`, and `won_lost`. String fields support `equals` and `in`; numeric
+fields such as `duration_seconds` also support `gte`, `lte`, and `between`.
+Participant email and identifier filters narrow the call set but do not cause
+those raw values to be returned.
 
 Use `limit` deliberately. Every tool result becomes model context, so a
 1,000-row return from a wide filter often produces a worse answer than a

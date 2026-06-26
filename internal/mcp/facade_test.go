@@ -243,11 +243,17 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 		t.Fatalf("expected one content entry, got %d", len(result.Content))
 	}
 	var payload struct {
-		FacadeVersion string            `json:"facade_version"`
-		FacadeTools   []string          `json:"facade_tools"`
-		Operations    []map[string]any  `json:"operations"`
-		MCPServer     PublicRuntimeInfo `json:"mcp_server"`
-		Note          string            `json:"note"`
+		FacadeVersion    string            `json:"facade_version"`
+		FacadeTools      []string          `json:"facade_tools"`
+		Operations       []map[string]any  `json:"operations"`
+		MCPServer        PublicRuntimeInfo `json:"mcp_server"`
+		DimensionFilters struct {
+			SupportedDimensions      []string            `json:"supported_dimensions"`
+			OperatorsByDimension     map[string][]string `json:"operators_by_dimension"`
+			DisallowedDimensions     []string            `json:"disallowed_dimensions"`
+			DefaultDisallowListEmpty bool                `json:"default_disallow_list_empty"`
+		} `json:"dimension_filters"`
+		Note string `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
 		t.Fatalf("decode capability payload: %v", err)
@@ -266,6 +272,18 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 	}
 	if !strings.Contains(payload.Note, "individual tools") {
 		t.Fatalf("note missing top-level-tools statement: %q", payload.Note)
+	}
+	if !payload.DimensionFilters.DefaultDisallowListEmpty || len(payload.DimensionFilters.DisallowedDimensions) != 0 {
+		t.Fatalf("dimension filter contract should advertise empty default disallow list: %+v", payload.DimensionFilters)
+	}
+	if !containsString(payload.DimensionFilters.SupportedDimensions, "participant_email") || !containsString(payload.DimensionFilters.SupportedDimensions, "duration_seconds") {
+		t.Fatalf("dimension filter contract missing expected dimensions: %+v", payload.DimensionFilters.SupportedDimensions)
+	}
+	if operators := strings.Join(payload.DimensionFilters.OperatorsByDimension["duration_seconds"], ","); !strings.Contains(operators, "between") {
+		t.Fatalf("duration_seconds operators should include between: %v", payload.DimensionFilters.OperatorsByDimension["duration_seconds"])
+	}
+	if operators := strings.Join(payload.DimensionFilters.OperatorsByDimension["participant_email"], ","); operators != "equals,in" {
+		t.Fatalf("participant_email operators=%q want equals,in", operators)
 	}
 	availability := map[string]bool{}
 	for _, op := range payload.Operations {

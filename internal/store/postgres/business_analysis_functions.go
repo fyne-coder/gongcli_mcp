@@ -318,12 +318,59 @@ SELECT m.call_id,
 	       WHEN sr.role_count > 0 THEN 'available'
 	       ELSE 'affiliation_missing'
        END AS speaker_role_status
-  FROM matched_segments m
+ FROM matched_segments m
   LEFT JOIN speaker_roles sr ON sr.call_id = m.call_id AND sr.segment_index = m.segment_index AND sr.speaker_id = m.speaker_id
  ORDER BY m.rank DESC, m.started_at DESC, m.call_id, m.segment_index
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text, account_revenue_range_arg text, account_type_arg text, account_industry_arg text, opportunity_stage_arg text, opportunity_type_arg text, forecast_category_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, lifecycle_bucket_arg text, call_month_arg text, call_date_arg text)
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_persona_bucket(call_id_arg text, fact_title_present boolean)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+WITH titles AS (
+	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' ' AS t
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS p
+	 WHERE c.call_id = call_id_arg
+	   AND COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '') <> ''
+	UNION ALL
+	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' '
+	  FROM calls c
+	  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS p
+	 WHERE c.call_id = call_id_arg
+	   AND COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '') <> ''
+	UNION ALL
+	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(f.field_value_text)), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' '
+	  FROM call_context_fields f
+	  JOIN call_context_objects o
+	    ON o.call_id = f.call_id
+	   AND o.object_key = f.object_key
+	 WHERE f.call_id = call_id_arg
+	   AND o.object_type IN ('Contact', 'Lead')
+	   AND f.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')
+	   AND TRIM(f.field_value_text) <> ''
+)
+SELECT CASE
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%procurement%' OR t LIKE '%purchasing%' OR t LIKE '%sourcing%' OR t LIKE '%buyer%' OR t LIKE '%category manager%') THEN 'procurement'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%supplier%' OR t LIKE '%vendor manager%' OR t LIKE '%vendor management%' OR t LIKE '%vendor enablement%' OR t LIKE '%channel manager%' OR t LIKE '%partner manager%' OR t LIKE '%alliances%') THEN 'supplier_enablement'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% ciso %' OR t LIKE '% cio %' OR t LIKE '% cto %' OR t LIKE '%chief information%' OR t LIKE '%chief technology%' OR t LIKE '%vp it%' OR t LIKE '%vp of it%' OR t LIKE '%head of it%' OR t LIKE '%it director%' OR t LIKE '%it manager%' OR t LIKE '%infrastructure%' OR t LIKE '%security%' OR t LIKE '%infosec%' OR t LIKE '%integration%' OR t LIKE '%architect%' OR t LIKE '%devops%' OR t LIKE '%platform engineer%' OR t LIKE '%site reliability%') THEN 'it_security_integration'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% cfo %' OR t LIKE '%chief financial%' OR t LIKE '%finance%' OR t LIKE '%controller%' OR t LIKE '%treasur%' OR t LIKE '%accounting%') THEN 'finance'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% coo %' OR t LIKE '%chief operating%' OR t LIKE '%operations%' OR t LIKE '%supply chain%' OR t LIKE '%logistics%' OR t LIKE '%manufacturing%' OR t LIKE '%production%' OR t LIKE '%fulfillment%') THEN 'operations'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%sales%' OR t LIKE '%revenue%' OR t LIKE '%account exec%' OR t LIKE '%account manager%' OR t LIKE '% sdr %' OR t LIKE '% bdr %' OR t LIKE '% ae %' OR t LIKE '% csm %' OR t LIKE '%customer success%' OR t LIKE '%go-to-market%' OR t LIKE '%gtm%') THEN 'sales_revenue'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% ceo %' OR t LIKE '%chief executive%' OR t LIKE '%founder%' OR t LIKE '%president%' OR t LIKE '%chair%' OR t LIKE '%general manager%') THEN 'executive'
+	WHEN EXISTS (SELECT 1 FROM titles WHERE TRIM(t) <> '') THEN 'other_title_present'
+	WHEN COALESCE(fact_title_present, false) THEN 'participant_title_present'
+	ELSE ''
+END
+$function$;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_persona_bucket(text, boolean) FROM PUBLIC;
+
+-- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__
+
+CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text, account_revenue_range_arg text, account_type_arg text, account_industry_arg text, opportunity_stage_arg text, opportunity_type_arg text, forecast_category_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, lifecycle_bucket_arg text, call_month_arg text, call_date_arg text, duration_seconds_arg bigint, call_id_arg text)
 RETURNS boolean
 LANGUAGE sql
 STABLE
@@ -334,21 +381,25 @@ WITH filters AS (
 	SELECT item.value AS filter_json
 	  FROM jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb) AS item(value)
 ),
+row_ctx AS (
+	SELECT cf.*,
+	       c.raw_json AS call_raw_json,
+	       c.parties_count,
+	       COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) +
+	       COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) AS party_title_count
+	  FROM call_facts cf
+	  JOIN calls c
+	    ON c.call_id = cf.call_id
+	 WHERE cf.call_id = call_id_arg
+),
 normalized AS (
-	SELECT lower(trim(filter_json->>'dimension')) AS dimension,
+	SELECT dims.dimension,
 	       COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator,
-	       CASE lower(trim(filter_json->>'dimension'))
-		       WHEN 'account_revenue_range' THEN account_revenue_range_arg
-		       WHEN 'account_type' THEN account_type_arg
-		       WHEN 'account_industry' THEN account_industry_arg
-		       WHEN 'opportunity_stage' THEN opportunity_stage_arg
-		       WHEN 'opportunity_type' THEN opportunity_type_arg
-		       WHEN 'forecast_category' THEN forecast_category_arg
-		       WHEN 'scope' THEN scope_arg
-		       WHEN 'system' THEN system_arg
-		       WHEN 'direction' THEN direction_arg
-		       WHEN 'transcript_status' THEN transcript_status_arg
-		       WHEN 'lifecycle_bucket' THEN lifecycle_bucket_arg
+	       CASE dims.dimension
+		       WHEN 'call_id' THEN cf.call_id
+		       WHEN 'title' THEN cf.title
+		       WHEN 'started_at' THEN cf.started_at
+		       WHEN 'call_date' THEN cf.call_date
 		       WHEN 'call_month' THEN call_month_arg
 		       WHEN 'quarter' THEN CASE
 			       WHEN substring(call_date_arg from 6 for 2) IN ('01','02','03') THEN left(call_date_arg, 4) || '-Q1'
@@ -357,32 +408,205 @@ normalized AS (
 			       WHEN substring(call_date_arg from 6 for 2) IN ('10','11','12') THEN left(call_date_arg, 4) || '-Q4'
 			       ELSE ''
 		       END
+		       WHEN 'duration_bucket' THEN cf.duration_bucket
+		       WHEN 'system' THEN system_arg
+		       WHEN 'direction' THEN direction_arg
+		       WHEN 'scope' THEN scope_arg
+		       WHEN 'purpose' THEN cf.purpose
+		       WHEN 'primary_user_id' THEN cf.primary_user_id
+		       WHEN 'calendar_event_status' THEN cf.calendar_event_status
+		       WHEN 'sdr_disposition' THEN cf.sdr_disposition
+		       WHEN 'transcript_status' THEN transcript_status_arg
+		       WHEN 'lifecycle_bucket' THEN lifecycle_bucket_arg
+		       WHEN 'lifecycle_confidence' THEN cf.lifecycle_confidence
+		       WHEN 'lifecycle_reason' THEN cf.lifecycle_reason
+		       WHEN 'lifecycle_evidence_fields' THEN cf.lifecycle_evidence_fields
+		       WHEN 'account_id' THEN cf.account_id
+		       WHEN 'account_type' THEN account_type_arg
+		       WHEN 'account_industry' THEN account_industry_arg
+		       WHEN 'account_revenue_range' THEN account_revenue_range_arg
+		       WHEN 'account_primary_procurement_system' THEN cf.account_primary_procurement_system
+		       WHEN 'opportunity_id' THEN cf.opportunity_id
+		       WHEN 'opportunity_stage' THEN opportunity_stage_arg
+		       WHEN 'opportunity_type' THEN opportunity_type_arg
+		       WHEN 'opportunity_amount' THEN cf.opportunity_amount
+		       WHEN 'opportunity_probability' THEN cf.opportunity_probability
+		       WHEN 'forecast_category' THEN forecast_category_arg
+		       WHEN 'opportunity_primary_lead_source' THEN cf.opportunity_primary_lead_source
+		       WHEN 'opportunity_procurement_system' THEN cf.opportunity_procurement_system
+		       WHEN 'persona' THEN gongmcp_business_analysis_persona_bucket(cf.call_id, cf.participant_title_present)
+		       WHEN 'won_lost' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
+		       WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket(cf.call_id, cf.loss_reason_present)
+		       WHEN 'participant_status' THEN CASE WHEN cf.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END
+		       WHEN 'person_title_status' THEN CASE WHEN cf.party_title_count > 0 THEN 'available' WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_present_title_unverified' WHEN cf.parties_count > 0 THEN 'participants_present_check_party_titles' ELSE 'missing_from_cache' END
+		       WHEN 'person_title_source' THEN CASE WHEN cf.party_title_count > 0 THEN 'call_parties' WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_object' ELSE '' END
 		       ELSE NULL
 	       END AS row_value,
+	       CASE dims.dimension
+		       WHEN 'duration_seconds' THEN duration_seconds_arg
+		       WHEN 'opportunity_count' THEN cf.opportunity_count
+		       WHEN 'account_count' THEN cf.account_count
+		       ELSE NULL
+	       END AS numeric_value,
+	       CASE dims.dimension
+		       WHEN 'calendar_event_present' THEN cf.calendar_event_present
+		       WHEN 'transcript_present' THEN cf.transcript_present
+		       WHEN 'likely_voicemail_or_ivr' THEN cf.likely_voicemail_or_ivr
+		       ELSE NULL
+	       END AS boolean_value,
 	       filter_json->'values' AS values_json
 	  FROM filters
+	  CROSS JOIN row_ctx cf
+	  CROSS JOIN LATERAL (
+		SELECT CASE lower(trim(filter_json->>'dimension'))
+		       WHEN 'revenue_range' THEN 'account_revenue_range'
+		       WHEN 'stage' THEN 'opportunity_stage'
+		       WHEN 'industry' THEN 'account_industry'
+		       WHEN 'lifecycle' THEN 'lifecycle_bucket'
+		       WHEN 'month' THEN 'call_month'
+		       WHEN 'call_length' THEN 'duration_seconds'
+		       WHEN 'duration' THEN 'duration_seconds'
+		       WHEN 'account_procurement_system' THEN 'account_primary_procurement_system'
+		       WHEN 'opportunity_forecast_category' THEN 'forecast_category'
+		       WHEN 'primary_lead_source' THEN 'opportunity_primary_lead_source'
+		       WHEN 'participant_title' THEN 'persona'
+		       WHEN 'outcome' THEN 'won_lost'
+		       WHEN 'email' THEN 'participant_email'
+		       ELSE lower(trim(filter_json->>'dimension'))
+	       END AS dimension
+	  ) dims
 )
-SELECT NOT EXISTS (
+SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 	SELECT 1
 	  FROM normalized
-	 WHERE row_value IS NULL
+	 WHERE dimension NOT IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_name', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'crm_object_id', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', 'duration_seconds', 'opportunity_count', 'account_count', 'calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'participant_email')
 	    OR values_json IS NULL
 	    OR jsonb_typeof(values_json) <> 'array'
-	    OR CASE
-		    WHEN jsonb_typeof(values_json) = 'array'
-		    THEN jsonb_array_length(values_json) = 0
-		      OR (operator = 'equals' AND jsonb_array_length(values_json) <> 1)
-		    ELSE false
-	    END
-	    OR NOT EXISTS (
-		    SELECT 1
-		      FROM jsonb_array_elements_text(values_json) AS values(value)
-		     WHERE left(values.value, 160) = row_value
+	    OR jsonb_array_length(values_json) = 0
+	    OR (operator = 'equals' AND jsonb_array_length(values_json) <> 1)
+	    OR (operator = 'between' AND jsonb_array_length(values_json) <> 2)
+	    OR operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
+	    OR (
+		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source')
+		    AND operator NOT IN ('equals', 'in')
 	    )
-	    OR operator NOT IN ('equals', 'in')
+	    OR (
+		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source')
+		    AND (
+			    row_value IS NULL
+			    OR NOT EXISTS (
+				    SELECT 1
+				      FROM jsonb_array_elements_text(values_json) AS values(value)
+				     WHERE left(values.value, 160) = row_value
+			    )
+		    )
+	    )
+	    OR (
+		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count')
+		    AND operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
+	    )
+	    OR (
+		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'account_name', 'crm_object_id', 'participant_email')
+		    AND operator NOT IN ('equals', 'in')
+	    )
+	    OR (
+		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count')
+		    AND operator IN ('equals', 'in', 'gte', 'lte', 'between')
+		    AND (
+			    numeric_value IS NULL
+			    OR (operator = 'equals' AND numeric_value <> (values_json->>0)::bigint)
+			    OR (operator = 'gte' AND numeric_value < (values_json->>0)::bigint)
+			    OR (operator = 'lte' AND numeric_value > (values_json->>0)::bigint)
+			    OR (operator = 'between' AND (
+				    numeric_value < LEAST((values_json->>0)::bigint, (values_json->>1)::bigint)
+				    OR numeric_value > GREATEST((values_json->>0)::bigint, (values_json->>1)::bigint)
+			    ))
+			    OR (operator = 'in' AND NOT EXISTS (
+				    SELECT 1
+				      FROM jsonb_array_elements_text(values_json) AS values(value)
+				     WHERE numeric_value = values.value::bigint
+			    ))
+		    )
+	    )
+	    OR (
+		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr')
+		    AND operator IN ('equals', 'in')
+		    AND (
+			    boolean_value IS NULL
+			    OR NOT EXISTS (
+				    SELECT 1
+				      FROM jsonb_array_elements_text(values_json) AS values(value)
+				     WHERE boolean_value = CASE lower(trim(values.value))
+					    WHEN 'true' THEN true
+					    WHEN '1' THEN true
+					    WHEN 'yes' THEN true
+					    WHEN 'y' THEN true
+					    WHEN 'false' THEN false
+					    WHEN '0' THEN false
+					    WHEN 'no' THEN false
+					    WHEN 'n' THEN false
+					    ELSE NULL
+				     END
+			    )
+		    )
+	    )
+	    OR (
+		    dimension = 'account_name'
+		    AND operator IN ('equals', 'in')
+		    AND NOT EXISTS (
+			    SELECT 1
+			      FROM call_context_objects account_o
+			      LEFT JOIN call_context_fields account_f
+			        ON account_f.call_id = account_o.call_id
+			       AND account_f.object_key = account_o.object_key
+			       AND account_f.field_name = 'Name'
+			     WHERE account_o.call_id = call_id_arg
+			       AND account_o.object_type = 'Account'
+			       AND (
+				       lower(trim(COALESCE(account_o.object_name, ''))) IN (SELECT lower(trim(value)) FROM jsonb_array_elements_text(values_json) AS values(value))
+				    OR lower(trim(COALESCE(account_f.field_value_text, ''))) IN (SELECT lower(trim(value)) FROM jsonb_array_elements_text(values_json) AS values(value))
+			       )
+		    )
+	    )
+	    OR (
+		    dimension = 'crm_object_id'
+		    AND operator IN ('equals', 'in')
+		    AND NOT EXISTS (
+			    SELECT 1
+			      FROM call_context_objects object_o
+			     WHERE object_o.call_id = call_id_arg
+			       AND lower(trim(COALESCE(object_o.object_id, ''))) IN (SELECT lower(trim(value)) FROM jsonb_array_elements_text(values_json) AS values(value))
+		    )
+	    )
+	    OR (
+		    dimension = 'participant_email'
+		    AND operator IN ('equals', 'in')
+		    AND NOT EXISTS (
+			    SELECT 1
+			      FROM calls email_c
+			      CROSS JOIN LATERAL (
+				      SELECT lower(trim(COALESCE(p.value->>'emailAddress', p.value->>'email', ''))) AS email
+				        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(email_c.raw_json->'parties') = 'array' THEN email_c.raw_json->'parties' ELSE '[]'::jsonb END) AS p(value)
+				       WHERE trim(COALESCE(p.value->>'emailAddress', p.value->>'email', '')) <> ''
+				       UNION ALL
+				      SELECT lower(trim(COALESCE(p.value->>'emailAddress', p.value->>'email', '')))
+				        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(email_c.raw_json->'metaData'->'parties') = 'array' THEN email_c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS p(value)
+				       WHERE trim(COALESCE(p.value->>'emailAddress', p.value->>'email', '')) <> ''
+			      ) emails
+			     WHERE email_c.call_id = call_id_arg
+			       AND emails.email <> ''
+			       AND (
+				       (operator = 'equals' AND emails.email = lower(trim(values_json->>0)))
+				       OR (operator = 'in' AND emails.email IN (
+					       SELECT lower(trim(value))
+					         FROM jsonb_array_elements_text(values_json) AS values(value)
+				       ))
+			       )
+		    )
+	    )
 )
 $function$;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text) FROM PUBLIC;
 
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls(title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(call_id text, title text, started_at text, call_date text, call_month text, duration_seconds bigint, lifecycle_bucket text, likely_voicemail_or_ivr boolean, scope text, system text, direction text, transcript_status text, account_industry text, opportunity_stage text, opportunity_type text, forecast_category text, opportunity_count bigint, account_count bigint, participant_status text, person_title_status text, person_title_source text)
@@ -405,7 +629,7 @@ WITH filtered AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
-	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -489,7 +713,7 @@ WITH rows AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
-	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -576,7 +800,7 @@ matched AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
-	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -720,7 +944,7 @@ WITH sampled AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
-	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)
@@ -828,53 +1052,6 @@ SELECT s.call_id,
  LIMIT LEAST(GREATEST(COALESCE(row_limit, 25), 1), 1000)
 $function$;
 
-CREATE OR REPLACE FUNCTION gongmcp_business_analysis_persona_bucket(call_id_arg text, fact_title_present boolean)
-RETURNS text
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $function$
-WITH titles AS (
-	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' ' AS t
-	  FROM calls c
-	  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) AS p
-	 WHERE c.call_id = call_id_arg
-	   AND COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '') <> ''
-	UNION ALL
-	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', ''))), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' '
-	  FROM calls c
-	  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) AS p
-	 WHERE c.call_id = call_id_arg
-	   AND COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '') <> ''
-	UNION ALL
-	SELECT ' ' || REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(LOWER(TRIM(f.field_value_text)), ',', ' '), '/', ' '), '-', ' '), '.', ' '), E'\t', ' '), E'\n', ' ') || ' '
-	  FROM call_context_fields f
-	  JOIN call_context_objects o
-	    ON o.call_id = f.call_id
-	   AND o.object_key = f.object_key
-	 WHERE f.call_id = call_id_arg
-	   AND o.object_type IN ('Contact', 'Lead')
-	   AND f.field_name IN ('Title', 'JobTitle', 'Job_Title__c', 'JobTitle__c')
-	   AND TRIM(f.field_value_text) <> ''
-)
-SELECT CASE
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%procurement%' OR t LIKE '%purchasing%' OR t LIKE '%sourcing%' OR t LIKE '%buyer%' OR t LIKE '%category manager%') THEN 'procurement'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%supplier%' OR t LIKE '%vendor manager%' OR t LIKE '%vendor management%' OR t LIKE '%vendor enablement%' OR t LIKE '%channel manager%' OR t LIKE '%partner manager%' OR t LIKE '%alliances%') THEN 'supplier_enablement'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% ciso %' OR t LIKE '% cio %' OR t LIKE '% cto %' OR t LIKE '%chief information%' OR t LIKE '%chief technology%' OR t LIKE '%vp it%' OR t LIKE '%vp of it%' OR t LIKE '%head of it%' OR t LIKE '%it director%' OR t LIKE '%it manager%' OR t LIKE '%infrastructure%' OR t LIKE '%security%' OR t LIKE '%infosec%' OR t LIKE '%integration%' OR t LIKE '%architect%' OR t LIKE '%devops%' OR t LIKE '%platform engineer%' OR t LIKE '%site reliability%') THEN 'it_security_integration'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% cfo %' OR t LIKE '%chief financial%' OR t LIKE '%finance%' OR t LIKE '%controller%' OR t LIKE '%treasur%' OR t LIKE '%accounting%') THEN 'finance'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% coo %' OR t LIKE '%chief operating%' OR t LIKE '%operations%' OR t LIKE '%supply chain%' OR t LIKE '%logistics%' OR t LIKE '%manufacturing%' OR t LIKE '%production%' OR t LIKE '%fulfillment%') THEN 'operations'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '%sales%' OR t LIKE '%revenue%' OR t LIKE '%account exec%' OR t LIKE '%account manager%' OR t LIKE '% sdr %' OR t LIKE '% bdr %' OR t LIKE '% ae %' OR t LIKE '% csm %' OR t LIKE '%customer success%' OR t LIKE '%go-to-market%' OR t LIKE '%gtm%') THEN 'sales_revenue'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE t LIKE '% ceo %' OR t LIKE '%chief executive%' OR t LIKE '%founder%' OR t LIKE '%president%' OR t LIKE '%chair%' OR t LIKE '%general manager%') THEN 'executive'
-	WHEN EXISTS (SELECT 1 FROM titles WHERE TRIM(t) <> '') THEN 'other_title_present'
-	WHEN COALESCE(fact_title_present, false) THEN 'participant_title_present'
-	ELSE ''
-END
-$function$;
-REVOKE ALL ON FUNCTION gongmcp_business_analysis_persona_bucket(text, boolean) FROM PUBLIC;
-
--- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__
-
 CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension(dimension_arg text, theme_query_arg text, title_query_arg text, transcript_query_arg text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, transcript_status_arg text, industry_arg text, account_query_arg text, opportunity_stage_arg text, crm_object_type_arg text, crm_object_id_arg text, participant_title_query_arg text, exclude_lifecycle_buckets_json text, exclude_likely_voicemail_arg boolean, row_limit integer, dimension_filters_json text DEFAULT '[]')
 RETURNS TABLE(dimension text, value text, call_count bigint, transcript_count bigint, missing_transcript_count bigint, opportunity_call_count bigint, account_call_count bigint, external_call_count bigint, latest_call_at text)
 LANGUAGE sql
@@ -923,7 +1100,7 @@ WITH rows AS (
 	   AND (to_date_arg = '' OR cf.call_date <= to_date_arg)
 	   AND (lifecycle_bucket_arg = '' OR cf.lifecycle_bucket = lifecycle_bucket_arg)
 	   AND (COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(exclude_lifecycle_buckets_json, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
-	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date))
+	   AND (COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id))
 	   AND (NOT COALESCE(exclude_likely_voicemail_arg, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND (scope_arg = '' OR cf.scope = scope_arg)
 	   AND (system_arg = '' OR cf.system = system_arg)

@@ -148,9 +148,11 @@ Use only documented filter fields. Common fields are `title_query`, `query`,
 `participant_title_query`, `dimension_filters`, and `limit`. Unknown aliases are
 rejected by the server; do not invent fields.
 
-Use `dimension_filters` only for reviewed known dimensions advertised by
-`gong_discover_capabilities`; it is not an arbitrary CRM field lookup. Supported
-operators are `equals` and `in`. Multiple entries are combined with AND
+Use `dimension_filters` for backed business-analysis fields or dimensions.
+The package defaults to no disallowed dimensions; a policy hook can disallow
+specific dimensions later without changing the tool schema. String-backed
+fields use `equals` and `in`; numeric fields such as `duration_seconds` also
+support `gte`, `lte`, and `between`. Multiple entries are combined with AND
 semantics; values inside one `in` entry are OR alternatives. `quarter` values
 must use `YYYY-Q#` such as `2026-Q1`, and `call_month` values must use
 `YYYY-MM` such as `2026-01`. For example:
@@ -171,13 +173,14 @@ must use `YYYY-Q#` such as `2026-Q1`, and `call_month` values must use
 }
 ```
 
-Known dimensions are low-cardinality read-model fields such as
-`account_revenue_range`, `account_type`, `account_industry`,
-`opportunity_stage`, `opportunity_type`, `forecast_category`, `scope`, `system`,
-`direction`, `transcript_status`, `lifecycle_bucket`, `call_month`, and
-`quarter`. Do not use `dimension_filters` for account names, CRM object IDs,
-participant titles, raw transcript queries, loss reasons, personas, or won/lost
-buckets.
+Backed dimensions include read-model fields such as `duration_seconds`,
+`duration_bucket`, `account_revenue_range`, `account_type`,
+`account_industry`, `account_name`, `crm_object_id`, `opportunity_stage`,
+`opportunity_type`, `forecast_category`, `scope`, `system`, `direction`,
+`transcript_status`, `lifecycle_bucket`, `call_month`, `quarter`,
+`participant_email`, `persona`, `loss_reason`, and `won_lost`. Participant
+email filters are predicates only; tool output remains governed by the usual
+bounded evidence and field-profile rules.
 
 ## ICP Context
 

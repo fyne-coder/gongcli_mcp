@@ -714,6 +714,18 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 		"facade_version": "v1",
 		"mcp_server":     s.publicRuntimeInfo(),
 		"operations":     enriched,
+		"dimension_filters": map[string]any{
+			"supported_dimensions": sqlite.BackedBusinessAnalysisFilterDimensions(),
+			"operators_by_dimension": func() map[string][]string {
+				out := map[string][]string{}
+				for _, dimension := range sqlite.BackedBusinessAnalysisFilterDimensions() {
+					out[dimension] = sqlite.SupportedBusinessAnalysisDimensionFilterOperators(dimension)
+				}
+				return out
+			}(),
+			"disallowed_dimensions":       sqlite.DisallowedBusinessAnalysisFilterDimensions(),
+			"default_disallow_list_empty": len(sqlite.DisallowedBusinessAnalysisFilterDimensions()) == 0,
+		},
 		"facade_tools": []string{
 			FacadeToolStatus,
 			FacadeToolDiscoverCapabilities,

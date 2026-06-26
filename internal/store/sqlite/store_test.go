@@ -385,6 +385,95 @@ func TestBusinessAnalysisFiltersApplyAgainstCallFactsAndEvidence(t *testing.T) {
 	}
 }
 
+func TestBusinessAnalysisDimensionFiltersDurationAndParticipantEmail(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	for _, raw := range []json.RawMessage{
+		mustNormalizeValue(t, map[string]any{
+			"id":       "call-ba-duration-email",
+			"title":    "Duration email discovery",
+			"started":  "2026-02-18T15:00:00Z",
+			"duration": 1800,
+			"parties": []any{
+				map[string]any{"id": "buyer", "emailAddress": "buyer@example.invalid"},
+			},
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"id":       "call-ba-short",
+			"title":    "Duration email short",
+			"started":  "2026-02-18T16:00:00Z",
+			"duration": 600,
+			"parties": []any{
+				map[string]any{"id": "buyer", "emailAddress": "buyer@example.invalid"},
+			},
+		}),
+		mustNormalizeValue(t, map[string]any{
+			"id":       "call-ba-other-email",
+			"title":    "Duration email other",
+			"started":  "2026-02-18T17:00:00Z",
+			"duration": 1800,
+			"parties": []any{
+				map[string]any{"id": "buyer", "emailAddress": "other@example.invalid"},
+			},
+		}),
+	} {
+		if _, err := store.UpsertCall(ctx, raw); err != nil {
+			t.Fatalf("upsert duration/email call: %v", err)
+		}
+	}
+	if _, err := store.UpsertTranscript(ctx, mustNormalizeValue(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": "call-ba-duration-email",
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2500, "text": "We need a longer implementation timeline."},
+						},
+					},
+				},
+			},
+		},
+	})); err != nil {
+		t.Fatalf("upsert duration/email transcript: %v", err)
+	}
+
+	durationFilter := BusinessAnalysisFilter{
+		TitleQuery: "duration email",
+		DimensionFilters: []BusinessAnalysisDimensionFilter{
+			{Dimension: "duration_seconds", Operator: "between", Values: []string{"1200", "2400"}},
+			{Dimension: "participant_email", Operator: "equals", Values: []string{"buyer@example.invalid"}},
+		},
+	}
+	calls, err := store.SearchBusinessAnalysisCalls(ctx, BusinessAnalysisCallSearchParams{Filter: durationFilter, Limit: 100})
+	if err != nil {
+		t.Fatalf("SearchBusinessAnalysisCalls duration/email filters: %v", err)
+	}
+	if calls.Summary.CallCount != 1 || len(calls.Rows) != 1 || calls.Rows[0].CallID != "call-ba-duration-email" {
+		t.Fatalf("duration/email filters should keep only the long buyer call: summary=%+v rows=%+v", calls.Summary, calls.Rows)
+	}
+
+	evidence, err := store.SearchBusinessAnalysisEvidence(ctx, BusinessAnalysisEvidenceSearchParams{
+		Filter: durationFilter,
+		Query:  "implementation timeline",
+		Limit:  10,
+	})
+	if err != nil {
+		t.Fatalf("SearchBusinessAnalysisEvidence duration/email filters: %v", err)
+	}
+	if len(evidence) != 1 || evidence[0].CallID != "call-ba-duration-email" {
+		t.Fatalf("evidence should combine participant_email and transcript query, got %+v", evidence)
+	}
+	if strings.Contains(evidence[0].Snippet, "buyer@example.invalid") {
+		t.Fatalf("evidence must not expose participant email text: %+v", evidence[0])
+	}
+}
+
 // personaBucketFixture exposes the synthetic call layout used by the persona
 // bucket tests so SQLite and Postgres can be seeded from the same source.
 type personaBucketFixture struct {
