@@ -108,7 +108,7 @@ Every cohort, search, and analysis tool accepts only these filter fields:
 Other common `dimension_filters` dimensions include `duration_seconds`,
 `participant_email`, `account_name`, `crm_object_id`, `persona`, `loss_reason`,
 and `won_lost`. Participant email and identifier filters narrow the call set;
-returned fields still follow the tool's normal redaction and opt-in behavior.
+returned fields still follow the tool's normal output policy behavior.
 
 Multiple entries are combined with AND semantics; values inside one `in` entry
 are OR alternatives. `quarter` values must use `YYYY-Q#`, and `call_month`

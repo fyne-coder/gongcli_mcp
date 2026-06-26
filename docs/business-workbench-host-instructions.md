@@ -135,6 +135,7 @@ route to an operation through one of those tools:
 | Health and cache status | `gong_status` | `status.sync` |
 | Tool/operation discovery | `gong_discover_capabilities` | n/a |
 | Call counts without row payload | `gong_query` | `query.call_count` |
+| Ranked/grouped call counts by dimension | `gong_query` | `query.dimension_counts` |
 | Bounded call search | `gong_query` | `query.calls` |
 | Business Discovery summary | `gong_analyze` | `analyze.discovery_summary` |
 | Broad business answer | `gong_analyze` | `question.answer` |

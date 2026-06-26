@@ -81,10 +81,11 @@ underneath.
 The deterministic release harness mirrors the business-workbench versions of
 the manual prompts below. It exercises the six facade tools directly, including
 compact and full `gong_discover_capabilities`, `query.call_count` for calls over
-five minutes, Business Discovery `analyze.discovery_summary`, cohort_token quote
-follow-up, Gong AI highlight/keyPoint retrieval, Q1 Business Discovery seedless AI
-theme bootstrap, manual-process quote packs, pipeline/dimension caveats, objection
-extraction, buyer-question extraction, field-profile behavior, and
+five minutes, `query.dimension_counts` for ranked/grouped call counts, Business
+Discovery `analyze.discovery_summary`, cohort_token quote follow-up, Gong AI
+highlight/keyPoint retrieval, Q1 Business Discovery seedless AI theme bootstrap,
+manual-process quote packs, pipeline/dimension caveats, objection extraction,
+buyer-question extraction, field-profile behavior, and
 transcript-enumeration probes. Use `scripts/business-workbench-ga-harness.sh` as
 the release gate; use the manual prompts for exploratory host-model behavior only.
 
@@ -124,7 +125,7 @@ Expected core tools:
 
 - `gong_status` (routes `status.sync` → `get_sync_status`)
 - `gong_discover_capabilities`
-- `gong_query` (`query.calls`, `query.call_count`)
+- `gong_query` (`query.calls`, `query.call_count`, `query.dimension_counts`)
 - `gong_analyze` (`question.answer`, `analyze.discovery_summary`, `theme_intelligence_report`, and other routed operations)
 - `gong_get_evidence` (`evidence.quotes.search`, `evidence.quote_pack.build`, `evidence.highlights.list`, `evidence.call_drilldown`)
 - `gong_explain_limitations`
