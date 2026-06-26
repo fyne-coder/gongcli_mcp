@@ -35,6 +35,8 @@ do not break when the routed tool changes.
 | Operation | Routes to | What it returns |
 |---|---|---|
 | `query.calls` | `search_calls_by_filters` (fallback `search_calls`) | Bounded call rows matching a `call_filter` |
+| `query.call_count` | internal `call_count` handler | Exact call count for a bounded filter without row payload |
+| `query.dimension_counts` | internal `dimension_counts` handler | Per-bucket call counts for a backed summarize dimension inside a bounded cohort; supports participant_domain, participant_affiliation, and participant_email ranking by default, with internal_domains (default tradecentric.com), participant_affiliation_filter, and `hide_contact_emails` as the privacy switch for disabling raw email buckets |
 | `query.transcript_segments` | `search_transcript_segments` (fallback `search_transcripts_by_filters`) | Bounded transcript snippets |
 | `query.scorecards` | `list_scorecards` | Scorecard inventory |
 | `query.scorecard_detail` | `get_scorecard` | Scorecard configuration detail |
@@ -91,7 +93,7 @@ Every cohort, search, and analysis tool accepts only these filter fields:
 | `crm_object_id` | string | Specific CRM record |
 | `participant_title_query` | string | Substring match on participant title |
 | `dimension_filters` | array | Filters over backed business-analysis fields and dimensions. String fields use `equals`/`in`; numeric fields such as `duration_seconds` also support `gte`/`lte`/`between`. The default disallow list is empty. |
-| `limit` | integer | Per-tool result cap. Always provide. |
+| `limit` | integer | Per-tool result cap. Always provide. For `query.calls`, this caps returned preview rows only; `count` and `coverage_summary.call_count` still describe the full matched cohort. |
 
 `dimension_filters` entries use:
 
@@ -125,6 +127,10 @@ filter.
 
 - If a tool returns `capped: true`, do **not** just bump `limit` — narrow
   the filter first.
+- For scalar questions such as "how many calls were longer than 5 minutes",
+  use `query.call_count`. `query.calls` is for inspecting bounded call rows;
+  its `limit` controls only the returned preview rows, not the matched
+  cohort count.
 - Prefer a concrete date window plus one or more of `lifecycle_bucket`,
   `scope`, `system`, `direction`, `crm_object_type`/`crm_object_id`, or a
   more specific `query`/`title_query`.

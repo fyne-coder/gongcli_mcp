@@ -255,14 +255,17 @@ of:
 - `hide_loss_reasons`
 - `hide_crm_value_snippets`
 
-In this foundation slice the wired enforcement points are `search_calls`
-(call_id, title) and `get_call` (call_id, title, account names). The other
-switches parse, validate, and surface in `RuntimeInfo.policy_switches` /
-`policy_switches_enabled` so downstream slices can attach behavior without
-breaking the contract. An emit-time defense-in-depth blocklist guard sits in
-front of `search_calls` and `get_call` and suppresses rows whose title or CRM
-account name matches a blocklisted entity, even when source-to-serving
-redaction missed a row.
+Wired enforcement points include `search_calls` (call_id, title), `get_call`
+(call_id, title, account names), business-analysis item serialization, loss
+reason buckets, and participant-email dimension buckets. In particular,
+`hide_contact_emails` disables raw `participant_email` buckets in
+`query.dimension_counts` / `summarize_calls_by_filters`; participant-domain and
+participant-affiliation rollups remain available. Switches also parse, validate,
+and surface in `RuntimeInfo.policy_switches` / `policy_switches_enabled` so
+downstream slices can attach behavior without breaking the contract. An
+emit-time defense-in-depth blocklist guard sits in front of `search_calls` and
+`get_call` and suppresses rows whose title or CRM account name matches a
+blocklisted entity, even when source-to-serving redaction missed a row.
 
 ## Analyst Cohort Tool Exposure
 
@@ -287,7 +290,16 @@ Required filter contract:
   semantics; `quarter` uses `YYYY-Q#`, and `call_month` uses `YYYY-MM`.
   `participant_email`, `account_name`, and `crm_object_id` are predicates only:
   they narrow the cohort without changing the normal output redaction and
-  opt-in behavior.
+  opt-in behavior. `query.dimension_counts` also supports participant-policy
+  dimensions (`participant_domain`, `participant_affiliation`, and
+  `participant_email` ranking by default for this lab) using cached party email
+  domains, configurable `internal_domains` (default `tradecentric.com`),
+  optional `include_participant_emails` as an explicit acknowledgement, and
+  optional
+  `participant_affiliation_filter` (`external` for buyer/marketing rollups,
+  `internal` for seller coaching). Participant affiliation is distinct from
+  utterance-level `speaker_role_filter`. Operators can disable raw email
+  buckets with the existing `hide_contact_emails` policy switch.
 - Echo the normalized filter in every cohort response so a host can reproduce
   the same call set after process restart.
 - Treat `cohort_id` as a deterministic convenience handle, not as the only
@@ -542,6 +554,12 @@ aggregate or inventory tools expose schema maximums and enforce limits, but may
 continue to return their normal payload shape without `capped: true`. The cap
 feedback deliberately does not expose governance-filtered counts, because
 filtered counts could become a match oracle.
+
+Facade `query.calls` is a bounded row-preview operation. Its `limit` caps the
+returned `results` rows only; the `count` field and
+`coverage_summary.call_count` describe the full matched cohort. Count-only
+business prompts should use `query.call_count` so the host model does not
+mistake a preview limit such as 25 for the number of matching calls.
 
 Practical recommendations:
 

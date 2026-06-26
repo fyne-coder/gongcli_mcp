@@ -92,6 +92,7 @@ type Server struct {
 	limitPolicy                  LimitPolicy
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
 	businessAnalysisSmallCellMin int
+	internalParticipantDomains   []string
 	allowedToolNames             map[string]struct{}
 	facadeRoutedToolNames        map[string]struct{}
 	suppressedCallIDs            map[string]struct{}

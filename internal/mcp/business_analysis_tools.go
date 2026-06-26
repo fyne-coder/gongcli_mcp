@@ -160,6 +160,7 @@ type businessAnalysisResponse struct {
 	DataCaveats       []string                              `json:"data_readiness_caveats,omitempty"`
 	DimensionReady    map[string]string                     `json:"dimension_readiness,omitempty"`
 	AnswerContract    []string                              `json:"answer_contract,omitempty"`
+	ResultScope       map[string]any                        `json:"result_scope,omitempty"`
 	Limit             int                                   `json:"limit"`
 	Count             int                                   `json:"count"`
 	Coverage          map[string]any                        `json:"coverage_summary,omitempty"`
@@ -471,6 +472,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
 	case "search_calls_by_filters":
 		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
+		response.ResultScope = businessAnalysisCallSearchResultScope(limit, int(cohort.Summary.CallCount), len(response.Results))
 	case "summarize_calls_by_filters":
 		dimension := firstNonBlank(args.Dimension, "lifecycle")
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, dimension, "", limit)
@@ -711,7 +713,27 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Warnings = append(response.Warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text: field_profile=limited suppresses structured metadata, but Gong AI brief/keyPoint/highlight text may still contain names or customer terms")
 	}
 	response.AnswerContract = businessEvidenceAnswerContract(response.EvidenceType)
+	if params.Name == "search_calls_by_filters" {
+		response.AnswerContract = append(response.AnswerContract,
+			"For query.calls/search_calls_by_filters, count and coverage_summary.call_count describe the full matched cohort; results are only the bounded row preview.",
+			"For count-only questions, prefer query.call_count instead of explaining the preview limit.",
+		)
+	}
 	return finalizeBusinessAnalysisResponse(response)
+}
+
+func businessAnalysisCallSearchResultScope(limit int, matchedCount int, returnedRows int) map[string]any {
+	return map[string]any{
+		"matched_count_field":  "count",
+		"coverage_count_field": "coverage_summary.call_count",
+		"result_rows_field":    "results",
+		"limit_field":          "limit",
+		"limit_applies_to":     "returned_rows_only",
+		"matched_count":        matchedCount,
+		"returned_rows":        returnedRows,
+		"limit":                limit,
+		"guidance":             "limit caps returned preview rows only; it does not cap count or coverage_summary.call_count. Use query.call_count for scalar count questions.",
+	}
 }
 
 func finalizeBusinessAnalysisResponse(response businessAnalysisResponse) (toolCallResult, error) {
@@ -815,11 +837,20 @@ func businessAnalysisCoverageHint(populated, total int64, label string) string {
 }
 
 func (s *Server) businessAnalysisDimension(ctx context.Context, filter callFilter, dimension string, themeQuery string, limit int) ([]sqlite.BusinessAnalysisDimensionRow, error) {
+	if participantPolicyDimensionCanonical(dimension) == "participant_email" && s.policySwitches.HideContactEmails {
+		return nil, fmt.Errorf("participant_email dimension is disabled by policy_switches.hide_contact_emails")
+	}
+	return s.businessAnalysisDimensionWithParticipantPolicy(ctx, filter, dimension, themeQuery, limit, nil, "")
+}
+
+func (s *Server) businessAnalysisDimensionWithParticipantPolicy(ctx context.Context, filter callFilter, dimension string, themeQuery string, limit int, internalDomains []string, participantAffiliationFilter string) ([]sqlite.BusinessAnalysisDimensionRow, error) {
 	return s.store.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{
-		Filter:     sqliteBusinessAnalysisFilter(filter),
-		Dimension:  dimension,
-		ThemeQuery: themeQuery,
-		Limit:      limit,
+		Filter:                       sqliteBusinessAnalysisFilter(filter),
+		Dimension:                    dimension,
+		ThemeQuery:                   themeQuery,
+		Limit:                        limit,
+		InternalDomains:              resolveInternalParticipantDomains(s.internalParticipantDomains, internalDomains),
+		ParticipantAffiliationFilter: participantAffiliationFilter,
 	})
 }
 

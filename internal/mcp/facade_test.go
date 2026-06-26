@@ -97,6 +97,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpProspectQuestionAnswer,
 		OpQueryCallCount,
 		OpQueryCalls,
+		OpQueryDimensionCounts,
 		OpQueryScorecardDetail,
 		OpQueryScorecards,
 		OpQueryTranscriptSegments,
@@ -562,6 +563,51 @@ func TestFacadeQueryRoutesTranscriptSegmentsAndDeniesUnallowedRoutedTool(t *test
 	}
 	if !strings.Contains(err.Error(), "analyst") {
 		t.Fatalf("error did not name a remediation preset: %v", err)
+	}
+}
+
+func TestFacadeQueryCallsExplainsPreviewLimitVsMatchedCount(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolQuery}),
+		WithFacadeRoutedToolAllowlist([]string{"search_calls_by_filters"}),
+	)
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolQuery, mustFacadeArgs(t, OpQueryCalls, map[string]any{
+		"filter": map[string]any{
+			"from_date": "2024-01-01",
+			"to_date":   "2026-12-31",
+			"limit":     1,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("query.calls dispatch: %v", err)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing inner result: %T", wrapper["result"])
+	}
+	if got, _ := inner["count"].(float64); got < 2 {
+		t.Fatalf("count should describe the full matched cohort, got %v", inner["count"])
+	}
+	results, _ := inner["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results should be capped to preview limit, got %d rows: %v", len(results), results)
+	}
+	scope, ok := inner["result_scope"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing result_scope: %v", inner)
+	}
+	if scope["limit_applies_to"] != "returned_rows_only" {
+		t.Fatalf("result_scope should explain row-preview limit, got %v", scope)
+	}
+	contractText := strings.ToLower(mustJSONText(t, inner["answer_contract"]))
+	if !strings.Contains(contractText, "full matched cohort") || !strings.Contains(contractText, OpQueryCallCount) {
+		t.Fatalf("answer_contract missing preview/count guidance: %s", contractText)
 	}
 }
 

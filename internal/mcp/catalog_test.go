@@ -121,6 +121,7 @@ func TestFacadeHiddenRoutedToolsDerivedFromRegistry(t *testing.T) {
 		internalRoutedToolObjectionSignals,
 		internalRoutedToolProspectQuestionAnswer,
 		internalRoutedToolCallCount,
+		internalRoutedToolDimensionCounts,
 		internalRoutedToolQuestionAnswer,
 		internalRoutedToolThemeIntelReport,
 	}

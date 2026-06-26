@@ -216,6 +216,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 			"public.gongmcp_crm_field_population_matrix(text, text, integer)",
 		},
 		"diagnose_attribution_coverage":     businessAnalysisCoreFunctions,
+		"dimension_counts":                  businessAnalysisDimensionFunctions,
 		"discovery_summary":                 businessAnalysisEvidenceFunctions,
 		"discover_themes_in_cohort":         businessAnalysisThemeDiscoveryFunctions,
 		"explain_analysis_limitations":      businessAnalysisCoreFunctions,
@@ -563,6 +564,7 @@ func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
 func facadeOnlyScopedReaderTools() map[string]struct{} {
 	return map[string]struct{}{
 		"call_count":                {},
+		"dimension_counts":          {},
 		"list_call_ai_highlights":   {},
 		"question_answer":           {},
 		"prospect_question_answer":  {},

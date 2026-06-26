@@ -217,8 +217,11 @@ Backed dimensions include read-model fields such as `duration_seconds`,
 `opportunity_type`, `forecast_category`, `scope`, `system`, `direction`,
 `transcript_status`, `lifecycle_bucket`, `call_month`, `quarter`,
 `participant_email`, `persona`, `loss_reason`, and `won_lost`. Participant
-email filters are predicates only; tool output remains governed by the usual
-bounded evidence and field-profile rules.
+email filters are predicates only. `query.dimension_counts` can rank
+`participant_email` buckets by default for analyst/business workbench use; an
+operator can disable raw participant-email buckets with
+`GONGMCP_POLICY_SWITCHES=hide_contact_emails` or
+`--policy-switches hide_contact_emails`.
 
 ## ICP Context
 

@@ -1909,6 +1909,73 @@ func TestPostgresBusinessAnalysisPhase5BMatchesSQLiteRepresentativeSlice(t *test
 	}
 }
 
+func TestPostgresBusinessAnalysisParticipantDimensionsMatchSQLiteRepresentativeSlice(t *testing.T) {
+	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("GONGCTL_TEST_POSTGRES_URL is not set")
+	}
+
+	ctx := context.Background()
+	pgStore, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer pgStore.Close()
+	resetPostgresTestStore(t, ctx, pgStore)
+	pgServingView := &Store{db: pgStore.DB(), readOnly: true, readOnlyOptions: ReadOnlyOptions{EnforceAllowedColumnBoundary: true, AllowAccountQuery: true}}
+
+	sqlitePath := filepath.Join(t.TempDir(), "gongctl.sqlite")
+	sqliteStore, err := sqlite.Open(ctx, sqlitePath)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	defer sqliteStore.Close()
+
+	seedParticipantDimensionParityFixtures(t, ctx, pgStore, sqliteStore)
+
+	filter := sqlite.BusinessAnalysisFilter{
+		TitleQuery:   "participant parity",
+		AccountQuery: "Example",
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "duration_seconds", Operator: "gte", Values: []string{"1200"}},
+		},
+		Limit: 10,
+	}
+	baseParams := sqlite.BusinessAnalysisDimensionSummaryParams{
+		Filter:          filter,
+		ThemeQuery:      "implementation",
+		Limit:           10,
+		InternalDomains: []string{"tradecentric.com"},
+	}
+
+	for _, tc := range []struct {
+		name              string
+		dimension         string
+		affiliationFilter string
+	}{
+		{name: "affiliation", dimension: "participant_affiliation"},
+		{name: "external domains", dimension: "participant_domain", affiliationFilter: "external"},
+		{name: "internal emails", dimension: "participant_email", affiliationFilter: "internal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := baseParams
+			params.Dimension = tc.dimension
+			params.ParticipantAffiliationFilter = tc.affiliationFilter
+			pgRows, err := pgServingView.SummarizeBusinessAnalysisDimension(ctx, params)
+			if err != nil {
+				t.Fatalf("postgres SummarizeBusinessAnalysisDimension %s: %v", tc.dimension, err)
+			}
+			sqliteRows, err := sqliteStore.SummarizeBusinessAnalysisDimension(ctx, params)
+			if err != nil {
+				t.Fatalf("sqlite SummarizeBusinessAnalysisDimension %s: %v", tc.dimension, err)
+			}
+			if got, want := businessAnalysisDimensionCountMap(pgRows), businessAnalysisDimensionCountMap(sqliteRows); !reflect.DeepEqual(got, want) {
+				t.Fatalf("postgres %s participant dimension counts=%v want sqlite %v\npg rows=%+v\nsqlite rows=%+v", tc.dimension, got, want, pgRows, sqliteRows)
+			}
+		})
+	}
+}
+
 func TestPostgresBusinessAnalysisPersonaBucketsMatchSQLiteRepresentativeSlice(t *testing.T) {
 	databaseURL := os.Getenv("GONGCTL_TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -4386,6 +4453,96 @@ func seedPhase5BBusinessAnalysisFixtures(t *testing.T, ctx context.Context, stor
 	}
 }
 
+func seedParticipantDimensionParityFixtures(t *testing.T, ctx context.Context, stores ...phase5BStore) {
+	t.Helper()
+	calls := []json.RawMessage{
+		participantParityCall(t, "pg-participant-external", "Participant parity external buyer", []any{
+			map[string]any{"id": "buyer", "title": "VP Operations", "emailAddress": "buyer@acme.example"},
+		}),
+		participantParityCall(t, "pg-participant-mixed", "Participant parity mixed buyer seller", []any{
+			map[string]any{"id": "buyer", "title": "Procurement Director", "emailAddress": "buyer@contoso.example"},
+			map[string]any{"id": "seller", "title": "Account Executive", "emailAddress": "rep@tradecentric.com"},
+		}),
+		participantParityCall(t, "pg-participant-internal", "Participant parity internal coaching", []any{
+			map[string]any{"id": "seller", "title": "Account Executive", "emailAddress": "rep@tradecentric.com"},
+		}),
+		participantParityCall(t, "pg-participant-unknown", "Participant parity unknown email", []any{
+			map[string]any{"id": "buyer", "title": "VP Operations"},
+		}),
+	}
+	transcripts := []json.RawMessage{
+		participantParityTranscript(t, "pg-participant-external", "Implementation timeline is important for the buyer."),
+		participantParityTranscript(t, "pg-participant-mixed", "Implementation risk and procurement timing came up."),
+		participantParityTranscript(t, "pg-participant-internal", "Implementation handoff and coaching were discussed."),
+		participantParityTranscript(t, "pg-participant-unknown", "Implementation questions were captured."),
+	}
+	for _, store := range stores {
+		for _, raw := range calls {
+			if _, err := store.UpsertCall(ctx, raw); err != nil {
+				t.Fatalf("upsert participant parity call: %v", err)
+			}
+		}
+		for _, raw := range transcripts {
+			if _, err := store.UpsertTranscript(ctx, raw); err != nil {
+				t.Fatalf("upsert participant parity transcript: %v", err)
+			}
+		}
+	}
+}
+
+func participantParityCall(t *testing.T, id, title string, parties []any) json.RawMessage {
+	t.Helper()
+	return postgresTestRaw(t, map[string]any{
+		"id":       id,
+		"title":    title,
+		"started":  "2026-02-12T15:00:00Z",
+		"duration": 1800,
+		"metaData": map[string]any{
+			"system":    "Zoom",
+			"direction": "Conference",
+			"scope":     "External",
+			"parties":   parties,
+		},
+		"context": []any{
+			map[string]any{
+				"objectType": "Account",
+				"id":         "acct-participant-" + id,
+				"fields": []any{
+					map[string]any{"name": "Name", "value": "Example Participant Account"},
+					map[string]any{"name": "Industry", "value": "Manufacturing"},
+				},
+			},
+			map[string]any{
+				"objectType": "Opportunity",
+				"id":         "opp-participant-" + id,
+				"fields": []any{
+					map[string]any{"name": "StageName", "value": "Discovery"},
+					map[string]any{"name": "Type", "value": "New Business"},
+				},
+			},
+		},
+	})
+}
+
+func participantParityTranscript(t *testing.T, callID, text string) json.RawMessage {
+	t.Helper()
+	return postgresTestRaw(t, map[string]any{
+		"callTranscripts": []any{
+			map[string]any{
+				"callId": callID,
+				"transcript": []any{
+					map[string]any{
+						"speakerId": "buyer",
+						"sentences": []any{
+							map[string]any{"start": 1000, "end": 2000, "text": text},
+						},
+					},
+				},
+			},
+		},
+	})
+}
+
 func postgresTestRaw(t *testing.T, value any) json.RawMessage {
 	t.Helper()
 	raw, err := normalizeJSONValue(value)
@@ -4419,6 +4576,14 @@ func businessAnalysisCallIDs(rows []sqlite.BusinessAnalysisCallRow) []string {
 		out = append(out, row.CallID)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func businessAnalysisDimensionCountMap(rows []sqlite.BusinessAnalysisDimensionRow) map[string]int64 {
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.Value] = row.CallCount
+	}
 	return out
 }
 

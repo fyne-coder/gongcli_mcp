@@ -156,6 +156,10 @@ when the backend has a title and policy allows it. Suppress them with
 `GONGMCP_POLICY_SWITCHES` / `--policy-switches` at launch. This is a
 launch/runtime policy, not an AI governance YAML toggle; see
 [MCP data exposure](docs/mcp-data-exposure.md#call-title-exposure).
+Participant email ranking is also available by default for analyst/business
+workbench dimension-count questions; disable raw participant-email buckets by
+adding `hide_contact_emails` to `GONGMCP_POLICY_SWITCHES` /
+`--policy-switches` and restarting `gongmcp`.
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer
 deployment): `list_unmapped_crm_fields`, `search_crm_field_values`,
