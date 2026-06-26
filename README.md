@@ -159,7 +159,11 @@ launch/runtime policy, not an AI governance YAML toggle; see
 Participant email ranking is also available by default for analyst/business
 workbench dimension-count questions; disable raw participant-email buckets by
 adding `hide_contact_emails` to `GONGMCP_POLICY_SWITCHES` /
-`--policy-switches` and restarting `gongmcp`.
+`--policy-switches` and restarting `gongmcp`. Participant domain and
+affiliation rollups classify internal participants with
+`GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` / `--internal-participant-domains`;
+the built-in fallback is the generic `internal.example` domain, so real
+deployments should set their own comma-separated internal email domains.
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer
 deployment): `list_unmapped_crm_fields`, `search_crm_field_values`,

@@ -20,7 +20,7 @@ func TestSummarizeBusinessAnalysisParticipantDimensions(t *testing.T) {
 		},
 		{
 			"id": "pg-participant-internal", "title": "Participant internal", "started": "2026-02-19T15:00:00Z", "duration": 1800,
-			"parties": []any{map[string]any{"emailAddress": "rep@tradecentric.com"}},
+			"parties": []any{map[string]any{"emailAddress": "rep@internal.example"}},
 		},
 	} {
 		payload, err := json.Marshal(raw)
@@ -37,7 +37,7 @@ func TestSummarizeBusinessAnalysisParticipantDimensions(t *testing.T) {
 		Filter:          filter,
 		Dimension:       "participant_affiliation",
 		Limit:           10,
-		InternalDomains: []string{"tradecentric.com"},
+		InternalDomains: []string{"internal.example"},
 	})
 	if err != nil {
 		t.Fatalf("SummarizeBusinessAnalysisDimension participant_affiliation: %v", err)
@@ -54,7 +54,7 @@ func TestSummarizeBusinessAnalysisParticipantDimensions(t *testing.T) {
 		Filter:                       filter,
 		Dimension:                    "participant_domain",
 		Limit:                        10,
-		InternalDomains:              []string{"tradecentric.com"},
+		InternalDomains:              []string{"internal.example"},
 		ParticipantAffiliationFilter: ParticipantAffiliationExternal,
 	})
 	if err != nil {

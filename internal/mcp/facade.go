@@ -167,7 +167,7 @@ func FacadeOperations() []FacadeOperation {
 				"internal_domains": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Optional internal email domains for participant affiliation classification. Defaults to tradecentric.com when unset.",
+					"description": "Optional internal email domains for participant affiliation classification. Defaults to internal.example when unset.",
 				},
 				"participant_affiliation_filter": map[string]any{
 					"type":        "string",

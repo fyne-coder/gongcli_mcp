@@ -7,13 +7,14 @@ import (
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
-const defaultInternalParticipantDomain = "tradecentric.com"
+const defaultInternalParticipantDomain = "internal.example"
 
 var defaultInternalParticipantDomains = []string{defaultInternalParticipantDomain}
 
 // WithInternalParticipantDomains seeds participant-domain classification with
-// deployment-specific internal email domains. When unset, tradecentric.com is
-// used for participant affiliation in dimension-count workflows.
+// deployment-specific internal email domains. When unset, a generic example
+// domain is used so deployments must configure their own internal domain when
+// they need exact seller/buyer affiliation.
 func WithInternalParticipantDomains(domains []string) ServerOption {
 	return func(s *Server) {
 		s.internalParticipantDomains = normalizeInternalParticipantDomains(domains)

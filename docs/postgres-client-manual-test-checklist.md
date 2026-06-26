@@ -121,6 +121,12 @@ customer-policy switch contract. The reload contract is restart-required: set
 `mcp_server.policy_switch_reload_contract` so a manual tester can confirm
 which posture a deployment is running.
 
+For participant-domain and participant-affiliation rollups, set
+`GONGMCP_INTERNAL_PARTICIPANT_DOMAINS=<comma-separated-company-domains>` or
+`--internal-participant-domains=<csv>` before restart. If unset, the server uses
+the generic `internal.example` fallback, which is suitable for synthetic tests
+but not exact seller/buyer classification in a real tenant.
+
 Expected core tools:
 
 - `gong_status` (routes `status.sync` → `get_sync_status`)

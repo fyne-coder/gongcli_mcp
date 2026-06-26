@@ -36,7 +36,7 @@ do not break when the routed tool changes.
 |---|---|---|
 | `query.calls` | `search_calls_by_filters` (fallback `search_calls`) | Bounded call rows matching a `call_filter` |
 | `query.call_count` | internal `call_count` handler | Exact call count for a bounded filter without row payload |
-| `query.dimension_counts` | internal `dimension_counts` handler | Per-bucket call counts for a backed summarize dimension inside a bounded cohort; supports participant_domain, participant_affiliation, and participant_email ranking by default, with internal_domains (default tradecentric.com), participant_affiliation_filter, and `hide_contact_emails` as the privacy switch for disabling raw email buckets |
+| `query.dimension_counts` | internal `dimension_counts` handler | Per-bucket call counts for a backed summarize dimension inside a bounded cohort; supports participant_domain, participant_affiliation, and participant_email ranking by default, with request-level internal_domains, process-level `GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` / `--internal-participant-domains`, participant_affiliation_filter, and `hide_contact_emails` as the privacy switch for disabling raw email buckets |
 | `query.transcript_segments` | `search_transcript_segments` (fallback `search_transcripts_by_filters`) | Bounded transcript snippets |
 | `query.scorecards` | `list_scorecards` | Scorecard inventory |
 | `query.scorecard_detail` | `get_scorecard` | Scorecard configuration detail |

@@ -18,13 +18,13 @@ func seedParticipantPolicyFixtures(t *testing.T, store *sqlite.Store) {
 		},
 		{
 			"id": "call_participant_internal", "title": "Participant policy seller coaching", "started": "2026-02-19T15:00:00Z", "duration": 1800,
-			"parties": []any{map[string]any{"id": "rep", "emailAddress": "rep@tradecentric.com"}},
+			"parties": []any{map[string]any{"id": "rep", "emailAddress": "rep@internal.example"}},
 		},
 		{
 			"id": "call_participant_mixed", "title": "Participant policy mixed domains", "started": "2026-02-20T15:00:00Z", "duration": 1800,
 			"parties": []any{
 				map[string]any{"id": "buyer", "emailAddress": "buyer@acme.example"},
-				map[string]any{"id": "rep", "emailAddress": "coach@tradecentric.com"},
+				map[string]any{"id": "rep", "emailAddress": "coach@internal.example"},
 			},
 		},
 		{
@@ -68,8 +68,8 @@ func TestFacadeQueryDimensionCountsParticipantDomainExternalRanking(t *testing.T
 		t.Fatalf("dimension=%q want participant_domain", got)
 	}
 	coverage, _ := inner["coverage_summary"].(map[string]any)
-	if domains, _ := coverage["internal_domains"].([]any); len(domains) != 1 || domains[0] != "tradecentric.com" {
-		t.Fatalf("internal_domains=%v want [tradecentric.com]", coverage["internal_domains"])
+	if domains, _ := coverage["internal_domains"].([]any); len(domains) != 1 || domains[0] != "internal.example" {
+		t.Fatalf("internal_domains=%v want [internal.example]", coverage["internal_domains"])
 	}
 	summary, _ := coverage["participant_affiliation_summary"].(map[string]any)
 	if summary["external"] != float64(1) || summary["mixed"] != float64(1) || summary["internal"] != float64(1) || summary["unknown"] != float64(1) {
@@ -157,8 +157,8 @@ func TestFacadeQueryDimensionCountsParticipantEmailRankingAllowed(t *testing.T) 
 		t.Fatalf("expected one internal participant email bucket, got %v", mustJSONForTest(t, rows))
 	}
 	row, _ := rows[0].(map[string]any)
-	if email, _ := row["bucket"].(string); email != "rep@tradecentric.com" {
-		t.Fatalf("bucket=%q want rep@tradecentric.com", email)
+	if email, _ := row["bucket"].(string); email != "rep@internal.example" {
+		t.Fatalf("bucket=%q want rep@internal.example", email)
 	}
 }
 

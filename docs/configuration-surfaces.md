@@ -33,6 +33,7 @@ Claude Desktop JSON, and wrapper scripts:
 | Tool surface | `--tool-preset` | `GONGMCP_TOOL_PRESET` | Named presets such as `business-workbench`, `analyst`, `broad-public-redacted`. |
 | Tool surface | `--tool-allowlist` | `GONGMCP_TOOL_ALLOWLIST` | Comma-separated explicit tool names. |
 | Policy | `--policy-switches` | `GONGMCP_POLICY_SWITCHES` | Comma-separated switches such as `hide_call_titles` or `hide_contact_emails`; restart required. `hide_contact_emails` disables raw participant-email dimension buckets. |
+| Policy | `--internal-participant-domains` | `GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` | Comma-separated internal email domains for participant domain and affiliation classification; restart required. Defaults to generic `internal.example` when unset. |
 | Governance | `--ai-governance-config` | `GONGMCP_AI_GOVERNANCE_CONFIG` | Private AI governance YAML path. |
 | Governance | `--allow-unmatched-ai-governance` | `GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE` | Allows governance entries that do not match the current cache. |
 | Postgres guard | `--enforce-tool-scoped-db-grants` | `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` | Validates scoped reader grants against the selected surface. |

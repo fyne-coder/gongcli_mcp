@@ -4,6 +4,14 @@
 
 ## 0.5.5 - 2026-06-25
 
+- Added Business Workbench `query.call_count` and `query.dimension_counts`
+  intent primitives, including guided repairs for malformed facade filters and
+  explicit `query.calls` preview-limit metadata.
+- Added participant domain, affiliation, and email dimension rollups with
+  configurable internal participant domains and `hide_contact_emails` policy
+  suppression for raw email buckets.
+- Added Business Workbench host docs and Proxmox OAuth lab configuration
+  coverage for the new query operations.
 - Added governed `filter.dimension_filters` support for Business Workbench
   business-analysis tools, starting with reviewed dimensions such as
   `account_revenue_range`, so ICP-style segmentation can be expressed without

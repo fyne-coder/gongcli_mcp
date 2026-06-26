@@ -1945,7 +1945,7 @@ func TestPostgresBusinessAnalysisParticipantDimensionsMatchSQLiteRepresentativeS
 		Filter:          filter,
 		ThemeQuery:      "implementation",
 		Limit:           10,
-		InternalDomains: []string{"tradecentric.com"},
+		InternalDomains: []string{"internal.example"},
 	}
 
 	for _, tc := range []struct {
@@ -4461,10 +4461,10 @@ func seedParticipantDimensionParityFixtures(t *testing.T, ctx context.Context, s
 		}),
 		participantParityCall(t, "pg-participant-mixed", "Participant parity mixed buyer seller", []any{
 			map[string]any{"id": "buyer", "title": "Procurement Director", "emailAddress": "buyer@contoso.example"},
-			map[string]any{"id": "seller", "title": "Account Executive", "emailAddress": "rep@tradecentric.com"},
+			map[string]any{"id": "seller", "title": "Account Executive", "emailAddress": "rep@internal.example"},
 		}),
 		participantParityCall(t, "pg-participant-internal", "Participant parity internal coaching", []any{
-			map[string]any{"id": "seller", "title": "Account Executive", "emailAddress": "rep@tradecentric.com"},
+			map[string]any{"id": "seller", "title": "Account Executive", "emailAddress": "rep@internal.example"},
 		}),
 		participantParityCall(t, "pg-participant-unknown", "Participant parity unknown email", []any{
 			map[string]any{"id": "buyer", "title": "VP Operations"},

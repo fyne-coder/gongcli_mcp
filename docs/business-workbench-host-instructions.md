@@ -222,7 +222,11 @@ email filters are predicates only. `query.dimension_counts` can rank
 `participant_email` buckets by default for analyst/business workbench use; an
 operator can disable raw participant-email buckets with
 `GONGMCP_POLICY_SWITCHES=hide_contact_emails` or
-`--policy-switches hide_contact_emails`.
+`--policy-switches hide_contact_emails`. Participant-domain and
+participant-affiliation counts use request-level `internal_domains` when
+provided, otherwise the server-level
+`GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` / `--internal-participant-domains`
+setting, otherwise the generic `internal.example` fallback.
 
 ## ICP Context
 

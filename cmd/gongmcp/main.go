@@ -38,6 +38,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	toolAllowlist := flags.String("tool-allowlist", "", "Comma-separated MCP tool allowlist; defaults to GONGMCP_TOOL_ALLOWLIST when no tool preset is set; one of preset or allowlist is required for HTTP")
 	toolPreset := flags.String("tool-preset", "", "Named MCP tool preset: business-workbench (recommended client surface; alias of analyst-facade), analyst-facade, business-pilot, operator-smoke, analyst-core, analyst-business-core, analyst, governance-search, redacted-all-readonly (internal manual testing only), broad-public-redacted (customer-test broad surface; same fail-closed gates as redacted-all-readonly), all-readonly; defaults to GONGMCP_TOOL_PRESET")
 	policySwitchesFlag := flags.String("policy-switches", "", "Comma-separated customer-policy switches for the broad-public-redacted profile (hide_account_names, hide_call_titles, hide_raw_call_ids, hide_speaker_ids, hide_contact_names, hide_contact_emails, hide_opportunity_names, hide_loss_reasons, hide_crm_value_snippets); reload contract is restart_required; defaults to GONGMCP_POLICY_SWITCHES")
+	internalParticipantDomainsFlag := flags.String("internal-participant-domains", "", "Comma-separated internal email domains for participant_domain/participant_affiliation classification; defaults to GONGMCP_INTERNAL_PARTICIPANT_DOMAINS or a generic example domain")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
@@ -274,6 +275,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mcp.WithFacadeRoutedToolAllowlist(facadeRoutedAllowlist),
 		mcp.WithLimitPolicy(limitPolicy),
 		mcp.WithTranscriptEvidenceProvenance(provenance),
+		mcp.WithInternalParticipantDomains(parseCommaList(firstNonEmpty(*internalParticipantDomainsFlag, os.Getenv("GONGMCP_INTERNAL_PARTICIPANT_DOMAINS")))),
 		mcp.WithRuntimeInfo(mcp.RuntimeInfo{
 			Commit:       buildInfo.Commit,
 			BuildDate:    buildInfo.Date,
@@ -963,6 +965,27 @@ func parseAllowedOrigins(flagValue, envValue string) (map[string]struct{}, error
 		return nil, fmt.Errorf("no valid allowed origins provided")
 	}
 	return out, nil
+}
+
+func parseCommaList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, piece := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(piece)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func normalizeOrigin(origin string) (string, error) {

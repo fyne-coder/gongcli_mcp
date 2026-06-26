@@ -416,6 +416,11 @@ participant-email buckets in dimension-count outputs. Change policy switches by
 restarting or redeploying `gongmcp`; there is no hot reload for this setting
 today.
 
+`GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` is also launch-time configuration. Set
+it to a comma-separated list of company-owned email domains when using
+participant-domain or participant-affiliation counts; otherwise the server uses
+the generic `internal.example` fallback.
+
 The example binds the host port to `127.0.0.1` so only a local customer proxy,
 gateway, or tunnel can reach it. Do not change this to `-p 8080:8080` unless
 the host firewall, private network, and customer auth boundary are already in

@@ -59,6 +59,19 @@ func TestRunRequiresDBFlag(t *testing.T) {
 	}
 }
 
+func TestParseCommaListTrimsSkipsEmptyAndDedupes(t *testing.T) {
+	t.Parallel()
+
+	got := parseCommaList(" internal.example, , buyer.example,internal.example ")
+	want := []string{"internal.example", "buyer.example"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("parseCommaList=%v want %v", got, want)
+	}
+	if got := parseCommaList(" \t "); got != nil {
+		t.Fatalf("parseCommaList blank=%v want nil", got)
+	}
+}
+
 func TestPostgresToolAllowlistDefaultsToSupportedSlice(t *testing.T) {
 	allowlist, err := postgresToolAllowlist(nil, false, "")
 	if err != nil {

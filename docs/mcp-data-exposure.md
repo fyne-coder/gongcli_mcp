@@ -293,9 +293,10 @@ Required filter contract:
   `query.dimension_counts` also supports participant-policy
   dimensions (`participant_domain`, `participant_affiliation`, and
   `participant_email` ranking by default for this lab) using cached party email
-  domains, configurable `internal_domains` (default `tradecentric.com`),
-  optional `include_participant_emails` as an explicit acknowledgement, and
-  optional
+  domains, request-level `internal_domains`, process-level
+  `GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` / `--internal-participant-domains`
+  (default `internal.example`), optional `include_participant_emails` as an
+  explicit acknowledgement, and optional
   `participant_affiliation_filter` (`external` for buyer/marketing rollups,
   `internal` for seller coaching). Participant affiliation is distinct from
   utterance-level `speaker_role_filter`. Operators can disable raw email
