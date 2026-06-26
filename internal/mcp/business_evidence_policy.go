@@ -49,7 +49,7 @@ func businessEvidenceTypeForOperation(operation string, broadDiscovery bool) str
 		return evidenceTypeDimensionRollup
 	case "extract_theme_quotes", "search_quotes_in_cohort", "rank_quotes_for_sales_use", "build_quote_pack",
 		"generate_sales_hooks_from_themes", "generate_outreach_sequence_inputs", "build_theme_brief",
-		OpQuestionAnswer, OpProspectQuestionAnswer, OpThemeIntelReport, OpEvidenceQuotePackBuild, OpEvidenceQuotesSearch, OpEvidenceCallDrilldown:
+		OpQuestionAnswer, OpProspectQuestionAnswer, OpThemeIntelReport, OpAnalyzeDiscoverySummary, OpEvidenceQuotePackBuild, OpEvidenceQuotesSearch, OpEvidenceCallDrilldown:
 		return evidenceTypeTranscriptQuote
 	default:
 		return ""

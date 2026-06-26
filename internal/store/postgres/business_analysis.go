@@ -578,6 +578,9 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params s
 	if err != nil {
 		return nil, err
 	}
+	if _, ok := sqliteParticipantPolicyDimensionCanonical(params.Dimension); ok {
+		return s.summarizeBusinessAnalysisParticipantDimension(ctx, filter, params.Dimension, params.ThemeQuery, params.Limit, params.InternalDomains, params.ParticipantAffiliationFilter)
+	}
 	excludeBucketsJSON, err := postgresBusinessAnalysisExcludeBucketsArg(filter)
 	if err != nil {
 		return nil, err
@@ -1082,6 +1085,8 @@ func postgresBusinessAnalysisDimension(value string) (string, error) {
 		return "won_lost", nil
 	case "loss_reason":
 		return "loss_reason", nil
+	case "participant_domain", "domain", "email_domain", "participant_email", "participant_affiliation", "participant_affiliation_class":
+		return "", fmt.Errorf("participant dimensions are handled by the participant policy path")
 	default:
 		return "", fmt.Errorf("unsupported business-analysis dimension %q", value)
 	}

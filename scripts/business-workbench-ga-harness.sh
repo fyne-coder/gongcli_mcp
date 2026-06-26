@@ -89,6 +89,72 @@ echo "[business-workbench-ga] artifact dir: $ARTIFACT_DIR" >&2
 mcp_call tools/list '{}' >"$ARTIFACT_DIR/tools-list.json"
 save_tool status.json gong_status '{}'
 save_tool capabilities.json gong_discover_capabilities '{}'
+save_tool capabilities-full.json gong_discover_capabilities '{"detail":"full"}'
+
+save_tool call-count-long-calls.json gong_query "$(jq -n '{
+  operation:"query.call_count",
+  arguments:{
+    filter:{
+      dimension_filters:[{
+        dimension:"duration_seconds",
+        operator:"gte",
+        values:["300"]
+      }]
+    }
+  }
+}')"
+
+save_tool business-discovery-summary.json gong_analyze "$(jq -n '{
+  operation:"analyze.discovery_summary",
+  arguments:{
+    filter:{title_query:"business discovery"},
+    field_profile:"limited",
+    limit:25
+  }
+}')"
+
+business_discovery_cohort_token="$(jq -r '.result.content[0].text' "$ARTIFACT_DIR/business-discovery-summary.json" \
+  | jq -r '.result.cohort_token // .cohort_token // empty')"
+if [[ -z "$business_discovery_cohort_token" ]]; then
+  echo "business discovery summary returned no cohort_token" >&2
+  exit 1
+fi
+
+save_tool business-discovery-cohort-quotes.json gong_get_evidence "$(jq -n --arg cohort_token "$business_discovery_cohort_token" '{
+  operation:"evidence.quotes.search",
+  arguments:{
+    cohort_token:$cohort_token,
+    theme_query:"pricing",
+    field_profile:"limited",
+    limit:5
+  }
+}')"
+
+business_discovery_call_refs="$(jq -r '.result.content[0].text' "$ARTIFACT_DIR/business-discovery-summary.json" \
+  | jq -c '(.result // .) as $r
+    | [
+        ($r.seeded_preview // [])[]?.quotes?[]?.call_ref?,
+        ($r.theme_summaries // [])[]?.quotes?[]?.call_ref?
+      ]
+    | map(select(. != null and . != ""))
+    | unique
+    | .[:15]')"
+if [[ "$business_discovery_call_refs" == "[]" ]]; then
+  save_tool business-discovery-cohort.json gong_query "$(jq -n '{
+    operation:"query.calls",
+    arguments:{
+      filter:{from_date:"2026-04-01",to_date:"2026-05-08",title_query:"business discovery",transcript_status:"present"},
+      field_profile:"limited",
+      limit:25
+    }
+  }')"
+  business_discovery_call_refs="$(jq -r '.result.content[0].text' "$ARTIFACT_DIR/business-discovery-cohort.json" \
+    | jq -c '(.result.results // []) | map(.call_ref) | map(select(. != null and . != ""))[:15]')"
+fi
+if [[ "$business_discovery_call_refs" == "[]" ]]; then
+  echo "business discovery flow returned no call_refs for highlight follow-up" >&2
+  exit 1
+fi
 
 save_tool broad-question.json gong_analyze "$(jq -n '{
   operation:"question.answer",
@@ -110,22 +176,6 @@ save_tool seedless-discovery.json gong_analyze "$(jq -n '{
     limit:50
   }
 }')"
-
-save_tool business-discovery-cohort.json gong_query "$(jq -n '{
-  operation:"query.calls",
-  arguments:{
-    filter:{from_date:"2026-04-01",to_date:"2026-05-08",title_query:"business discovery",transcript_status:"present"},
-    field_profile:"limited",
-    limit:25
-  }
-}')"
-
-business_discovery_call_refs="$(jq -r '.result.content[0].text' "$ARTIFACT_DIR/business-discovery-cohort.json" \
-  | jq -c '(.result.results // []) | map(.call_ref) | map(select(. != null and . != ""))[:15]')"
-if [[ "$business_discovery_call_refs" == "[]" ]]; then
-  echo "business discovery cohort returned no call_refs" >&2
-  exit 1
-fi
 
 save_tool business-discovery-highlights.json gong_get_evidence "$(jq -n --argjson call_refs "$business_discovery_call_refs" '{
   operation:"evidence.highlights.list",
@@ -298,6 +348,66 @@ def case(name, obj, required_paths=(), allowed_status=(), degraded_status=(), fo
     return {"name": name, "grade": grade, "status": status, "problems": problems}
 
 cases = []
+compact_caps = load("capabilities.json")
+compact_grade = "PASS"
+compact_problems = []
+if isinstance(compact_caps, dict):
+    if compact_caps.get("discovery_detail") != "compact":
+        compact_grade = "FAIL"
+        compact_problems.append(f"discovery_detail={compact_caps.get('discovery_detail')!r} want compact")
+    for entry in compact_caps.get("operations") or []:
+        if isinstance(entry, dict) and "input_schema" in entry:
+            compact_grade = "FAIL"
+            compact_problems.append(f"compact discovery should omit input_schema for {entry.get('operation')}")
+else:
+    compact_grade = "FAIL"
+    compact_problems.append("expected object payload")
+cases.append({"name": "compact_capabilities_discovery", "grade": compact_grade, "status": compact_caps.get("discovery_detail") if isinstance(compact_caps, dict) else None, "problems": compact_problems})
+
+full_caps = load("capabilities-full.json")
+full_grade = "PASS"
+full_problems = []
+if isinstance(full_caps, dict):
+    if full_caps.get("discovery_detail") != "full":
+        full_grade = "FAIL"
+        full_problems.append(f"discovery_detail={full_caps.get('discovery_detail')!r} want full")
+    call_count_schema = False
+    for entry in full_caps.get("operations") or []:
+        if isinstance(entry, dict) and entry.get("operation") == "query.call_count":
+            call_count_schema = "input_schema" in entry
+            break
+    if not call_count_schema:
+        full_grade = "FAIL"
+        full_problems.append("full discovery missing input_schema for query.call_count")
+else:
+    full_grade = "FAIL"
+    full_problems.append("expected object payload")
+cases.append({"name": "full_capabilities_discovery", "grade": full_grade, "status": full_caps.get("discovery_detail") if isinstance(full_caps, dict) else None, "problems": full_problems})
+
+cases.append(case("call_count_long_calls", load("call-count-long-calls.json"),
+    required_paths=("call_count","cohort_token","coverage_summary","answer_contract"),
+    allowed_status=("cache_derived",), forbid=False))
+
+cases.append(case("business_discovery_summary", load("business-discovery-summary.json"),
+    required_paths=("cohort_token","coverage_summary","answer_contract","evidence_policy","suggested_seed_topics"),
+    allowed_status=("directional_discovery_preview","discovery_summary_ready","directional_seed_guidance","needs_theme_seed"),
+    degraded_status=("needs_theme_seed","directional_seed_guidance")))
+
+cohort_quotes = load("business-discovery-cohort-quotes.json")
+cohort_quotes_grade = "PASS"
+cohort_quotes_problems = []
+if not isinstance(cohort_quotes, dict):
+    cohort_quotes_grade = "FAIL"
+    cohort_quotes_problems.append("expected object payload")
+else:
+    if "cohort_token" not in cohort_quotes and "quotes" not in cohort_quotes:
+        cohort_quotes_grade = "FAIL"
+        cohort_quotes_problems.append("cohort_token quote follow-up missing quotes or cohort_token echo")
+    if "evidence_policy" not in cohort_quotes:
+        cohort_quotes_grade = "FAIL"
+        cohort_quotes_problems.append("missing evidence_policy on cohort_token quote follow-up")
+cases.append({"name": "business_discovery_cohort_token_quotes", "grade": cohort_quotes_grade, "status": cohort_quotes.get("status") if isinstance(cohort_quotes, dict) else None, "problems": cohort_quotes_problems})
+
 cases.append(case("broad_business_theme_prompt", load("broad-question.json"),
     required_paths=("evidence_policy","evidence_policy.host_display_policy","answer_contract","dimension_readiness","data_readiness_caveats"),
     allowed_status=("needs_theme_seed","ai_brief_theme_candidates_ready")))
@@ -305,9 +415,10 @@ cases.append(case("seedless_discovery", load("seedless-discovery.json"),
     required_paths=("evidence_policy","answer_contract"),
     allowed_status=("needs_theme_seed","ai_brief_candidate_terms","candidate_terms_only"),
     degraded_status=("candidate_terms_only",)))
-cases.append(case("business_discovery_title_filter", load("business-discovery-cohort.json"),
-    required_paths=("results","coverage_summary","evidence_policy"),
-    allowed_status=("cache_derived","ready","ok"), forbid=False))
+cases.append(case("business_discovery_title_filter", load("business-discovery-summary.json"),
+    required_paths=("coverage_summary","evidence_policy","cohort_token"),
+    allowed_status=("directional_discovery_preview","discovery_summary_ready","directional_seed_guidance","needs_theme_seed"),
+    degraded_status=("needs_theme_seed","directional_seed_guidance"), forbid=False))
 
 highlights = load("business-discovery-highlights.json")
 highlights_grade = "PASS"

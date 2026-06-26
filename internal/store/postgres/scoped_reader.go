@@ -203,6 +203,7 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 		"build_call_cohort":    businessAnalysisCoreFunctions,
 		"build_quote_pack":     businessAnalysisEvidenceFunctions,
 		"build_theme_brief":    businessAnalysisEvidenceFunctions,
+		"call_count":           businessAnalysisCoreFunctions,
 		"compare_call_cohorts": businessAnalysisCoreFunctions,
 		"compare_lifecycle_crm_fields": {
 			"public.gongmcp_compare_lifecycle_crm_fields(text, text, text, integer)",
@@ -215,6 +216,8 @@ func FunctionSignaturesForTools(allowlist []string) []string {
 			"public.gongmcp_crm_field_population_matrix(text, text, integer)",
 		},
 		"diagnose_attribution_coverage":     businessAnalysisCoreFunctions,
+		"dimension_counts":                  businessAnalysisDimensionFunctions,
+		"discovery_summary":                 businessAnalysisEvidenceFunctions,
 		"discover_themes_in_cohort":         businessAnalysisThemeDiscoveryFunctions,
 		"explain_analysis_limitations":      businessAnalysisCoreFunctions,
 		"extract_theme_quotes":              businessAnalysisEvidenceFunctions,
@@ -560,10 +563,13 @@ func RedactedAllReadonlyScopedColumns(allowlist []string) bool {
 
 func facadeOnlyScopedReaderTools() map[string]struct{} {
 	return map[string]struct{}{
+		"call_count":                {},
+		"dimension_counts":          {},
 		"list_call_ai_highlights":   {},
 		"question_answer":           {},
 		"prospect_question_answer":  {},
 		"call_drilldown":            {},
+		"discovery_summary":         {},
 		"theme_intelligence_report": {},
 		"extract_buyer_questions":   {},
 		"extract_objection_signals": {},

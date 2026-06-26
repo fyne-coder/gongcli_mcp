@@ -191,6 +191,7 @@ LAB_TOOL_PRESET=redacted-all-readonly \
 LAB_GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1 \
 LAB_GONGMCP_POSTGRES_REDACTED_SERVING_DB=1 \
 LAB_GONGMCP_AI_GOVERNANCE_CONFIG_HOST=/srv/gongctl-governed/private/ai-governance.yaml \
+LAB_GONGMCP_INTERNAL_PARTICIPANT_DOMAINS=internal.example \
   deploy/lab-auth/scripts/lab-up.sh
 ```
 
@@ -204,8 +205,15 @@ LAB_GONG_DATABASE_URL='postgres://...' \
 LAB_TOOL_PRESET=business-workbench \
 LAB_DEPLOY_MODE=app-only \
 LAB_GONGMCP_DEPLOYMENT_ID=lab-business-workbench-$(date -u +%Y%m%dT%H%M%SZ) \
+LAB_GONGMCP_INTERNAL_PARTICIPANT_DOMAINS=internal.example \
   deploy/lab-auth/scripts/lab-up.sh
 ```
+
+Set `LAB_GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` to the lab tenant's
+comma-separated internal email domains when testing participant-domain or
+participant-affiliation counts. The value is written into the remote lab
+`.env` as `GONGMCP_INTERNAL_PARTICIPANT_DOMAINS`; the source-controlled example
+uses `internal.example`.
 
 Use a full deploy instead when changing `LAB_PUBLIC_BASE_URL`, approved lab
 users, Keycloak policies, proxy settings, or the auth stack. App-only mode

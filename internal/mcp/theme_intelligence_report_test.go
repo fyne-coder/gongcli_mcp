@@ -1114,6 +1114,18 @@ func TestFacadeAnalyzeThemeIntelReportSeedlessUsesAIBusinessBriefs(t *testing.T)
 	if !strings.Contains(candidates, "bigcommerce migration") {
 		t.Fatalf("AI brief bootstrap should include dynamic non-seed phrase bigcommerce migration: %s", candidates)
 	}
+	suggested := strings.ToLower(mustJSONText(t, inner["suggested_seed_topics"]))
+	if !strings.Contains(suggested, "pricing") || !strings.Contains(suggested, "manual order entry") {
+		t.Fatalf("seedless report missing suggested_seed_topics: %s", suggested)
+	}
+	previewText := mustJSONText(t, inner["seeded_preview"])
+	if previewText == "" {
+		t.Fatalf("seedless report should include seeded_preview field")
+	}
+	contract := strings.ToLower(mustJSONText(t, inner["answer_contract"]))
+	if strings.Contains(contract, "buyer-validated") && !strings.Contains(contract, "not final") {
+		t.Fatalf("seedless answer_contract must not label candidates as final buyer-validated themes: %s", contract)
+	}
 	aiEvidence, _ := inner["ai_business_brief_evidence_by_theme"].(map[string]any)
 	if len(aiEvidence) == 0 {
 		t.Fatalf("ai_business_brief_evidence_by_theme empty: %v", inner)

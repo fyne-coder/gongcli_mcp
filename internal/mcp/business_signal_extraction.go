@@ -280,6 +280,7 @@ func businessSignalTopicAliases(operation string, topic string) []string {
 		"budget":                {"pricing", "price", "cost", "investment", "funding"},
 		"roi":                   {"ROI", "return on investment", "business case", "value", "payback", "justify"},
 		"punchout":              {"punchout integration", "punch out", "eprocurement", "Coupa", "Ariba", "Jaggaer"},
+		"manual order entry":    {"manual process", "manual order", "order entry", "manual data entry"},
 		"supplier onboarding":   {"supplier enablement", "vendor onboarding", "trading relationship", "supplier setup", "supplier adoption"},
 		"timeline":              {"implementation timeline", "go live", "launch date", "rollout", "schedule"},
 		"support":               {"customer support", "post implementation support", "training", "enablement", "help desk"},

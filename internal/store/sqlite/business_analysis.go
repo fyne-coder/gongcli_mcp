@@ -272,10 +272,12 @@ type BusinessAnalysisEvidenceRow struct {
 }
 
 type BusinessAnalysisDimensionSummaryParams struct {
-	Filter     BusinessAnalysisFilter
-	Dimension  string
-	ThemeQuery string
-	Limit      int
+	Filter                       BusinessAnalysisFilter
+	Dimension                    string
+	ThemeQuery                   string
+	Limit                        int
+	InternalDomains              []string
+	ParticipantAffiliationFilter string
 }
 
 type BusinessAnalysisDimensionRow struct {
@@ -987,21 +989,18 @@ func (s *Store) SummarizeBusinessAnalysisDimension(ctx context.Context, params B
 	if err != nil {
 		return nil, err
 	}
+	from, where, args, err := businessAnalysisCallFromWhere(filter, true)
+	if err != nil {
+		return nil, err
+	}
 	if themeQuery := strings.TrimSpace(params.ThemeQuery); themeQuery != "" {
-		var err error
-		from, where, args, err := businessAnalysisCallFromWhere(filter, true)
-		if err != nil {
-			return nil, err
-		}
 		where, args, err = businessAnalysisAppendTranscriptQueryFilter(where, args, themeQuery, "theme_query")
 		if err != nil {
 			return nil, err
 		}
-		return s.summarizeBusinessAnalysisDimension(ctx, filter, params.Dimension, params.Limit, from, where, args)
 	}
-	from, where, args, err := businessAnalysisCallFromWhere(filter, true)
-	if err != nil {
-		return nil, err
+	if _, ok := participantPolicyDimensionCanonical(params.Dimension); ok {
+		return s.summarizeBusinessAnalysisParticipantDimension(ctx, filter, params.Dimension, params.Limit, params.InternalDomains, params.ParticipantAffiliationFilter, from, where, args)
 	}
 	return s.summarizeBusinessAnalysisDimension(ctx, filter, params.Dimension, params.Limit, from, where, args)
 }

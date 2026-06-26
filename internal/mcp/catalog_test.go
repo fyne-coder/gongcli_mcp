@@ -114,11 +114,14 @@ func TestFacadeHiddenRoutedToolsDerivedFromRegistry(t *testing.T) {
 	t.Parallel()
 
 	want := []string{
+		internalRoutedToolDiscoverySummary,
 		internalRoutedToolCallDrilldown,
 		internalRoutedToolListAIHighlights,
 		internalRoutedToolBuyerQuestions,
 		internalRoutedToolObjectionSignals,
 		internalRoutedToolProspectQuestionAnswer,
+		internalRoutedToolCallCount,
+		internalRoutedToolDimensionCounts,
 		internalRoutedToolQuestionAnswer,
 		internalRoutedToolThemeIntelReport,
 	}

@@ -118,6 +118,7 @@ type businessAnalysisArgs struct {
 	FilterA                 callFilter `json:"filter_a"`
 	FilterB                 callFilter `json:"filter_b"`
 	CohortID                string     `json:"cohort_id"`
+	CohortToken             string     `json:"cohort_token"`
 	CohortIDA               string     `json:"cohort_id_a"`
 	CohortIDB               string     `json:"cohort_id_b"`
 	Query                   string     `json:"query"`
@@ -140,6 +141,7 @@ type businessAnalysisResponse struct {
 	Tool              string                                `json:"tool"`
 	Status            string                                `json:"status"`
 	CohortID          string                                `json:"cohort_id,omitempty"`
+	CohortToken       string                                `json:"cohort_token,omitempty"`
 	CohortIDA         string                                `json:"cohort_id_a,omitempty"`
 	CohortIDB         string                                `json:"cohort_id_b,omitempty"`
 	NormalizedFilter  callFilter                            `json:"normalized_filter,omitempty"`
@@ -158,6 +160,7 @@ type businessAnalysisResponse struct {
 	DataCaveats       []string                              `json:"data_readiness_caveats,omitempty"`
 	DimensionReady    map[string]string                     `json:"dimension_readiness,omitempty"`
 	AnswerContract    []string                              `json:"answer_contract,omitempty"`
+	ResultScope       map[string]any                        `json:"result_scope,omitempty"`
 	Limit             int                                   `json:"limit"`
 	Count             int                                   `json:"count"`
 	Coverage          map[string]any                        `json:"coverage_summary,omitempty"`
@@ -263,6 +266,7 @@ func businessAnalysisInputSchema(policy LimitPolicy) map[string]any {
 		"filter_a":                  filter,
 		"filter_b":                  filter,
 		"cohort_id":                 map[string]any{"type": "string"},
+		"cohort_token":              cohortTokenSchemaField(),
 		"cohort_id_a":               map[string]any{"type": "string"},
 		"cohort_id_b":               map[string]any{"type": "string"},
 		"query":                     map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength},
@@ -353,7 +357,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if s.restrictedAccountQueryAny(accountQueries) {
 		return toolCallResult{}, restrictedAccountQueryError()
 	}
-	normalized, err := normalizeCallFilter(args.Filter)
+	normalized, err := resolveCohortFilter(args.Filter, args.CohortToken)
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -413,12 +417,12 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 	if params.Name == "list_call_cohorts" {
 		response.Status = "stateless"
 		response.Warnings = append(response.Warnings, "cohort_state_not_persisted: pass normalized_filter between calls; cohort_id is deterministic convenience only")
-		return newToolResult(response)
+		return finalizeBusinessAnalysisResponse(response)
 	}
 	if s.store == nil {
 		response.Status = "store_unavailable"
 		response.Warnings = append(response.Warnings, "store_unavailable")
-		return newToolResult(response)
+		return finalizeBusinessAnalysisResponse(response)
 	}
 
 	if params.Name == "compare_call_cohorts" {
@@ -449,7 +453,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 			"filter_a_summary": a.Summary,
 			"filter_b_summary": b.Summary,
 		}
-		return newToolResult(response)
+		return finalizeBusinessAnalysisResponse(response)
 	}
 
 	cohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
@@ -468,6 +472,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
 	case "search_calls_by_filters":
 		response.Results = s.businessAnalysisCallRows(cohort.Rows, args)
+		response.ResultScope = businessAnalysisCallSearchResultScope(limit, int(cohort.Summary.CallCount), len(response.Results))
 	case "summarize_calls_by_filters":
 		dimension := firstNonBlank(args.Dimension, "lifecycle")
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, dimension, "", limit)
@@ -585,6 +590,10 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Quotes = quotes
 		if params.Name == "build_quote_pack" && response.FieldProfile != "" {
 			response.Warnings = append(response.Warnings, "field_profile_controls_structured_quote_metadata_not_names_inside_quote_text")
+		}
+		if len(quotes) == 0 && response.Count > 0 && strings.TrimSpace(themeQuery) != "" {
+			response.Warnings = append(response.Warnings, "no_quote_evidence_for_theme: theme_query matched no transcript snippets in the cohort")
+			response.Refinements = append(response.Refinements, quoteEvidenceNoResultsFollowups(themeQuery)...)
 		}
 	case "compare_theme_outcomes":
 		summaries, err := s.businessAnalysisDimension(ctx, normalized, "won_lost", themeQuery, limit)
@@ -704,15 +713,144 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 		response.Warnings = append(response.Warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text: field_profile=limited suppresses structured metadata, but Gong AI brief/keyPoint/highlight text may still contain names or customer terms")
 	}
 	response.AnswerContract = businessEvidenceAnswerContract(response.EvidenceType)
+	if params.Name == "search_calls_by_filters" {
+		response.AnswerContract = append(response.AnswerContract,
+			"For query.calls/search_calls_by_filters, count and coverage_summary.call_count describe the full matched cohort; results are only the bounded row preview.",
+			"For count-only questions, prefer query.call_count instead of explaining the preview limit.",
+		)
+	}
+	return finalizeBusinessAnalysisResponse(response)
+}
+
+func businessAnalysisCallSearchResultScope(limit int, matchedCount int, returnedRows int) map[string]any {
+	return map[string]any{
+		"matched_count_field":  "count",
+		"coverage_count_field": "coverage_summary.call_count",
+		"result_rows_field":    "results",
+		"limit_field":          "limit",
+		"limit_applies_to":     "returned_rows_only",
+		"matched_count":        matchedCount,
+		"returned_rows":        returnedRows,
+		"limit":                limit,
+		"guidance":             "limit caps returned preview rows only; it does not cap count or coverage_summary.call_count. Use query.call_count for scalar count questions.",
+	}
+}
+
+func finalizeBusinessAnalysisResponse(response businessAnalysisResponse) (toolCallResult, error) {
+	if response.Tool != "compare_call_cohorts" && response.Tool != "list_call_cohorts" && cohortFilterProvided(response.NormalizedFilter) {
+		id, token, err := attachCohortHandoff(response.NormalizedFilter, response.CohortID)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		response.CohortID = id
+		response.CohortToken = token
+	}
 	return newToolResult(response)
 }
 
+func (s *Server) businessAnalysisFilteredCallRows(rows []sqlite.BusinessAnalysisCallRow) []sqlite.BusinessAnalysisCallRow {
+	out := make([]sqlite.BusinessAnalysisCallRow, 0, len(rows))
+	for _, row := range rows {
+		if s.isSuppressedCall(row.CallID) {
+			continue
+		}
+		if s.blocklistMatchesBusinessAnalysisCall(row) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func businessAnalysisSummaryFromCallRows(rows []sqlite.BusinessAnalysisCallRow) sqlite.BusinessAnalysisCohortSummary {
+	var summary sqlite.BusinessAnalysisCohortSummary
+	summary.CallCount = int64(len(rows))
+	if len(rows) == 0 {
+		summary.CacheDerivedNotLLMClaims = true
+		return summary
+	}
+	for _, row := range rows {
+		if strings.EqualFold(strings.TrimSpace(row.TranscriptStatus), "present") {
+			summary.TranscriptCount++
+		} else if strings.EqualFold(strings.TrimSpace(row.TranscriptStatus), "missing") {
+			summary.MissingTranscriptCount++
+		}
+		if strings.TrimSpace(row.AccountIndustry) != "" {
+			summary.AccountIndustryCount++
+		}
+		if strings.TrimSpace(row.OpportunityStage) != "" {
+			summary.OpportunityStageCount++
+		}
+		if row.OpportunityCount > 0 {
+			summary.OpportunityCallCount++
+		}
+		if row.AccountCount > 0 {
+			summary.AccountCallCount++
+		}
+		if strings.EqualFold(strings.TrimSpace(row.Scope), "External") {
+			summary.ExternalCallCount++
+		}
+		if strings.TrimSpace(row.PersonTitleStatus) == "available" {
+			summary.ParticipantTitleCallCount++
+		}
+		if strings.TrimSpace(row.PersonTitleStatus) != "" {
+			summary.ParticipantCallCount++
+		}
+		if started := strings.TrimSpace(row.StartedAt); started != "" {
+			if summary.EarliestCallAt == "" || started < summary.EarliestCallAt {
+				summary.EarliestCallAt = started
+			}
+			if summary.LatestCallAt == "" || started > summary.LatestCallAt {
+				summary.LatestCallAt = started
+			}
+		}
+		summary.TotalDurationSeconds += row.DurationSeconds
+	}
+	summary.TranscriptCoverageRate = businessAnalysisRate(summary.TranscriptCount, summary.CallCount)
+	summary.ParticipantTitleRate = businessAnalysisRate(summary.ParticipantTitleCallCount, summary.CallCount)
+	summary.AverageDurationSeconds = float64(summary.TotalDurationSeconds) / float64(summary.CallCount)
+	summary.CRMOutcomeCoverageHint = businessAnalysisCoverageHint(summary.OpportunityStageCount, summary.CallCount, "opportunity stage")
+	summary.ParticipantCoverageHint = businessAnalysisCoverageHint(summary.ParticipantTitleCallCount, summary.CallCount, "participant title")
+	summary.IndustryCoverageHint = businessAnalysisCoverageHint(summary.AccountIndustryCount, summary.CallCount, "account industry")
+	summary.CacheDerivedNotLLMClaims = true
+	return summary
+}
+
+func businessAnalysisRate(part, total int64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(part) / float64(total)
+}
+
+func businessAnalysisCoverageHint(populated, total int64, label string) string {
+	switch {
+	case total == 0:
+		return label + " unavailable: no matched calls"
+	case populated == 0:
+		return label + " missing for matched cohort"
+	case populated == total:
+		return label + " populated for matched cohort"
+	default:
+		return fmt.Sprintf("%s partially populated: %d/%d calls", label, populated, total)
+	}
+}
+
 func (s *Server) businessAnalysisDimension(ctx context.Context, filter callFilter, dimension string, themeQuery string, limit int) ([]sqlite.BusinessAnalysisDimensionRow, error) {
+	if participantPolicyDimensionCanonical(dimension) == "participant_email" && s.policySwitches.HideContactEmails {
+		return nil, fmt.Errorf("participant_email dimension is disabled by policy_switches.hide_contact_emails")
+	}
+	return s.businessAnalysisDimensionWithParticipantPolicy(ctx, filter, dimension, themeQuery, limit, nil, "")
+}
+
+func (s *Server) businessAnalysisDimensionWithParticipantPolicy(ctx context.Context, filter callFilter, dimension string, themeQuery string, limit int, internalDomains []string, participantAffiliationFilter string) ([]sqlite.BusinessAnalysisDimensionRow, error) {
 	return s.store.SummarizeBusinessAnalysisDimension(ctx, sqlite.BusinessAnalysisDimensionSummaryParams{
-		Filter:     sqliteBusinessAnalysisFilter(filter),
-		Dimension:  dimension,
-		ThemeQuery: themeQuery,
-		Limit:      limit,
+		Filter:                       sqliteBusinessAnalysisFilter(filter),
+		Dimension:                    dimension,
+		ThemeQuery:                   themeQuery,
+		Limit:                        limit,
+		InternalDomains:              resolveInternalParticipantDomains(s.internalParticipantDomains, internalDomains),
+		ParticipantAffiliationFilter: participantAffiliationFilter,
 	})
 }
 
@@ -1112,6 +1250,15 @@ func businessAnalysisWarnings(toolName string, filter callFilter) []string {
 		)
 	}
 	return warnings
+}
+
+func quoteEvidenceNoResultsFollowups(themeQuery string) []string {
+	_ = themeQuery
+	return []string{
+		"Try a broader or alternate theme_query (synonyms such as rollout for implementation).",
+		"Run analyze.cohort.inspect on the cohort_token to confirm transcript coverage and filter breadth.",
+		"If a call_ref is already known from a theme report, use evidence.call_drilldown with that call_ref and the exact drilldown_term.",
+	}
 }
 
 func businessAnalysisLimitations(toolName string) []string {

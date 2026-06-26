@@ -85,6 +85,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 	expected := []string{
 		OpAnalyzeCohortBuild,
 		OpAnalyzeCohortInspect,
+		OpAnalyzeDiscoverySummary,
 		OpAnalyzeLimitationsExplain,
 		OpAnalyzeThemesDiscover,
 		OpEvidenceCallDrilldown,
@@ -94,7 +95,9 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpExtractBuyerQuestions,
 		OpExtractObjectionSignals,
 		OpProspectQuestionAnswer,
+		OpQueryCallCount,
 		OpQueryCalls,
+		OpQueryDimensionCounts,
 		OpQueryScorecardDetail,
 		OpQueryScorecards,
 		OpQueryTranscriptSegments,
@@ -326,6 +329,141 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 	}
 }
 
+func TestFacadeDiscoverCapabilitiesDefaultIsCompact(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	result, err := server.executeFacadeDiscoverCapabilities(nil)
+	if err != nil {
+		t.Fatalf("discover capabilities: %v", err)
+	}
+	payload := decodeDiscoverCapabilitiesPayload(t, result)
+	if got, _ := payload["discovery_detail"].(string); got != "compact" {
+		t.Fatalf("discovery_detail=%q want compact", got)
+	}
+	for _, op := range payload["operations"].([]any) {
+		entry, _ := op.(map[string]any)
+		if _, hasSchema := entry["input_schema"]; hasSchema {
+			t.Fatalf("compact discovery should omit input_schema for operation %v", entry["operation"])
+		}
+	}
+}
+
+func TestFacadeDiscoverCapabilitiesFullIncludesSchemas(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	result, err := server.executeFacadeDiscoverCapabilities(mustJSON(t, map[string]any{"detail": "full"}))
+	if err != nil {
+		t.Fatalf("discover capabilities full: %v", err)
+	}
+	payload := decodeDiscoverCapabilitiesPayload(t, result)
+	if got, _ := payload["discovery_detail"].(string); got != "full" {
+		t.Fatalf("discovery_detail=%q want full", got)
+	}
+	var callCountSchema any
+	for _, op := range payload["operations"].([]any) {
+		entry, _ := op.(map[string]any)
+		if entry["operation"] == OpQueryCallCount {
+			callCountSchema = entry["input_schema"]
+			break
+		}
+	}
+	if callCountSchema == nil {
+		t.Fatalf("full discovery missing input_schema for %s", OpQueryCallCount)
+	}
+
+	result, err = server.executeFacadeDiscoverCapabilities(mustJSON(t, map[string]any{"include_schemas": true}))
+	if err != nil {
+		t.Fatalf("discover capabilities include_schemas: %v", err)
+	}
+	payload = decodeDiscoverCapabilitiesPayload(t, result)
+	if got, _ := payload["discovery_detail"].(string); got != "full" {
+		t.Fatalf("include_schemas discovery_detail=%q want full", got)
+	}
+}
+
+func TestFacadeDiscoverCapabilitiesIncludesBusinessIntentExamples(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	result, err := server.executeFacadeDiscoverCapabilities(nil)
+	if err != nil {
+		t.Fatalf("discover capabilities: %v", err)
+	}
+	payload := decodeDiscoverCapabilitiesPayload(t, result)
+	examples, ok := payload["business_intent_examples"].([]any)
+	if !ok || len(examples) == 0 {
+		t.Fatalf("missing business_intent_examples: %v", payload["business_intent_examples"])
+	}
+	text := strings.ToLower(mustJSONText(t, examples))
+	if !strings.Contains(text, OpQueryCallCount) || !strings.Contains(text, "duration_seconds") || !strings.Contains(text, `"values":["300"]`) && !strings.Contains(text, `"values": ["300"]`) {
+		t.Fatalf("call-count duration example missing or wrong shape: %s", text)
+	}
+	if !strings.Contains(text, OpAnalyzeDiscoverySummary) || !strings.Contains(text, "business discovery") {
+		t.Fatalf("discovery summary example missing: %s", text)
+	}
+	if !strings.Contains(text, OpEvidenceQuotesSearch) || !strings.Contains(text, "cohort_token") {
+		t.Fatalf("quote evidence example missing: %s", text)
+	}
+}
+
+func TestFacadeDiscoverCapabilitiesFieldProfileGuidance(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	result, err := server.executeFacadeDiscoverCapabilities(nil)
+	if err != nil {
+		t.Fatalf("discover capabilities: %v", err)
+	}
+	payload := decodeDiscoverCapabilitiesPayload(t, result)
+	guidance, ok := payload["field_profile_guidance"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing field_profile_guidance: %v", payload["field_profile_guidance"])
+	}
+	caveat, _ := guidance["limited_profile_caveat"].(string)
+	if !strings.Contains(caveat, "does not redact") || !strings.Contains(caveat, "transcript") {
+		t.Fatalf("limited_profile_caveat missing evidence-text note: %q", caveat)
+	}
+	aliases, _ := guidance["aliases"].(map[string]any)
+	if aliases["quote_compact"] != "limited" {
+		t.Fatalf("quote_compact alias=%v want limited", aliases["quote_compact"])
+	}
+}
+
+func TestFacadeDiscoverCapabilitiesQuoteEvidenceGuidance(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test", WithToolAllowlist(FacadeToolNames()))
+	result, err := server.executeFacadeDiscoverCapabilities(nil)
+	if err != nil {
+		t.Fatalf("discover capabilities: %v", err)
+	}
+	payload := decodeDiscoverCapabilitiesPayload(t, result)
+	guidance, ok := payload["quote_evidence_guidance"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing quote_evidence_guidance: %v", payload["quote_evidence_guidance"])
+	}
+	text := strings.ToLower(mustJSONText(t, guidance))
+	for _, want := range []string{OpEvidenceQuotesSearch, OpEvidenceQuotePackBuild, "no_quote_evidence", "call_drilldown"} {
+		if !strings.Contains(text, strings.ToLower(want)) {
+			t.Fatalf("quote_evidence_guidance missing %q: %s", want, text)
+		}
+	}
+}
+
+func decodeDiscoverCapabilitiesPayload(t *testing.T, result toolCallResult) map[string]any {
+	t.Helper()
+	if result.IsError {
+		t.Fatalf("unexpected isError: %+v", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("decode capability payload: %v", err)
+	}
+	return payload
+}
+
 func TestFacadeStatusDispatchesToGetSyncStatus(t *testing.T) {
 	t.Parallel()
 
@@ -425,6 +563,51 @@ func TestFacadeQueryRoutesTranscriptSegmentsAndDeniesUnallowedRoutedTool(t *test
 	}
 	if !strings.Contains(err.Error(), "analyst") {
 		t.Fatalf("error did not name a remediation preset: %v", err)
+	}
+}
+
+func TestFacadeQueryCallsExplainsPreviewLimitVsMatchedCount(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolQuery}),
+		WithFacadeRoutedToolAllowlist([]string{"search_calls_by_filters"}),
+	)
+	result, err := server.executeFacadeDispatch(t.Context(), FacadeToolQuery, mustFacadeArgs(t, OpQueryCalls, map[string]any{
+		"filter": map[string]any{
+			"from_date": "2024-01-01",
+			"to_date":   "2026-12-31",
+			"limit":     1,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("query.calls dispatch: %v", err)
+	}
+	wrapper := decodeFacadeWrapper(t, result)
+	inner, ok := wrapper["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing inner result: %T", wrapper["result"])
+	}
+	if got, _ := inner["count"].(float64); got < 2 {
+		t.Fatalf("count should describe the full matched cohort, got %v", inner["count"])
+	}
+	results, _ := inner["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("results should be capped to preview limit, got %d rows: %v", len(results), results)
+	}
+	scope, ok := inner["result_scope"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing result_scope: %v", inner)
+	}
+	if scope["limit_applies_to"] != "returned_rows_only" {
+		t.Fatalf("result_scope should explain row-preview limit, got %v", scope)
+	}
+	contractText := strings.ToLower(mustJSONText(t, inner["answer_contract"]))
+	if !strings.Contains(contractText, "full matched cohort") || !strings.Contains(contractText, OpQueryCallCount) {
+		t.Fatalf("answer_contract missing preview/count guidance: %s", contractText)
 	}
 }
 

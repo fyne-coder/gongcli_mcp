@@ -38,6 +38,27 @@ func TestFieldProfilePresetsControlExposureFlags(t *testing.T) {
 	}
 }
 
+func TestFieldProfileQuoteCompactAliasesToLimited(t *testing.T) {
+	t.Parallel()
+
+	got, err := normalizeFieldProfile("quote_compact")
+	if err != nil {
+		t.Fatalf("normalize quote_compact: %v", err)
+	}
+	if got != fieldProfileLimited {
+		t.Fatalf("quote_compact=%q want %s", got, fieldProfileLimited)
+	}
+}
+
+func TestFieldProfileSchemaMentionsLimitedEvidenceTextCaveat(t *testing.T) {
+	t.Parallel()
+
+	desc, _ := fieldProfileSchema()["description"].(string)
+	if !strings.Contains(desc, "does not redact") || !strings.Contains(desc, "transcript") {
+		t.Fatalf("field_profile schema missing limited evidence-text caveat: %q", desc)
+	}
+}
+
 func TestBusinessEvidencePolicyIncludesHostDisplayDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -786,5 +807,69 @@ func seedExternalAndInternalObjectionSignals(t *testing.T, store *sqlite.Store) 
 		})); err != nil {
 			t.Fatalf("upsert objection signal transcript: %v", err)
 		}
+	}
+}
+
+func TestFacadeCohortTokenHandoffBuildToInspect(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	seedBusinessAnalysisMCPFixtures(t, store)
+
+	server := NewServerWithOptions(store, "gongmcp", "test",
+		WithToolAllowlist([]string{FacadeToolAnalyze}),
+		WithFacadeRoutedToolAllowlist([]string{"build_call_cohort", "inspect_call_cohort"}),
+	)
+	filter := map[string]any{
+		"from_date":         "2026-04-01",
+		"to_date":           "2026-04-30",
+		"transcript_status": "present",
+	}
+	buildResult, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpAnalyzeCohortBuild, map[string]any{
+		"filter": filter,
+		"limit":  5,
+	}))
+	if err != nil {
+		t.Fatalf("analyze.cohort.build dispatch: %v", err)
+	}
+	if buildResult.IsError {
+		t.Fatalf("unexpected build isError: %+v", buildResult)
+	}
+	buildWrapper := decodeFacadeWrapper(t, buildResult)
+	buildInner, _ := buildWrapper["result"].(map[string]any)
+	token, _ := buildInner["cohort_token"].(string)
+	if !strings.HasPrefix(token, cohortTokenPrefix) {
+		t.Fatalf("build missing cohort_token: %v", buildInner["cohort_token"])
+	}
+
+	inspectResult, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpAnalyzeCohortInspect, map[string]any{
+		"cohort_token": token,
+		"limit":        5,
+	}))
+	if err != nil {
+		t.Fatalf("analyze.cohort.inspect dispatch: %v", err)
+	}
+	if inspectResult.IsError {
+		t.Fatalf("unexpected inspect isError: %+v", inspectResult)
+	}
+	inspectWrapper := decodeFacadeWrapper(t, inspectResult)
+	inspectInner, _ := inspectWrapper["result"].(map[string]any)
+	if inspectInner["cohort_token"] != token {
+		t.Fatalf("inspect cohort_token=%v want %q", inspectInner["cohort_token"], token)
+	}
+	if buildInner["cohort_id"] != inspectInner["cohort_id"] {
+		t.Fatalf("cohort_id mismatch build=%v inspect=%v", buildInner["cohort_id"], inspectInner["cohort_id"])
+	}
+
+	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpAnalyzeCohortInspect, map[string]any{
+		"cohort_token": token,
+		"filter": map[string]any{
+			"from_date": "2026-01-01",
+			"to_date":   "2026-01-31",
+		},
+	}))
+	if err == nil || !strings.Contains(err.Error(), "cohort_token") {
+		t.Fatalf("expected cohort_token mismatch error, got %v", err)
 	}
 }
