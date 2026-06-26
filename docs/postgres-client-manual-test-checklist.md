@@ -80,12 +80,13 @@ underneath.
 
 The deterministic release harness mirrors the business-workbench versions of
 the manual prompts below. It exercises the six facade tools directly, including
-Business Discovery title filtering, Gong AI highlight/keyPoint retrieval, Q1
-Business Discovery seedless AI theme bootstrap, manual-process quote packs,
-pipeline/dimension caveats, objection extraction, buyer-question extraction,
-field-profile behavior, and transcript-enumeration probes. Use
-`scripts/business-workbench-ga-harness.sh` as the release gate; use the manual
-prompts for exploratory host-model behavior only.
+compact and full `gong_discover_capabilities`, `query.call_count` for calls over
+five minutes, Business Discovery `analyze.discovery_summary`, cohort_token quote
+follow-up, Gong AI highlight/keyPoint retrieval, Q1 Business Discovery seedless AI
+theme bootstrap, manual-process quote packs, pipeline/dimension caveats, objection
+extraction, buyer-question extraction, field-profile behavior, and
+transcript-enumeration probes. Use `scripts/business-workbench-ga-harness.sh` as
+the release gate; use the manual prompts for exploratory host-model behavior only.
 
 For internal redacted-DB broad testing, `redacted-all-readonly` exposes every
 reviewed Postgres-readable MCP tool, including `search_calls`, `get_call`,
@@ -121,6 +122,17 @@ which posture a deployment is running.
 
 Expected core tools:
 
+- `gong_status` (routes `status.sync` → `get_sync_status`)
+- `gong_discover_capabilities`
+- `gong_query` (`query.calls`, `query.call_count`)
+- `gong_analyze` (`question.answer`, `analyze.discovery_summary`, `theme_intelligence_report`, and other routed operations)
+- `gong_get_evidence` (`evidence.quotes.search`, `evidence.quote_pack.build`, `evidence.highlights.list`, `evidence.call_drilldown`)
+- `gong_explain_limitations`
+
+For trained analyst/operator fallback over the broader `analyst-expansion`
+preset, the lower-level tools below remain available. Do not use them as the
+default business-user path when `business-workbench` is deployed.
+
 - `get_sync_status`
 - `list_crm_object_types`
 - `list_crm_fields`
@@ -142,7 +154,7 @@ Expected core tools:
 - `search_transcripts_by_call_facts`
 - `search_transcript_quotes_with_attribution`
 
-Expected analyst tools:
+Expected analyst tools (analyst-expansion fallback only):
 
 - `build_call_cohort`
 - `inspect_call_cohort`
@@ -187,15 +199,15 @@ IDs, and call IDs continue to be off-limits for any preset.
 Prompt:
 
 ```text
-Using the Gong Test MCP, check sync status first. Confirm the cache counts,
-transcript coverage, and any limitations. Then list the tools you expect to use
-for a Business Discovery analysis. Do not request raw transcripts, raw SQL, or
-unrestricted account enumeration.
+Using the Gong Test MCP, check sync status first with gong_status. Confirm the
+cache counts, transcript coverage, and any limitations. Then list the six facade
+tools you expect to use for a Business Discovery analysis. Do not request raw
+transcripts, raw SQL, or unrestricted account enumeration.
 ```
 
 Expected result:
 
-- `get_sync_status` succeeds.
+- `gong_status` succeeds (internally routes `status.sync` → `get_sync_status`).
 - The status payload includes `mcp_server` with the expected `version`,
   `commit`, `tool_preset`, `deployment_id`, `started_at_utc`, tool counts, and
   transcript evidence provenance. Stop if these do not match the intended
@@ -207,7 +219,7 @@ Expected result:
 
 Fail if:
 
-- The model cannot call `get_sync_status`.
+- The model cannot call `gong_status`.
 - Counts are stale or unexpectedly zero.
 - The model claims live Gong access from MCP.
 - The model suggests raw SQL, raw transcript dump, or unrestricted account
@@ -219,11 +231,24 @@ Prompt:
 
 ```text
 Using the Gong Test MCP, find recent Business Discovery calls from the reviewed
-cache. Build a bounded cohort, inspect coverage, then summarize the main
-discovery themes with transcript evidence and limitations.
+cache. Summarize the main discovery themes with transcript evidence and
+limitations. Start with the Business Discovery summary operation before deeper
+theme or quote work.
 ```
 
-Expected tool sequence:
+Expected tool sequence (business-workbench facade path):
+
+- `gong_status`
+- `gong_discover_capabilities` (compact default)
+- `gong_analyze` with operation `analyze.discovery_summary` and
+  `filter.title_query:"business discovery"`
+- `gong_get_evidence` with operation `evidence.quotes.search` or
+  `evidence.quote_pack.build`, reusing the returned `cohort_token` when helpful
+- `gong_analyze` with operation `theme_intelligence_report` only after a seed
+  topic is chosen from the discovery summary
+- `gong_explain_limitations` when coverage is thin
+
+Analyst/operator fallback (only when explicitly testing `analyst-expansion`):
 
 - `build_call_cohort`
 - `inspect_call_cohort`
@@ -234,12 +259,13 @@ Expected tool sequence:
 
 Expected result:
 
-- Title filtering works for "Business Discovery" or the approved equivalent.
+- Title filtering works for "Business Discovery" or the approved equivalent via
+  `analyze.discovery_summary` or `query.calls`.
 - The answer is evidence-backed and labels gaps.
 - Theme output distinguishes structured tool results from host-model synthesis.
-- If the model selects a single returned `call_ref`, `get_call` can fetch
-  minimized call detail with that `call_ref` without requiring or echoing the raw
-  `call_id`.
+- If the model selects a single returned `call_ref`, `gong_get_evidence`
+  operation `evidence.call_drilldown` can fetch bounded call evidence with that
+  `call_ref` without requiring or echoing the raw `call_id`.
 
 Fail if:
 
@@ -325,7 +351,15 @@ enablement, procurement process, and operations workflow. Include bounded
 evidence snippets and note attribution limitations.
 ```
 
-Expected tool sequence:
+Expected tool sequence (business-workbench facade path):
+
+- `gong_analyze` with operation `question.answer` or seeded
+  `theme_intelligence_report`
+- `gong_get_evidence` with operation `evidence.quotes.search` or
+  `evidence.quote_pack.build`, reusing `cohort_token` when returned upstream
+- `gong_explain_limitations` when attribution or coverage is thin
+
+Analyst/operator fallback (`analyst-expansion` only):
 
 - `build_call_cohort`
 - `inspect_call_cohort`
@@ -355,7 +389,13 @@ associated with lifecycle buckets, opportunity stages, or pipeline progression
 in the reviewed cache. Include caveats about CRM outcome coverage.
 ```
 
-Expected tool sequence:
+Expected tool sequence (business-workbench facade path):
+
+- `gong_analyze` with operation `analyze.discovery_summary` or seeded
+  `theme_intelligence_report` with `group_by` dimensions
+- `gong_explain_limitations` for CRM outcome coverage caveats
+
+Analyst/operator fallback (`analyst-expansion` only):
 
 - `compare_theme_outcomes`
 - `summarize_pipeline_progression_by_theme`

@@ -53,8 +53,17 @@ the facade tools with { "operation": "<name>", "arguments": { ... } }.
 
 Routing:
 - Session start when tool state is unknown: gong_status, then
-  gong_discover_capabilities.
-- Bounded call search: gong_query with operation query.calls.
+  gong_discover_capabilities (default compact output; pass detail:"full" only
+  when you need per-operation input_schema).
+- If gong_status fails with auth, connection, or configuration errors, report
+  that failure directly to the user. Do not retry unrelated analysis tools or
+  claim a transient outage unless the returned status explicitly says transient.
+- Count questions such as "how many calls...": gong_query with operation
+  query.call_count.
+- Business Discovery themes or seed topics: gong_analyze with operation
+  analyze.discovery_summary before theme_intelligence_report or quote
+  operations.
+- Bounded call row search: gong_query with operation query.calls.
 - Broad business question: gong_analyze with operation question.answer. If the
   response is needs_theme_seed, pick or ask for a seed topic and then run
   gong_analyze with operation theme_intelligence_report. Never present seedless
@@ -65,6 +74,9 @@ Routing:
 - Sales coaching: gong_analyze with operation extract.objection_signals, seeded.
 - Marketing content gaps: gong_analyze with operation extract.buyer_questions,
   seeded.
+- Quote evidence inside a cohort: gong_get_evidence with operation
+  evidence.quotes.search or evidence.quote_pack.build, passing the cohort_token
+  returned by query.call_count, analyze.discovery_summary, or analyze.cohort.build.
 - Evidence drilldown: gong_get_evidence with operation evidence.call_drilldown,
   using the exact drilldown_term returned upstream.
 - Coverage limits and "why can't you answer": gong_explain_limitations.
@@ -88,6 +100,12 @@ When a tool errors, is unavailable, or returns a governance or coverage block,
 say so directly and recommend the smallest operator action that would unblock
 the answer. Do not retry blindly, swap in raw transcript search, or fabricate
 around missing data.
+
+When gong_status fails because of authentication, gateway connection, or MCP
+configuration problems, state that failure plainly in business language. Do not
+retry gong_analyze, gong_query, or other evidence tools until status succeeds.
+Do not describe the outage as transient unless the status payload explicitly
+marks it transient.
 
 Answer format: a concise business answer with findings, supporting evidence,
 caveats, and a recommended next step. Do not show raw tool traces, schema or
@@ -116,12 +134,15 @@ route to an operation through one of those tools:
 | --- | --- | --- |
 | Health and cache status | `gong_status` | `status.sync` |
 | Tool/operation discovery | `gong_discover_capabilities` | n/a |
+| Call counts without row payload | `gong_query` | `query.call_count` |
 | Bounded call search | `gong_query` | `query.calls` |
+| Business Discovery summary | `gong_analyze` | `analyze.discovery_summary` |
 | Broad business answer | `gong_analyze` | `question.answer` |
 | Named prospect/account answer | `gong_analyze` | `prospect.question.answer` |
 | Theme evidence report | `gong_analyze` | `theme_intelligence_report` |
 | Buyer questions | `gong_analyze` | `extract.buyer_questions` |
 | Objection/coaching signals | `gong_analyze` | `extract.objection_signals` |
+| Quote evidence in a cohort | `gong_get_evidence` | `evidence.quotes.search` or `evidence.quote_pack.build` |
 | Evidence drilldown | `gong_get_evidence` | `evidence.call_drilldown` |
 | Limitations | `gong_explain_limitations` | `analyze.limitations.explain` or no operation |
 
@@ -155,7 +176,24 @@ fields use `equals` and `in`; numeric fields such as `duration_seconds` also
 support `gte`, `lte`, and `between`. Multiple entries are combined with AND
 semantics; values inside one `in` entry are OR alternatives. `quarter` values
 must use `YYYY-Q#` such as `2026-Q1`, and `call_month` values must use
-`YYYY-MM` such as `2026-01`. For example:
+`YYYY-MM` such as `2026-01`. For calls longer than five minutes, use
+`query.call_count` or `query.calls` with this exact dimension filter shape:
+
+```json
+{
+  "filter": {
+    "dimension_filters": [
+      {
+        "dimension": "duration_seconds",
+        "operator": "gte",
+        "values": ["300"]
+      }
+    ]
+  }
+}
+```
+
+For a combined example with quarter and revenue band:
 
 ```json
 {
@@ -242,7 +280,16 @@ signals instead of inventing an `icp` filter or hidden classification.
 ## Required Workflow
 
 - Start each session with `gong_status` and `gong_discover_capabilities` when
-  tool state is unknown.
+  tool state is unknown. Default capability discovery is compact; request
+  `detail:"full"` only when you need per-operation input_schema.
+- If `gong_status` reports auth, connection, or configuration failure, stop and
+  report that failure directly. Do not run analysis tools until status is healthy.
+- For "how many calls..." questions, use `gong_query` operation `query.call_count`.
+  Reuse the returned `cohort_token` for quote or coverage follow-ups when helpful.
+- For Business Discovery themes, seed topics, or cohort coverage, call
+  `gong_analyze` operation `analyze.discovery_summary` with
+  `filter.title_query:"business discovery"` (plus date or quarter bounds when
+  needed) before `theme_intelligence_report` or quote operations.
 - For broad questions such as "what are the main themes this quarter", call
   `question.answer` first. Do not call raw transcript search or present
   seedless keyword candidates as final themes.
@@ -327,5 +374,8 @@ scripts/business-workbench-ga-harness.sh
 ```
 
 The harness writes `business-workbench-ga-report.json` and scores each workflow
-as `PASS`, `DEGRADED`, or `FAIL`. Manual Claude/ChatGPT testing remains useful
-for exploration, but this deterministic harness is the release gate.
+as `PASS`, `DEGRADED`, or `FAIL`. It exercises compact and full capability
+discovery, `query.call_count` for calls over five minutes, Business Discovery
+`analyze.discovery_summary`, cohort_token quote follow-up, and the existing
+theme, quote, objection, and adversarial probes. Manual Claude/ChatGPT testing
+remains useful for exploration, but this deterministic harness is the release gate.
