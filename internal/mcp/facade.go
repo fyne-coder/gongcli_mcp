@@ -57,6 +57,7 @@ const (
 // Operation names are dotted, lowercase, and stable across versions.
 const (
 	OpStatusSync                = "status.sync"
+	OpQueryCallCount            = "query.call_count"
 	OpQueryCalls                = "query.calls"
 	OpQueryScorecards           = "query.scorecards"
 	OpQueryScorecardDetail      = "query.scorecard_detail"
@@ -81,6 +82,7 @@ const (
 // MCP tool — the facade is the only supported entry point — and the Postgres
 // store is the only backend that can return rows.
 const internalRoutedToolListAIHighlights = "list_call_ai_highlights"
+const internalRoutedToolCallCount = "call_count"
 const internalRoutedToolQuestionAnswer = "question_answer"
 const internalRoutedToolProspectQuestionAnswer = "prospect_question_answer"
 const internalRoutedToolCallDrilldown = "call_drilldown"
@@ -102,6 +104,36 @@ func FacadeOperations() []FacadeOperation {
 			AllowedPresets: []string{"business-pilot", "operator-smoke", "analyst-core", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema:    objectSchema(nil, nil),
 			Examples:       []any{map[string]any{}},
+		},
+		{
+			Name:           OpQueryCallCount,
+			Version:        "v1",
+			Description:    "Count calls matching a bounded business filter without returning row payload. Use filter.dimension_filters for fields such as duration_seconds, participant_email, industry, lifecycle, stage, and other backed dimensions.",
+			FacadeTool:     FacadeToolQuery,
+			RoutedTool:     internalRoutedToolCallCount,
+			ExposureLevel:  "scoped-analyst",
+			AllowedPresets: []string{"business-workbench", "analyst-facade", "analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
+			InputSchema: objectSchema(map[string]any{
+				"filter":       facadeCallFilterSchemaWithDescription("Bounded call filter. Put dimension filters under filter.dimension_filters, for example duration_seconds gte 300 for calls longer than 5 minutes."),
+				"cohort_token": cohortTokenSchemaField(),
+				"include_account_names": map[string]any{
+					"type":        "boolean",
+					"description": "Required with account_query because direct account-name probes are otherwise denied.",
+				},
+			}, nil),
+			Examples: []any{
+				map[string]any{
+					"filter": map[string]any{
+						"dimension_filters": []any{
+							map[string]any{
+								"dimension": "duration_seconds",
+								"operator":  "gte",
+								"values":    []string{"300"},
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			Name:           OpQueryCalls,
@@ -188,8 +220,9 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter": facadeCallFilterSchema(),
-				"limit":  map[string]any{"type": "integer"},
+				"filter":       facadeCallFilterSchema(),
+				"cohort_token": cohortTokenSchemaField(),
+				"limit":        map[string]any{"type": "integer"},
 			}, nil),
 			Examples: []any{
 				map[string]any{
@@ -212,8 +245,9 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter": facadeCallFilterSchema(),
-				"limit":  map[string]any{"type": "integer"},
+				"filter":       facadeCallFilterSchema(),
+				"cohort_token": cohortTokenSchemaField(),
+				"limit":        map[string]any{"type": "integer"},
 			}, nil),
 		},
 		{
@@ -226,6 +260,7 @@ func FacadeOperations() []FacadeOperation {
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":        facadeCallFilterSchema(),
+				"cohort_token":  cohortTokenSchemaField(),
 				"theme_query":   map[string]any{"type": "string"},
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
@@ -240,7 +275,8 @@ func FacadeOperations() []FacadeOperation {
 			ExposureLevel:  "scoped-analyst",
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
-				"filter": facadeCallFilterSchema(),
+				"filter":       facadeCallFilterSchema(),
+				"cohort_token": cohortTokenSchemaField(),
 			}, nil),
 		},
 		{
@@ -254,6 +290,7 @@ func FacadeOperations() []FacadeOperation {
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":        facadeCallFilterSchema(),
+				"cohort_token":  cohortTokenSchemaField(),
 				"theme_query":   map[string]any{"type": "string"},
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
@@ -269,6 +306,7 @@ func FacadeOperations() []FacadeOperation {
 			AllowedPresets: []string{"analyst-business-core", "analyst", "all-readonly", "redacted-all-readonly"},
 			InputSchema: objectSchema(map[string]any{
 				"filter":        facadeCallFilterSchema(),
+				"cohort_token":  cohortTokenSchemaField(),
 				"theme_query":   map[string]any{"type": "string"},
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
@@ -355,7 +393,7 @@ func FacadeOperations() []FacadeOperation {
 				"redacted-all-readonly",
 				"broad-public-redacted",
 			},
-			InputSchema: objectSchema(map[string]any{
+			InputSchema: withCohortTokenField(objectSchema(map[string]any{
 				"filter":        facadeCallFilterSchema(),
 				"from_date":     map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.from_date."},
 				"to_date":       map[string]any{"type": "string", "description": "Inclusive YYYY-MM-DD; alias for filter.to_date."},
@@ -375,7 +413,7 @@ func FacadeOperations() []FacadeOperation {
 				"include_speaker_refs":  map[string]any{"type": "boolean"},
 				"include_raw_ids":       map[string]any{"type": "boolean", "description": "Operator/internal opt-in. Ignored when hide_raw_call_ids policy switch is enabled."},
 				"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
-			}, nil),
+			}, nil)),
 			Examples: []any{
 				map[string]any{
 					"from_date":            "2026-01-01",
@@ -402,7 +440,7 @@ func FacadeOperations() []FacadeOperation {
 				"all-readonly",
 				"redacted-all-readonly",
 			},
-			InputSchema: businessSignalExtractionSchema(),
+			InputSchema: withCohortTokenField(businessSignalExtractionSchema()),
 			Examples: []any{
 				map[string]any{
 					"filter": map[string]any{
@@ -430,7 +468,7 @@ func FacadeOperations() []FacadeOperation {
 				"all-readonly",
 				"redacted-all-readonly",
 			},
-			InputSchema: businessSignalExtractionSchema(),
+			InputSchema: withCohortTokenField(businessSignalExtractionSchema()),
 			Examples: []any{
 				map[string]any{
 					"filter": map[string]any{
@@ -505,6 +543,7 @@ func FacadeOperations() []FacadeOperation {
 			InputSchema: objectSchema(map[string]any{
 				"question":              map[string]any{"type": "string", "maxLength": maxQuestionAnswerQuestionLength},
 				"filter":                facadeCallFilterSchema(),
+				"cohort_token":          cohortTokenSchemaField(),
 				"role_context":          map[string]any{"type": "string", "enum": []string{"", "sales", "sales-manager", "sales-enablement", "marketing", "customer-success", "revops", "exec-readonly"}},
 				"output_intent":         map[string]any{"type": "string", "enum": []string{"", "brief", "quotes", "risks", "themes", "next_steps"}},
 				"field_profile":         fieldProfileSchema(),
@@ -587,7 +626,7 @@ func facadeTools(_ LimitPolicy) []tool {
 		},
 		{
 			Name:        FacadeToolQuery,
-			Description: "Stable facade for bounded query operations. Pass {\"operation\": \"query.calls\" | \"query.transcript_segments\" | \"query.scorecards\" | \"query.scorecard_detail\", \"arguments\": {...}}.",
+			Description: "Stable facade for bounded query operations. For counts without row payload, pass {\"operation\":\"query.call_count\",\"arguments\":{\"filter\":{\"dimension_filters\":[{\"dimension\":\"duration_seconds\",\"operator\":\"gte\",\"values\":[\"300\"]}]}}}. For rows, use query.calls with the same filter.dimension_filters shape.",
 			InputSchema: facadeDispatchSchema(facadeOperationNamesForTool(FacadeToolQuery)),
 		},
 		{
@@ -617,7 +656,7 @@ func facadeDispatchSchema(operations []string) map[string]any {
 		},
 		"arguments": map[string]any{
 			"type":        "object",
-			"description": "Arguments forwarded to the routed tool. Schema follows the routed tool's input schema.",
+			"description": "Arguments forwarded to the routed operation. For query.calls and query.call_count, use {\"filter\":{\"dimension_filters\":[{\"dimension\":\"duration_seconds\",\"operator\":\"gte\",\"values\":[\"300\"]}]}} for calls over five minutes; dimension filter entries use values as an array of strings.",
 		},
 	}, nil)
 }
@@ -865,12 +904,104 @@ func (s *Server) isFacadeRoutedToolAllowed(name string) bool {
 	return ok
 }
 
+type facadeCallCountArgs struct {
+	Filter              callFilter `json:"filter"`
+	CohortToken         string     `json:"cohort_token"`
+	IncludeAccountNames bool       `json:"include_account_names"`
+}
+
+func (s *Server) executeFacadeCallCount(ctx context.Context, raw json.RawMessage) (toolCallResult, error) {
+	var args facadeCallCountArgs
+	if err := decodeArgs(raw, &args); err != nil {
+		return toolCallResult{}, err
+	}
+	normalized, err := resolveCohortFilter(args.Filter, args.CohortToken)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	if strings.TrimSpace(normalized.AccountQuery) != "" && !args.IncludeAccountNames {
+		return toolCallResult{}, fmt.Errorf("account_query requires include_account_names=true because it can probe customer names")
+	}
+	if s.restrictedAccountQuery(normalized.AccountQuery) {
+		return toolCallResult{}, restrictedAccountQueryError()
+	}
+	if !businessAnalysisFilterIsSelective(normalized) {
+		return toolCallResult{}, fmt.Errorf("%s requires at least one selective filter field such as quarter, date range, title_query, query, industry, opportunity_stage, crm_object_id, participant_title_query, lifecycle_bucket, or dimension_filters", OpQueryCallCount)
+	}
+	cohortIDValue, cohortTokenValue, err := attachCohortHandoff(normalized, "")
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	warnings := businessAnalysisWarnings(OpQueryCallCount, normalized)
+	payload := map[string]any{
+		"operation":         OpQueryCallCount,
+		"status":            "cache_derived",
+		"normalized_filter": normalized,
+		"cohort_id":         cohortIDValue,
+		"cohort_token":      cohortTokenValue,
+		"call_count":        0,
+		"coverage_summary":  map[string]any{},
+		"warnings":          warnings,
+		"limitations":       businessAnalysisLimitations(OpQueryCallCount),
+		"answer_contract": []string{
+			"Answer in plain business language.",
+			"Describe this as cached Gong call data, not a live Gong API query.",
+			"Do not expose MCP mechanics unless the user asks.",
+		},
+	}
+	if s.store == nil {
+		payload["status"] = "store_unavailable"
+		payload["warnings"] = append(warnings, "store_unavailable")
+		return newToolResult(payload)
+	}
+
+	reviewLimit := 1
+	emitFilterActive := s.governanceActive() || (s.blocklistGuard != nil && !s.blocklistGuard.Empty())
+	if emitFilterActive {
+		reviewLimit = hardMaxBusinessAnalysisRows
+	}
+	cohort, err := s.store.SearchBusinessAnalysisCalls(ctx, sqlite.BusinessAnalysisCallSearchParams{
+		Filter: sqliteBusinessAnalysisFilter(normalized),
+		Limit:  reviewLimit,
+	})
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	count := cohort.Summary.CallCount
+	coverageSummary := cohort.Summary
+	if emitFilterActive {
+		if cohort.Summary.CallCount > int64(len(cohort.Rows)) {
+			return toolCallResult{}, fmt.Errorf("%s cannot return an exact governed count because the cohort has %d calls and emit-time governance filtering requires row review capped at %d; narrow the filter with date range, lifecycle_bucket, title_query, query, or dimension_filters", OpQueryCallCount, cohort.Summary.CallCount, hardMaxBusinessAnalysisRows)
+		}
+		filteredRows := s.businessAnalysisFilteredCallRows(cohort.Rows)
+		coverageSummary = businessAnalysisSummaryFromCallRows(filteredRows)
+		count = coverageSummary.CallCount
+		payload["warnings"] = append(warnings, "governance_emit_filter_applied_to_count")
+	}
+	payload["call_count"] = count
+	payload["coverage_summary"] = businessAnalysisCoverageFromSummary(coverageSummary)
+	if count == 0 {
+		payload["warnings"] = append(payload["warnings"].([]string), "empty_cohort: no calls matched the normalized filter")
+	}
+	return newToolResult(payload)
+}
+
 // executeFacadeRouted invokes an existing tool by name, reusing the same
 // dispatch path (and governance/business-analysis routing) the server uses
 // for direct tools/call requests.
 func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json.RawMessage) (toolCallResult, error) {
 	if isFacadeTool(name) {
 		return toolCallResult{}, fmt.Errorf("facade routed tool %q must not be another facade tool", name)
+	}
+	if name == internalRoutedToolCallCount {
+		return s.executeFacadeCallCount(ctx, args)
+	}
+	if routedToolAcceptsCohortToken(name) {
+		var err error
+		args, err = applyCohortTokenToRawArgs(args)
+		if err != nil {
+			return toolCallResult{}, err
+		}
 	}
 	if name == internalRoutedToolListAIHighlights {
 		return s.executeListCallAIHighlights(ctx, args)
@@ -1111,6 +1242,7 @@ func questionAnswerNeedsThemeSeedPayload(question string, args questionAnswerArg
 type questionAnswerArgs struct {
 	Question            string     `json:"question"`
 	Filter              callFilter `json:"filter"`
+	CohortToken         string     `json:"cohort_token"`
 	RoleContext         string     `json:"role_context"`
 	OutputIntent        string     `json:"output_intent"`
 	Query               string     `json:"query"`
@@ -1433,7 +1565,7 @@ func (s *Server) executeQuestionAnswer(ctx context.Context, raw json.RawMessage)
 	if err != nil {
 		return toolCallResult{}, err
 	}
-	normalized, err := normalizeCallFilter(args.Filter)
+	normalized, err := resolveCohortFilter(args.Filter, args.CohortToken)
 	if err != nil {
 		return toolCallResult{}, err
 	}

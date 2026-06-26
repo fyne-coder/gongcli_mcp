@@ -94,6 +94,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 		OpExtractBuyerQuestions,
 		OpExtractObjectionSignals,
 		OpProspectQuestionAnswer,
+		OpQueryCallCount,
 		OpQueryCalls,
 		OpQueryScorecardDetail,
 		OpQueryScorecards,
