@@ -65,6 +65,7 @@ const (
 	OpAnalyzeCohortBuild        = "analyze.cohort.build"
 	OpAnalyzeCohortInspect      = "analyze.cohort.inspect"
 	OpAnalyzeThemesDiscover     = "analyze.themes.discover"
+	OpAnalyzeDiscoverySummary   = "analyze.discovery_summary"
 	OpAnalyzeLimitationsExplain = "analyze.limitations.explain"
 	OpEvidenceQuotesSearch      = "evidence.quotes.search"
 	OpEvidenceQuotePackBuild    = "evidence.quote_pack.build"
@@ -89,6 +90,7 @@ const internalRoutedToolCallDrilldown = "call_drilldown"
 const internalRoutedToolThemeIntelReport = "theme_intelligence_report"
 const internalRoutedToolBuyerQuestions = "extract_buyer_questions"
 const internalRoutedToolObjectionSignals = "extract_objection_signals"
+const internalRoutedToolDiscoverySummary = "discovery_summary"
 
 // FacadeOperations returns the registry of all known facade operations. The
 // list is sorted by operation name for stable output.
@@ -265,6 +267,80 @@ func FacadeOperations() []FacadeOperation {
 				"limit":         map[string]any{"type": "integer"},
 				"field_profile": fieldProfileSchema(),
 			}, nil),
+		},
+		{
+			Name:          OpAnalyzeDiscoverySummary,
+			Version:       "v1",
+			Description:   "One-shot Business Discovery evidence pack with cohort coverage, deterministic seed selection, bounded theme summaries with quote evidence, and directional seeded preview when no explicit theme seeds are supplied. For Business Discovery cohorts prefer title_query:\"business discovery\" over free-text transcript query.",
+			FacadeTool:    FacadeToolAnalyze,
+			RoutedTool:    internalRoutedToolDiscoverySummary,
+			ExposureLevel: "business-workbench",
+			AllowedPresets: []string{
+				"business-workbench",
+				"analyst-facade",
+				"analyst-business-core",
+				"analyst",
+				"all-readonly",
+				"redacted-all-readonly",
+			},
+			InputSchema: withCohortTokenField(objectSchema(map[string]any{
+				"filter": facadeCallFilterSchemaWithDescription("Bounded call filter. For Business Discovery meetings prefer title_query:\"business discovery\" rather than transcript query."),
+				"from_date": map[string]any{
+					"type":        "string",
+					"description": "Inclusive YYYY-MM-DD; alias for filter.from_date.",
+				},
+				"to_date": map[string]any{
+					"type":        "string",
+					"description": "Inclusive YYYY-MM-DD; alias for filter.to_date.",
+				},
+				"quarter": map[string]any{
+					"type":        "string",
+					"description": "Calendar quarter such as 2026-Q1; alias for filter.quarter.",
+				},
+				"title_query": map[string]any{
+					"type":        "string",
+					"description": "Call title filter. For Business Discovery cohorts use \"business discovery\".",
+				},
+				"opportunity_stage": map[string]any{
+					"type":        "string",
+					"description": "Alias for filter.opportunity_stage.",
+				},
+				"theme_queries": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength},
+					"maxItems":    maxDiscoverySummarySelectedSeeds,
+					"description": "Optional explicit business topic seeds. When omitted, deterministic suggested_seed_topics and a bounded seeded_preview are returned.",
+				},
+				"theme_query": map[string]any{
+					"type":        "string",
+					"maxLength":   maxBusinessAnalysisFTSQueryLength,
+					"description": "Optional single theme seed; alias for one entry in theme_queries.",
+				},
+				"output_intent":         map[string]any{"type": "string", "enum": []string{"", "full_report", "themes_only", "outreach_only"}},
+				"field_profile":         fieldProfileSchema(),
+				"speaker_role":          speakerRoleSchema(),
+				"limit":                 map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
+				"include_call_titles":   map[string]any{"type": "boolean"},
+				"include_account_names": map[string]any{"type": "boolean", "description": "Required to use filter.account_query."},
+				"include_speaker_refs":  map[string]any{"type": "boolean"},
+				"include_raw_ids":       map[string]any{"type": "boolean", "description": "Operator/internal opt-in. Ignored when hide_raw_call_ids policy switch is enabled."},
+			}, nil)),
+			Examples: []any{
+				map[string]any{
+					"title_query": "business discovery",
+					"from_date":   "2026-01-01",
+					"to_date":     "2026-03-31",
+					"limit":       25,
+				},
+				map[string]any{
+					"filter": map[string]any{
+						"title_query": "business discovery",
+						"quarter":     "2026-Q1",
+					},
+					"theme_queries": []string{"manual order entry", "pricing"},
+					"limit":         10,
+				},
+			},
 		},
 		{
 			Name:           OpAnalyzeLimitationsExplain,
@@ -1023,6 +1099,9 @@ func (s *Server) executeFacadeRouted(ctx context.Context, name string, args json
 	}
 	if name == internalRoutedToolObjectionSignals {
 		return s.executeBusinessSignalExtraction(ctx, OpExtractObjectionSignals, args)
+	}
+	if name == internalRoutedToolDiscoverySummary {
+		return s.executeDiscoverySummary(ctx, args)
 	}
 	if isBusinessAnalysisTool(name) {
 		return s.executeBusinessAnalysisTool(ctx, toolsCallParams{Name: name, Arguments: args})

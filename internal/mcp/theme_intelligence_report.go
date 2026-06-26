@@ -377,6 +377,33 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 			warnings = append(warnings, "broad_discovery_no_business_like_candidates: no Gong AI brief/keyPoint/highlight candidate themes survived the business evidence policy; rerun with a suggested theme_query")
 		}
 	}
+
+	suggestedSeedTopics := mergeDiscoverySeedTopicNames(questionAnswerSuggestedSeedTopics(), themeCandidates, maxDiscoverySummarySuggestedSeeds)
+	var seededPreview []discoveryThemeSummary
+	if broadDiscovery && cohort.Summary.CallCount > 0 {
+		previewSeeds := pickDiscoveryPreviewSeeds(suggestedSeedTopics, themeCandidates, maxDiscoverySummaryPreviewSeeds)
+		previewBAArgs := businessAnalysisArgs{
+			Filter:              normalized,
+			Limit:               limit,
+			IncludeCallIDs:      includeRaw,
+			IncludeCallTitles:   includeTitles,
+			IncludeAccountNames: includeAccounts,
+			FieldProfile:        args.FieldProfile,
+			SpeakerRole:         speakerRoleFilter,
+		}
+		var previewItems []businessAnalysisItem
+		var previewErr error
+		seededPreview, previewItems, previewErr = s.buildBoundedSeededThemeSummaries(ctx, normalized, previewSeeds, maxDiscoverySummaryQuotesPerTheme, previewBAArgs, includeRaw, includeTitles, includeAccounts, includeSpeakerRefs, "directional_seeded_preview_not_exhaustive_theme_ranking")
+		if previewErr != nil {
+			return toolCallResult{}, previewErr
+		}
+		evidenceItems = append(evidenceItems, previewItems...)
+		if len(seededPreview) > 0 {
+			warnings = append(warnings, "seeded_preview_directional: bounded seeded_preview is directional and not an exhaustive or frequency-ranked theme analysis")
+		} else if len(themeCandidates) == 0 {
+			warnings = append(warnings, "seeded_preview_unavailable: no quote evidence found for safe preview seeds; choose a suggested_seed_topic and rerun with theme_query")
+		}
+	}
 	if loss, ok := lossSummary["status"].(string); ok && loss == "loss_reason_not_populated" {
 		limitations = append(limitations, "loss_reason_not_populated")
 	}
@@ -426,6 +453,8 @@ func (s *Server) executeThemeIntelReport(ctx context.Context, raw json.RawMessag
 		"primary_theme":                       primaryThemeName,
 		"coverage_summary":                    businessAnalysisCoverageFromSummary(cohort.Summary),
 		"theme_candidates":                    themeCandidates,
+		"suggested_seed_topics":               suggestedSeedTopics,
+		"seeded_preview":                      seededPreview,
 		"ai_business_brief_evidence_by_theme": themeIntelReportAIMapAsPayload(aiBriefSummary.EvidenceByTheme),
 		"ai_business_brief_source": map[string]any{
 			"source":          "gong_ai_brief_keypoints_highlights",

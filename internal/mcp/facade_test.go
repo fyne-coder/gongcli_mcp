@@ -85,6 +85,7 @@ func TestFacadeOperationsRegistryShape(t *testing.T) {
 	expected := []string{
 		OpAnalyzeCohortBuild,
 		OpAnalyzeCohortInspect,
+		OpAnalyzeDiscoverySummary,
 		OpAnalyzeLimitationsExplain,
 		OpAnalyzeThemesDiscover,
 		OpEvidenceCallDrilldown,

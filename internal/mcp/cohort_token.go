@@ -141,6 +141,7 @@ func routedToolAcceptsCohortToken(name string) bool {
 		return false
 	case internalRoutedToolQuestionAnswer,
 		internalRoutedToolThemeIntelReport,
+		internalRoutedToolDiscoverySummary,
 		internalRoutedToolBuyerQuestions,
 		internalRoutedToolObjectionSignals:
 		return true
