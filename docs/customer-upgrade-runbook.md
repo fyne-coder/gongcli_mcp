@@ -100,18 +100,27 @@ Use this path for local or single-file cache deployments:
 1. Stop the MCP host or disconnect the business-user MCP config.
 2. Copy the current SQLite cache and related profile/transcript files to a
    protected staging path.
-3. Run the candidate `gongctl` image or binary against the copy:
+3. Run a candidate `gongctl` image or binary command that opens the copy through
+   the writable SQLite path. For an offline check that does not contact Gong:
+
+   ```bash
+   gongctl profile history --db /protected-copy/gong.db
+   ```
+
+   Opening the cache through the writable operator path applies required
+   cache-side migrations. A normal writable `gongctl sync ...` command also
+   applies them. Do not attempt schema repair from read-only `gongmcp`.
+4. Verify the migrated copy through the same read-only status path used by MCP
+   operators:
 
    ```bash
    gongctl sync status --db /protected-copy/gong.db
    ```
 
-   Opening the cache through the writable operator path applies required
-   cache-side updates. Do not attempt schema repair from read-only `gongmcp`.
-4. Start candidate `gongmcp` against the copied cache with a read-only mount
+5. Start candidate `gongmcp` against the copied cache with a read-only mount
    and the intended preset or allowlist.
-5. Run `initialize`, `tools/list`, and `get_sync_status`.
-6. Promote by replacing the production binary/image and cache together during
+6. Run `initialize`, `tools/list`, and `get_sync_status`.
+7. Promote by replacing the production binary/image and cache together during
    the maintenance window.
 
 Rollback means restoring the prior image digest and the prior verified cache
