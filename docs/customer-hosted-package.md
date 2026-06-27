@@ -27,7 +27,7 @@ of the package supports deployment, security review, support, and operations.
 | Audit-log schema | [Support](support.md#audit-log-schema-expectations) |
 | No-sensitive-telemetry statement | [Data Boundary Statement](data-boundary-statement.md#no-sensitive-telemetry-statement) |
 | Support-access policy | [Support](support.md) |
-| Upgrade and rollback instructions | [Release versioning](release.md), [Enterprise deployment](enterprise-deployment.md#backup-retention-and-decommissioning) |
+| Upgrade and rollback instructions | [Customer upgrade runbook](customer-upgrade-runbook.md), [Release versioning](release.md), [Enterprise deployment](enterprise-deployment.md#backup-retention-and-decommissioning) |
 | Smoke-test scripts | `scripts/docker-smoke.sh`, `scripts/smoke-http-mcp.sh`, [Docker deployment](docker.md), [Customer implementation checklist](implementation-checklist.md#smoke-tests) |
 | Example security questionnaire answers | [Security questionnaire](security-questionnaire.md) |
 | Postgres shared-deployment pilot packet | [Postgres client pilot release packet](postgres-client-pilot-release-packet.md) |
@@ -81,6 +81,9 @@ Default enterprise posture:
 3. Pin the image tag/digest from a tagged release. If an operator deliberately
    uses an untagged branch build, record it as customer-ready pilot code, not a
    versioned GA release.
+   For upgrades from an existing deployment, follow the
+   [Customer upgrade runbook](customer-upgrade-runbook.md) before changing the
+   production image digest or MCP connector URL.
 4. Create a protected customer data root and secret-manager entries outside the
    source checkout. Gong credentials belong only to the operator sync job.
 5. Sync the approved date window, build the read model, and import only a

@@ -39,6 +39,8 @@ You install, secure, schedule, and maintain it.
   HTTP MCP, single-VM Postgres starter
 - [Operator sync runbook](runbooks/operator-sync.md) — preflight, refresh,
   backup, restore, decommissioning
+- [Customer upgrade runbook](customer-upgrade-runbook.md) — tagged-release
+  promotion, schema/read-model handling, gateway smoke, rollback evidence
 - [Postgres client deployment runbook](runbooks/postgres-client-deployment.md)
   — Postgres-specific bootstrap, scoped reader grants, smoke
 - [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md)
@@ -83,12 +85,14 @@ You decide pilot scope, approve profiles, and own the business outcome.
 - [Postgres client onboarding checklist](postgres-client-onboarding-checklist.md)
 - [Postgres Kubernetes operator setup](postgres-kubernetes-operator-setup.md)
 - [Postgres client pilot release packet](postgres-client-pilot-release-packet.md)
+- [Customer upgrade runbook](customer-upgrade-runbook.md)
 
 ## Developer (writing code in this repo)
 
 - [Developer orientation](developer-orientation.md)
 - [Architecture](architecture.md)
 - [Release process](release.md)
+- [Customer upgrade runbook](customer-upgrade-runbook.md)
 - [Postgres parity matrix](postgres-parity.md)
 
 ## Examples

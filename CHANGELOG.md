@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a consolidated customer upgrade runbook covering 0.5.x promotion,
+  schema/read-model handling, gateway smoke testing, rollback, and non-secret
+  acceptance evidence.
+
 ## 0.5.5 - 2026-06-25
 
 - Added Business Workbench `query.call_count` and `query.dimension_counts`
