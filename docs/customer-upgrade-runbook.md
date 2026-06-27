@@ -38,8 +38,10 @@ Before changing production:
 1. Record the current release tag, image digests, and runtime command lines for
    `gongctl`, `gongmcp`, and `gongmcp-gateway`.
 2. Record the current public MCP URL, OAuth/OIDC client settings, redirect URI,
-   required scope, access group, tool preset or allowlist, and internal bearer
-   token secret location. Do not record secret values.
+   auth profile (`OIDC_AUTH_PROFILE` or `GATEWAY_AUTH_PROFILE`), required
+   scope, access group, group claim (`OIDC_GROUP_CLAIM`), tool preset or
+   allowlist, and internal bearer token secret location. Do not record secret
+   values.
 3. Back up the SQLite file or Postgres databases, transcript files, profile
    YAML, AI governance YAML, and MCP host or connector config.
 4. Restore the backup into an isolated staging location and prove the restore
@@ -170,10 +172,24 @@ gongctl doctor mcp-gateway \
   --token-env GONGMCP_TEST_ACCESS_TOKEN
 ```
 
-Production promotion is usually a URL and image-digest change only when the
-public URL, client ID, secret, redirect URI, scopes, and token-auth method stay
-stable. If any of those OAuth inputs change, expect the hosted connector to
-need reauthorization or recreation.
+For an existing direct-OIDC deployment, do not change `PUBLIC_BASE_URL`,
+`OIDC_CLIENT_ID`, the client-auth method, required scope,
+`OIDC_GROUP_CLAIM`, or `OIDC_AUTH_PROFILE` unless you intend to change the
+auth boundary. A 0.5.x to 0.5.5 upgrade does not require changing those auth
+inputs.
+
+For the gateway or hosted connector, production promotion is usually a URL and
+image-digest change only when the public URL, client ID, secret, redirect URI,
+scopes, token-auth method, auth profile, and group claim stay stable. If any of
+those OAuth inputs change, expect the hosted connector to need reauthorization
+or recreation. The SQLite and Postgres sections above still own cache/schema,
+read-model, serving-refresh, and scoped-grant upgrade work.
+
+The `doctor mcp-gateway` flags must mirror production gateway settings. For
+example, the direct-OIDC runtime default group claim is `groups`; deployments
+whose provider emits group membership under `ext.memberOf` should set
+`OIDC_GROUP_CLAIM=memberOf` and pass `--group-claim memberOf` in the matching
+smoke.
 
 Before broad access, verify:
 
@@ -181,8 +197,23 @@ Before broad access, verify:
 - authenticated `tools/list` succeeds
 - the first safe tool call, usually `get_sync_status`, succeeds
 - blocked users are denied
-- forged client-supplied identity headers are ignored or stripped
+- forged client-supplied identity headers such as `X-Forwarded-User`,
+  `X-Auth-Request-Email`, subject, email, or group headers are ignored or
+  stripped and cannot override the token-derived principal
 - no public route reaches raw `gongmcp`
+
+For direct-OIDC upgrades, add explicit negative and compatibility checks.
+`doctor mcp-gateway` proves metadata and the configured happy path; it is not a
+substitute for these adversarial assertions:
+
+- a present wrong `client_id` is rejected
+- a missing `client_id` succeeds only when approved audience/client binding is
+  present
+- a valid present `client_id` with an empty `aud` list still succeeds when that
+  is the provider's known working shape
+- wrong issuer is rejected
+- missing required scope is rejected
+- missing or wrong group membership is rejected
 
 ## 0.5.x Upgrade Notes
 
