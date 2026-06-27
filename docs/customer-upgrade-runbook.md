@@ -61,6 +61,38 @@ A reader URL in a writer command cannot migrate, refresh, or reconcile grants.
 A writer URL in `gongmcp` or reader-side validation weakens the deployment
 boundary and should fail read-only posture checks.
 
+## Access Model Before Upgrade
+
+Decide who should have MCP access before changing images, OAuth settings, or
+group policy. Hosted connector visibility and IdP login permission are not the
+same as approved MCP access.
+
+For a small pilot, keep a dedicated MCP access group and add only approved test
+users. For broader rollout, use one of these patterns:
+
+- create a dedicated all-approved MCP group and add every approved user to it
+- map an existing approved business group, such as sales, marketing, RevOps,
+  services, or an all-users business group, into `OIDC_REQUIRED_GROUPS`
+- use multiple approved groups through `OIDC_REQUIRED_GROUPS` or
+  `OIDC_ALLOWED_GROUPS` instead of changing one user at a time
+
+Avoid binding production MCP access to a misleading admin or infrastructure
+group just because it was convenient during the first working smoke. If the
+group name or scope is wrong, fix the IdP group assignment and the gateway
+configuration deliberately, then re-run the direct-OIDC negative tests.
+
+The current gateway requires at least one explicit access gate: group, subject,
+or email. Do not remove server-side access checks as an upgrade shortcut. If
+the intended production model is "anyone assigned to the IdP application may
+use MCP," represent that with a reviewed all-approved group or track a separate
+gateway change with security review and forged-header/client-binding negative
+tests.
+
+All approved users on the same `gongmcp` deployment receive the same MCP tool
+surface. Per-person access should be controlled by IdP/gateway membership, not
+by handing users Gong credentials, database credentials, sync/admin scopes, or
+direct access to private `gongmcp`.
+
 ## SQLite Upgrade
 
 Use this path for local or single-file cache deployments:
