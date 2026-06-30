@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -152,7 +153,7 @@ func FacadeOperations() []FacadeOperation {
 				"cohort_token": cohortTokenSchemaField(),
 				"dimension": map[string]any{
 					"type":        "string",
-					"description": "Backed summarize dimension such as lifecycle, opportunity_stage, industry, persona, participant_domain, participant_affiliation, participant_email, quarter, won_lost, or loss_reason.",
+					"description": "Backed summarize dimension. See gong_discover_capabilities.dimension_counts.supported_dimensions for the current list; examples include lifecycle, opportunity_stage, industry, persona, participant_domain, quarter, won_lost, loss_reason, and account_customer_segment_type.",
 				},
 				"theme_query": map[string]any{
 					"type":        "string",
@@ -931,6 +932,10 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 			"disallowed_dimensions":       sqlite.DisallowedBusinessAnalysisFilterDimensions(),
 			"default_disallow_list_empty": len(sqlite.DisallowedBusinessAnalysisFilterDimensions()) == 0,
 		},
+		"dimension_counts": map[string]any{
+			"supported_dimensions": facadeSupportedDimensionCountDimensions(),
+			"aliases_by_dimension": facadeDimensionCountAliases(),
+		},
 		"facade_tools": []string{
 			FacadeToolStatus,
 			FacadeToolDiscoverCapabilities,
@@ -946,6 +951,54 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 		"note":                     "Top-level individual tools (search_calls, build_call_cohort, search_transcript_segments, build_quote_pack, etc.) remain available for operator and analyst testing alongside this facade.",
 	}
 	return newToolResult(payload)
+}
+
+func facadeSupportedDimensionCountDimensions() []string {
+	base := []string{
+		"direction",
+		"forecast_category",
+		"industry",
+		"lifecycle",
+		"lifecycle_bucket",
+		"loss_reason",
+		"month",
+		"opportunity_stage",
+		"opportunity_type",
+		"participant_affiliation",
+		"participant_domain",
+		"participant_email",
+		"persona",
+		"quarter",
+		"scope",
+		"system",
+		"transcript_status",
+		"won_lost",
+	}
+	seen := make(map[string]struct{}, len(base)+len(crmdimensions.SupportedSummarizeDimensionNames()))
+	out := make([]string, 0, len(base)+len(crmdimensions.SupportedSummarizeDimensionNames()))
+	for _, dimension := range append(base, crmdimensions.SupportedSummarizeDimensionNames()...) {
+		dimension = strings.TrimSpace(dimension)
+		if dimension == "" {
+			continue
+		}
+		if _, ok := seen[dimension]; ok {
+			continue
+		}
+		seen[dimension] = struct{}{}
+		out = append(out, dimension)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func facadeDimensionCountAliases() map[string][]string {
+	out := map[string][]string{}
+	for _, dimension := range crmdimensions.SupportedSummarizeDimensionNames() {
+		if aliases := crmdimensions.AliasesForDimension(dimension); len(aliases) > 0 {
+			out[dimension] = aliases
+		}
+	}
+	return out
 }
 
 type facadeDiscoverCapabilitiesArgs struct {

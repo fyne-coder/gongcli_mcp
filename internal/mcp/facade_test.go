@@ -256,6 +256,10 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 			DisallowedDimensions     []string            `json:"disallowed_dimensions"`
 			DefaultDisallowListEmpty bool                `json:"default_disallow_list_empty"`
 		} `json:"dimension_filters"`
+		DimensionCounts struct {
+			SupportedDimensions []string            `json:"supported_dimensions"`
+			AliasesByDimension  map[string][]string `json:"aliases_by_dimension"`
+		} `json:"dimension_counts"`
 		Note string `json:"note"`
 	}
 	if err := json.Unmarshal([]byte(result.Content[0].Text), &payload); err != nil {
@@ -281,6 +285,12 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 	}
 	if !containsString(payload.DimensionFilters.SupportedDimensions, "participant_email") || !containsString(payload.DimensionFilters.SupportedDimensions, "duration_seconds") {
 		t.Fatalf("dimension filter contract missing expected dimensions: %+v", payload.DimensionFilters.SupportedDimensions)
+	}
+	if !containsString(payload.DimensionCounts.SupportedDimensions, "account_customer_segment_type") {
+		t.Fatalf("dimension_counts contract missing account_customer_segment_type: %+v", payload.DimensionCounts.SupportedDimensions)
+	}
+	if !containsString(payload.DimensionCounts.AliasesByDimension["account_customer_segment_type"], "customer_segment_type") {
+		t.Fatalf("dimension_counts aliases missing customer_segment_type: %+v", payload.DimensionCounts.AliasesByDimension)
 	}
 	if operators := strings.Join(payload.DimensionFilters.OperatorsByDimension["duration_seconds"], ","); !strings.Contains(operators, "between") {
 		t.Fatalf("duration_seconds operators should include between: %v", payload.DimensionFilters.OperatorsByDimension["duration_seconds"])

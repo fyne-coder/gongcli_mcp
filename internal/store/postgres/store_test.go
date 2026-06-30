@@ -1593,6 +1593,32 @@ func TestPostgresCallFactGroupColumnSupportsCRMDimensions(t *testing.T) {
 	}
 }
 
+func TestPostgresBusinessAnalysisDimensionSupportsCRMRegistry(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "account_customer_segment_type", want: "account_customer_segment_type"},
+		{input: "customer_segment_type", want: "account_customer_segment_type"},
+		{input: "customer_segment", want: "account_customer_segment_type"},
+		{input: "opportunity_close_month", want: "opportunity_close_month"},
+	} {
+		got, err := postgresBusinessAnalysisDimension(tc.input)
+		if err != nil {
+			t.Fatalf("postgresBusinessAnalysisDimension(%q): %v", tc.input, err)
+		}
+		if got != tc.want {
+			t.Fatalf("postgresBusinessAnalysisDimension(%q)=%q want %q", tc.input, got, tc.want)
+		}
+	}
+
+	if _, err := postgresBusinessAnalysisDimension("account_annual_revenue"); err == nil {
+		t.Fatal("raw numeric CRM field should not be groupable")
+	}
+}
+
 func TestVoicemailDetectionAvoidsLoosePressSubstring(t *testing.T) {
 	t.Parallel()
 

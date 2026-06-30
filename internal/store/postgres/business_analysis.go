@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -237,6 +238,8 @@ SELECT m.call_id,
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_call_drilldown_transcript_evidence(text, text, integer) FROM PUBLIC;
 `
+
+var postgresBusinessAnalysisDimensionAliases = crmdimensions.BuildAliasMap()
 
 // ListAIHighlights returns bounded, typed Gong AI highlight rows from the
 // Postgres call_ai_highlights read model. The serving DB never contains rows
@@ -1056,7 +1059,13 @@ func validatePostgresBusinessAnalysisSearchText(value string, field string) erro
 }
 
 func postgresBusinessAnalysisDimension(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if canonical, ok := postgresBusinessAnalysisDimensionAliases[normalized]; ok {
+		if _, ok := crmdimensions.SummarizeExpr(canonical, "cf"); ok {
+			return canonical, nil
+		}
+	}
+	switch normalized {
 	case "", "lifecycle", "lifecycle_bucket":
 		return "lifecycle", nil
 	case "industry", "account_industry":
