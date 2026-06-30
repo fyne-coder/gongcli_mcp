@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 )
 
 // Phase B-1 read-time speaker attribution status/source/confidence values.
@@ -125,6 +127,7 @@ const (
 	businessAnalysisFilterDimensionString businessAnalysisFilterDimensionKind = iota
 	businessAnalysisFilterDimensionNumeric
 	businessAnalysisFilterDimensionBoolean
+	businessAnalysisFilterDimensionDate
 	businessAnalysisFilterDimensionParticipantEmail
 	businessAnalysisFilterDimensionAccountName
 	businessAnalysisFilterDimensionCRMObjectID
@@ -1256,6 +1259,13 @@ func businessAnalysisAppendDimensionFilters(where []string, args []any, filters 
 			}
 			where = append(where, clause)
 			args = append(args, clauseArgs...)
+		case businessAnalysisFilterDimensionDate:
+			clause, clauseArgs, err := businessAnalysisDateDimensionFilterSQL(spec.Expr, filter)
+			if err != nil {
+				return nil, nil, err
+			}
+			where = append(where, clause)
+			args = append(args, clauseArgs...)
 		default:
 			switch filter.Operator {
 			case "equals":
@@ -1328,12 +1338,55 @@ func businessAnalysisBooleanDimensionFilterSQL(expr string, filter BusinessAnaly
 	}
 }
 
+func businessAnalysisDateDimensionFilterSQL(expr string, filter BusinessAnalysisDimensionFilter) (string, []any, error) {
+	dates, err := businessAnalysisDateDimensionFilterValues(filter)
+	if err != nil {
+		return "", nil, err
+	}
+	switch filter.Operator {
+	case "equals":
+		return expr + ` = ?`, []any{dates[0]}, nil
+	case "in":
+		placeholders := make([]string, 0, len(dates))
+		args := make([]any, 0, len(dates))
+		for _, value := range dates {
+			placeholders = append(placeholders, "?")
+			args = append(args, value)
+		}
+		return expr + ` IN (` + strings.Join(placeholders, ",") + `)`, args, nil
+	case "gte":
+		return expr + ` >= ?`, []any{dates[0]}, nil
+	case "lte":
+		return expr + ` <= ?`, []any{dates[0]}, nil
+	case "between":
+		low, high := dates[0], dates[1]
+		if low > high {
+			low, high = high, low
+		}
+		return expr + ` BETWEEN ? AND ?`, []any{low, high}, nil
+	default:
+		return "", nil, fmt.Errorf("dimension filter operator %q is not supported for %s", filter.Operator, filter.Dimension)
+	}
+}
+
 func businessAnalysisBooleanDimensionFilterValues(filter BusinessAnalysisDimensionFilter) ([]bool, error) {
 	out := make([]bool, 0, len(filter.Values))
 	for _, raw := range filter.Values {
 		value, err := parseBusinessAnalysisBoolFilterValue(raw)
 		if err != nil {
 			return nil, fmt.Errorf("dimension_filters for %s require boolean values", filter.Dimension)
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+func businessAnalysisDateDimensionFilterValues(filter BusinessAnalysisDimensionFilter) ([]string, error) {
+	out := make([]string, 0, len(filter.Values))
+	for _, raw := range filter.Values {
+		value, err := normalizeDateFilter(raw, filter.Dimension)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, value)
 	}
@@ -1683,6 +1736,7 @@ func BackedBusinessAnalysisFilterDimensions() []string {
 		"transcript_status",
 		"won_lost",
 	}
+	candidates = crmdimensions.MergeBackedFilterDimensions(candidates)
 	out := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{})
 	for _, canonical := range candidates {
@@ -1718,6 +1772,8 @@ func SupportedBusinessAnalysisDimensionFilterOperators(dimension string) []strin
 	}
 	switch spec.Kind {
 	case businessAnalysisFilterDimensionNumeric:
+		return []string{"equals", "in", "gte", "lte", "between"}
+	case businessAnalysisFilterDimensionDate:
 		return []string{"equals", "in", "gte", "lte", "between"}
 	default:
 		return []string{"equals", "in"}
@@ -1801,6 +1857,13 @@ func normalizeBusinessAnalysisDimensionFilterValues(values []string, filterIndex
 				value = "false"
 			}
 		}
+		if spec.Kind == businessAnalysisFilterDimensionDate {
+			dateValue, err := normalizeDateFilter(value, dimension)
+			if err != nil {
+				return nil, fmt.Errorf("dimension_filters[%d].values for %s require YYYY-MM-DD values", filterIndex, dimension)
+			}
+			value = dateValue
+		}
 		if spec.Kind == businessAnalysisFilterDimensionParticipantEmail {
 			value = strings.ToLower(value)
 		}
@@ -1839,6 +1902,12 @@ func BusinessAnalysisFilterDimensionCanonical(dimension string) (string, error) 
 	canonical := normalized
 	if alias, ok := businessAnalysisFilterDimensionAliases[normalized]; ok {
 		canonical = alias
+	}
+	if alias, ok := crmdimensions.BuildAliasMap()[normalized]; ok {
+		canonical = alias
+	}
+	if crmdimensions.IsExcludedFilterDimension(canonical) {
+		return "", fmt.Errorf("dimension filter %q is not available for filtering", dimension)
 	}
 	if _, disallowed := disallowedBusinessAnalysisFilterDimensions[canonical]; disallowed {
 		return "", fmt.Errorf("dimension filter %q is not available for filtering", dimension)
@@ -1963,6 +2032,21 @@ func lookupBAFilterDimensionSpec(dimension string) (baFilterDimensionSpec, error
 	case "participant_email":
 		return baFilterDimensionSpec{Canonical: canonical, Kind: businessAnalysisFilterDimensionParticipantEmail}, nil
 	default:
+		if crmdimensions.IsExcludedFilterDimension(canonical) {
+			return baFilterDimensionSpec{}, fmt.Errorf("dimension filter %q is not available for filtering", dimension)
+		}
+		if expr, ok := crmdimensions.FilterExpr(canonical, "cf"); ok {
+			kind := businessAnalysisFilterDimensionString
+			switch kindName, _ := crmdimensions.FilterKindForDimension(canonical); kindName {
+			case "numeric":
+				kind = businessAnalysisFilterDimensionNumeric
+			case "boolean":
+				kind = businessAnalysisFilterDimensionBoolean
+			case "date":
+				kind = businessAnalysisFilterDimensionDate
+			}
+			return baFilterDimensionSpec{Canonical: canonical, Kind: kind, Expr: expr}, nil
+		}
 		return baFilterDimensionSpec{}, fmt.Errorf("unsupported dimension filter %q; use a backed business-analysis field", dimension)
 	}
 }
@@ -2026,6 +2110,8 @@ func businessAnalysisDimensionExpr(dimension string) (string, string, error) {
 		return "opportunity_type", "cf.opportunity_type", nil
 	case "forecast_category":
 		return "forecast_category", "cf.opportunity_forecast_category", nil
+	case "revenue_range", "account_revenue_range":
+		return "account_revenue_range", "cf.account_revenue_range", nil
 	case "scope":
 		return "scope", "cf.scope", nil
 	case "system":
@@ -2048,6 +2134,9 @@ func businessAnalysisDimensionExpr(dimension string) (string, string, error) {
 	case "loss_reason":
 		return "loss_reason", businessAnalysisLossReasonBucketSQL(), nil
 	default:
+		if expr, ok := crmdimensions.SummarizeExpr(strings.ToLower(strings.TrimSpace(dimension)), "cf"); ok {
+			return strings.ToLower(strings.TrimSpace(dimension)), expr, nil
+		}
 		return "", "", fmt.Errorf("unsupported business-analysis dimension %q", dimension)
 	}
 }

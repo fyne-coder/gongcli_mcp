@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/store/contextmodel"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 )
 
 const (
@@ -718,12 +719,17 @@ ON CONFLICT(call_id, highlight_index) DO UPDATE SET
 	source_path = EXCLUDED.source_path,
 	updated_at = EXCLUDED.updated_at`
 
-var postgresInsertCallFactsSQL = strings.Replace(
-	postgresInsertCallFactsSQLTemplate,
-	"-- __INSERT_LOSS_REASON_FIELD_NAMES_HERE__",
-	postgresLossReasonFieldNamesSQLList(),
-	1,
-)
+var postgresInsertCallFactsSQL = strings.NewReplacer(
+	"-- __INSERT_LOSS_REASON_FIELD_NAMES_HERE__", postgresLossReasonFieldNamesSQLList(),
+	"-- __INSERT_CRM_ACCOUNT_PROMOTED_FIELDS_HERE__", crmdimensions.PostgresCRMPromotionLinesForScope(crmdimensions.ScopeAccount),
+	"-- __INSERT_CRM_OPPORTUNITY_PROMOTED_FIELDS_HERE__", crmdimensions.PostgresCRMPromotionLinesForScope(crmdimensions.ScopeOpportunity),
+	"-- __INSERT_CRM_ACCOUNT_SIGNALS_FIELDS_HERE__", crmdimensions.PostgresSignalsCRMSelectLinesForScope(crmdimensions.ScopeAccount),
+	"-- __INSERT_CRM_OPPORTUNITY_SIGNALS_FIELDS_HERE__", crmdimensions.PostgresSignalsCRMSelectLinesForScope(crmdimensions.ScopeOpportunity),
+	"-- __INSERT_CRM_ACCOUNT_INSERT_COLUMNS_HERE__", crmdimensions.PostgresInsertCRMColumnNamesForScope(crmdimensions.ScopeAccount),
+	"-- __INSERT_CRM_OPPORTUNITY_INSERT_COLUMNS_HERE__", crmdimensions.PostgresInsertCRMColumnNamesForScope(crmdimensions.ScopeOpportunity),
+	"-- __INSERT_CRM_ACCOUNT_INSERT_SELECT_HERE__", crmdimensions.PostgresInsertCRMSelectLinesForScope(crmdimensions.ScopeAccount),
+	"-- __INSERT_CRM_OPPORTUNITY_INSERT_SELECT_HERE__", crmdimensions.PostgresInsertCRMSelectLinesForScope(crmdimensions.ScopeOpportunity),
+).Replace(postgresInsertCallFactsSQLTemplate)
 
 const postgresInsertCallFactsSQLTemplate = `
 WITH selected_account AS (
@@ -747,6 +753,7 @@ crm AS (
 	       COALESCE(MAX(CASE WHEN f.object_key = sa.object_key AND f.field_name = 'Industry' THEN TRIM(f.field_value_text) END), '') AS account_industry,
 	       COALESCE(MAX(CASE WHEN f.object_key = sa.object_key AND f.field_name = 'Revenue_Range_f__c' THEN TRIM(f.field_value_text) END), '') AS account_revenue_range,
 	       COALESCE(MAX(CASE WHEN f.object_key = sa.object_key AND f.field_name = 'Primary_Procurement_System__c' THEN TRIM(f.field_value_text) END), '') AS account_primary_procurement_system,
+-- __INSERT_CRM_ACCOUNT_PROMOTED_FIELDS_HERE__
 	       COALESCE(MAX(so.object_id), '') AS opportunity_id,
 	       COALESCE(MAX(CASE WHEN f.object_key = so.object_key AND f.field_name = 'StageName' THEN TRIM(f.field_value_text) END), '') AS opportunity_stage,
 	       COALESCE(MAX(CASE WHEN f.object_key = so.object_key AND f.field_name = 'Type' THEN TRIM(f.field_value_text) END), '') AS opportunity_type,
@@ -755,6 +762,7 @@ crm AS (
 	       COALESCE(MAX(CASE WHEN f.object_key = so.object_key AND f.field_name = 'Forecast_Category_VP__c' THEN TRIM(f.field_value_text) END), '') AS opportunity_forecast_category,
 	       COALESCE(MAX(CASE WHEN f.object_key = so.object_key AND f.field_name = 'Primary_Lead_Source__c' THEN TRIM(f.field_value_text) END), '') AS opportunity_primary_lead_source,
 	       COALESCE(MAX(CASE WHEN f.object_key = so.object_key AND f.field_name = 'Procurement_System__c' THEN TRIM(f.field_value_text) END), '') AS opportunity_procurement_system,
+-- __INSERT_CRM_OPPORTUNITY_PROMOTED_FIELDS_HERE__
 	       COUNT(DISTINCT CASE WHEN LOWER(o.object_type) = 'opportunity' THEN o.object_key END) AS opportunity_count,
 	       COUNT(DISTINCT CASE WHEN LOWER(o.object_type) = 'account' THEN o.object_key END) AS account_count,
 	       COALESCE(MAX(CASE WHEN LOWER(o.object_type) = 'opportunity' AND f.field_name = 'Type' AND LOWER(TRIM(f.field_value_text)) = 'partnership' THEN 1 ELSE 0 END), 0) AS has_partner_opportunity,
@@ -805,6 +813,7 @@ signals AS (
 	       COALESCE(crm.account_industry, '') AS account_industry,
 	       COALESCE(crm.account_revenue_range, '') AS account_revenue_range,
 	       COALESCE(crm.account_primary_procurement_system, '') AS account_primary_procurement_system,
+-- __INSERT_CRM_ACCOUNT_SIGNALS_FIELDS_HERE__
 	       COALESCE(crm.opportunity_id, '') AS opportunity_id,
 	       COALESCE(crm.opportunity_stage, '') AS opportunity_stage,
 	       COALESCE(crm.opportunity_type, '') AS opportunity_type,
@@ -813,6 +822,7 @@ signals AS (
 	       COALESCE(crm.opportunity_forecast_category, '') AS opportunity_forecast_category,
 	       COALESCE(crm.opportunity_primary_lead_source, '') AS opportunity_primary_lead_source,
 	       COALESCE(crm.opportunity_procurement_system, '') AS opportunity_procurement_system,
+-- __INSERT_CRM_OPPORTUNITY_SIGNALS_FIELDS_HERE__
 	       COALESCE(crm.opportunity_count, 0) AS opportunity_count,
 	       COALESCE(crm.account_count, 0) AS account_count,
 	       COALESCE(crm.has_partner_opportunity, 0) AS has_partner_opportunity,
@@ -842,9 +852,9 @@ INSERT INTO call_facts(
 	system, direction, scope, purpose, primary_user_id, calendar_event_present, calendar_event_status,
 	sdr_disposition, transcript_present, transcript_status, lifecycle_bucket, likely_voicemail_or_ivr,
 	lifecycle_confidence, lifecycle_reason, lifecycle_evidence_fields, account_id, account_type, account_industry,
-	account_revenue_range, account_primary_procurement_system, opportunity_id, opportunity_stage,
+	account_revenue_range, account_primary_procurement_system-- __INSERT_CRM_ACCOUNT_INSERT_COLUMNS_HERE__, opportunity_id, opportunity_stage,
 	opportunity_type, opportunity_amount, opportunity_probability, opportunity_forecast_category,
-	opportunity_primary_lead_source, opportunity_procurement_system, opportunity_count, account_count,
+	opportunity_primary_lead_source, opportunity_procurement_system-- __INSERT_CRM_OPPORTUNITY_INSERT_COLUMNS_HERE__, opportunity_count, account_count,
 	participant_title_present, loss_reason_present, updated_at
 )
 SELECT c.call_id,
@@ -912,6 +922,7 @@ SELECT c.call_id,
        c.account_industry,
        c.account_revenue_range,
        c.account_primary_procurement_system,
+-- __INSERT_CRM_ACCOUNT_INSERT_SELECT_HERE__
        c.opportunity_id,
        c.opportunity_stage,
        c.opportunity_type,
@@ -920,6 +931,7 @@ SELECT c.call_id,
        c.opportunity_forecast_category,
        c.opportunity_primary_lead_source,
        c.opportunity_procurement_system,
+-- __INSERT_CRM_OPPORTUNITY_INSERT_SELECT_HERE__
        c.opportunity_count,
        c.account_count,
        (c.call_party_title_present OR c.has_contact_title = 1),

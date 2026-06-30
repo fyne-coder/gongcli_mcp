@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -2079,6 +2080,18 @@ func validateMCPCallFactsGroupBy(groupBy string) error {
 		"forecast_category":
 		return nil
 	default:
+		dim := strings.ToLower(strings.TrimSpace(groupBy))
+		if field, ok := crmdimensions.LookupPromotedField(dim); ok && (field.Kind == crmdimensions.KindCategorical || field.Kind == crmdimensions.KindBoolean) {
+			return nil
+		}
+		for _, bucket := range crmdimensions.BucketDimensions {
+			if bucket.Dimension == dim {
+				return nil
+			}
+		}
+		if crmdimensions.IsExcludedFilterDimension(dim) {
+			return fmt.Errorf("unsupported MCP group_by %q; excluded CRM field", groupBy)
+		}
 		return fmt.Errorf("unsupported MCP group_by %q; use list_business_concepts for field discovery and search_crm_field_values with explicit opt-in for value lookups", groupBy)
 	}
 }

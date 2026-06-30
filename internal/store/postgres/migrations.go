@@ -1,5 +1,7 @@
 package postgres
 
+import "github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
+
 var migrations = []string{
 	`
 CREATE TABLE IF NOT EXISTS gongctl_schema_migrations (
@@ -1886,5 +1888,16 @@ DROP FUNCTION IF EXISTS gongmcp_business_analysis_evidence_sanitized(text, text,
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
 DROP FUNCTION IF EXISTS gongmcp_business_analysis_theme_seed_sample_sanitized(text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, text, boolean, integer, text);
 ` + postgresBusinessAnalysisFunctionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
+	`-- Business-safe CRM field dimensions: promote governed Account/Opportunity context into call_facts.
+` + crmdimensions.PostgresAlterTableAddColumnStatements() + `
+DO $$
+BEGIN
+	IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gongmcp_reader') THEN
+		EXECUTE 'GRANT SELECT (` + crmdimensions.PostgresReaderGrantColumns() + `) ON call_facts TO gongmcp_reader';
+	END IF;
+END;
+$$;
+` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
 }

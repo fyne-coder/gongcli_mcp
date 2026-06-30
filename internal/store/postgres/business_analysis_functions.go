@@ -3,6 +3,7 @@ package postgres
 import (
 	"strings"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -62,16 +63,37 @@ $function$;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_loss_reason_bucket(text, boolean) FROM PUBLIC;
 `
 
-// postgresBusinessAnalysisFunctionsSQL is the full set of business-analysis
-// SECURITY DEFINER functions. It is composed at package init from a base
-// template plus the rendered loss-reason-bucket function so the SQLite and
-// Postgres bucket mappings are sourced from the same Go rule set.
-var postgresBusinessAnalysisFunctionsSQL = strings.Replace(
-	postgresBusinessAnalysisFunctionsTemplateSQL,
-	"-- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__",
-	postgresBusinessAnalysisLossReasonBucketFunctionSQL,
-	1,
-)
+// postgresBusinessAnalysisFunctionsSQL is the historical set of
+// business-analysis SECURITY DEFINER functions. Keep this CRM-column-free
+// because older migrations still reference it before CRM dimension columns are
+// added.
+var postgresBusinessAnalysisFunctionsSQL = strings.NewReplacer(
+	"-- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__", postgresBusinessAnalysisLossReasonBucketFunctionSQL,
+	"-- __INSERT_CRM_FILTER_ROW_VALUE_CASES_HERE__", "",
+	"-- __INSERT_CRM_FILTER_NUMERIC_VALUE_CASES_HERE__", "",
+	"-- __INSERT_CRM_FILTER_BOOLEAN_VALUE_CASES_HERE__", "",
+	"-- __INSERT_CRM_FILTER_DIMENSION_ALLOWS_HERE__", "'__gongctl_no_crm_dimension__'",
+	"-- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__", "'__gongctl_no_crm_string_dimension__'",
+	"-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__", "'__gongctl_no_crm_date_dimension__'",
+	"-- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__", "'__gongctl_no_crm_boolean_dimension__'",
+	"-- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__", "'__gongctl_no_crm_numeric_dimension__'",
+	"-- __INSERT_CRM_SUMMARIZE_DIMENSION_CASES_HERE__", "",
+).Replace(postgresBusinessAnalysisFunctionsTemplateSQL)
+
+// postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL refreshes the same
+// functions after the CRM dimension migration has added its call_facts columns.
+var postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL = strings.NewReplacer(
+	"-- __INSERT_LOSS_REASON_BUCKET_FUNCTION_HERE__", postgresBusinessAnalysisLossReasonBucketFunctionSQL,
+	"-- __INSERT_CRM_FILTER_ROW_VALUE_CASES_HERE__", crmdimensions.PostgresDimensionFilterCaseLines(),
+	"-- __INSERT_CRM_FILTER_NUMERIC_VALUE_CASES_HERE__", crmdimensions.PostgresDimensionFilterNumericCaseLines(),
+	"-- __INSERT_CRM_FILTER_BOOLEAN_VALUE_CASES_HERE__", crmdimensions.PostgresCRMBooleanFilterCaseLines(),
+	"-- __INSERT_CRM_FILTER_DIMENSION_ALLOWS_HERE__", crmdimensions.PostgresCRMFilterDimensionAllowListCSV(),
+	"-- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__", crmdimensions.PostgresCRMStringEqualsDimensionsCSV(),
+	"-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__", crmdimensions.PostgresCRMDateFilterDimensionsCSV(),
+	"-- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__", crmdimensions.PostgresCRMBooleanFilterDimensionsCSV(),
+	"-- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__", crmdimensions.PostgresCRMNumericFilterDimensionsCSV(),
+	"-- __INSERT_CRM_SUMMARIZE_DIMENSION_CASES_HERE__", crmdimensions.PostgresSummarizeDimensionCaseLines(),
+).Replace(postgresBusinessAnalysisFunctionsTemplateSQL)
 
 const postgresBusinessAnalysisFunctionsTemplateSQL = `
 CREATE OR REPLACE FUNCTION gongmcp_search_transcript_segments_by_call_facts(search_text text, from_date_arg text, to_date_arg text, lifecycle_bucket_arg text, scope_arg text, system_arg text, direction_arg text, row_limit integer)
@@ -440,18 +462,21 @@ normalized AS (
 		       WHEN 'participant_status' THEN CASE WHEN cf.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END
 		       WHEN 'person_title_status' THEN CASE WHEN cf.party_title_count > 0 THEN 'available' WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_present_title_unverified' WHEN cf.parties_count > 0 THEN 'participants_present_check_party_titles' ELSE 'missing_from_cache' END
 		       WHEN 'person_title_source' THEN CASE WHEN cf.party_title_count > 0 THEN 'call_parties' WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_object' ELSE '' END
+-- __INSERT_CRM_FILTER_ROW_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS row_value,
 	       CASE dims.dimension
 		       WHEN 'duration_seconds' THEN duration_seconds_arg
 		       WHEN 'opportunity_count' THEN cf.opportunity_count
 		       WHEN 'account_count' THEN cf.account_count
+-- __INSERT_CRM_FILTER_NUMERIC_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS numeric_value,
 	       CASE dims.dimension
 		       WHEN 'calendar_event_present' THEN cf.calendar_event_present
 		       WHEN 'transcript_present' THEN cf.transcript_present
 		       WHEN 'likely_voicemail_or_ivr' THEN cf.likely_voicemail_or_ivr
+-- __INSERT_CRM_FILTER_BOOLEAN_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS boolean_value,
 	       filter_json->'values' AS values_json
@@ -479,7 +504,8 @@ normalized AS (
 SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 	SELECT 1
 	  FROM normalized
-	 WHERE dimension NOT IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_name', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'crm_object_id', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', 'duration_seconds', 'opportunity_count', 'account_count', 'calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'participant_email')
+	 WHERE dimension NOT IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_name', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'crm_object_id', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', 'duration_seconds', 'opportunity_count', 'account_count', 'calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'participant_email', -- __INSERT_CRM_FILTER_DIMENSION_ALLOWS_HERE__
+)
 	    OR values_json IS NULL
 	    OR jsonb_typeof(values_json) <> 'array'
 	    OR jsonb_array_length(values_json) = 0
@@ -487,11 +513,13 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 	    OR (operator = 'between' AND jsonb_array_length(values_json) <> 2)
 	    OR operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
 	    OR (
-		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source')
+		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', -- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__
+)
 		    AND operator NOT IN ('equals', 'in')
 	    )
 	    OR (
-		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source')
+		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', -- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__
+)
 		    AND (
 			    row_value IS NULL
 			    OR NOT EXISTS (
@@ -502,15 +530,23 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 		    )
 	    )
 	    OR (
-		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count')
+		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count', -- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__
+)
 		    AND operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
 	    )
 	    OR (
-		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'account_name', 'crm_object_id', 'participant_email')
+		    dimension IN (-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__
+)
+		    AND operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
+	    )
+	    OR (
+		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'account_name', 'crm_object_id', 'participant_email', -- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__
+)
 		    AND operator NOT IN ('equals', 'in')
 	    )
 	    OR (
-		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count')
+		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count', -- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__
+)
 		    AND operator IN ('equals', 'in', 'gte', 'lte', 'between')
 		    AND (
 			    numeric_value IS NULL
@@ -529,7 +565,29 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 		    )
 	    )
 	    OR (
-		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr')
+		    dimension IN (-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__
+)
+		    AND operator IN ('equals', 'in', 'gte', 'lte', 'between')
+		    AND (
+			    row_value IS NULL
+			    OR trim(row_value) = ''
+			    OR (operator = 'equals' AND row_value <> values_json->>0)
+			    OR (operator = 'in' AND NOT EXISTS (
+				    SELECT 1
+				      FROM jsonb_array_elements_text(values_json) allowed(value)
+				     WHERE row_value = allowed.value
+			    ))
+			    OR (operator = 'gte' AND row_value < values_json->>0)
+			    OR (operator = 'lte' AND row_value > values_json->>0)
+			    OR (operator = 'between' AND (
+				    row_value < LEAST(values_json->>0, values_json->>1)
+				    OR row_value > GREATEST(values_json->>0, values_json->>1)
+			    ))
+		    )
+	    )
+	    OR (
+		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', -- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__
+)
 		    AND operator IN ('equals', 'in')
 		    AND (
 			    boolean_value IS NULL
@@ -1090,6 +1148,7 @@ WITH rows AS (
 		       WHEN 'won_lost' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
 		       WHEN 'outcome' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
 		       WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket(cf.call_id, cf.loss_reason_present)
+-- __INSERT_CRM_SUMMARIZE_DIMENSION_CASES_HERE__
 		       ELSE ''
 	       END AS dimension_value
 	  FROM call_facts cf

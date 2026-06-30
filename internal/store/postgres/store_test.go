@@ -1471,7 +1471,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyVoicemailExclusionsInSQL(t *testi
 func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.T) {
 	t.Parallel()
 
-	sqlText := postgresBusinessAnalysisFunctionsSQL
+	sqlText := postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL
 	for _, want := range []string{
 		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text",
 		"jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb)",
@@ -1482,7 +1482,10 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket",
 		"WHEN 'person_title_status' THEN CASE WHEN cf.party_title_count > 0 THEN 'available'",
 		"WHEN 'person_title_source' THEN CASE WHEN cf.party_title_count > 0 THEN 'call_parties'",
-		"dimension IN ('duration_seconds', 'opportunity_count', 'account_count')",
+		"dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
+		"dimension IN ('account_created_date'",
+		"WHEN 'account_customer_segment_type' THEN cf.account_customer_segment_type",
+		"WHEN 'opportunity_close_month' THEN CASE WHEN length(TRIM(cf.opportunity_close_date)) >= 7 THEN left(TRIM(cf.opportunity_close_date), 7) ELSE '' END",
 		"dimension = 'participant_email'",
 		"dimension = 'account_name'",
 		"dimension = 'crm_object_id'",
@@ -1519,16 +1522,74 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	if personaHelperIndex > filterHelperIndex || lossReasonHelperIndex > filterHelperIndex {
 		t.Fatalf("derived bucket helpers must be created before dimension filter helper: persona=%d loss_reason=%d filter=%d", personaHelperIndex, lossReasonHelperIndex, filterHelperIndex)
 	}
+	var crmColumnMigration string
+	for _, migration := range migrations {
+		if strings.Contains(migration, "Business-safe CRM field dimensions") {
+			crmColumnMigration = migration
+			break
+		}
+	}
+	if crmColumnMigration == "" {
+		t.Fatal("missing Business-safe CRM field dimensions migration")
+	}
+	for _, want := range []string{
+		"Business-safe CRM field dimensions",
+		"account_customer_segment_type",
+	} {
+		if !strings.Contains(crmColumnMigration, want) {
+			t.Fatalf("CRM column migration missing rollout contract %q", want)
+		}
+	}
 	latestMigration := migrations[len(migrations)-1]
 	for _, want := range []string{
-		"Package-2 business-analysis dimension filters",
-		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
-		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text)",
+		"Business-safe CRM field dimensions",
+		"ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS account_customer_segment_type",
+		"account_customer_segment_type",
 		"dimension_filters_json text DEFAULT '[]'",
 	} {
 		if !strings.Contains(latestMigration, want) {
-			t.Fatalf("latest migration missing dimension-filter rollout contract %q", want)
+			t.Fatalf("latest migration missing CRM function refresh contract %q", want)
 		}
+	}
+	var package2Migration string
+	for _, migration := range migrations {
+		if strings.Contains(migration, "Package-2 business-analysis dimension filters") {
+			package2Migration = migration
+			break
+		}
+	}
+	if package2Migration == "" {
+		t.Fatal("missing Package-2 business-analysis dimension filters migration")
+	}
+	for _, want := range []string{
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text)",
+		"DROP FUNCTION IF EXISTS gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text)",
+	} {
+		if !strings.Contains(package2Migration, want) {
+			t.Fatalf("package-2 migration missing dimension-filter rollout contract %q", want)
+		}
+	}
+}
+
+func TestPostgresCallFactGroupColumnSupportsCRMDimensions(t *testing.T) {
+	t.Parallel()
+
+	groupBy, column, err := postgresCallFactGroupColumn("account_customer_segment_type")
+	if err != nil {
+		t.Fatalf("customer segment group: %v", err)
+	}
+	if groupBy != "account_customer_segment_type" || column != "account_customer_segment_type" {
+		t.Fatalf("unexpected customer segment mapping: %s %s", groupBy, column)
+	}
+	groupBy, column, err = postgresCallFactGroupColumn("opportunity_close_month")
+	if err != nil {
+		t.Fatalf("close month group: %v", err)
+	}
+	if groupBy != "opportunity_close_month" || !strings.Contains(column, "opportunity_close_date") {
+		t.Fatalf("unexpected close month mapping: %s %s", groupBy, column)
+	}
+	if !strings.Contains(postgresCallFactsSQL(), "account_customer_segment_type") {
+		t.Fatal("postgres facts SQL must select promoted CRM columns")
 	}
 }
 

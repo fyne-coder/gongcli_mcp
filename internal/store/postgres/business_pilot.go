@@ -10,6 +10,7 @@ import (
 	"time"
 
 	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
 )
 
@@ -691,10 +692,15 @@ SELECT call_id,
 	       account_type,
 	       account_industry,
 	       account_revenue_range,
+	       account_primary_procurement_system,
 	       opportunity_stage,
        opportunity_type,
+       opportunity_amount,
+       opportunity_probability,
        opportunity_primary_lead_source,
        opportunity_forecast_category,
+       opportunity_procurement_system,
+` + crmdimensions.PostgresCallFactsSelectLines() + `
        duration_bucket
   FROM call_facts`
 }
@@ -972,6 +978,15 @@ func postgresCallFactGroupColumn(groupBy string) (string, string, error) {
 	case "forecast_category":
 		return "forecast_category", "opportunity_forecast_category", nil
 	default:
+		dim := strings.ToLower(strings.TrimSpace(groupBy))
+		if field, ok := crmdimensions.LookupPromotedField(dim); ok && (field.Kind == crmdimensions.KindCategorical || field.Kind == crmdimensions.KindBoolean) {
+			return dim, field.Column, nil
+		}
+		for _, bucket := range crmdimensions.BucketDimensions {
+			if bucket.Dimension == dim {
+				return dim, crmdimensions.PostgresBucketExpr(bucket, ""), nil
+			}
+		}
 		return "", "", fmt.Errorf("unsupported group_by %q in postgres business-pilot slice", groupBy)
 	}
 }
