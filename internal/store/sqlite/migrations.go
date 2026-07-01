@@ -1,5 +1,7 @@
 package sqlite
 
+import "github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
+
 var migrations = []string{
 	`
 CREATE TABLE IF NOT EXISTS sync_runs (
@@ -863,4 +865,5 @@ CREATE TABLE IF NOT EXISTS governance_ingest_skipped_calls (
 CREATE INDEX IF NOT EXISTS idx_governance_ingest_skipped_calls_config
 	ON governance_ingest_skipped_calls(config_sha256);
 `,
+	crmdimensions.SQLiteCallFactsViewMigrationSQL,
 }

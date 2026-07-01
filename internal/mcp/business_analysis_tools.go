@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1030,6 +1031,9 @@ func normalizeCallFilter(filter callFilter) (callFilter, error) {
 	if filter.DimensionFilters, err = sqlite.NormalizeBusinessAnalysisDimensionFilters(filter.DimensionFilters); err != nil {
 		return callFilter{}, err
 	}
+	if filter, err = canonicalizeCallFilterDimensionTimeFilters(filter); err != nil {
+		return callFilter{}, err
+	}
 	if filter.Quarter != "" {
 		canonical, fromDate, toDate, err := normalizeCallFilterQuarter(filter.Quarter)
 		if err != nil {
@@ -1064,6 +1068,129 @@ func normalizeCallFilter(filter callFilter) (callFilter, error) {
 	}
 	if filter.Limit > 0 {
 		filter.Limit = boundedBusinessAnalysisLimit(filter.Limit)
+	}
+	return filter, nil
+}
+
+func canonicalizeCallFilterDimensionTimeFilters(filter callFilter) (callFilter, error) {
+	if len(filter.DimensionFilters) == 0 {
+		return filter, nil
+	}
+	out := make([]sqlite.BusinessAnalysisDimensionFilter, 0, len(filter.DimensionFilters))
+	for _, dimensionFilter := range filter.DimensionFilters {
+		if dimensionFilter.Dimension != "quarter" {
+			out = append(out, dimensionFilter)
+			continue
+		}
+		if dimensionFilter.Operator != "equals" && dimensionFilter.Operator != "in" {
+			out = append(out, dimensionFilter)
+			continue
+		}
+		quarters, contiguous, err := normalizedQuarterFilterValues(dimensionFilter.Values)
+		if err != nil {
+			return callFilter{}, err
+		}
+		if !contiguous {
+			out = append(out, dimensionFilter)
+			continue
+		}
+		first := quarters[0]
+		last := quarters[len(quarters)-1]
+		if filter.Quarter != "" {
+			existing, existingFromDate, existingToDate, err := normalizeCallFilterQuarter(filter.Quarter)
+			if err != nil {
+				return callFilter{}, err
+			}
+			existingOrdinal, err := quarterOrdinal(existing)
+			if err != nil {
+				return callFilter{}, err
+			}
+			if existingOrdinal < first.ordinal || existingOrdinal > last.ordinal {
+				return callFilter{}, fmt.Errorf("quarter dimension_filter %q..%q conflicts with filter.quarter %q", first.canonical, last.canonical, existing)
+			}
+			first = quarterFilterValue{canonical: existing, fromDate: existingFromDate, toDate: existingToDate, ordinal: existingOrdinal}
+			last = first
+		}
+		if len(quarters) == 1 {
+			filter.Quarter = first.canonical
+		}
+		filter, err = constrainCallFilterDateRange(filter, first.fromDate, last.toDate)
+		if err != nil {
+			return callFilter{}, err
+		}
+	}
+	filter.DimensionFilters = out
+	return filter, nil
+}
+
+type quarterFilterValue struct {
+	canonical string
+	fromDate  string
+	toDate    string
+	ordinal   int
+}
+
+func normalizedQuarterFilterValues(values []string) ([]quarterFilterValue, bool, error) {
+	seen := map[string]quarterFilterValue{}
+	for _, raw := range values {
+		canonical, fromDate, toDate, err := normalizeCallFilterQuarter(raw)
+		if err != nil {
+			return nil, false, err
+		}
+		ordinal, err := quarterOrdinal(canonical)
+		if err != nil {
+			return nil, false, err
+		}
+		seen[canonical] = quarterFilterValue{
+			canonical: canonical,
+			fromDate:  fromDate,
+			toDate:    toDate,
+			ordinal:   ordinal,
+		}
+	}
+	quarters := make([]quarterFilterValue, 0, len(seen))
+	for _, quarter := range seen {
+		quarters = append(quarters, quarter)
+	}
+	sort.Slice(quarters, func(i, j int) bool {
+		return quarters[i].ordinal < quarters[j].ordinal
+	})
+	for i := 1; i < len(quarters); i++ {
+		if quarters[i].ordinal != quarters[i-1].ordinal+1 {
+			return quarters, false, nil
+		}
+	}
+	return quarters, len(quarters) > 0, nil
+}
+
+func quarterOrdinal(canonical string) (int, error) {
+	yearText, quarterText, ok := strings.Cut(canonical, "-Q")
+	if !ok {
+		return 0, fmt.Errorf("quarter must look like 2026-Q1")
+	}
+	year, err := strconv.Atoi(yearText)
+	if err != nil {
+		return 0, err
+	}
+	quarter, err := strconv.Atoi(quarterText)
+	if err != nil {
+		return 0, err
+	}
+	if quarter < 1 || quarter > 4 {
+		return 0, fmt.Errorf("quarter must be Q1, Q2, Q3, or Q4")
+	}
+	return year*4 + quarter - 1, nil
+}
+
+func constrainCallFilterDateRange(filter callFilter, fromDate, toDate string) (callFilter, error) {
+	if filter.FromDate == "" || filter.FromDate < fromDate {
+		filter.FromDate = fromDate
+	}
+	if filter.ToDate == "" || filter.ToDate > toDate {
+		filter.ToDate = toDate
+	}
+	if filter.FromDate > filter.ToDate {
+		return callFilter{}, fmt.Errorf("quarter dimension_filter date range does not overlap from_date/to_date")
 	}
 	return filter, nil
 }

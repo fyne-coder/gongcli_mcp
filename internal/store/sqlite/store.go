@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/store/contextmodel"
+	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 	_ "modernc.org/sqlite"
 )
 
@@ -4239,6 +4240,15 @@ func callFactGroupColumn(groupBy string) (string, string, error) {
 	case "forecast_category":
 		return "forecast_category", "opportunity_forecast_category", nil
 	default:
+		dim := strings.ToLower(strings.TrimSpace(groupBy))
+		if field, ok := crmdimensions.LookupPromotedField(dim); ok && (field.Kind == crmdimensions.KindCategorical || field.Kind == crmdimensions.KindBoolean) {
+			return dim, field.Column, nil
+		}
+		for _, bucket := range crmdimensions.BucketDimensions {
+			if bucket.Dimension == dim {
+				return dim, crmdimensions.SQLiteBucketExpr(bucket, ""), nil
+			}
+		}
 		return "", "", fmt.Errorf("unsupported group_by %q", groupBy)
 	}
 }

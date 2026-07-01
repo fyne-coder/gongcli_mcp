@@ -41,6 +41,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	internalParticipantDomainsFlag := flags.String("internal-participant-domains", "", "Comma-separated internal email domains for participant_domain/participant_affiliation classification; defaults to GONGMCP_INTERNAL_PARTICIPANT_DOMAINS or a generic example domain")
 	listToolPresets := flags.Bool("list-tool-presets", false, "List built-in MCP tool presets as JSON and exit")
 	httpAddr := flags.String("http", "", "Optional HTTP listen address for /mcp; defaults to GONGMCP_HTTP_ADDR")
+	httpToolTimeout := flags.String("http-tool-timeout", "", "Maximum duration for one HTTP MCP tool call; defaults to GONGMCP_HTTP_TOOL_TIMEOUT or 60s")
 	forceStdio := flags.Bool("stdio", false, "Force stdio transport and ignore GONGMCP_HTTP_ADDR")
 	authMode := flags.String("auth-mode", "", "HTTP auth mode: none or bearer; defaults to GONGMCP_AUTH_MODE or bearer")
 	bearerToken := flags.String("bearer-token", "", "Bearer token for HTTP auth; defaults to GONGMCP_BEARER_TOKEN")
@@ -173,6 +174,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "invalid MCP limit policy: %v\n", err)
 		return 2
 	}
+	resolvedHTTPToolTimeout, err := resolveHTTPToolCallTimeout(*httpToolTimeout, flagSet["http-tool-timeout"], os.Getenv)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid http tool timeout: %v\n", err)
+		return 2
+	}
 	provenance, err := mcp.ParseTranscriptEvidenceProvenance(*transcriptEvidenceProvenance)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -275,6 +281,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		mcp.WithFacadeRoutedToolAllowlist(facadeRoutedAllowlist),
 		mcp.WithLimitPolicy(limitPolicy),
 		mcp.WithTranscriptEvidenceProvenance(provenance),
+		mcp.WithHTTPToolCallTimeout(resolvedHTTPToolTimeout),
 		mcp.WithInternalParticipantDomains(parseCommaList(firstNonEmpty(*internalParticipantDomainsFlag, os.Getenv("GONGMCP_INTERNAL_PARTICIPANT_DOMAINS")))),
 		mcp.WithRuntimeInfo(mcp.RuntimeInfo{
 			Commit:       buildInfo.Commit,
@@ -409,7 +416,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       20 * time.Second,
-			WriteTimeout:      90 * time.Second,
+			WriteTimeout:      httpWriteTimeoutForToolTimeout(resolvedHTTPToolTimeout),
 			IdleTimeout:       120 * time.Second,
 		}
 		fmt.Fprintf(stderr, "serving mcp over http on %s path=/mcp auth_mode=%s bearer_token_count=%d\n", httpConfig.Addr, httpConfig.AuthMode, len(httpConfig.BearerTokens))
@@ -425,6 +432,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func resolveHTTPToolCallTimeout(flagValue string, flagSet bool, getenv func(string) string) (time.Duration, error) {
+	raw := strings.TrimSpace(flagValue)
+	if !flagSet && getenv != nil {
+		raw = strings.TrimSpace(getenv("GONGMCP_HTTP_TOOL_TIMEOUT"))
+	}
+	if raw == "" {
+		return mcp.DefaultHTTPToolCallTimeout, nil
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("must be a valid duration such as 60s or 2m")
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("must be greater than zero")
+	}
+	return timeout, nil
+}
+
+func httpWriteTimeoutForToolTimeout(toolTimeout time.Duration) time.Duration {
+	writeTimeout := toolTimeout + 30*time.Second
+	if writeTimeout < 90*time.Second {
+		return 90 * time.Second
+	}
+	return writeTimeout
 }
 
 func postgresToolAllowlist(allowlist []string, httpMode bool, presetName string) ([]string, error) {

@@ -762,6 +762,7 @@ can expose the same read-only MCP tools over a minimal HTTP `/mcp` endpoint:
 GONGMCP_BEARER_TOKEN="<customer-managed-token>" \
 GONGMCP_ALLOWED_ORIGINS="https://approved-client.example.com" \
 GONGMCP_TOOL_PRESET=business-pilot \
+GONGMCP_HTTP_TOOL_TIMEOUT=60s \
 GONGMCP_MAX_SEARCH_RESULTS=100 \
   gongmcp --http 127.0.0.1:8080 --auth-mode bearer --db /srv/gongctl/gong.db
 ```
@@ -805,6 +806,10 @@ Non-local HTTP also requires `GONGMCP_ALLOWED_ORIGINS` or `--allowed-origins`
 so the server can reject unexpected browser `Origin` headers.
 Use `/healthz` for infrastructure health checks and `/mcp` only for MCP
 JSON-RPC traffic.
+HTTP MCP tool calls default to a `60s` server-side deadline. For approved
+large-cache Postgres deployments, set `--http-tool-timeout` or
+`GONGMCP_HTTP_TOOL_TIMEOUT` to a positive Go duration such as `2m`; keep the
+upstream proxy and load-balancer timeouts above the same value.
 
 Full SQLite catalog tools. Postgres availability is limited to the supported
 presets and explicit allowlists described above; unsupported Postgres tools and

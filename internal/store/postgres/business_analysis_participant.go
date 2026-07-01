@@ -42,12 +42,21 @@ func (s *Store) summarizeBusinessAnalysisParticipantDimension(ctx context.Contex
 	}
 
 	filteredSQL := `
-WITH filtered AS (
+WITH dimension_filters AS MATERIALIZED (
+	SELECT dimension, operator, values_json
+	  FROM gongmcp_business_analysis_normalized_dimension_filters($19)
+),
+dimension_filter_mode AS MATERIALIZED (
+	SELECT COALESCE(NULLIF($19, ''), '[]') = '[]' AS dimension_filters_empty,
+	       NOT EXISTS (SELECT 1 FROM dimension_filters WHERE dimension IS DISTINCT FROM 'duration_seconds') AS duration_filters_only
+),
+filtered AS (
 	SELECT cf.*,
 	       c.raw_json AS raw_json
 	  FROM call_facts cf
 	  JOIN calls c
 	    ON c.call_id = cf.call_id
+	  CROSS JOIN dimension_filter_mode dfm
 	 WHERE ($1 = '' OR LOWER(cf.title) LIKE '%' || LOWER(left($1, 160)) || '%')
 	   AND ($2 = '' OR EXISTS (SELECT 1 FROM transcript_segments theme_ts WHERE theme_ts.call_id = cf.call_id AND theme_ts.search_vector @@ websearch_to_tsquery('simple', left($2, 160))))
 	   AND ($3 = '' OR EXISTS (SELECT 1 FROM transcript_segments query_ts WHERE query_ts.call_id = cf.call_id AND query_ts.search_vector @@ websearch_to_tsquery('simple', left($3, 160))))
@@ -55,7 +64,35 @@ WITH filtered AS (
 	   AND ($5 = '' OR cf.call_date <= $5)
 	   AND ($6 = '' OR cf.lifecycle_bucket = $6)
 	   AND (COALESCE(NULLIF($7, ''), '[]') = '[]' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF($7, ''), '[]')::jsonb) excluded(value) WHERE LOWER(TRIM(excluded.value)) = cf.lifecycle_bucket))
-	   AND (COALESCE(NULLIF($19, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match($19, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id))
+	   AND CASE
+		   WHEN dfm.dimension_filters_empty THEN true
+		   WHEN dfm.duration_filters_only THEN NOT EXISTS (
+			   SELECT 1
+			     FROM dimension_filters df
+			    WHERE df.values_json IS NULL
+			       OR jsonb_typeof(df.values_json) <> 'array'
+			       OR jsonb_array_length(df.values_json) = 0
+			       OR (df.operator = 'equals' AND jsonb_array_length(df.values_json) <> 1)
+			       OR (df.operator = 'between' AND jsonb_array_length(df.values_json) <> 2)
+			       OR df.operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
+			       OR cf.duration_seconds IS NULL
+			       OR (
+				       (df.operator = 'equals' AND cf.duration_seconds <> (df.values_json->>0)::bigint)
+				    OR (df.operator = 'gte' AND cf.duration_seconds < (df.values_json->>0)::bigint)
+				    OR (df.operator = 'lte' AND cf.duration_seconds > (df.values_json->>0)::bigint)
+				    OR (df.operator = 'between' AND (
+					       cf.duration_seconds < LEAST((df.values_json->>0)::bigint, (df.values_json->>1)::bigint)
+					    OR cf.duration_seconds > GREATEST((df.values_json->>0)::bigint, (df.values_json->>1)::bigint)
+				       ))
+				    OR (df.operator = 'in' AND NOT EXISTS (
+					       SELECT 1
+					         FROM jsonb_array_elements_text(df.values_json) AS values(value)
+					        WHERE cf.duration_seconds = values.value::bigint
+				       ))
+			       )
+		   )
+		   ELSE gongmcp_business_analysis_dimension_filters_match($19, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id)
+	   END
 	   AND (NOT COALESCE($8::boolean, false) OR NOT cf.likely_voicemail_or_ivr)
 	   AND ($9 = '' OR cf.scope = $9)
 	   AND ($10 = '' OR cf.system = $10)

@@ -50,6 +50,176 @@ func TestNormalizeCallFilterDimensionFiltersAcceptsBackedDurationAndEmail(t *tes
 	}
 }
 
+func TestNormalizeCallFilterCanonicalizesSingleQuarterDimensionFilter(t *testing.T) {
+	filter, err := normalizeCallFilter(callFilter{
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "quarter", Operator: "in", Values: []string{"2026-Q2"}},
+			{Dimension: "duration_seconds", Operator: "gte", Values: []string{"300"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCallFilter quarter dimension filter: %v", err)
+	}
+	if filter.Quarter != "2026-Q2" || filter.FromDate != "2026-04-01" || filter.ToDate != "2026-06-30" {
+		t.Fatalf("quarter dimension filter was not canonicalized to top-level dates: %+v", filter)
+	}
+	if len(filter.DimensionFilters) != 1 {
+		t.Fatalf("dimension filter count=%d want only duration filter: %+v", len(filter.DimensionFilters), filter.DimensionFilters)
+	}
+	if got := filter.DimensionFilters[0]; got.Dimension != "duration_seconds" || got.Operator != "gte" || got.Values[0] != "300" {
+		t.Fatalf("unexpected remaining dimension filter: %+v", got)
+	}
+}
+
+func TestNormalizeCallFilterCanonicalizesContiguousQuarterDimensionFilters(t *testing.T) {
+	filter, err := normalizeCallFilter(callFilter{
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "quarter", Operator: "in", Values: []string{"2026-Q2", "2025-Q3", "2026-Q1", "2025-Q4"}},
+			{Dimension: "duration_seconds", Operator: "gte", Values: []string{"300"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCallFilter multi-quarter dimension filter: %v", err)
+	}
+	if filter.Quarter != "" || filter.FromDate != "2025-07-01" || filter.ToDate != "2026-06-30" {
+		t.Fatalf("contiguous quarter dimension filters were not canonicalized to a date range: %+v", filter)
+	}
+	if len(filter.DimensionFilters) != 1 {
+		t.Fatalf("dimension filter count=%d want only duration filter: %+v", len(filter.DimensionFilters), filter.DimensionFilters)
+	}
+	if got := filter.DimensionFilters[0]; got.Dimension != "duration_seconds" || got.Operator != "gte" || got.Values[0] != "300" {
+		t.Fatalf("unexpected remaining dimension filter: %+v", got)
+	}
+}
+
+func TestNormalizeCallFilterIntersectsContiguousQuarterDimensionFilters(t *testing.T) {
+	tests := []struct {
+		name     string
+		filter   callFilter
+		wantFrom string
+		wantTo   string
+	}{
+		{
+			name: "explicit dates narrow quarter",
+			filter: callFilter{
+				FromDate: "2025-08-01",
+				DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+					{Dimension: "quarter", Operator: "in", Values: []string{"2025-Q3"}},
+				},
+			},
+			wantFrom: "2025-08-01",
+			wantTo:   "2025-09-30",
+		},
+		{
+			name: "top-level quarter narrows quarter range",
+			filter: callFilter{
+				Quarter: "2025-Q4",
+				DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+					{Dimension: "quarter", Operator: "in", Values: []string{"2025-Q3", "2025-Q4", "2026-Q1"}},
+				},
+			},
+			wantFrom: "2025-10-01",
+			wantTo:   "2025-12-31",
+		},
+		{
+			name: "duplicate mixed-format quarters remain contiguous",
+			filter: callFilter{
+				DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+					{Dimension: "quarter", Operator: "in", Values: []string{"Q3-2025", "2025Q3", "2025-Q4"}},
+				},
+			},
+			wantFrom: "2025-07-01",
+			wantTo:   "2025-12-31",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter, err := normalizeCallFilter(tt.filter)
+			if err != nil {
+				t.Fatalf("normalizeCallFilter: %v", err)
+			}
+			if filter.FromDate != tt.wantFrom || filter.ToDate != tt.wantTo {
+				t.Fatalf("date range=%s..%s want %s..%s filter=%+v", filter.FromDate, filter.ToDate, tt.wantFrom, tt.wantTo, filter)
+			}
+			for _, dimensionFilter := range filter.DimensionFilters {
+				if dimensionFilter.Dimension == "quarter" {
+					t.Fatalf("canonicalized filter kept quarter dimension filter: %+v", filter.DimensionFilters)
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeCallFilterRejectsNonOverlappingQuarterDimensionFilters(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter callFilter
+	}{
+		{
+			name: "top-level quarter outside dimension range",
+			filter: callFilter{
+				Quarter: "2025-Q1",
+				DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+					{Dimension: "quarter", Operator: "in", Values: []string{"2025-Q3", "2025-Q4"}},
+				},
+			},
+		},
+		{
+			name: "explicit date outside dimension range",
+			filter: callFilter{
+				FromDate: "2026-01-01",
+				DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+					{Dimension: "quarter", Operator: "in", Values: []string{"2025-Q3"}},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := normalizeCallFilter(tt.filter); err == nil {
+				t.Fatal("normalizeCallFilter accepted non-overlapping quarter filters")
+			}
+		})
+	}
+}
+
+func TestNormalizeCallFilterKeepsNonContiguousQuarterDimensionFilters(t *testing.T) {
+	filter, err := normalizeCallFilter(callFilter{
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "quarter", Operator: "in", Values: []string{"2025-Q3", "2026-Q2"}},
+			{Dimension: "duration_seconds", Operator: "gte", Values: []string{"300"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeCallFilter non-contiguous quarter dimension filter: %v", err)
+	}
+	if filter.FromDate != "" || filter.ToDate != "" {
+		t.Fatalf("non-contiguous quarter filters should not be broadened into a date range: %+v", filter)
+	}
+	if len(filter.DimensionFilters) != 2 {
+		t.Fatalf("non-contiguous quarter dimension filter should remain: %+v", filter.DimensionFilters)
+	}
+	got := make(map[string]sqlite.BusinessAnalysisDimensionFilter, len(filter.DimensionFilters))
+	for _, dimensionFilter := range filter.DimensionFilters {
+		got[dimensionFilter.Dimension] = dimensionFilter
+	}
+	if _, ok := got["quarter"]; !ok {
+		t.Fatalf("non-contiguous quarter dimension filter should remain: %+v", filter.DimensionFilters)
+	}
+}
+
+func TestNormalizeCallFilterRejectsConflictingQuarterDimensionFilter(t *testing.T) {
+	_, err := normalizeCallFilter(callFilter{
+		Quarter: "2026-Q1",
+		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
+			{Dimension: "quarter", Operator: "equals", Values: []string{"2026-Q2"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("normalizeCallFilter accepted conflicting top-level and dimension-filter quarters")
+	}
+}
+
 func TestNormalizeCallFilterDimensionFiltersAcceptsBackedIdentifiersAndDerivedDimensions(t *testing.T) {
 	filter, err := normalizeCallFilter(callFilter{
 		DimensionFilters: []sqlite.BusinessAnalysisDimensionFilter{
