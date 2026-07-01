@@ -7,14 +7,14 @@ import (
 	"github.com/fyne-coder/gongcli_mcp/internal/store/crmdimensions"
 )
 
-func TestAccountCustomerSegmentTypeRegistered(t *testing.T) {
+func TestAccountRatingRegistered(t *testing.T) {
 	t.Parallel()
 
-	field, ok := crmdimensions.LookupPromotedField("account_customer_segment_type")
+	field, ok := crmdimensions.LookupPromotedField("account_rating")
 	if !ok {
-		t.Fatal("expected account_customer_segment_type in registry")
+		t.Fatal("expected account_rating in registry")
 	}
-	if field.SFDCNames[0] != "Customer_Segment_Type__c" {
+	if field.SFDCNames[0] != "Rating" {
 		t.Fatalf("unexpected SFDC mapping: %+v", field.SFDCNames)
 	}
 	if field.Kind != crmdimensions.KindCategorical {
@@ -25,25 +25,25 @@ func TestAccountCustomerSegmentTypeRegistered(t *testing.T) {
 func TestExcludedDimensionsRejected(t *testing.T) {
 	t.Parallel()
 
-	for _, excluded := range []string{"owner_id", "website", "marketing_notes"} {
+	for _, excluded := range []string{"owner_id", "website", "next_step"} {
 		if !crmdimensions.IsExcludedFilterDimension(excluded) {
 			t.Fatalf("expected %q to be excluded", excluded)
 		}
 	}
 }
 
-func TestSupportedFilterDimensionsIncludeCustomerSegment(t *testing.T) {
+func TestSupportedFilterDimensionsIncludeAccountRating(t *testing.T) {
 	t.Parallel()
 
 	seen := false
 	for _, dim := range crmdimensions.SupportedFilterDimensionNames() {
-		if dim == "account_customer_segment_type" {
+		if dim == "account_rating" {
 			seen = true
 			break
 		}
 	}
 	if !seen {
-		t.Fatalf("account_customer_segment_type missing from supported filters: %v", crmdimensions.SupportedFilterDimensionNames())
+		t.Fatalf("account_rating missing from supported filters: %v", crmdimensions.SupportedFilterDimensionNames())
 	}
 }
 
@@ -125,30 +125,30 @@ func TestPromotedNumericAndDateFieldsHaveGroupBuckets(t *testing.T) {
 	}
 }
 
-func TestSQLiteMigrationSQLIncludesCustomerSegment(t *testing.T) {
+func TestSQLiteMigrationSQLIncludesAccountRating(t *testing.T) {
 	t.Parallel()
 
-	if !strings.Contains(crmdimensions.SQLiteCallFactsViewMigrationSQL, "Customer_Segment_Type__c") {
-		t.Fatal("sqlite migration missing Customer_Segment_Type__c promotion")
+	if !strings.Contains(crmdimensions.SQLiteCallFactsViewMigrationSQL, "Rating") {
+		t.Fatal("sqlite migration missing Rating promotion")
 	}
-	if !strings.Contains(crmdimensions.SQLiteCallFactsViewMigrationSQL, "account_customer_segment_type") {
-		t.Fatal("sqlite migration missing account_customer_segment_type column")
+	if !strings.Contains(crmdimensions.SQLiteCallFactsViewMigrationSQL, "account_rating") {
+		t.Fatal("sqlite migration missing account_rating column")
 	}
 }
 
-func TestPostgresPromotionSQLIncludesCustomerSegment(t *testing.T) {
+func TestPostgresPromotionSQLIncludesAccountRating(t *testing.T) {
 	t.Parallel()
 
 	sqlText := crmdimensions.PostgresCRMPromotionLinesForScope(crmdimensions.ScopeAccount)
-	if !strings.Contains(sqlText, "Customer_Segment_Type__c") {
-		t.Fatalf("postgres promotion SQL missing Customer_Segment_Type__c: %s", sqlText)
+	if !strings.Contains(sqlText, "Rating") {
+		t.Fatalf("postgres promotion SQL missing Rating: %s", sqlText)
 	}
 }
 
 func TestPostgresPromotionSQLAcceptsDecimalNumericValues(t *testing.T) {
 	t.Parallel()
 
-	sqlText := crmdimensions.PostgresCRMPromotionLinesForScope(crmdimensions.ScopeOpportunity)
+	sqlText := crmdimensions.PostgresCRMPromotionLinesForScope(crmdimensions.ScopeAccount)
 	if !strings.Contains(sqlText, "::numeric::bigint") {
 		t.Fatalf("postgres numeric promotion should cast decimal CRM values through numeric: %s", sqlText)
 	}

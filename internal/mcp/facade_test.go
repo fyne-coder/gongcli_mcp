@@ -286,11 +286,8 @@ func TestFacadeDiscoverCapabilitiesReportsRoutedAvailability(t *testing.T) {
 	if !containsString(payload.DimensionFilters.SupportedDimensions, "participant_email") || !containsString(payload.DimensionFilters.SupportedDimensions, "duration_seconds") {
 		t.Fatalf("dimension filter contract missing expected dimensions: %+v", payload.DimensionFilters.SupportedDimensions)
 	}
-	if !containsString(payload.DimensionCounts.SupportedDimensions, "account_customer_segment_type") {
-		t.Fatalf("dimension_counts contract missing account_customer_segment_type: %+v", payload.DimensionCounts.SupportedDimensions)
-	}
-	if !containsString(payload.DimensionCounts.AliasesByDimension["account_customer_segment_type"], "customer_segment_type") {
-		t.Fatalf("dimension_counts aliases missing customer_segment_type: %+v", payload.DimensionCounts.AliasesByDimension)
+	if !containsString(payload.DimensionCounts.SupportedDimensions, "account_rating") {
+		t.Fatalf("dimension_counts contract missing account_rating: %+v", payload.DimensionCounts.SupportedDimensions)
 	}
 	if operators := strings.Join(payload.DimensionFilters.OperatorsByDimension["duration_seconds"], ","); !strings.Contains(operators, "between") {
 		t.Fatalf("duration_seconds operators should include between: %v", payload.DimensionFilters.OperatorsByDimension["duration_seconds"])

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestBusinessSafeCRMDimensionsCustomerSegmentFilterAndGroup(t *testing.T) {
+func TestBusinessSafeCRMDimensionsAccountRatingFilterAndGroup(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -14,8 +14,8 @@ func TestBusinessSafeCRMDimensionsCustomerSegmentFilterAndGroup(t *testing.T) {
 	defer store.Close()
 
 	raw := map[string]any{
-		"id":       "call-crm-segment-001",
-		"title":    "CRM segment filter test",
+		"id":       "call-crm-rating-001",
+		"title":    "CRM rating filter test",
 		"started":  "2026-03-01T12:00:00Z",
 		"duration": 900,
 		"metaData": map[string]any{
@@ -26,15 +26,15 @@ func TestBusinessSafeCRMDimensionsCustomerSegmentFilterAndGroup(t *testing.T) {
 		"context": []any{
 			map[string]any{
 				"objectType": "Account",
-				"id":         "acct-segment-001",
+				"id":         "acct-rating-001",
 				"fields": []any{
-					map[string]any{"name": "Customer_Segment_Type__c", "value": "Enterprise"},
+					map[string]any{"name": "Rating", "value": "Enterprise"},
 					map[string]any{"name": "AnnualRevenue", "value": 25000000},
 				},
 			},
 			map[string]any{
 				"objectType": "Opportunity",
-				"id":         "opp-segment-001",
+				"id":         "opp-rating-001",
 				"fields": []any{
 					map[string]any{"name": "CloseDate", "value": "2026-06-15"},
 					map[string]any{"name": "Amount", "value": 120000},
@@ -51,17 +51,17 @@ func TestBusinessSafeCRMDimensionsCustomerSegmentFilterAndGroup(t *testing.T) {
 	}
 
 	var segment string
-	if err := store.DB().QueryRowContext(ctx, `SELECT account_customer_segment_type FROM call_facts WHERE call_id = ?`, "call-crm-segment-001").Scan(&segment); err != nil {
-		t.Fatalf("read promoted segment: %v", err)
+	if err := store.DB().QueryRowContext(ctx, `SELECT account_rating FROM call_facts WHERE call_id = ?`, "call-crm-rating-001").Scan(&segment); err != nil {
+		t.Fatalf("read promoted rating: %v", err)
 	}
 	if segment != "Enterprise" {
-		t.Fatalf("account_customer_segment_type = %q, want Enterprise", segment)
+		t.Fatalf("account_rating = %q, want Enterprise", segment)
 	}
 
 	filtered, err := store.SearchBusinessAnalysisCalls(ctx, BusinessAnalysisCallSearchParams{
 		Filter: BusinessAnalysisFilter{
 			DimensionFilters: []BusinessAnalysisDimensionFilter{
-				{Dimension: "account_customer_segment_type", Operator: "equals", Values: []string{"Enterprise"}},
+				{Dimension: "account_rating", Operator: "equals", Values: []string{"Enterprise"}},
 			},
 		},
 		Limit: 10,
@@ -89,7 +89,7 @@ func TestBusinessSafeCRMDimensionsCustomerSegmentFilterAndGroup(t *testing.T) {
 	}
 
 	grouped, err := store.SummarizeBusinessAnalysisDimension(ctx, BusinessAnalysisDimensionSummaryParams{
-		Dimension: "account_customer_segment_type",
+		Dimension: "account_rating",
 		Filter:    BusinessAnalysisFilter{},
 		Limit:     10,
 	})
@@ -163,7 +163,7 @@ func TestBusinessSafeCRMDimensionsCustomerSegmentFilterAndGroup(t *testing.T) {
 func TestExcludedCRMDimensionsRejectedFromFilters(t *testing.T) {
 	t.Parallel()
 
-	for _, dim := range []string{"website", "owner_id", "marketing_notes"} {
+	for _, dim := range []string{"website", "owner_id", "next_step"} {
 		_, err := BusinessAnalysisFilterDimensionCanonical(dim)
 		if err == nil {
 			t.Fatalf("expected %q rejection, got nil", dim)

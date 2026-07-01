@@ -98,12 +98,7 @@ func MergeBackedFilterDimensions(candidates []string) []string {
 
 // AliasesForDimension returns known aliases for a canonical dimension name.
 func AliasesForDimension(dimension string) []string {
-	switch dimension {
-	case "account_customer_segment_type":
-		return []string{"customer_segment_type", "customer_segment"}
-	default:
-		return nil
-	}
+	return nil
 }
 
 // BuildAliasMap returns lowercase alias -> canonical dimension mappings.

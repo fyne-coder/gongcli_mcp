@@ -110,6 +110,15 @@ Other common `dimension_filters` dimensions include `duration_seconds`,
 and `won_lost`. Participant email and identifier filters narrow the call set;
 returned fields still follow the tool's normal output policy behavior.
 
+Deployments may also expose governed CRM dimensions promoted from cached Gong
+CRM context, for example `account_rating`. Use only dimensions
+advertised by `gong_discover_capabilities`; the default promoted set is
+a fixed reviewed standard Account/Opportunity mapping set rather than a
+generic all-CRM-field abstraction. Numeric and date CRM fields are groupable
+through bucket, month, or quarter dimensions instead of their raw values, and
+tenant-specific lifecycle or methodology concepts still belong in reviewed
+business profiles.
+
 Multiple entries are combined with AND semantics; values inside one `in` entry
 are OR alternatives. `quarter` values must use `YYYY-Q#`, and `call_month`
 values must use `YYYY-MM`. The server accepts backed business-analysis fields

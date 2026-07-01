@@ -162,6 +162,16 @@ fields such as `duration_seconds` also support `gte`, `lte`, and `between`.
 Participant email and identifier filters narrow the call set but do not cause
 those raw values to be returned.
 
+Some deployments also advertise governed CRM dimensions promoted from cached
+Gong CRM context, such as `account_rating`. Treat these as
+backed dimensions returned by `gong_discover_capabilities`, not as permission
+to probe arbitrary CRM fields. The built-in promoted fields are a fixed
+reviewed standard Account/Opportunity mapping set, not a generic custom-field
+discovery mechanism; non-Salesforce lifecycle, methodology, and tenant-specific
+segmentation should remain in a reviewed business profile until the operator
+advertises a supported dimension. Numeric and date CRM fields use bucket,
+month, or quarter dimensions for grouping.
+
 Use `limit` deliberately. Every tool result becomes model context, so a
 1,000-row return from a wide filter often produces a worse answer than a
 50-row return from a tight filter. If a tool returns `capped: true`, do not

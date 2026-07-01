@@ -2,9 +2,34 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-07-01
+
+- Added a governed CRM-dimension registry for a fixed reviewed set of standard
+  Account and Opportunity fields from cached Gong CRM context. Categorical and
+  boolean promoted fields can be filtered and grouped directly; numeric and
+  date fields are exposed through bucket/month/quarter dimensions instead of
+  raw high-cardinality values.
+- Promoted the reviewed CRM dimensions into SQLite and Postgres `call_facts`,
+  MCP capability discovery, Business Workbench dimension filtering/counts,
+  scoped-reader grants, migrations, and parity tests so analysts can use
+  advertised dimensions such as `account_rating` without
+  arbitrary CRM field probing.
+- Improved Business Workbench dimension-filter handling, including contiguous
+  quarter parsing, canonical dimension dispatch, lazy matcher context for
+  backed dimensions, and duration-only fast paths.
+- Added `GONGMCP_HTTP_TOOL_TIMEOUT` / `--http-tool-timeout` so approved
+  large-cache HTTP MCP deployments can raise the per-tool deadline deliberately.
 - Added a consolidated customer upgrade runbook covering 0.5.x promotion,
   schema/read-model handling, gateway smoke testing, rollback, and non-secret
   acceptance evidence.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.6.0`.
+- Operator note: the built-in promoted CRM dimensions are a fixed reviewed
+  standard Account/Opportunity mapping set backed by cached Gong CRM context,
+  not a generic custom-field discovery mechanism. Non-Salesforce and
+  tenant-specific methodology/lifecycle mappings should still come from
+  reviewed business profiles and the dimensions advertised by
+  `gong_discover_capabilities`.
 
 ## 0.5.5 - 2026-06-25
 
@@ -228,7 +253,7 @@
   `gong_get_evidence`, and `gong_explain_limitations`, with reviewed routed
   operations underneath for ad-hoc business questions, theme intelligence,
   quotes, Gong AI highlights, and call drilldown.
-- Improved the TC sales/marketing business-workbench prompt path for GA:
+- Improved the customer sales/marketing business-workbench prompt path for GA:
   broad `question.answer` theme prompts now return `status=needs_theme_seed`
   with suggested seeded workflows instead of weak literal-word evidence;
   `theme_intelligence_report` and quote evidence support limited,
