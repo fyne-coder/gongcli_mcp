@@ -1909,4 +1909,7 @@ $$;
 	`-- Fast-path duration-only business-analysis dimension filters.
 ` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	`-- Preparse duration-only business-analysis filters in public functions.
+` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }

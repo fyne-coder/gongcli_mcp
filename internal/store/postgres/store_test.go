@@ -1473,6 +1473,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 
 	sqlText := postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL
 	for _, want := range []string{
+		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_normalized_dimension_filters(dimension_filters_json text)",
 		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text",
 		"jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb)",
 		"row_ctx AS",
@@ -1503,7 +1504,11 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator",
 		"jsonb_array_elements_text(values_json)",
 		"dimension_filters_json text DEFAULT '[]'",
-		"COALESCE(NULLIF(dimension_filters_json, ''), '[]') = '[]' OR gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id)",
+		"dimension_filters AS MATERIALIZED",
+		"dimension_filter_mode AS MATERIALIZED",
+		"WHEN dfm.duration_filters_only THEN NOT EXISTS",
+		"ELSE gongmcp_business_analysis_dimension_filters_match(dimension_filters_json, cf.account_revenue_range, cf.account_type, cf.account_industry, cf.opportunity_stage, cf.opportunity_type, cf.opportunity_forecast_category, cf.scope, cf.system, cf.direction, cf.transcript_status, cf.lifecycle_bucket, cf.call_month, cf.call_date, cf.duration_seconds, cf.call_id)",
+		"REVOKE ALL ON FUNCTION gongmcp_business_analysis_normalized_dimension_filters(text) FROM PUBLIC",
 		"REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text) FROM PUBLIC",
 	} {
 		if !strings.Contains(sqlText, want) {
@@ -1511,6 +1516,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		}
 	}
 	for _, forbidden := range []string{
+		"GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_normalized_dimension_filters",
 		"GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension_filters_match",
 		"c.raw_json AS call_raw_json",
 		"cf.party_title_count",
@@ -1595,12 +1601,13 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	}
 	latestMigration := migrations[len(migrations)-1]
 	for _, want := range []string{
-		"Fast-path duration-only business-analysis dimension filters",
+		"Preparse duration-only business-analysis filters in public functions",
 		"account_customer_segment_type",
 		"dimension_filters_json text DEFAULT '[]'",
-		"normalized_filters AS",
-		"WHEN NOT EXISTS (SELECT 1 FROM normalized_filters WHERE dimension IS DISTINCT FROM 'duration_seconds') THEN NOT EXISTS",
-		"duration_seconds_arg = values.value::bigint",
+		"dimension_filters AS MATERIALIZED",
+		"dimension_filter_mode AS MATERIALIZED",
+		"WHEN dfm.duration_filters_only THEN NOT EXISTS",
+		"cf.duration_seconds = values.value::bigint",
 	} {
 		if !strings.Contains(latestMigration, want) {
 			t.Fatalf("latest migration missing duration-only fast-path refresh contract %q", want)
