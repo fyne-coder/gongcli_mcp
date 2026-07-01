@@ -404,15 +404,10 @@ WITH filters AS (
 	  FROM jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb) AS item(value)
 ),
 row_ctx AS (
-	SELECT cf.*,
-	       c.raw_json AS call_raw_json,
-	       c.parties_count,
-	       COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) +
-	       COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) AS party_title_count
+	SELECT cf.*
 	  FROM call_facts cf
-	  JOIN calls c
-	    ON c.call_id = cf.call_id
 	 WHERE cf.call_id = call_id_arg
+	   AND EXISTS (SELECT 1 FROM calls c WHERE c.call_id = cf.call_id)
 ),
 normalized AS (
 	SELECT dims.dimension,
@@ -459,9 +454,18 @@ normalized AS (
 		       WHEN 'persona' THEN gongmcp_business_analysis_persona_bucket(cf.call_id, cf.participant_title_present)
 		       WHEN 'won_lost' THEN CASE WHEN lower(cf.opportunity_stage) = 'closed won' THEN 'closed_won' WHEN lower(cf.opportunity_stage) = 'closed lost' THEN 'closed_lost' WHEN trim(cf.opportunity_stage) <> '' THEN 'open_or_in_progress' ELSE 'unknown' END
 		       WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket(cf.call_id, cf.loss_reason_present)
-		       WHEN 'participant_status' THEN CASE WHEN cf.parties_count > 0 THEN 'present' ELSE 'missing_from_cache' END
-		       WHEN 'person_title_status' THEN CASE WHEN cf.party_title_count > 0 THEN 'available' WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_present_title_unverified' WHEN cf.parties_count > 0 THEN 'participants_present_check_party_titles' ELSE 'missing_from_cache' END
-		       WHEN 'person_title_source' THEN CASE WHEN cf.party_title_count > 0 THEN 'call_parties' WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_object' ELSE '' END
+		       WHEN 'participant_status' THEN CASE WHEN COALESCE((SELECT c.parties_count FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'present' ELSE 'missing_from_cache' END
+		       WHEN 'person_title_status' THEN CASE
+			       WHEN COALESCE((SELECT COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) + COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'available'
+			       WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_present_title_unverified'
+			       WHEN COALESCE((SELECT c.parties_count FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'participants_present_check_party_titles'
+			       ELSE 'missing_from_cache'
+		       END
+		       WHEN 'person_title_source' THEN CASE
+			       WHEN COALESCE((SELECT COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'parties') = 'array' THEN c.raw_json->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) + COALESCE((SELECT COUNT(1) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(c.raw_json->'metaData'->'parties') = 'array' THEN c.raw_json->'metaData'->'parties' ELSE '[]'::jsonb END) p WHERE TRIM(COALESCE(p.value->>'title', p.value->>'jobTitle', p.value->>'job_title', '')) <> ''), 0) FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'call_parties'
+			       WHEN EXISTS (SELECT 1 FROM call_context_objects po WHERE po.call_id = cf.call_id AND po.object_type IN ('Contact', 'Lead')) THEN 'contact_or_lead_object'
+			       ELSE ''
+		       END
 -- __INSERT_CRM_FILTER_ROW_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS row_value,

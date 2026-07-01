@@ -1480,8 +1480,12 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"WHEN 'account_revenue_range' THEN account_revenue_range_arg",
 		"WHEN 'persona' THEN gongmcp_business_analysis_persona_bucket",
 		"WHEN 'loss_reason' THEN gongmcp_business_analysis_loss_reason_bucket",
-		"WHEN 'person_title_status' THEN CASE WHEN cf.party_title_count > 0 THEN 'available'",
-		"WHEN 'person_title_source' THEN CASE WHEN cf.party_title_count > 0 THEN 'call_parties'",
+		"AND EXISTS (SELECT 1 FROM calls c WHERE c.call_id = cf.call_id)",
+		"WHEN 'participant_status' THEN CASE WHEN COALESCE((SELECT c.parties_count FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'present'",
+		"WHEN 'person_title_status' THEN CASE",
+		"WHEN 'person_title_source' THEN CASE",
+		"FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'available'",
+		"FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'call_parties'",
 		"dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
 		"dimension IN ('account_created_date'",
 		"WHEN 'account_customer_segment_type' THEN cf.account_customer_segment_type",
@@ -1504,6 +1508,9 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	}
 	for _, forbidden := range []string{
 		"GRANT EXECUTE ON FUNCTION gongmcp_business_analysis_dimension_filters_match",
+		"c.raw_json AS call_raw_json",
+		"cf.party_title_count",
+		"cf.parties_count",
 	} {
 		helperSQL := sqlText
 		if idx := strings.Index(helperSQL, "CREATE OR REPLACE FUNCTION gongmcp_business_analysis_calls("); idx > 0 {
@@ -1542,13 +1549,13 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	}
 	latestMigration := migrations[len(migrations)-1]
 	for _, want := range []string{
-		"Business-safe CRM field dimensions",
-		"ALTER TABLE call_facts ADD COLUMN IF NOT EXISTS account_customer_segment_type",
+		"Lazy business-analysis dimension filter matcher",
 		"account_customer_segment_type",
 		"dimension_filters_json text DEFAULT '[]'",
+		"AND EXISTS (SELECT 1 FROM calls c WHERE c.call_id = cf.call_id)",
 	} {
 		if !strings.Contains(latestMigration, want) {
-			t.Fatalf("latest migration missing CRM function refresh contract %q", want)
+			t.Fatalf("latest migration missing lazy dimension-filter refresh contract %q", want)
 		}
 	}
 	var package2Migration string
