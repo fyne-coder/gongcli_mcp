@@ -47,6 +47,44 @@ func TestSupportedFilterDimensionsIncludeCustomerSegment(t *testing.T) {
 	}
 }
 
+func TestPostgresFilterDimensionCSVsCoverSupportedDimensions(t *testing.T) {
+	t.Parallel()
+
+	allowed := splitPostgresDimensionCSV(crmdimensions.PostgresCRMFilterDimensionAllowListCSV())
+	typed := splitPostgresDimensionCSV(crmdimensions.PostgresCRMStringEqualsDimensionsCSV())
+	for dim := range splitPostgresDimensionCSV(crmdimensions.PostgresCRMNumericFilterDimensionsCSV()) {
+		typed[dim] = true
+	}
+	for dim := range splitPostgresDimensionCSV(crmdimensions.PostgresCRMDateFilterDimensionsCSV()) {
+		typed[dim] = true
+	}
+	for dim := range splitPostgresDimensionCSV(crmdimensions.PostgresCRMBooleanFilterDimensionsCSV()) {
+		typed[dim] = true
+	}
+
+	for dim := range allowed {
+		if !typed[dim] {
+			t.Fatalf("supported Postgres filter dimension %q is not covered by a typed matcher family", dim)
+		}
+	}
+	for dim := range typed {
+		if !allowed[dim] {
+			t.Fatalf("typed Postgres filter dimension %q is missing from supported filter dimensions", dim)
+		}
+	}
+}
+
+func splitPostgresDimensionCSV(csv string) map[string]bool {
+	dims := make(map[string]bool)
+	for _, part := range strings.Split(csv, ",") {
+		dim := strings.Trim(strings.TrimSpace(part), "'")
+		if dim != "" {
+			dims[dim] = true
+		}
+	}
+	return dims
+}
+
 func TestBucketDimensionsIncludeRepresentativeNumericAndDate(t *testing.T) {
 	t.Parallel()
 

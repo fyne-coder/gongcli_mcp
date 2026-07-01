@@ -516,45 +516,18 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 	    OR (operator = 'equals' AND jsonb_array_length(values_json) <> 1)
 	    OR (operator = 'between' AND jsonb_array_length(values_json) <> 2)
 	    OR operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
-	    OR (
-		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', -- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__
+	    OR CASE
+		    WHEN dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', -- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__
 )
-		    AND operator NOT IN ('equals', 'in')
-	    )
-	    OR (
-		    dimension IN ('call_id', 'title', 'started_at', 'call_date', 'call_month', 'quarter', 'duration_bucket', 'system', 'direction', 'scope', 'purpose', 'primary_user_id', 'calendar_event_status', 'sdr_disposition', 'transcript_status', 'lifecycle_bucket', 'lifecycle_confidence', 'lifecycle_reason', 'lifecycle_evidence_fields', 'account_id', 'account_type', 'account_industry', 'account_revenue_range', 'account_primary_procurement_system', 'opportunity_id', 'opportunity_stage', 'opportunity_type', 'opportunity_amount', 'opportunity_probability', 'forecast_category', 'opportunity_primary_lead_source', 'opportunity_procurement_system', 'persona', 'won_lost', 'loss_reason', 'participant_status', 'person_title_status', 'person_title_source', -- __INSERT_CRM_STRING_EQUALS_DIMENSIONS_HERE__
-)
-		    AND (
-			    row_value IS NULL
-			    OR NOT EXISTS (
-				    SELECT 1
-				      FROM jsonb_array_elements_text(values_json) AS values(value)
-				     WHERE left(values.value, 160) = row_value
-			    )
+		    THEN operator NOT IN ('equals', 'in') OR row_value IS NULL OR NOT EXISTS (
+			    SELECT 1
+			      FROM jsonb_array_elements_text(values_json) AS values(value)
+			     WHERE left(values.value, 160) = row_value
 		    )
-	    )
-	    OR (
-		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count', -- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__
+		    WHEN dimension IN ('duration_seconds', 'opportunity_count', 'account_count', -- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__
 )
-		    AND operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
-	    )
-	    OR (
-		    dimension IN (-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__
-)
-		    AND operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
-	    )
-	    OR (
-		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', 'account_name', 'crm_object_id', 'participant_email', -- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__
-)
-		    AND operator NOT IN ('equals', 'in')
-	    )
-	    OR (
-		    dimension IN ('duration_seconds', 'opportunity_count', 'account_count', -- __INSERT_CRM_NUMERIC_FILTER_DIMENSIONS_HERE__
-)
-		    AND operator IN ('equals', 'in', 'gte', 'lte', 'between')
-		    AND (
-			    numeric_value IS NULL
-			    OR (operator = 'equals' AND numeric_value <> (values_json->>0)::bigint)
+		    THEN operator NOT IN ('equals', 'in', 'gte', 'lte', 'between') OR numeric_value IS NULL OR (
+			    (operator = 'equals' AND numeric_value <> (values_json->>0)::bigint)
 			    OR (operator = 'gte' AND numeric_value < (values_json->>0)::bigint)
 			    OR (operator = 'lte' AND numeric_value > (values_json->>0)::bigint)
 			    OR (operator = 'between' AND (
@@ -567,15 +540,10 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 				     WHERE numeric_value = values.value::bigint
 			    ))
 		    )
-	    )
-	    OR (
-		    dimension IN (-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__
+		    WHEN dimension IN (-- __INSERT_CRM_DATE_FILTER_DIMENSIONS_HERE__
 )
-		    AND operator IN ('equals', 'in', 'gte', 'lte', 'between')
-		    AND (
-			    row_value IS NULL
-			    OR trim(row_value) = ''
-			    OR (operator = 'equals' AND row_value <> values_json->>0)
+		    THEN operator NOT IN ('equals', 'in', 'gte', 'lte', 'between') OR row_value IS NULL OR trim(row_value) = '' OR (
+			    (operator = 'equals' AND row_value <> values_json->>0)
 			    OR (operator = 'in' AND NOT EXISTS (
 				    SELECT 1
 				      FROM jsonb_array_elements_text(values_json) allowed(value)
@@ -588,34 +556,24 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 				    OR row_value > GREATEST(values_json->>0, values_json->>1)
 			    ))
 		    )
-	    )
-	    OR (
-		    dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', -- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__
+		    WHEN dimension IN ('calendar_event_present', 'transcript_present', 'likely_voicemail_or_ivr', -- __INSERT_CRM_BOOLEAN_FILTER_DIMENSIONS_HERE__
 )
-		    AND operator IN ('equals', 'in')
-		    AND (
-			    boolean_value IS NULL
-			    OR NOT EXISTS (
-				    SELECT 1
-				      FROM jsonb_array_elements_text(values_json) AS values(value)
-				     WHERE boolean_value = CASE lower(trim(values.value))
-					    WHEN 'true' THEN true
-					    WHEN '1' THEN true
-					    WHEN 'yes' THEN true
-					    WHEN 'y' THEN true
-					    WHEN 'false' THEN false
-					    WHEN '0' THEN false
-					    WHEN 'no' THEN false
-					    WHEN 'n' THEN false
-					    ELSE NULL
-				     END
-			    )
+		    THEN operator NOT IN ('equals', 'in') OR boolean_value IS NULL OR NOT EXISTS (
+			    SELECT 1
+			      FROM jsonb_array_elements_text(values_json) AS values(value)
+			     WHERE boolean_value = CASE lower(trim(values.value))
+				    WHEN 'true' THEN true
+				    WHEN '1' THEN true
+				    WHEN 'yes' THEN true
+				    WHEN 'y' THEN true
+				    WHEN 'false' THEN false
+				    WHEN '0' THEN false
+				    WHEN 'no' THEN false
+				    WHEN 'n' THEN false
+				    ELSE NULL
+			     END
 		    )
-	    )
-	    OR (
-		    dimension = 'account_name'
-		    AND operator IN ('equals', 'in')
-		    AND NOT EXISTS (
+		    WHEN dimension = 'account_name' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS (
 			    SELECT 1
 			      FROM call_context_objects account_o
 			      LEFT JOIN call_context_fields account_f
@@ -629,21 +587,13 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 				    OR lower(trim(COALESCE(account_f.field_value_text, ''))) IN (SELECT lower(trim(value)) FROM jsonb_array_elements_text(values_json) AS values(value))
 			       )
 		    )
-	    )
-	    OR (
-		    dimension = 'crm_object_id'
-		    AND operator IN ('equals', 'in')
-		    AND NOT EXISTS (
+		    WHEN dimension = 'crm_object_id' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS (
 			    SELECT 1
 			      FROM call_context_objects object_o
 			     WHERE object_o.call_id = call_id_arg
 			       AND lower(trim(COALESCE(object_o.object_id, ''))) IN (SELECT lower(trim(value)) FROM jsonb_array_elements_text(values_json) AS values(value))
 		    )
-	    )
-	    OR (
-		    dimension = 'participant_email'
-		    AND operator IN ('equals', 'in')
-		    AND NOT EXISTS (
+		    WHEN dimension = 'participant_email' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS (
 			    SELECT 1
 			      FROM calls email_c
 			      CROSS JOIN LATERAL (
@@ -665,7 +615,8 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 				       ))
 			       )
 		    )
-	    )
+		    ELSE true
+	    END
 )
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text) FROM PUBLIC;

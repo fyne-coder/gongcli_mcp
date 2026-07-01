@@ -1486,16 +1486,18 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"WHEN 'person_title_source' THEN CASE",
 		"FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'available'",
 		"FROM calls c WHERE c.call_id = cf.call_id), 0) > 0 THEN 'call_parties'",
-		"dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
+		"OR CASE",
+		"WHEN dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
 		"dimension IN ('account_created_date'",
 		"WHEN 'account_customer_segment_type' THEN cf.account_customer_segment_type",
 		"WHEN 'opportunity_close_month' THEN CASE WHEN length(TRIM(cf.opportunity_close_date)) >= 7 THEN left(TRIM(cf.opportunity_close_date), 7) ELSE '' END",
-		"dimension = 'participant_email'",
-		"dimension = 'account_name'",
-		"dimension = 'crm_object_id'",
+		"WHEN dimension = 'participant_email' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
+		"WHEN dimension = 'account_name' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
+		"WHEN dimension = 'crm_object_id' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
+		"ELSE true",
 		"duration_seconds_arg bigint, call_id_arg text",
 		"operator = 'between'",
-		"operator IN ('equals', 'in', 'gte', 'lte', 'between')",
+		"operator NOT IN ('equals', 'in', 'gte', 'lte', 'between') OR numeric_value IS NULL",
 		"COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator",
 		"jsonb_array_elements_text(values_json)",
 		"dimension_filters_json text DEFAULT '[]'",
@@ -1547,15 +1549,37 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 			t.Fatalf("CRM column migration missing rollout contract %q", want)
 		}
 	}
-	latestMigration := migrations[len(migrations)-1]
+	var lazyMatcherMigration string
+	for _, migration := range migrations {
+		if strings.Contains(migration, "Lazy business-analysis dimension filter matcher") {
+			lazyMatcherMigration = migration
+			break
+		}
+	}
+	if lazyMatcherMigration == "" {
+		t.Fatal("missing Lazy business-analysis dimension filter matcher migration")
+	}
 	for _, want := range []string{
 		"Lazy business-analysis dimension filter matcher",
 		"account_customer_segment_type",
 		"dimension_filters_json text DEFAULT '[]'",
 		"AND EXISTS (SELECT 1 FROM calls c WHERE c.call_id = cf.call_id)",
 	} {
+		if !strings.Contains(lazyMatcherMigration, want) {
+			t.Fatalf("lazy matcher migration missing dimension-filter refresh contract %q", want)
+		}
+	}
+	latestMigration := migrations[len(migrations)-1]
+	for _, want := range []string{
+		"Dispatch business-analysis dimension filters by dimension",
+		"account_customer_segment_type",
+		"dimension_filters_json text DEFAULT '[]'",
+		"OR CASE",
+		"WHEN dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
+		"WHEN dimension = 'participant_email' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
+	} {
 		if !strings.Contains(latestMigration, want) {
-			t.Fatalf("latest migration missing lazy dimension-filter refresh contract %q", want)
+			t.Fatalf("latest migration missing dimension-dispatch filter refresh contract %q", want)
 		}
 	}
 	var package2Migration string

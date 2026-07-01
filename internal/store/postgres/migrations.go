@@ -1903,4 +1903,7 @@ $$;
 	`-- Lazy business-analysis dimension filter matcher.
 ` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	`-- Dispatch business-analysis dimension filters by dimension.
+` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }
