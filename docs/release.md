@@ -136,6 +136,11 @@ this repo.
 
 For customer-hosted deployments:
 
+The consolidated operator sequence lives in the
+[Customer upgrade runbook](customer-upgrade-runbook.md). Keep this section as
+the release-facing summary and use the runbook for customer promotion steps,
+schema/read-model handling, gateway smoke, and evidence collection.
+
 1. Pin the current working image digest and record the current cache backup.
 2. Pull the candidate `gongctl` and `gongmcp` images by immutable tag or digest.
 3. Back up SQLite or Postgres, transcript files, profile YAML, AI governance
