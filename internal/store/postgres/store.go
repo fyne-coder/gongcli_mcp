@@ -1302,7 +1302,7 @@ SELECT EXISTS (
 	  FROM information_schema.columns
 	 WHERE table_schema = 'public'
 	   AND table_name = 'call_facts'
-	   AND column_name = 'account_customer_segment_type'
+	   AND column_name = 'account_rating'
 )`).Scan(&hasCRMColumns)
 	if err != nil {
 		return "", fmt.Errorf("check postgres CRM call_facts columns: %w", err)

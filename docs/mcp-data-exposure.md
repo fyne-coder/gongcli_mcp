@@ -267,6 +267,15 @@ emit-time defense-in-depth blocklist guard sits in front of `search_calls` and
 `get_call` and suppresses rows whose title or CRM account name matches a
 blocklisted entity, even when source-to-serving redaction missed a row.
 
+Promoted CRM dimensions add another aggregate grouping surface. Categorical and
+boolean promoted fields can appear as group labels when the operator advertises
+them through `gong_discover_capabilities`; numeric and date promoted fields are
+groupable only through bucket, month, or quarter dimensions. These outputs do
+not return raw CRM object IDs, record names, or unbounded raw CRM values, but
+group labels and field names can still reveal tenant-specific CRM structure.
+Use reviewed business profiles and policy switches to keep deployment-specific
+segmentation intentional.
+
 ## Analyst Cohort Tool Exposure
 
 The full analyst cohort surface in `executor_tasks.md` is intended for trusted

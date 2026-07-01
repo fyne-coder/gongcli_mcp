@@ -1492,7 +1492,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"OR CASE",
 		"WHEN dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
 		"dimension IN ('account_created_date'",
-		"WHEN 'account_customer_segment_type' THEN cf.account_customer_segment_type",
+		"WHEN 'account_rating' THEN cf.account_rating",
 		"WHEN 'opportunity_close_month' THEN CASE WHEN length(TRIM(cf.opportunity_close_date)) >= 7 THEN left(TRIM(cf.opportunity_close_date), 7) ELSE '' END",
 		"WHEN dimension = 'participant_email' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
 		"WHEN dimension = 'account_name' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
@@ -1551,7 +1551,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	}
 	for _, want := range []string{
 		"Business-safe CRM field dimensions",
-		"account_customer_segment_type",
+		"account_rating",
 	} {
 		if !strings.Contains(crmColumnMigration, want) {
 			t.Fatalf("CRM column migration missing rollout contract %q", want)
@@ -1569,7 +1569,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	}
 	for _, want := range []string{
 		"Lazy business-analysis dimension filter matcher",
-		"account_customer_segment_type",
+		"account_rating",
 		"dimension_filters_json text DEFAULT '[]'",
 		"AND EXISTS (SELECT 1 FROM calls c WHERE c.call_id = cf.call_id)",
 	} {
@@ -1589,7 +1589,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	}
 	for _, want := range []string{
 		"Dispatch business-analysis dimension filters by dimension",
-		"account_customer_segment_type",
+		"account_rating",
 		"dimension_filters_json text DEFAULT '[]'",
 		"OR CASE",
 		"WHEN dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
@@ -1602,7 +1602,7 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 	latestMigration := migrations[len(migrations)-1]
 	for _, want := range []string{
 		"Preparse duration-only business-analysis filters in public functions",
-		"account_customer_segment_type",
+		"account_rating",
 		"dimension_filters_json text DEFAULT '[]'",
 		"dimension_filters AS MATERIALIZED",
 		"dimension_filter_mode AS MATERIALIZED",
@@ -1636,12 +1636,12 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 func TestPostgresCallFactGroupColumnSupportsCRMDimensions(t *testing.T) {
 	t.Parallel()
 
-	groupBy, column, err := postgresCallFactGroupColumn("account_customer_segment_type")
+	groupBy, column, err := postgresCallFactGroupColumn("account_rating")
 	if err != nil {
-		t.Fatalf("customer segment group: %v", err)
+		t.Fatalf("account rating group: %v", err)
 	}
-	if groupBy != "account_customer_segment_type" || column != "account_customer_segment_type" {
-		t.Fatalf("unexpected customer segment mapping: %s %s", groupBy, column)
+	if groupBy != "account_rating" || column != "account_rating" {
+		t.Fatalf("unexpected account rating mapping: %s %s", groupBy, column)
 	}
 	groupBy, column, err = postgresCallFactGroupColumn("opportunity_close_month")
 	if err != nil {
@@ -1650,7 +1650,7 @@ func TestPostgresCallFactGroupColumnSupportsCRMDimensions(t *testing.T) {
 	if groupBy != "opportunity_close_month" || !strings.Contains(column, "opportunity_close_date") {
 		t.Fatalf("unexpected close month mapping: %s %s", groupBy, column)
 	}
-	if !strings.Contains(postgresCallFactsSQL(), "account_customer_segment_type") {
+	if !strings.Contains(postgresCallFactsSQL(), "account_rating") {
 		t.Fatal("postgres facts SQL must select promoted CRM columns")
 	}
 }
@@ -1662,9 +1662,7 @@ func TestPostgresBusinessAnalysisDimensionSupportsCRMRegistry(t *testing.T) {
 		input string
 		want  string
 	}{
-		{input: "account_customer_segment_type", want: "account_customer_segment_type"},
-		{input: "customer_segment_type", want: "account_customer_segment_type"},
-		{input: "customer_segment", want: "account_customer_segment_type"},
+		{input: "account_rating", want: "account_rating"},
 		{input: "opportunity_close_month", want: "opportunity_close_month"},
 	} {
 		got, err := postgresBusinessAnalysisDimension(tc.input)

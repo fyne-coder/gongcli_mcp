@@ -153,7 +153,7 @@ func FacadeOperations() []FacadeOperation {
 				"cohort_token": cohortTokenSchemaField(),
 				"dimension": map[string]any{
 					"type":        "string",
-					"description": "Backed summarize dimension. See gong_discover_capabilities.dimension_counts.supported_dimensions for the current list; examples include lifecycle, opportunity_stage, industry, persona, participant_domain, quarter, won_lost, loss_reason, and account_customer_segment_type.",
+					"description": "Backed summarize dimension. See gong_discover_capabilities.dimension_counts.supported_dimensions for the current list; examples include lifecycle, opportunity_stage, industry, persona, participant_domain, quarter, won_lost, loss_reason, and account_rating.",
 				},
 				"theme_query": map[string]any{
 					"type":        "string",
