@@ -1476,6 +1476,8 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"CREATE OR REPLACE FUNCTION gongmcp_business_analysis_dimension_filters_match(dimension_filters_json text",
 		"jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb)",
 		"row_ctx AS",
+		"normalized_filters AS",
+		"WHEN NOT EXISTS (SELECT 1 FROM normalized_filters WHERE dimension IS DISTINCT FROM 'duration_seconds') THEN NOT EXISTS",
 		"SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS",
 		"WHEN 'account_revenue_range' THEN account_revenue_range_arg",
 		"WHEN 'persona' THEN gongmcp_business_analysis_persona_bucket",
@@ -1569,7 +1571,16 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 			t.Fatalf("lazy matcher migration missing dimension-filter refresh contract %q", want)
 		}
 	}
-	latestMigration := migrations[len(migrations)-1]
+	var dispatchMatcherMigration string
+	for _, migration := range migrations {
+		if strings.Contains(migration, "Dispatch business-analysis dimension filters by dimension") {
+			dispatchMatcherMigration = migration
+			break
+		}
+	}
+	if dispatchMatcherMigration == "" {
+		t.Fatal("missing Dispatch business-analysis dimension filters by dimension migration")
+	}
 	for _, want := range []string{
 		"Dispatch business-analysis dimension filters by dimension",
 		"account_customer_segment_type",
@@ -1578,8 +1589,21 @@ func TestPostgresBusinessAnalysisFunctionsApplyDimensionFiltersInSQL(t *testing.
 		"WHEN dimension IN ('duration_seconds', 'opportunity_count', 'account_count',",
 		"WHEN dimension = 'participant_email' THEN operator NOT IN ('equals', 'in') OR NOT EXISTS",
 	} {
+		if !strings.Contains(dispatchMatcherMigration, want) {
+			t.Fatalf("dispatch matcher migration missing dimension-dispatch filter refresh contract %q", want)
+		}
+	}
+	latestMigration := migrations[len(migrations)-1]
+	for _, want := range []string{
+		"Fast-path duration-only business-analysis dimension filters",
+		"account_customer_segment_type",
+		"dimension_filters_json text DEFAULT '[]'",
+		"normalized_filters AS",
+		"WHEN NOT EXISTS (SELECT 1 FROM normalized_filters WHERE dimension IS DISTINCT FROM 'duration_seconds') THEN NOT EXISTS",
+		"duration_seconds_arg = values.value::bigint",
+	} {
 		if !strings.Contains(latestMigration, want) {
-			t.Fatalf("latest migration missing dimension-dispatch filter refresh contract %q", want)
+			t.Fatalf("latest migration missing duration-only fast-path refresh contract %q", want)
 		}
 	}
 	var package2Migration string

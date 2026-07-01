@@ -403,16 +403,67 @@ WITH filters AS (
 	SELECT item.value AS filter_json
 	  FROM jsonb_array_elements(COALESCE(NULLIF(dimension_filters_json, ''), '[]')::jsonb) AS item(value)
 ),
-row_ctx AS (
+normalized_filters AS (
+	SELECT dims.dimension,
+	       COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator,
+	       filter_json->'values' AS values_json
+	  FROM filters
+	  CROSS JOIN LATERAL (
+		SELECT CASE lower(trim(filter_json->>'dimension'))
+		       WHEN 'call_length' THEN 'duration_seconds'
+		       WHEN 'duration' THEN 'duration_seconds'
+		       WHEN 'revenue_range' THEN 'account_revenue_range'
+		       WHEN 'stage' THEN 'opportunity_stage'
+		       WHEN 'industry' THEN 'account_industry'
+		       WHEN 'lifecycle' THEN 'lifecycle_bucket'
+		       WHEN 'month' THEN 'call_month'
+		       WHEN 'account_procurement_system' THEN 'account_primary_procurement_system'
+		       WHEN 'opportunity_forecast_category' THEN 'forecast_category'
+		       WHEN 'primary_lead_source' THEN 'opportunity_primary_lead_source'
+		       WHEN 'participant_title' THEN 'persona'
+		       WHEN 'outcome' THEN 'won_lost'
+		       WHEN 'email' THEN 'participant_email'
+		       ELSE lower(trim(filter_json->>'dimension'))
+	       END AS dimension
+	  ) dims
+)
+SELECT CASE
+	WHEN NOT EXISTS (SELECT 1 FROM normalized_filters WHERE dimension IS DISTINCT FROM 'duration_seconds') THEN NOT EXISTS (
+		SELECT 1
+		  FROM normalized_filters
+		 WHERE values_json IS NULL
+		    OR jsonb_typeof(values_json) <> 'array'
+		    OR jsonb_array_length(values_json) = 0
+		    OR (operator = 'equals' AND jsonb_array_length(values_json) <> 1)
+		    OR (operator = 'between' AND jsonb_array_length(values_json) <> 2)
+		    OR operator NOT IN ('equals', 'in', 'gte', 'lte', 'between')
+		    OR duration_seconds_arg IS NULL
+		    OR (
+			    (operator = 'equals' AND duration_seconds_arg <> (values_json->>0)::bigint)
+			    OR (operator = 'gte' AND duration_seconds_arg < (values_json->>0)::bigint)
+			    OR (operator = 'lte' AND duration_seconds_arg > (values_json->>0)::bigint)
+			    OR (operator = 'between' AND (
+				    duration_seconds_arg < LEAST((values_json->>0)::bigint, (values_json->>1)::bigint)
+				    OR duration_seconds_arg > GREATEST((values_json->>0)::bigint, (values_json->>1)::bigint)
+			    ))
+			    OR (operator = 'in' AND NOT EXISTS (
+				    SELECT 1
+				      FROM jsonb_array_elements_text(values_json) AS values(value)
+				     WHERE duration_seconds_arg = values.value::bigint
+			    ))
+		    )
+	)
+	ELSE (
+WITH row_ctx AS (
 	SELECT cf.*
 	  FROM call_facts cf
 	 WHERE cf.call_id = call_id_arg
 	   AND EXISTS (SELECT 1 FROM calls c WHERE c.call_id = cf.call_id)
 ),
 normalized AS (
-	SELECT dims.dimension,
-	       COALESCE(NULLIF(lower(trim(filter_json->>'operator')), ''), 'equals') AS operator,
-	       CASE dims.dimension
+	SELECT nf.dimension,
+	       nf.operator,
+	       CASE nf.dimension
 		       WHEN 'call_id' THEN cf.call_id
 		       WHEN 'title' THEN cf.title
 		       WHEN 'started_at' THEN cf.started_at
@@ -469,41 +520,23 @@ normalized AS (
 -- __INSERT_CRM_FILTER_ROW_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS row_value,
-	       CASE dims.dimension
+	       CASE nf.dimension
 		       WHEN 'duration_seconds' THEN duration_seconds_arg
 		       WHEN 'opportunity_count' THEN cf.opportunity_count
 		       WHEN 'account_count' THEN cf.account_count
 -- __INSERT_CRM_FILTER_NUMERIC_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS numeric_value,
-	       CASE dims.dimension
+	       CASE nf.dimension
 		       WHEN 'calendar_event_present' THEN cf.calendar_event_present
 		       WHEN 'transcript_present' THEN cf.transcript_present
 		       WHEN 'likely_voicemail_or_ivr' THEN cf.likely_voicemail_or_ivr
 -- __INSERT_CRM_FILTER_BOOLEAN_VALUE_CASES_HERE__
 		       ELSE NULL
 	       END AS boolean_value,
-	       filter_json->'values' AS values_json
-	  FROM filters
+	       nf.values_json AS values_json
+	  FROM normalized_filters nf
 	  CROSS JOIN row_ctx cf
-	  CROSS JOIN LATERAL (
-		SELECT CASE lower(trim(filter_json->>'dimension'))
-		       WHEN 'revenue_range' THEN 'account_revenue_range'
-		       WHEN 'stage' THEN 'opportunity_stage'
-		       WHEN 'industry' THEN 'account_industry'
-		       WHEN 'lifecycle' THEN 'lifecycle_bucket'
-		       WHEN 'month' THEN 'call_month'
-		       WHEN 'call_length' THEN 'duration_seconds'
-		       WHEN 'duration' THEN 'duration_seconds'
-		       WHEN 'account_procurement_system' THEN 'account_primary_procurement_system'
-		       WHEN 'opportunity_forecast_category' THEN 'forecast_category'
-		       WHEN 'primary_lead_source' THEN 'opportunity_primary_lead_source'
-		       WHEN 'participant_title' THEN 'persona'
-		       WHEN 'outcome' THEN 'won_lost'
-		       WHEN 'email' THEN 'participant_email'
-		       ELSE lower(trim(filter_json->>'dimension'))
-	       END AS dimension
-	  ) dims
 )
 SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 	SELECT 1
@@ -618,6 +651,8 @@ SELECT EXISTS (SELECT 1 FROM row_ctx) AND NOT EXISTS (
 		    ELSE true
 	    END
 )
+	)
+END
 $function$;
 REVOKE ALL ON FUNCTION gongmcp_business_analysis_dimension_filters_match(text, text, text, text, text, text, text, text, text, text, text, text, text, text, bigint, text) FROM PUBLIC;
 

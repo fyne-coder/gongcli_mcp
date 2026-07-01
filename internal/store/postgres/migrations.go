@@ -1906,4 +1906,7 @@ $$;
 	`-- Dispatch business-analysis dimension filters by dimension.
 ` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
 `,
+	`-- Fast-path duration-only business-analysis dimension filters.
+` + postgresBusinessAnalysisFunctionsWithCRMDimensionsSQL + postgresBusinessAnalysisReaderGrantsSQL + `
+`,
 }
