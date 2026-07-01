@@ -1030,6 +1030,9 @@ func normalizeCallFilter(filter callFilter) (callFilter, error) {
 	if filter.DimensionFilters, err = sqlite.NormalizeBusinessAnalysisDimensionFilters(filter.DimensionFilters); err != nil {
 		return callFilter{}, err
 	}
+	if filter, err = canonicalizeCallFilterDimensionTimeFilters(filter); err != nil {
+		return callFilter{}, err
+	}
 	if filter.Quarter != "" {
 		canonical, fromDate, toDate, err := normalizeCallFilterQuarter(filter.Quarter)
 		if err != nil {
@@ -1065,6 +1068,43 @@ func normalizeCallFilter(filter callFilter) (callFilter, error) {
 	if filter.Limit > 0 {
 		filter.Limit = boundedBusinessAnalysisLimit(filter.Limit)
 	}
+	return filter, nil
+}
+
+func canonicalizeCallFilterDimensionTimeFilters(filter callFilter) (callFilter, error) {
+	if len(filter.DimensionFilters) == 0 {
+		return filter, nil
+	}
+	out := make([]sqlite.BusinessAnalysisDimensionFilter, 0, len(filter.DimensionFilters))
+	for _, dimensionFilter := range filter.DimensionFilters {
+		if dimensionFilter.Dimension != "quarter" {
+			out = append(out, dimensionFilter)
+			continue
+		}
+		if dimensionFilter.Operator != "equals" && dimensionFilter.Operator != "in" {
+			out = append(out, dimensionFilter)
+			continue
+		}
+		if len(dimensionFilter.Values) != 1 {
+			out = append(out, dimensionFilter)
+			continue
+		}
+		canonical, _, _, err := normalizeCallFilterQuarter(dimensionFilter.Values[0])
+		if err != nil {
+			return callFilter{}, err
+		}
+		if filter.Quarter != "" {
+			existing, _, _, err := normalizeCallFilterQuarter(filter.Quarter)
+			if err != nil {
+				return callFilter{}, err
+			}
+			if existing != canonical {
+				return callFilter{}, fmt.Errorf("quarter dimension_filter %q conflicts with filter.quarter %q", canonical, existing)
+			}
+		}
+		filter.Quarter = canonical
+	}
+	filter.DimensionFilters = out
 	return filter, nil
 }
 
