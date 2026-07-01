@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	profilepkg "github.com/fyne-coder/gongcli_mcp/internal/profile"
 	"github.com/fyne-coder/gongcli_mcp/internal/store/sqlite"
@@ -3694,6 +3695,35 @@ func TestServeHTTPHandlesInitializeAndNotifications(t *testing.T) {
 	}
 	if notificationRecorder.Body.Len() != 0 {
 		t.Fatalf("notification body=%q want empty", notificationRecorder.Body.String())
+	}
+}
+
+func TestServeHTTPUsesConfiguredToolCallTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := NewServerWithOptions(nil, "gongmcp", "test",
+		WithToolAllowlist([]string{"get_sync_status"}),
+		WithHTTPToolCallTimeout(5*time.Millisecond),
+		WithGovernanceCheck(func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+	)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_sync_status","arguments":{}}}`
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	started := time.Now()
+	server.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%q", recorder.Code, recorder.Body.String())
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("configured timeout did not bound request; elapsed=%s body=%q", elapsed, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "context deadline exceeded") {
+		t.Fatalf("response did not include timeout error: %q", recorder.Body.String())
 	}
 }
 

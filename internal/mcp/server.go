@@ -26,7 +26,7 @@ import (
 const protocolVersion = "2025-11-25"
 const maxFrameBytes = 1 << 20
 const maxToolResultBytes = maxFrameBytes - 4096
-const httpToolCallTimeout = 60 * time.Second
+const DefaultHTTPToolCallTimeout = 60 * time.Second
 
 var errHTTPPayloadTooLarge = fmt.Errorf("request body exceeds maximum %d bytes", maxFrameBytes)
 
@@ -92,6 +92,7 @@ type Server struct {
 	tools                        []tool
 	limitPolicy                  LimitPolicy
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
+	httpToolCallTimeout          time.Duration
 	businessAnalysisSmallCellMin int
 	internalParticipantDomains   []string
 	allowedToolNames             map[string]struct{}
@@ -534,6 +535,7 @@ func NewServerWithOptions(store Store, name, version string, opts ...ServerOptio
 		runtimeInfo:                  RuntimeInfo{StartedAtUTC: time.Now().UTC().Format(time.RFC3339)},
 		limitPolicy:                  DefaultLimitPolicy(),
 		transcriptEvidenceProvenance: TranscriptEvidenceRedacted,
+		httpToolCallTimeout:          DefaultHTTPToolCallTimeout,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -639,6 +641,14 @@ func WithLimitPolicy(policy LimitPolicy) ServerOption {
 func WithTranscriptEvidenceProvenance(provenance TranscriptEvidenceProvenance) ServerOption {
 	return func(s *Server) {
 		s.transcriptEvidenceProvenance = normalizeTranscriptEvidenceProvenance(provenance)
+	}
+}
+
+func WithHTTPToolCallTimeout(timeout time.Duration) ServerOption {
+	return func(s *Server) {
+		if timeout > 0 {
+			s.httpToolCallTimeout = timeout
+		}
 	}
 }
 
@@ -1200,7 +1210,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), httpToolCallTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), s.httpToolCallTimeout)
 	defer cancel()
 
 	resp := s.handlePayload(ctx, payload)

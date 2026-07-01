@@ -30,6 +30,7 @@ Claude Desktop JSON, and wrapper scripts:
 | HTTP network | `--allow-open-network` | `GONGMCP_ALLOW_OPEN_NETWORK=1` | Required for non-local binds. |
 | HTTP network | `--dev-allow-no-auth-localhost` | none | Local development only. |
 | HTTP network | `--allowed-origins` | `GONGMCP_ALLOWED_ORIGINS` | Required for non-local HTTP. |
+| HTTP runtime | `--http-tool-timeout` | `GONGMCP_HTTP_TOOL_TIMEOUT` | Maximum duration for one HTTP MCP tool call. Defaults to `60s`; use a duration such as `2m` for large governed Postgres aggregations. |
 | Tool surface | `--tool-preset` | `GONGMCP_TOOL_PRESET` | Named presets such as `business-workbench`, `analyst`, `broad-public-redacted`. |
 | Tool surface | `--tool-allowlist` | `GONGMCP_TOOL_ALLOWLIST` | Comma-separated explicit tool names. |
 | Policy | `--policy-switches` | `GONGMCP_POLICY_SWITCHES` | Comma-separated switches such as `hide_call_titles` or `hide_contact_emails`; restart required. `hide_contact_emails` disables raw participant-email dimension buckets. |

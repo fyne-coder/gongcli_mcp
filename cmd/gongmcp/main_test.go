@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/governance"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
@@ -1789,6 +1790,48 @@ func TestResolveHTTPConfigCanForceStdioWithHTTPAddrEnv(t *testing.T) {
 
 	if _, err := resolveHTTPConfig("127.0.0.1:0", true, "", "", "", "", false, false, "", nil, func(string) string { return "" }); err == nil {
 		t.Fatal("resolveHTTPConfig allowed --stdio with --http")
+	}
+}
+
+func TestResolveHTTPToolCallTimeoutDefaultsEnvAndFlag(t *testing.T) {
+	defaultTimeout, err := resolveHTTPToolCallTimeout("", false, func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("default timeout returned error: %v", err)
+	}
+	if defaultTimeout != mcp.DefaultHTTPToolCallTimeout {
+		t.Fatalf("default timeout=%s want %s", defaultTimeout, mcp.DefaultHTTPToolCallTimeout)
+	}
+
+	envTimeout, err := resolveHTTPToolCallTimeout("", false, func(key string) string {
+		if key == "GONGMCP_HTTP_TOOL_TIMEOUT" {
+			return "2m"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("env timeout returned error: %v", err)
+	}
+	if envTimeout != 2*time.Minute {
+		t.Fatalf("env timeout=%s want 2m", envTimeout)
+	}
+
+	flagTimeout, err := resolveHTTPToolCallTimeout("75s", true, func(key string) string {
+		if key == "GONGMCP_HTTP_TOOL_TIMEOUT" {
+			return "2m"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("flag timeout returned error: %v", err)
+	}
+	if flagTimeout != 75*time.Second {
+		t.Fatalf("flag timeout=%s want 75s", flagTimeout)
+	}
+
+	for _, value := range []string{"0", "0s", "-1s", "not-a-duration"} {
+		if _, err := resolveHTTPToolCallTimeout(value, true, func(string) string { return "" }); err == nil {
+			t.Fatalf("resolveHTTPToolCallTimeout accepted %q", value)
+		}
 	}
 }
 
