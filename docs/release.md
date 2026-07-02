@@ -24,6 +24,8 @@ go version  # must be go1.26.4 or newer
 go test -count=1 ./...
 go vet ./...
 make public-surface-scan
+make public-surface-scan-test
+make release-public-surface-scan
 make secret-scan
 make sbom
 make checksums
@@ -48,44 +50,62 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
 4. Run `go test -count=1 ./...`.
 5. Run `go vet ./...`.
 6. Run `make public-surface-scan`.
-7. Run `make secret-scan`.
-8. Run `make sbom`.
-9. Run `make checksums`.
-10. Run `make postgres-backup-restore-smoke`.
-11. Render the Kubernetes Postgres pilot starter:
+7. Run `make public-surface-scan-test`.
+8. Run `make release-public-surface-scan`.
+9. Run `make secret-scan`.
+10. Run `make sbom`.
+11. Run `make checksums`.
+12. Run `make postgres-backup-restore-smoke`.
+13. Render the Kubernetes Postgres pilot starter:
    `kubectl kustomize deploy/kubernetes/postgres-pilot`.
-12. Run `make docker-build`.
-13. Run `make docker-build-mcp`.
-14. Run `make docker-build-mcp-gateway`.
-15. Run `make docker-build-ghcr`.
-16. Run `make docker-build-ghcr-mcp`.
-17. Run `make docker-build-ghcr-mcp-gateway`.
-18. Tag the release as `v$(cat VERSION)`.
-19. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
+14. Run `make docker-build`.
+15. Run `make docker-build-mcp`.
+16. Run `make docker-build-mcp-gateway`.
+17. Run `make docker-build-ghcr`.
+18. Run `make docker-build-ghcr-mcp`.
+19. Run `make docker-build-ghcr-mcp-gateway`.
+20. Tag the release as `v$(cat VERSION)`.
+21. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
     Go tests, the synthetic Postgres backup/restore smoke, vet, public-surface
-    scan, secret scan, Docker smoke builds, and image vulnerability scans before it
-    publishes:
+    scan, release-body public-surface scan, secret scan, Docker smoke builds,
+    and image vulnerability scans before it publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z`
-20. After the first publish, confirm the GHCR packages are public if the GitHub
+22. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-21. When publishing CLI/MCP archive artifacts, run GoReleaser from the tag with
+23. When publishing CLI/MCP archive artifacts, run GoReleaser from the tag with
     Go 1.26.4 or newer. GoReleaser builds archives and checksums; its
     `changelog: use: git` setting derives notes from commit messages and must
     not replace the curated release description.
-22. Create or update the GitHub Release body from the matching `CHANGELOG.md`
-    section, for example:
+24. Copy the matching `CHANGELOG.md` section into a local release-notes file
+    and scan that exact file before creating or updating the GitHub Release:
 
     ```bash
-    # Copy the curated ## X.Y.Z section from CHANGELOG.md into release-notes.md, then:
+    # Copy the curated ## X.Y.Z section from CHANGELOG.md into release-notes.md.
+    ./scripts/public-surface-scan.sh --input release-notes.md --label release-notes
     gh release create "v$(cat VERSION)" --notes-file release-notes.md
     # or, if the release already exists:
+    ./scripts/public-surface-scan.sh --input release-notes.md --label release-notes
     gh release edit "v$(cat VERSION)" --notes-file release-notes.md
     ```
 
     Use the curated changelog section as the public release notes. Do not rely
     on GoReleaser-generated commit-message notes for the GitHub Release body.
+25. Re-run `make release-public-surface-scan` after publishing the GitHub
+    Release and record its output as release evidence.
+
+`make public-surface-scan` is offline and scans tracked source/docs. `make
+public-surface-scan-test` is offline and verifies the scanner catches a
+synthetic banned release-body fixture without printing the matching text. `make
+release-public-surface-scan` uses `gh release list` to scan public GitHub
+Release bodies for `fyne-coder/gongcli_mcp`; it requires an authenticated `gh`
+CLI or `GH_TOKEN`. The command requires GitHub CLI support for
+`gh release list --json`; use a current GitHub-hosted runner or `gh` 2.35.0 or
+newer. It scans the newest 100 releases by default; set
+`GONGCTL_RELEASE_SCAN_LIMIT` for a deeper historical pass. If local development
+is offline, record that skip explicitly and run the live command before tagging
+or publishing.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they
