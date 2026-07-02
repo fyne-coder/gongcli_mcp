@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 scanner="${script_dir}/public-surface-scan.sh"
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/gongctl-public-surface-test.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
