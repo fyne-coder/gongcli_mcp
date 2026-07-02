@@ -269,18 +269,18 @@ and [Enterprise Deployment](docs/enterprise-deployment.md#2b-postgres-shared-con
 Use the published GHCR images after a release is published:
 
 ```bash
-docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.3 version
-docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.3 sync status --db /data/gong.db
+docker run --rm ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.4 version
+docker run --rm -v "$HOME/gongctl-data:/data" ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.4 sync status --db /data/gong.db
 ```
 
-The `v0.6.3` image references require the `v0.6.3` tag workflow to have
+The `v0.6.4` image references require the `v0.6.4` tag workflow to have
 completed successfully. If the GHCR manifest is not available yet, build and
 use the local images below.
 
 For read-only MCP, use the MCP-only image:
 
 ```bash
-docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.3 --db /data/gong.db --tool-preset business-pilot
+docker run --rm -i --network none -v "$HOME/gongctl-data:/data:ro" ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.4 --db /data/gong.db --tool-preset business-pilot
 ```
 
 Build the local image:
