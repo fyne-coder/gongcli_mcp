@@ -18,7 +18,7 @@ still gated.
 
 ## Matrix
 
-| SQLite-era question | Postgres status | Postgres path | Caveats and client-facing wording |
+| SQLite-era question | Postgres status | Postgres path | Caveats and reader-facing wording |
 | --- | --- | --- | --- |
 | Is the cache fresh enough to use? | supported | `get_sync_status` | Start every session here. Results reflect the last approved sync, not live Gong. |
 | How many calls/transcripts are available in the selected window? | supported | `get_sync_status`, `summarize_call_facts`, `summarize_calls_by_lifecycle` | Counts are safe to discuss. Use the deployment baseline for manual-test comparison. |

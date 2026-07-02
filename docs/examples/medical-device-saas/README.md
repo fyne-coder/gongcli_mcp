@@ -109,7 +109,7 @@ trails from one system instead of stitching together exports from multiple tools
    [company-profile.yaml](./company-profile.yaml) when a CLI or MCP example
    needs identifiers.
 5. Explain that analysis outputs should focus on lifecycle, stage, scope,
-   evidence density, and objection themes rather than tenant-specific values.
+   evidence density, and objection themes rather than deployment-specific values.
 6. Point reviewers to [data-notes.md](./data-notes.md) before sharing the
    example outside the repo.
 7. Treat [q1-demo-dataset-plan.md](./q1-demo-dataset-plan.md) as the canonical

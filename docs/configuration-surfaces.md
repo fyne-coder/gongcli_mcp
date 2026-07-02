@@ -13,6 +13,11 @@ flag/env surfaces should probably move to optional YAML next.
 | Docker Compose | `compose.yaml` | Local container wiring for CLI and MCP services | Implemented |
 | Release/CI automation | `.goreleaser.yml`, `.github/workflows/*.yml` | Build, release, and publish automation | Implemented |
 
+Compatibility CRM read-model columns that still encode Salesforce-shaped field
+examples are tracked separately in [CRM Genericity Roadmap](crm-genericity-roadmap.md).
+The target is profile-backed dimension advertisement rather than adding more
+global compiled custom-field defaults.
+
 ## Best Next YAML Candidate: MCP Runtime Config
 
 Today `gongmcp` runtime policy is spread across flags, env vars, Docker args,

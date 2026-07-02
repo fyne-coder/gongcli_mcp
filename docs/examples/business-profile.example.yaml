@@ -36,7 +36,7 @@ fields:
   account_lifecycle:
     object: account
     names:
-      - Customer_Status__c
+      - customer_status
 
 lifecycle:
   open:
@@ -87,7 +87,7 @@ methodology:
       - problem
     fields:
       - object: deal
-        name: Pain_Point__c
+        name: pain_point
   next_steps:
     description: Explicit next step, decision process, or action owner.
     aliases:

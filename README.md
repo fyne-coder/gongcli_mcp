@@ -3,7 +3,7 @@
 `gongctl` turns approved Gong data into a local, queryable evidence workbench
 for RevOps, sales, marketing, product, and governance teams. It helps teams
 answer questions that are awkward to answer directly in Gong while keeping
-credentials, cached data, and tenant-specific configuration under operator
+credentials, cached data, and deployment-specific configuration under operator
 control.
 
 Use it to:
@@ -133,8 +133,11 @@ gongctl profile schema
 ### MCP tool presets at a glance
 
 Built-in CRM and business defaults are Salesforce-compatible examples and a
-fixed reviewed dimension set. Tenant-specific CRM fields, lifecycle
-definitions, and methodology vocabulary belong in profiles/configuration.
+fixed reviewed dimension set. Deployment-specific CRM fields, lifecycle
+definitions, methodology vocabulary, procurement vocabulary, and account
+segmentation belong in reviewed profiles, request-level topic packs, or local
+configuration. The remaining compatibility-column plan is tracked in
+[CRM Genericity Roadmap](docs/crm-genericity-roadmap.md).
 
 `gongmcp --list-tool-presets` is the source of truth. Common presets:
 
@@ -432,7 +435,7 @@ GONG_DATABASE_URL="$GONGCTL_WRITER_DATABASE_URL" gongctl cache purge --config ~/
 
 ## Advanced Local Operator Commands
 
-These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or tenant-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
+These commands are useful when an operator is working against their own tenant data on their own machine. They can reveal raw call JSON, transcript files, CRM context, profile-derived field values, or deployment-specific configuration, so keep outputs outside the source repo and do not use them in public examples.
 When using Postgres, `gongctl search calls` and `gongctl calls show --json`
 return minimized read-model metadata. Use explicit SQLite/operator raw-export
 commands such as `calls export` with `--allow-sensitive-export` for
@@ -518,7 +521,7 @@ The local CLI sync/search flow is SQLite-backed:
 10. `gongctl cache inventory --db PATH` for SQLite, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres
 11. `gongctl cache purge --db PATH --older-than YYYY-MM-DD [--dry-run|--confirm]`, or omit `--db` with `GONG_DATABASE_URL` / `DATABASE_URL` for Postgres; scheduled retention jobs can use `gongctl cache purge --config PATH [--dry-run|--confirm]`
 12. `gongctl profile discover --db PATH --out PATH`
-13. Review and edit the YAML profile for tenant-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
+13. Review and edit the YAML profile for deployment-specific CRM objects, fields, lifecycle buckets, and methodology concepts.
 14. `gongctl profile validate --db PATH --profile PATH`
 15. `gongctl profile import --db PATH --profile PATH`
 16. `gongctl analyze calls --db PATH --group-by DIMENSION [--lifecycle-source auto|profile|builtin]`
@@ -633,7 +636,7 @@ Rules:
 - `analyze transcript-backlog` prioritizes External and Conference-style customer conversations ahead of short dialer-style events by default.
 - With an active profile, profile-aware analysis defaults to `lifecycle_source=profile`; use `--lifecycle-source builtin` to force the compatibility lifecycle/read model. In Postgres, `auto` falls back to builtin only when no active profile exists; when a profile is active, read-only Postgres requires a fresh profile fact cache and fails closed until a writable `gongctl sync read-model --rebuild`, `profile import`, or `profile activate` warms it.
 
-Public examples should avoid tenant field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs. See [docs/business-user-quickstart.md](docs/business-user-quickstart.md) for prompt examples shaped for sales, marketing, enablement, and RevOps users.
+Public examples should avoid real CRM field names, customer names, raw CRM values, transcripts, call titles, object IDs, and call IDs. See [docs/business-user-quickstart.md](docs/business-user-quickstart.md) for prompt examples shaped for sales, marketing, enablement, and RevOps users.
 
 ## Deterministic AI Exclusion Filtering
 

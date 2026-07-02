@@ -18,7 +18,7 @@ This document defines the current enterprise pilot deployment shape for
   to SQLite.
 
 This is a pilot-candidate operating model, not a hosted service design.
-Customer identity, raw transcripts, secrets, and tenant-specific filesystem
+Customer identity, raw transcripts, secrets, and deployment-specific filesystem
 details should stay outside shared docs and outside the source repo.
 For controlled multi-container Postgres sharing, pair this document with the
 [Postgres client pilot release packet](postgres-client-pilot-release-packet.md).
@@ -301,7 +301,7 @@ Required controls:
 - use host or volume encryption where company policy requires it
 - keep backups and restore copies in the same protected data class
 - keep logs and review artifacts metadata-only; do not copy transcript text,
-  secrets, raw payloads, or tenant-specific IDs into shared docs
+  secrets, raw payloads, or deployment-specific IDs into shared docs
 
 Storage-specific guidance:
 

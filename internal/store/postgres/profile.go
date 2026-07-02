@@ -870,7 +870,7 @@ func profileUnavailableConcepts(p *profilepkg.Profile, groupBy string) []string 
 func (s *Store) profileReadiness(ctx context.Context) (sqlite.ProfileReadiness, error) {
 	readiness := sqlite.ProfileReadiness{
 		Status:      "not_configured",
-		Detail:      "No active business profile is imported. Builtin lifecycle buckets are available, but reliable tenant-specific lifecycle separation requires a reviewed profile.",
+		Detail:      "No active business profile is imported. Builtin lifecycle buckets are available, but reliable deployment-specific lifecycle separation requires a reviewed profile.",
 		CacheStatus: "not_applicable",
 		Blocking:    []string{"run gongctl profile discover, review the YAML, then run profile validate and profile import"},
 	}

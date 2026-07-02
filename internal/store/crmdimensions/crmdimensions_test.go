@@ -14,8 +14,8 @@ func TestAccountRatingRegistered(t *testing.T) {
 	if !ok {
 		t.Fatal("expected account_rating in registry")
 	}
-	if field.SFDCNames[0] != "Rating" {
-		t.Fatalf("unexpected SFDC mapping: %+v", field.SFDCNames)
+	if field.CRMFieldNames[0] != "Rating" {
+		t.Fatalf("unexpected CRM field mapping: %+v", field.CRMFieldNames)
 	}
 	if field.Kind != crmdimensions.KindCategorical {
 		t.Fatalf("expected categorical kind, got %v", field.Kind)

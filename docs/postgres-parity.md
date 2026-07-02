@@ -385,7 +385,7 @@ currently supported, caveated, or blocked in Postgres pilots.
   parity, governance-safe aggregate variants, small-cell
   suppression, customer-scale aggregate performance testing, and per-surface
   reader roles. Field names/labels and exact lifecycle population rates can
-  reveal tenant-specific CRM structure, so customer deployments should keep it
+  reveal deployment-specific CRM structure, so customer deployments should keep it
   behind explicit allowlists until aggregate privacy and performance hardening
   are complete.
 
