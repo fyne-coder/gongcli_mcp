@@ -51,6 +51,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	devAllowNoAuthLocalhost := flags.Bool("dev-allow-no-auth-localhost", false, "Allow unauthenticated HTTP only on localhost for local development")
 	allowedOrigins := flags.String("allowed-origins", "", "Comma-separated allowed HTTP Origin values; defaults to GONGMCP_ALLOWED_ORIGINS; required for non-local HTTP")
 	aiGovernanceConfig := flags.String("ai-governance-config", "", "AI governance YAML config path; defaults to GONGMCP_AI_GOVERNANCE_CONFIG")
+	businessTopicPacksConfig := flags.String("business-topic-packs-config", "", "Local business topic packs YAML config path; defaults to GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG")
 	noGovernanceExclusions := flags.Bool("no-governance-exclusions", false, "Declare that no customer governance exclusions exist; do not pass --ai-governance-config; defaults to GONGMCP_NO_GOVERNANCE_EXCLUSIONS when set")
 	allowUnmatchedAIGovernance := flags.Bool("allow-unmatched-ai-governance", false, "Allow AI governance config entries that do not match the current cache; defaults to GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE when set")
 	enforceToolScopedDBGrants := flags.Bool("enforce-tool-scoped-db-grants", false, "For Postgres MCP, validate reader function EXECUTE grants against the selected tool preset/allowlist; defaults to GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS")
@@ -194,6 +195,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if postgresBroadPublicRedactedPreset(selectedPreset) {
 		policySwitches = mcp.MergePolicySwitches(mcp.BroadPublicRedactedDefaultPolicySwitches(), parsedPolicySwitches)
 	}
+	businessTopicPacksPath := firstNonEmpty(*businessTopicPacksConfig, os.Getenv("GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG"))
+	businessTopicPacks, err := mcp.LoadBusinessTopicPacksFile(businessTopicPacksPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid business topic packs config: %v\n", err)
+		return 2
+	}
 	governanceConfigPath := firstNonEmpty(*aiGovernanceConfig, os.Getenv("GONGMCP_AI_GOVERNANCE_CONFIG"))
 	noGovernanceExclusionsMode := *noGovernanceExclusions || truthy(os.Getenv("GONGMCP_NO_GOVERNANCE_EXCLUSIONS"))
 	if noGovernanceExclusionsMode && governanceConfigPath != "" {
@@ -291,6 +298,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			StartedAtUTC: time.Now().UTC().Format(time.RFC3339),
 		}),
 		mcp.WithPolicySwitches(policySwitches),
+		mcp.WithBusinessTopicPacks(businessTopicPacks),
 	}
 	if min := postgresAnalystSmallCellMin(postgresMode, selectedPreset, enforceScopedDBGrants); min > 1 {
 		serverOptions = append(serverOptions, mcp.WithBusinessAnalysisSmallCellMin(min))
@@ -397,6 +405,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 				audit.SuppressedCallCount,
 			)
 		}
+	}
+
+	if len(businessTopicPacks.CustomPackNames()) > 0 {
+		fmt.Fprintf(stderr, "business topic packs active: configured_packs=%s; restart gongmcp after config changes\n", strings.Join(businessTopicPacks.CustomPackNames(), ","))
 	}
 
 	server := mcp.NewServerWithOptions(store, "gongmcp", version.DisplayVersion(), serverOptions...)

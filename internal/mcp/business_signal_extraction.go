@@ -34,15 +34,22 @@ type businessSignalBucket struct {
 	Quotes          []businessAnalysisQuote `json:"quotes"`
 }
 
-func businessSignalExtractionSchema() map[string]any {
+func businessSignalExtractionSchema(topicPackEnum []string) map[string]any {
+	if len(topicPackEnum) == 0 {
+		topicPackEnum = []string{topicPackGenericB2B, topicPackTechnicalReadiness}
+	}
+	description := "Optional topic packs controlling synonym expansion and default topic seeds. Defaults to generic_b2b when omitted; technical_readiness opt-in adds integration, security, and launch-readiness vocabulary."
+	if len(topicPackEnum) > 2 {
+		description = "Optional topic packs controlling synonym expansion and default topic seeds. Defaults to generic_b2b when omitted; technical_readiness and configured local packs are opt-in."
+	}
 	return objectSchema(map[string]any{
 		"filter": facadeCallFilterSchema(),
 		"topics": map[string]any{"type": "array", "items": map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength}, "maxItems": maxBusinessSignalTopics},
 		"topic_packs": map[string]any{
 			"type":        "array",
-			"items":       map[string]any{"type": "string", "enum": []string{topicPackGenericB2B, topicPackTechnicalReadiness}},
+			"items":       map[string]any{"type": "string", "enum": topicPackEnum},
 			"maxItems":    4,
-			"description": "Optional topic packs controlling synonym expansion and default topic seeds. Defaults to generic_b2b when omitted; technical_readiness opt-in adds integration, security, and launch-readiness vocabulary.",
+			"description": description,
 		},
 		"query":                     map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional single topic seed."},
 		"theme_query":               map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for query."},
@@ -98,7 +105,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	if s.restrictedAccountQuery(normalized.AccountQuery) {
 		return toolCallResult{}, restrictedAccountQueryError()
 	}
-	topicPacks, err := resolveTopicPacks(args.TopicPacks)
+	topicPacks, err := s.resolveTopicPacks(args.TopicPacks)
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -164,6 +171,9 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	warnings = append(warnings, "seeded_topic_synonym_expansion: topic buckets transparently try common sales/marketing synonyms and expose expanded_queries")
 	if topicPacks.technicalReadiness {
 		warnings = append(warnings, "topic_pack_technical_readiness_active: technical_readiness pack expands integration, security, and launch-readiness synonyms and default seeds")
+	}
+	if len(topicPacks.customActive) > 0 {
+		warnings = append(warnings, "topic_pack_custom_active: configured local topic packs expand aliases and operation default seeds; requested custom entries are prioritized within topic/query caps")
 	}
 	status := "seeded_extraction_ready"
 	if totalEvidence == 0 {
@@ -285,6 +295,7 @@ func businessSignalTopicAliases(operation string, topic string, packs topicPackS
 	key = strings.Join(strings.Fields(key), " ")
 	aliases := genericB2BBusinessSignalTopicAliases()
 	out := append([]string{}, aliases[key]...)
+	out = append(packs.customAliases(topic), out...)
 	if packs.technicalReadiness {
 		technicalReadinessAliases := technicalReadinessBusinessSignalTopicAliasExtensions()
 		out = append(out, technicalReadinessAliases[key]...)
@@ -332,15 +343,8 @@ func businessSignalTopics(operation string, args businessSignalExtractionArgs, p
 		candidates = append([]string{query}, candidates...)
 	}
 	if len(candidates) == 0 {
-		switch operation {
-		case OpExtractObjectionSignals:
-			candidates = []string{"price", "budget", "timeline", "security review", "integration risk", "IT bandwidth", "ROI", "worried", "blocker", "competitor"}
-		default:
-			candidates = []string{"pricing", "implementation", "integration", "security", "support", "timeline", "data", "ERP"}
-			if packs.technicalReadiness {
-				candidates = append(candidates, "launch readiness")
-			}
-		}
+		candidates = append(candidates, packs.customDefaultTopics(operation)...)
+		candidates = append(candidates, builtinBusinessSignalDefaultTopics(operation, packs)...)
 	}
 	seen := make(map[string]struct{}, len(candidates))
 	out := make([]string, 0, len(candidates))

@@ -102,6 +102,7 @@ type Server struct {
 	governanceCheck              func(context.Context) error
 	policySwitches               PolicySwitches
 	blocklistGuard               *governance.BlocklistGuard
+	businessTopicPacks           BusinessTopicPackRegistry
 }
 
 // BlocklistGuard is re-exported from the governance package so MCP
@@ -714,6 +715,37 @@ func WithBlocklistGuard(guard *BlocklistGuard) ServerOption {
 			return
 		}
 		s.blocklistGuard = guard
+	}
+}
+
+// WithBusinessTopicPacks installs validated local custom topic packs loaded from
+// YAML. Built-in packs remain available without being listed in the registry.
+func WithBusinessTopicPacks(registry BusinessTopicPackRegistry) ServerOption {
+	return func(s *Server) {
+		s.businessTopicPacks = registry
+	}
+}
+
+func (s *Server) resolveTopicPacks(requested []string) (topicPackSet, error) {
+	if s == nil {
+		return resolveTopicPacks(requested)
+	}
+	return s.businessTopicPacks.ResolveTopicPacks(requested)
+}
+
+func (s *Server) businessSignalExtractionInputSchema() map[string]any {
+	if s == nil {
+		return businessSignalExtractionSchema(nil)
+	}
+	return businessSignalExtractionSchema(s.businessTopicPacks.TopicPackSchemaEnum())
+}
+
+func isBusinessSignalExtractionOperation(operation string) bool {
+	switch operation {
+	case OpExtractBuyerQuestions, OpExtractObjectionSignals:
+		return true
+	default:
+		return false
 	}
 }
 

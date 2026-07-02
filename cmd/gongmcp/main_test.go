@@ -60,6 +60,63 @@ func TestRunRequiresDBFlag(t *testing.T) {
 	}
 }
 
+func TestRunRejectsInvalidBusinessTopicPacksConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "topic-packs.yaml")
+	if err := os.WriteFile(configPath, []byte("topic_packs:\n  generic_b2b:\n    aliases:\n      pricing:\n        - budget\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--business-topic-packs-config", configPath}, bytes.NewReader(nil), &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code=%d want 2 stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid business topic packs config") {
+		t.Fatalf("stderr=%q want invalid business topic packs config", stderr.String())
+	}
+}
+
+func TestRunLoadsBusinessTopicPacksConfigFromEnv(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "gong.db")
+	store, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open returned error: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "topic-packs.yaml")
+	if err := os.WriteFile(configPath, []byte(`topic_packs:
+  product_readiness:
+    description: "Local readiness vocabulary."
+    aliases:
+      implementation:
+        - launch readiness
+`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG", configPath)
+	t.Setenv("GONGMCP_TOOL_PRESET", "business-workbench")
+	stdin := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`,
+	}, "\n") + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{"--db", dbPath, "--stdio"}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "business topic packs active") || !strings.Contains(stderr.String(), "product_readiness") {
+		t.Fatalf("stderr=%q missing business topic packs startup summary", stderr.String())
+	}
+}
+
 func TestParseCommaListTrimsSkipsEmptyAndDedupes(t *testing.T) {
 	t.Parallel()
 
