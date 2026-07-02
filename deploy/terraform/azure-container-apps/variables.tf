@@ -17,7 +17,7 @@ variable "container_app_environment_id" {
 variable "gongmcp_image" {
   type        = string
   description = "Digest-pinned MCP-only image."
-  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.1"
+  default     = "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.2"
 }
 
 variable "storage_account_name" {
