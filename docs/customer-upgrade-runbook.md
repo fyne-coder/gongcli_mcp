@@ -275,21 +275,38 @@ affect upgrades:
 | 0.6.3 | Ships release-body public-surface scanning, configurable business topic packs, and the CRM genericity roadmap. No data migration is required; deploy matching images if you want the stricter release gates, schema-advertised topic packs, and CRM-neutral capability wording. |
 | 0.6.4 | Replaces the public opt-in topic-pack example with a generic `technical_readiness` pack and updates release-facing image defaults. No data migration is required beyond the existing 0.6.0 read-model and scoped-grant path. |
 
-### Direct 0.5.5 to 0.6.4 Upgrade Path
+### Direct 0.5.x or Later to Current 0.6.x Upgrade Path
 
-An operator on `0.5.5` can upgrade directly to `0.6.4`; intermediate binaries
-do not need to be run one by one. Treat it as a normal stack promotion:
+Operators on `0.5.x` or later can upgrade directly to the current reviewed
+`0.6.x` release; intermediate binaries do not need to be run one by one. Treat
+the change as a normal stack promotion and apply the considerations for every
+release boundary crossed:
+
+- From `0.5.0` through `0.5.4`, review the deploy command, gateway, hosted MCP,
+  and governance-refresh notes in the table above before promotion.
+- From any release before `0.5.5`, plan for the `0.5.5` business-analysis
+  function migrations, dimension-filter support, participant rollups, and
+  deploy diagnostic changes.
+- From any release before `0.6.0`, plan for promoted CRM dimensions in
+  `call_facts`, Business Workbench capability discovery, scoped Postgres reader
+  grants, and read-model refresh.
+- From any release before `0.6.3`, treat `topic_packs` as a new optional request
+  field; existing hosts can omit it.
+- For `0.6.3` and later, do not carry opt-in pack names forward without checking
+  the candidate `tools/list` schema.
+
+Use this promotion sequence for the candidate release:
 
 1. Record the currently deployed image tags or digests for `gongctl`,
    `gongmcp`, and `gongmcp-gateway` where used.
 2. Back up the SQLite cache or restore the Postgres backup into an isolated
    validation database. Include transcript files, profile YAML, governance YAML,
    and MCP host configuration in the rollback bundle.
-3. Pull the matching `v0.6.4` images, preferably by digest after the release
+3. Pull the matching candidate images, preferably by digest after the release
    images are inspectable.
 4. Run the writable `gongctl` operator path against the copied cache or
    restored database. For Postgres, run the deploy/read-model refresh path with
-   the `v0.6.4` operator image and reapply scoped reader grants through the
+   the candidate operator image and reapply scoped reader grants through the
    deploy command or `gongctl mcp postgres-reader-apply`.
 5. Validate readiness with the matching `gongctl` image:
 
@@ -307,8 +324,9 @@ do not need to be run one by one. Treat it as a normal stack promotion:
 8. If MCP hosts send `topic_packs`, discover supported pack names from the
    candidate `tools/list` schema before promotion. Hosts that do not send
    `topic_packs` keep the default generic extraction behavior.
-9. Promote the candidate image digests and keep the `0.5.5` digests and backup
-   available until operator smoke and business-user read-only checks pass.
+9. Promote the candidate image digests and keep the prior image digests and
+   backup available until operator smoke and business-user read-only checks
+   pass.
 
 When upgrading from releases before 0.6.3, `topic_packs` is a new optional
 request field on business-signal extraction operations. Existing MCP hosts can
