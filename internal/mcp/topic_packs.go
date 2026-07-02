@@ -19,6 +19,8 @@ type topicPackSet struct {
 	active             []string
 	genericB2B         bool
 	technicalReadiness bool
+	customActive       []string
+	registry           BusinessTopicPackRegistry
 }
 
 func defaultTopicPackSet() topicPackSet {
@@ -27,36 +29,51 @@ func defaultTopicPackSet() topicPackSet {
 }
 
 func resolveTopicPacks(requested []string) (topicPackSet, error) {
+	return (BusinessTopicPackRegistry{}).ResolveTopicPacks(requested)
+}
+
+// ResolveTopicPacks validates requested pack names against built-ins and any
+// configured custom packs in the registry.
+func (r BusinessTopicPackRegistry) ResolveTopicPacks(requested []string) (topicPackSet, error) {
 	if len(requested) == 0 {
 		return topicPackSet{
 			active:     []string{topicPackGenericB2B},
 			genericB2B: true,
+			registry:   r,
 		}, nil
 	}
 	seen := make(map[string]struct{}, len(requested))
 	active := make([]string, 0, len(requested)+1)
+	customActive := make([]string, 0, len(requested))
 	technicalReadiness := false
 	for _, raw := range requested {
 		name := strings.ToLower(strings.TrimSpace(raw))
 		if name == "" {
 			continue
 		}
-		if _, ok := knownTopicPacks[name]; !ok {
-			return topicPackSet{}, fmt.Errorf("unknown topic_pack %q: supported packs are generic_b2b and technical_readiness", raw)
-		}
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		seen[name] = struct{}{}
-		if name == topicPackTechnicalReadiness {
-			technicalReadiness = true
+		if _, builtin := knownTopicPacks[name]; builtin {
+			seen[name] = struct{}{}
+			if name == topicPackTechnicalReadiness {
+				technicalReadiness = true
+			}
+			active = append(active, name)
+			continue
 		}
+		if _, ok := r.customPack(name); !ok {
+			return topicPackSet{}, unknownTopicPackError(raw, r)
+		}
+		seen[name] = struct{}{}
+		customActive = append(customActive, name)
 		active = append(active, name)
 	}
 	if len(active) == 0 {
 		return topicPackSet{
 			active:     []string{topicPackGenericB2B},
 			genericB2B: true,
+			registry:   r,
 		}, nil
 	}
 	if _, ok := seen[topicPackGenericB2B]; !ok {
@@ -66,17 +83,100 @@ func resolveTopicPacks(requested []string) (topicPackSet, error) {
 		active:             active,
 		genericB2B:         true,
 		technicalReadiness: technicalReadiness,
+		customActive:       customActive,
+		registry:           r,
 	}, nil
+}
+
+func unknownTopicPackError(raw string, registry BusinessTopicPackRegistry) error {
+	supported := strings.Join(registry.SupportedPackNames(), ", ")
+	return fmt.Errorf("unknown topic_pack %q: supported packs are %s", raw, supported)
 }
 
 func (s topicPackSet) provenancePayload() map[string]any {
 	note := "generic_b2b is the default pack for generic B2B topic aliases and seeds."
-	if s.technicalReadiness {
+	switch {
+	case len(s.customActive) > 0 && s.technicalReadiness:
+		note = "Built-in and configured topic packs expand topic aliases and default seeds; technical_readiness adds integration, security, and launch-readiness vocabulary; configured packs add local aliases and operation defaults, with requested custom entries prioritized within query caps."
+	case len(s.customActive) > 0:
+		note = "Built-in generic_b2b remains available; configured topic packs add local aliases and operation-specific default seeds, with requested custom entries prioritized within query caps."
+	case s.technicalReadiness:
 		note = "Opt-in topic packs expand topic aliases and default seeds; technical_readiness adds integration, security, and launch-readiness vocabulary."
 	}
-	return map[string]any{
+	payload := map[string]any{
 		"active_packs": append([]string{}, s.active...),
 		"note":         note,
+	}
+	if names := s.registry.CustomPackNames(); len(names) > 0 {
+		payload["configured_packs"] = names
+	}
+	return payload
+}
+
+func (s topicPackSet) customAliases(topic string) []string {
+	if len(s.customActive) == 0 {
+		return nil
+	}
+	key := strings.ToLower(strings.TrimSpace(topic))
+	key = strings.Join(strings.Fields(key), " ")
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, name := range s.customActive {
+		pack, ok := s.registry.customPack(name)
+		if !ok {
+			continue
+		}
+		for _, alias := range pack.Aliases[key] {
+			normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(alias)), " "))
+			if normalized == "" {
+				continue
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			out = append(out, alias)
+		}
+	}
+	return out
+}
+
+func (s topicPackSet) customDefaultTopics(operation string) []string {
+	if len(s.customActive) == 0 {
+		return nil
+	}
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, name := range s.customActive {
+		pack, ok := s.registry.customPack(name)
+		if !ok {
+			continue
+		}
+		for _, topic := range pack.DefaultTopics[operation] {
+			key := strings.ToLower(strings.TrimSpace(topic))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, topic)
+		}
+	}
+	return out
+}
+
+func builtinBusinessSignalDefaultTopics(operation string, packs topicPackSet) []string {
+	switch operation {
+	case OpExtractObjectionSignals:
+		return []string{"price", "budget", "timeline", "security review", "integration risk", "IT bandwidth", "ROI", "worried", "blocker", "competitor"}
+	default:
+		candidates := []string{"pricing", "implementation", "integration", "security", "support", "timeline", "data", "ERP"}
+		if packs.technicalReadiness {
+			candidates = append(candidates, "launch readiness")
+		}
+		return candidates
 	}
 }
 

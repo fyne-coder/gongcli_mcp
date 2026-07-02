@@ -176,7 +176,10 @@ deployments should set their own comma-separated internal email domains.
 request-level `topic_packs`. The default `generic_b2b` pack keeps generic B2B
 topic aliases and seeds; pass `topic_packs: ["technical_readiness"]` to opt
 into additional implementation, security, and integration-readiness synonym
-expansion. See
+expansion. Operators can also load reusable local custom packs from YAML via
+`--business-topic-packs-config` / `GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG`; see
+[Configuration surfaces](docs/configuration-surfaces.md#local-custom-business-topic-packs).
+Built-in request-level packs are documented in
 [Configuration surfaces](docs/configuration-surfaces.md#request-level-topic-packs).
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer

@@ -328,6 +328,12 @@ signals instead of inventing an `icp` filter or hidden classification.
   `extract.objection_signals`. Default extraction keeps generic B2B topic seeds
   and only adds the readiness-specific synonym expansion when that pack is
   requested.
+- For deployment-specific vocabulary, define local custom packs in YAML and
+  launch `gongmcp` with `--business-topic-packs-config` or
+  `GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG`. Discover configured pack names from
+  `gong_discover_capabilities` before sending `topic_packs` on extraction
+  operations. Built-in `generic_b2b` behavior remains the default when custom
+  packs are not requested.
 - For a question about one named prospect or account across calls, use
   `prospect.question.answer` only when the user supplied the prospect/account
   name. Set `filter.account_query` and `include_account_names=true`; do not use

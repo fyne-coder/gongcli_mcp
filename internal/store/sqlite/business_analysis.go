@@ -1585,6 +1585,13 @@ func businessAnalysisFTSQuery(value string, field string) (string, error) {
 	return strings.Join(quoted, " "), nil
 }
 
+// ValidateBusinessAnalysisFTSQueryValue validates a user-configured search
+// seed against the same tokenizer used for business-analysis FTS MATCH queries.
+func ValidateBusinessAnalysisFTSQueryValue(value string, field string) error {
+	_, err := businessAnalysisFTSQuery(value, field)
+	return err
+}
+
 func normalizeBusinessAnalysisFilter(filter BusinessAnalysisFilter) (BusinessAnalysisFilter, error) {
 	filter.TitleQuery = strings.ToLower(strings.TrimSpace(filter.TitleQuery))
 	filter.Query = strings.TrimSpace(filter.Query)

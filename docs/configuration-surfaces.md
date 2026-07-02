@@ -41,6 +41,7 @@ Claude Desktop JSON, and wrapper scripts:
 | Policy | `--policy-switches` | `GONGMCP_POLICY_SWITCHES` | Comma-separated switches such as `hide_call_titles` or `hide_contact_emails`; restart required. `hide_contact_emails` disables raw participant-email dimension buckets. |
 | Policy | `--internal-participant-domains` | `GONGMCP_INTERNAL_PARTICIPANT_DOMAINS` | Comma-separated internal email domains for participant domain and affiliation classification; restart required. Defaults to generic `internal.example` when unset. |
 | Governance | `--ai-governance-config` | `GONGMCP_AI_GOVERNANCE_CONFIG` | Private AI governance YAML path. |
+| Business topic packs | `--business-topic-packs-config` | `GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG` | Optional local YAML defining reusable custom topic packs for business signal extraction; restart required. |
 | Governance | `--allow-unmatched-ai-governance` | `GONGMCP_ALLOW_UNMATCHED_AI_GOVERNANCE` | Allows governance entries that do not match the current cache. |
 | Postgres guard | `--enforce-tool-scoped-db-grants` | `GONGMCP_ENFORCE_TOOL_SCOPED_DB_GRANTS=1` | Validates scoped reader grants against the selected surface. |
 | Postgres guard | none | `GONGMCP_POSTGRES_REDACTED_SERVING_DB=1` | Required for redacted broad Postgres presets. |
@@ -254,6 +255,63 @@ Example:
     "topics": ["integration", "security"]
   }
 }
+```
+
+## Local Custom Business Topic Packs
+
+Operators can define reusable local topic packs in YAML and load them at
+`gongmcp` startup. This keeps deployment-specific vocabulary out of compiled
+public defaults while still letting hosts discover and request pack names
+through `gong_discover_capabilities`.
+
+| Surface | Flag | Env | Purpose | Status |
+| --- | --- | --- | --- | --- |
+| Business topic packs | `--business-topic-packs-config` | `GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG` | Load local custom topic pack definitions | Implemented |
+
+Reload contract: restart `gongmcp` after changing the YAML file.
+
+Preferred YAML shape:
+
+```yaml
+topic_packs:
+  product_readiness:
+    description: "Optional local pack for product readiness reviews."
+    aliases:
+      implementation:
+        - launch readiness
+        - training plan
+    default_topics:
+      extract.buyer_questions:
+        - implementation
+        - launch readiness
+      extract.objection_signals:
+        - implementation risk
+```
+
+Rules:
+
+- Pack names must be lowercase identifiers and cannot reuse built-in names
+  (`generic_b2b`, `technical_readiness`).
+- Built-in packs remain available. Omitted `topic_packs` still defaults to
+  `generic_b2b` only.
+- Configured aliases expand `expanded_queries`; when query caps apply, requested
+  custom aliases are prioritized before built-in synonyms.
+- Configured `default_topics` apply only when the request omitted explicit
+  `topics`, `query`, and `theme_query`; when topic caps apply, requested custom
+  defaults are prioritized before built-in defaults.
+- Alias and default-topic values must be valid business-analysis search seeds:
+  ASCII letters/numbers plus simple separators, no more than 12 terms, and no
+  term longer than 48 characters.
+- Unknown pack names fail with an error listing built-in and configured names.
+- `gong_discover_capabilities` advertises configured pack names in extraction
+  operation schemas and `business_topic_packs.configured_pack_names` metadata.
+
+Example launch:
+
+```bash
+gongmcp --db /data/gong-mcp-governed.db \
+  --tool-preset business-workbench \
+  --business-topic-packs-config /etc/gongmcp/topic-packs.yaml
 ```
 
 ## Do Not Move These Into YAML

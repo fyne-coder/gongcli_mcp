@@ -607,7 +607,7 @@ func FacadeOperations() []FacadeOperation {
 				"all-readonly",
 				"redacted-all-readonly",
 			},
-			InputSchema: withCohortTokenField(businessSignalExtractionSchema()),
+			InputSchema: withCohortTokenField(businessSignalExtractionSchema(nil)),
 			Examples: []any{
 				map[string]any{
 					"filter": map[string]any{
@@ -635,7 +635,7 @@ func FacadeOperations() []FacadeOperation {
 				"all-readonly",
 				"redacted-all-readonly",
 			},
-			InputSchema: withCohortTokenField(businessSignalExtractionSchema()),
+			InputSchema: withCohortTokenField(businessSignalExtractionSchema(nil)),
 			Examples: []any{
 				map[string]any{
 					"filter": map[string]any{
@@ -908,6 +908,9 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 	ops := FacadeOperations()
 	enriched := make([]map[string]any, 0, len(ops))
 	for _, op := range ops {
+		if includeSchemas && isBusinessSignalExtractionOperation(op.Name) {
+			op.InputSchema = withCohortTokenField(s.businessSignalExtractionInputSchema())
+		}
 		enriched = append(enriched, facadeDiscoverOperationEntry(op, s.facadeRoutedToolAvailable(op), includeSchemas))
 	}
 	payload := map[string]any{
@@ -949,6 +952,14 @@ func (s *Server) executeFacadeDiscoverCapabilities(raw json.RawMessage) (toolCal
 		"quote_evidence_guidance":  facadeQuoteEvidenceGuidance(),
 		"full_schema_escape_hatch": "Pass {\"detail\":\"full\"} or {\"include_schemas\":true} to include per-operation input_schema.",
 		"note":                     "Top-level individual tools (search_calls, build_call_cohort, search_transcript_segments, build_quote_pack, etc.) remain available for operator and analyst testing alongside this facade.",
+	}
+	if names := s.businessTopicPacks.CustomPackNames(); len(names) > 0 {
+		payload["business_topic_packs"] = map[string]any{
+			"configured_pack_names":        names,
+			"configured_pack_descriptions": s.businessTopicPacks.CustomPackDescriptions(),
+			"reload_contract":              "restart_required",
+			"note":                         "Configured local topic packs are loaded at gongmcp startup from --business-topic-packs-config or GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG.",
+		}
 	}
 	return newToolResult(payload)
 }
