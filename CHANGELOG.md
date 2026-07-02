@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added request-level `topic_packs` for `extract.buyer_questions` and
+  `extract.objection_signals`. Generic B2B topic aliases and default seeds remain
+  enabled by default; the opt-in `procurement` pack adds punchout/e-procurement
+  vendor vocabulary.
 - Added release-body public-surface scanning, fixture coverage, and CI/release
   gates so GitHub Release notes are checked before and after publication.
 

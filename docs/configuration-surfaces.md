@@ -208,6 +208,45 @@ queries:
 This is lower priority than MCP runtime config because the current CLI/MCP tools
 already work. It becomes useful when teams want repeatable review packs.
 
+## Request-Level Topic Packs
+
+Business signal extraction operations accept optional per-request topic packs
+today. This is intentionally request-scoped rather than a global `gongmcp`
+config loader.
+
+| Surface | Operations | Field | Purpose | Status |
+| --- | --- | --- | --- | --- |
+| Business signal extraction | `extract.buyer_questions`, `extract.objection_signals` | `topic_packs` | Control synonym expansion and default topic seeds | Implemented |
+
+Supported packs:
+
+- `generic_b2b` — default when `topic_packs` is omitted. Keeps generic B2B
+  aliases and seeds such as pricing, implementation, integration, security,
+  support, timeline, data, and ERP.
+- `procurement` — opt-in pack that adds punchout/e-procurement vendor
+  vocabulary such as `punchout integration`, `Coupa`, `Ariba`, and `Jaggaer`.
+
+Responses include `topic_packs` and `topic_pack_provenance` so hosts can see
+which pack shaped synonym expansion. Unknown pack names return a clear input
+error. Packs are additive; `generic_b2b` remains active when an opt-in pack such
+as `procurement` is requested.
+
+Example:
+
+```json
+{
+  "operation": "extract.buyer_questions",
+  "arguments": {
+    "filter": {
+      "quarter": "2026-Q2",
+      "transcript_status": "present"
+    },
+    "topic_packs": ["procurement"],
+    "topics": ["integration", "punchout"]
+  }
+}
+```
+
 ## Do Not Move These Into YAML
 
 - Gong API secrets: keep in environment variables, ignored `.env` files, or a

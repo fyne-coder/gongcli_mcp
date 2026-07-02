@@ -502,7 +502,7 @@ func TestFacadeExtractObjectionSignalsDefaultsToExternalOrUnknownEvidenceAndProf
 	}
 }
 
-func TestFacadeExtractBuyerQuestionsUsesTCSpecificSynonymExpansion(t *testing.T) {
+func TestFacadeExtractBuyerQuestionsUsesGenericSynonymExpansion(t *testing.T) {
 	t.Parallel()
 
 	store := openSeededStore(t)
@@ -561,6 +561,12 @@ func TestFacadeExtractBuyerQuestionsUsesTCSpecificSynonymExpansion(t *testing.T)
 	}
 	wrapper := decodeFacadeWrapper(t, result)
 	inner, _ := wrapper["result"].(map[string]any)
+	if packs := strings.ToLower(mustJSONText(t, inner["topic_packs"])); !strings.Contains(packs, "generic_b2b") {
+		t.Fatalf("topic_packs missing default generic_b2b provenance: %s", packs)
+	}
+	if provenance := strings.ToLower(mustJSONText(t, inner["topic_pack_provenance"])); !strings.Contains(provenance, "generic_b2b") {
+		t.Fatalf("topic_pack_provenance missing generic_b2b note: %s", provenance)
+	}
 	buckets, _ := inner["buckets"].([]any)
 	if len(buckets) != 1 {
 		t.Fatalf("buckets len=%d want 1: %v", len(buckets), inner)
@@ -577,9 +583,58 @@ func TestFacadeExtractBuyerQuestionsUsesTCSpecificSynonymExpansion(t *testing.T)
 	if !strings.Contains(evidence, "rollout plan") {
 		t.Fatalf("expected rollout evidence from implementation topic: %s", evidence)
 	}
-	securityExpanded := strings.ToLower(mustJSONText(t, businessSignalTopicQueries(OpExtractBuyerQuestions, "security")))
+	securityExpanded := strings.ToLower(mustJSONText(t, businessSignalTopicQueries(OpExtractBuyerQuestions, "security", defaultTopicPackSet())))
 	if !strings.Contains(securityExpanded, "infosec") || !strings.Contains(securityExpanded, "compliance review") {
 		t.Fatalf("buyer-question security aliases should match objection alias breadth: %s", securityExpanded)
+	}
+
+	procurementResult, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
+		"filter": map[string]any{
+			"from_date":         "2026-04-01",
+			"to_date":           "2026-04-30",
+			"transcript_status": "present",
+		},
+		"topics":      []string{"integration"},
+		"topic_packs": []string{"procurement"},
+		"limit":       10,
+	}))
+	if err != nil {
+		t.Fatalf("extract buyer questions with procurement pack: %v", err)
+	}
+	if procurementResult.IsError {
+		t.Fatalf("unexpected procurement pack isError: %+v", procurementResult)
+	}
+	procurementInner, _ := decodeFacadeWrapper(t, procurementResult)["result"].(map[string]any)
+	if packs := strings.ToLower(mustJSONText(t, procurementInner["topic_packs"])); !strings.Contains(packs, "generic_b2b") || !strings.Contains(packs, "procurement") {
+		t.Fatalf("topic_packs missing additive generic/procurement packs: %s", packs)
+	}
+	if warnings := strings.ToLower(mustJSONText(t, procurementInner["warnings"])); !strings.Contains(warnings, "topic_pack_procurement_active") {
+		t.Fatalf("procurement pack warning missing: %s", warnings)
+	}
+	procurementBuckets, _ := procurementInner["buckets"].([]any)
+	if len(procurementBuckets) != 1 {
+		t.Fatalf("procurement buckets len=%d want 1: %v", len(procurementBuckets), procurementInner)
+	}
+	procurementBucket, _ := procurementBuckets[0].(map[string]any)
+	if expanded := strings.ToLower(mustJSONText(t, procurementBucket["expanded_queries"])); !strings.Contains(expanded, "punchout integration") {
+		t.Fatalf("procurement pack expanded_queries missing opt-in punchout synonym: %s", expanded)
+	}
+
+	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
+		"filter": map[string]any{
+			"from_date":         "2026-04-01",
+			"to_date":           "2026-04-30",
+			"transcript_status": "present",
+		},
+		"topics":      []string{"integration"},
+		"topic_packs": []string{"unknown_pack"},
+		"limit":       10,
+	}))
+	if err == nil {
+		t.Fatal("expected unknown topic_pack error")
+	}
+	if !strings.Contains(err.Error(), "unknown topic_pack") {
+		t.Fatalf("unexpected unknown topic_pack error: %v", err)
 	}
 }
 

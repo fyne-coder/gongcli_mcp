@@ -14,6 +14,7 @@ const maxBusinessSignalTopics = 12
 type businessSignalExtractionArgs struct {
 	Filter                  callFilter `json:"filter"`
 	Topics                  []string   `json:"topics"`
+	TopicPacks              []string   `json:"topic_packs"`
 	Query                   string     `json:"query"`
 	ThemeQuery              string     `json:"theme_query"`
 	Limit                   int        `json:"limit"`
@@ -35,8 +36,14 @@ type businessSignalBucket struct {
 
 func businessSignalExtractionSchema() map[string]any {
 	return objectSchema(map[string]any{
-		"filter":                    facadeCallFilterSchema(),
-		"topics":                    map[string]any{"type": "array", "items": map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength}, "maxItems": maxBusinessSignalTopics},
+		"filter": facadeCallFilterSchema(),
+		"topics": map[string]any{"type": "array", "items": map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength}, "maxItems": maxBusinessSignalTopics},
+		"topic_packs": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string", "enum": []string{topicPackGenericB2B, topicPackProcurement}},
+			"maxItems":    4,
+			"description": "Optional topic packs controlling synonym expansion and default topic seeds. Defaults to generic_b2b when omitted; procurement opt-in adds punchout/e-procurement vendor vocabulary.",
+		},
 		"query":                     map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional single topic seed."},
 		"theme_query":               map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for query."},
 		"limit":                     map[string]any{"type": "integer", "minimum": 1, "maximum": hardMaxBusinessAnalysisRows},
@@ -91,6 +98,10 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	if s.restrictedAccountQuery(normalized.AccountQuery) {
 		return toolCallResult{}, restrictedAccountQueryError()
 	}
+	topicPacks, err := resolveTopicPacks(args.TopicPacks)
+	if err != nil {
+		return toolCallResult{}, err
+	}
 	baArgs.Filter = normalized
 	limit := s.limitPolicy.BusinessAnalysisLimit(args.Limit)
 	if normalized.Limit > 0 {
@@ -98,7 +109,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 		normalized.Limit = limit
 		baArgs.Filter = normalized
 	}
-	topics := businessSignalTopics(operation, args)
+	topics := businessSignalTopics(operation, args, topicPacks)
 	if len(topics) == 0 {
 		return toolCallResult{}, fmt.Errorf("%s requires at least one topic seed", operation)
 	}
@@ -124,7 +135,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 		perTopicLimit = 5
 	}
 	for _, topic := range topics {
-		expandedQueries := businessSignalTopicQueries(operation, topic)
+		expandedQueries := businessSignalTopicQueries(operation, topic, topicPacks)
 		items, quotes, err := s.businessAnalysisEvidenceForTopicQueries(ctx, normalized, expandedQueries, perTopicLimit, baArgs)
 		if err != nil {
 			return toolCallResult{}, err
@@ -151,24 +162,29 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 		warnings = append(warnings, "no_seeded_signal_evidence_returned: try narrower domain topics such as pricing, implementation, security review, ERP integration, or timeline")
 	}
 	warnings = append(warnings, "seeded_topic_synonym_expansion: topic buckets transparently try common sales/marketing synonyms and expose expanded_queries")
+	if topicPacks.procurement {
+		warnings = append(warnings, "topic_pack_procurement_active: procurement pack expands punchout/e-procurement vendor synonyms and default seeds")
+	}
 	status := "seeded_extraction_ready"
 	if totalEvidence == 0 {
 		status = "no_seeded_evidence"
 	}
 	payload := map[string]any{
-		"operation":           operation,
-		"status":              status,
-		"searched_scope":      normalized,
-		"field_profile":       baArgs.FieldProfile,
-		"speaker_role_filter": speakerRole,
-		"evidence_type":       evidenceTypeKeywordSynonym,
-		"extraction_mode":     "seeded_topic_evidence",
-		"topics":              topics,
-		"coverage_summary":    businessAnalysisCoverageFromSummary(cohort.Summary),
-		"cohort_summary":      cohort.Summary,
-		"buckets":             buckets,
-		"evidence_count":      totalEvidence,
-		"warnings":            warnings,
+		"operation":             operation,
+		"status":                status,
+		"searched_scope":        normalized,
+		"field_profile":         baArgs.FieldProfile,
+		"speaker_role_filter":   speakerRole,
+		"evidence_type":         evidenceTypeKeywordSynonym,
+		"extraction_mode":       "seeded_topic_evidence",
+		"topics":                topics,
+		"topic_packs":           topicPacks.active,
+		"topic_pack_provenance": topicPacks.provenancePayload(),
+		"coverage_summary":      businessAnalysisCoverageFromSummary(cohort.Summary),
+		"cohort_summary":        cohort.Summary,
+		"buckets":               buckets,
+		"evidence_count":        totalEvidence,
+		"warnings":              warnings,
 		"limitations": append(businessAnalysisLimitations(operation),
 			"seeded_extraction_not_full_semantic_classification",
 			"question_mark_detection_is_not_required_for_buyer_question_buckets",
@@ -254,38 +270,25 @@ func businessSignalEvidenceKey(item businessAnalysisItem) string {
 	}, "\x00")
 }
 
-func businessSignalTopicQueries(operation string, topic string) []string {
+func businessSignalTopicQueries(operation string, topic string, packs topicPackSet) []string {
 	base := strings.TrimSpace(topic)
 	if base == "" {
 		return nil
 	}
 	queries := []string{base}
-	queries = append(queries, businessSignalTopicAliases(operation, base)...)
+	queries = append(queries, businessSignalTopicAliases(operation, base, packs)...)
 	return normalizeBusinessSignalQueries(queries, maxBusinessSignalTopics)
 }
 
-func businessSignalTopicAliases(operation string, topic string) []string {
+func businessSignalTopicAliases(operation string, topic string, packs topicPackSet) []string {
 	key := strings.ToLower(strings.TrimSpace(topic))
 	key = strings.Join(strings.Fields(key), " ")
-	aliases := map[string][]string{
-		"implementation":        {"implementation timeline", "implementation plan", "rollout", "deployment", "go live", "launch"},
-		"implementation effort": {"implementation timeline", "implementation plan", "rollout effort", "deployment effort", "IT bandwidth", "resource constraints"},
-		"integration":           {"ERP integration", "system integration", "API integration", "punchout integration"},
-		"integration risk":      {"ERP integration", "integration timeline", "integration effort", "API support", "technical lift", "IT bandwidth"},
-		"erp integration":       {"ERP", "integrate with ERP", "direct ERP", "SAP integration", "Oracle integration", "NetSuite integration"},
-		"security":              {"security review", "security questionnaire", "infosec", "information security", "compliance review", "risk review"},
-		"security review":       {"security", "security questionnaire", "infosec", "information security", "compliance review", "risk review"},
-		"pricing":               {"price", "budget", "cost", "investment", "pricing model", "quote"},
-		"price":                 {"pricing", "budget", "cost", "investment", "quote"},
-		"budget":                {"pricing", "price", "cost", "investment", "funding"},
-		"roi":                   {"ROI", "return on investment", "business case", "value", "payback", "justify"},
-		"punchout":              {"punchout integration", "punch out", "eprocurement", "Coupa", "Ariba", "Jaggaer"},
-		"manual order entry":    {"manual process", "manual order", "order entry", "manual data entry"},
-		"supplier onboarding":   {"supplier enablement", "vendor onboarding", "trading relationship", "supplier setup", "supplier adoption"},
-		"timeline":              {"implementation timeline", "go live", "launch date", "rollout", "schedule"},
-		"support":               {"customer support", "post implementation support", "training", "enablement", "help desk"},
-	}
+	aliases := genericB2BBusinessSignalTopicAliases()
 	out := append([]string{}, aliases[key]...)
+	if packs.procurement {
+		procurementAliases := procurementBusinessSignalTopicAliasExtensions()
+		out = append(out, procurementAliases[key]...)
+	}
 	if operation == OpExtractObjectionSignals {
 		switch key {
 		case "implementation", "implementation effort":
@@ -323,7 +326,7 @@ func normalizeBusinessSignalQueries(queries []string, max int) []string {
 	return out
 }
 
-func businessSignalTopics(operation string, args businessSignalExtractionArgs) []string {
+func businessSignalTopics(operation string, args businessSignalExtractionArgs, packs topicPackSet) []string {
 	candidates := append([]string{}, args.Topics...)
 	if query := firstNonBlank(args.Query, args.ThemeQuery); query != "" {
 		candidates = append([]string{query}, candidates...)
@@ -333,7 +336,10 @@ func businessSignalTopics(operation string, args businessSignalExtractionArgs) [
 		case OpExtractObjectionSignals:
 			candidates = []string{"price", "budget", "timeline", "security review", "integration risk", "IT bandwidth", "ROI", "worried", "blocker", "competitor"}
 		default:
-			candidates = []string{"pricing", "implementation", "integration", "security", "support", "timeline", "data", "ERP", "punchout"}
+			candidates = []string{"pricing", "implementation", "integration", "security", "support", "timeline", "data", "ERP"}
+			if packs.procurement {
+				candidates = append(candidates, "punchout")
+			}
 		}
 	}
 	seen := make(map[string]struct{}, len(candidates))

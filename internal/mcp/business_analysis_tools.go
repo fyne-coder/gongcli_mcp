@@ -554,7 +554,7 @@ func (s *Server) executeBusinessAnalysisTool(ctx context.Context, params toolsCa
 				response.Status = "needs_theme_seed"
 				response.Results = nil
 				response.Quotes = nil
-				response.Warnings = append(response.Warnings, "broad_discovery_no_business_like_candidates: quality filters removed all seedless transcript terms; rerun with a suggested business topic such as pricing, implementation, ERP integration, punchout, security review, timeline, ROI, supplier onboarding, or support")
+				response.Warnings = append(response.Warnings, "broad_discovery_no_business_like_candidates: quality filters removed all seedless transcript terms; rerun with a suggested business topic such as pricing, implementation, ERP integration, security review, timeline, ROI, supplier onboarding, or support")
 				response.Refinements = append(response.Refinements, questionAnswerSuggestedSeedTopics()...)
 			}
 		}

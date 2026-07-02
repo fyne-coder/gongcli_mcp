@@ -169,6 +169,12 @@ affiliation rollups classify internal participants with
 the built-in fallback is the generic `internal.example` domain, so real
 deployments should set their own comma-separated internal email domains.
 
+`extract.buyer_questions` and `extract.objection_signals` accept optional
+request-level `topic_packs`. The default `generic_b2b` pack keeps generic B2B
+topic aliases and seeds; pass `topic_packs: ["procurement"]` to opt into
+punchout/e-procurement vendor synonym expansion. See
+[Configuration surfaces](docs/configuration-surfaces.md#request-level-topic-packs).
+
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer
 deployment): `list_unmapped_crm_fields`, `search_crm_field_values`,
 `analyze_late_stage_crm_signals`, `opportunities_missing_transcripts`,

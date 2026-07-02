@@ -679,7 +679,7 @@ func FacadeOperations() []FacadeOperation {
 			}, []string{"question", "filter", "include_account_names"}),
 			Examples: []any{
 				map[string]any{
-					"question": "What is this prospect asking about implementation and punchout across calls?",
+					"question": "What is this prospect asking about implementation and integration across calls?",
 					"filter": map[string]any{
 						"account_query":     "Example Prospect",
 						"quarter":           "2026-Q2",
@@ -1760,7 +1760,6 @@ func questionAnswerSuggestedSeedTopics() []string {
 		"pricing",
 		"implementation effort",
 		"ERP integration",
-		"punchout",
 		"security review",
 		"timeline",
 		"ROI",
