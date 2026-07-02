@@ -40,9 +40,9 @@ func businessSignalExtractionSchema() map[string]any {
 		"topics": map[string]any{"type": "array", "items": map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength}, "maxItems": maxBusinessSignalTopics},
 		"topic_packs": map[string]any{
 			"type":        "array",
-			"items":       map[string]any{"type": "string", "enum": []string{topicPackGenericB2B, topicPackProcurement}},
+			"items":       map[string]any{"type": "string", "enum": []string{topicPackGenericB2B, topicPackTechnicalReadiness}},
 			"maxItems":    4,
-			"description": "Optional topic packs controlling synonym expansion and default topic seeds. Defaults to generic_b2b when omitted; procurement opt-in adds punchout/e-procurement vendor vocabulary.",
+			"description": "Optional topic packs controlling synonym expansion and default topic seeds. Defaults to generic_b2b when omitted; technical_readiness opt-in adds integration, security, and launch-readiness vocabulary.",
 		},
 		"query":                     map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Optional single topic seed."},
 		"theme_query":               map[string]any{"type": "string", "maxLength": maxBusinessAnalysisFTSQueryLength, "description": "Alias for query."},
@@ -162,8 +162,8 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 		warnings = append(warnings, "no_seeded_signal_evidence_returned: try narrower domain topics such as pricing, implementation, security review, ERP integration, or timeline")
 	}
 	warnings = append(warnings, "seeded_topic_synonym_expansion: topic buckets transparently try common sales/marketing synonyms and expose expanded_queries")
-	if topicPacks.procurement {
-		warnings = append(warnings, "topic_pack_procurement_active: procurement pack expands punchout/e-procurement vendor synonyms and default seeds")
+	if topicPacks.technicalReadiness {
+		warnings = append(warnings, "topic_pack_technical_readiness_active: technical_readiness pack expands integration, security, and launch-readiness synonyms and default seeds")
 	}
 	status := "seeded_extraction_ready"
 	if totalEvidence == 0 {
@@ -285,9 +285,9 @@ func businessSignalTopicAliases(operation string, topic string, packs topicPackS
 	key = strings.Join(strings.Fields(key), " ")
 	aliases := genericB2BBusinessSignalTopicAliases()
 	out := append([]string{}, aliases[key]...)
-	if packs.procurement {
-		procurementAliases := procurementBusinessSignalTopicAliasExtensions()
-		out = append(out, procurementAliases[key]...)
+	if packs.technicalReadiness {
+		technicalReadinessAliases := technicalReadinessBusinessSignalTopicAliasExtensions()
+		out = append(out, technicalReadinessAliases[key]...)
 	}
 	if operation == OpExtractObjectionSignals {
 		switch key {
@@ -337,8 +337,8 @@ func businessSignalTopics(operation string, args businessSignalExtractionArgs, p
 			candidates = []string{"price", "budget", "timeline", "security review", "integration risk", "IT bandwidth", "ROI", "worried", "blocker", "competitor"}
 		default:
 			candidates = []string{"pricing", "implementation", "integration", "security", "support", "timeline", "data", "ERP"}
-			if packs.procurement {
-				candidates = append(candidates, "punchout")
+			if packs.technicalReadiness {
+				candidates = append(candidates, "launch readiness")
 			}
 		}
 	}

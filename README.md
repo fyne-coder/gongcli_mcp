@@ -134,9 +134,9 @@ gongctl profile schema
 
 Built-in CRM and business defaults are Salesforce-compatible examples and a
 fixed reviewed dimension set. Deployment-specific CRM fields, lifecycle
-definitions, methodology vocabulary, procurement vocabulary, and account
-segmentation belong in reviewed profiles, request-level topic packs, or local
-configuration. The remaining compatibility-column plan is tracked in
+definitions, methodology vocabulary, domain vocabulary, and account segmentation
+belong in reviewed profiles, request-level topic packs, or local configuration.
+The remaining compatibility-column plan is tracked in
 [CRM Genericity Roadmap](docs/crm-genericity-roadmap.md).
 
 `gongmcp --list-tool-presets` is the source of truth. Common presets:
@@ -174,8 +174,9 @@ deployments should set their own comma-separated internal email domains.
 
 `extract.buyer_questions` and `extract.objection_signals` accept optional
 request-level `topic_packs`. The default `generic_b2b` pack keeps generic B2B
-topic aliases and seeds; pass `topic_packs: ["procurement"]` to opt into
-punchout/e-procurement vendor synonym expansion. See
+topic aliases and seeds; pass `topic_packs: ["technical_readiness"]` to opt
+into additional implementation, security, and integration-readiness synonym
+expansion. See
 [Configuration surfaces](docs/configuration-surfaces.md#request-level-topic-packs).
 
 Postgres explicit-allowlist tools (require `v0.4.0`+ for customer

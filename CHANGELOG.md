@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Replaced the public opt-in topic-pack example with a generic
+  `technical_readiness` pack; deployment-specific commerce vocabulary should
+  stay outside compiled public defaults.
+- Builds after `v0.6.3` should discover supported `topic_packs` from the
+  candidate `tools/list` schema; older unadvertised pack names now fail fast as
+  input errors.
+
 ## 0.6.3 - 2026-07-02
 
 - Renamed the reviewed CRM-dimension registry internals from Salesforce-specific
@@ -9,8 +16,7 @@
   coverage, and documented the remaining compatibility-column extraction plan.
 - Added request-level `topic_packs` for `extract.buyer_questions` and
   `extract.objection_signals`. Generic B2B topic aliases and default seeds remain
-  enabled by default; the opt-in `procurement` pack adds punchout/e-procurement
-  vendor vocabulary.
+  enabled by default; opt-in pack names are advertised by the tool schema.
 - Added release-body public-surface scanning, fixture coverage, and CI/release
   gates so GitHub Release notes are checked before and after publication.
 - Updated release-facing Docker image examples and deployment defaults to point

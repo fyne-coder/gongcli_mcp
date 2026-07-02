@@ -6,19 +6,19 @@ import (
 )
 
 const (
-	topicPackGenericB2B  = "generic_b2b"
-	topicPackProcurement = "procurement"
+	topicPackGenericB2B         = "generic_b2b"
+	topicPackTechnicalReadiness = "technical_readiness"
 )
 
 var knownTopicPacks = map[string]struct{}{
-	topicPackGenericB2B:  {},
-	topicPackProcurement: {},
+	topicPackGenericB2B:         {},
+	topicPackTechnicalReadiness: {},
 }
 
 type topicPackSet struct {
-	active      []string
-	genericB2B  bool
-	procurement bool
+	active             []string
+	genericB2B         bool
+	technicalReadiness bool
 }
 
 func defaultTopicPackSet() topicPackSet {
@@ -35,21 +35,21 @@ func resolveTopicPacks(requested []string) (topicPackSet, error) {
 	}
 	seen := make(map[string]struct{}, len(requested))
 	active := make([]string, 0, len(requested)+1)
-	procurement := false
+	technicalReadiness := false
 	for _, raw := range requested {
 		name := strings.ToLower(strings.TrimSpace(raw))
 		if name == "" {
 			continue
 		}
 		if _, ok := knownTopicPacks[name]; !ok {
-			return topicPackSet{}, fmt.Errorf("unknown topic_pack %q: supported packs are generic_b2b and procurement", raw)
+			return topicPackSet{}, fmt.Errorf("unknown topic_pack %q: supported packs are generic_b2b and technical_readiness", raw)
 		}
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
-		if name == topicPackProcurement {
-			procurement = true
+		if name == topicPackTechnicalReadiness {
+			technicalReadiness = true
 		}
 		active = append(active, name)
 	}
@@ -63,16 +63,16 @@ func resolveTopicPacks(requested []string) (topicPackSet, error) {
 		active = append([]string{topicPackGenericB2B}, active...)
 	}
 	return topicPackSet{
-		active:      active,
-		genericB2B:  true,
-		procurement: procurement,
+		active:             active,
+		genericB2B:         true,
+		technicalReadiness: technicalReadiness,
 	}, nil
 }
 
 func (s topicPackSet) provenancePayload() map[string]any {
 	note := "generic_b2b is the default pack for generic B2B topic aliases and seeds."
-	if s.procurement {
-		note = "Opt-in topic packs expand topic aliases and default seeds; procurement adds punchout/e-procurement vendor vocabulary."
+	if s.technicalReadiness {
+		note = "Opt-in topic packs expand topic aliases and default seeds; technical_readiness adds integration, security, and launch-readiness vocabulary."
 	}
 	return map[string]any{
 		"active_packs": append([]string{}, s.active...),
@@ -100,9 +100,13 @@ func genericB2BBusinessSignalTopicAliases() map[string][]string {
 	}
 }
 
-func procurementBusinessSignalTopicAliasExtensions() map[string][]string {
+func technicalReadinessBusinessSignalTopicAliasExtensions() map[string][]string {
 	return map[string][]string{
-		"integration": {"punchout integration"},
-		"punchout":    {"punchout integration", "punch out", "eprocurement", "Coupa", "Ariba", "Jaggaer"},
+		"implementation":   {"implementation readiness", "launch readiness", "training plan", "change management", "resource plan"},
+		"integration":      {"SSO integration", "identity provider", "sandbox testing", "data migration", "API readiness"},
+		"integration risk": {"SSO readiness", "data migration risk", "sandbox validation", "API readiness", "technical validation"},
+		"launch readiness": {"go-live checklist", "rollout plan", "deployment window", "training plan"},
+		"security":         {"security readiness", "access review", "audit logging", "data handling", "permission model"},
+		"timeline":         {"launch readiness", "go-live checklist", "deployment window", "rollout plan"},
 	}
 }

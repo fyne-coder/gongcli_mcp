@@ -230,7 +230,7 @@ save_tool objections.json gong_analyze "$(jq -n '{
 save_tool buyer-questions.json gong_analyze "$(jq -n '{
   operation:"extract.buyer_questions",
   arguments:{
-    topics:["pricing","implementation","security","support","ERP integration","punchout","supplier onboarding","ROI"],
+    topics:["pricing","implementation","security","support","ERP integration","data migration","launch readiness","ROI"],
     filter:{from_date:"2026-04-01",to_date:"2026-05-08",title_query:"discovery",transcript_status:"present"},
     field_profile:"limited",
     limit:10
@@ -273,7 +273,7 @@ if [[ -n "${GA_HARNESS_PROSPECT_ACCOUNT_QUERY:-}" ]]; then
   save_tool prospect-question-positive.json gong_analyze "$(jq -n --arg account_query "$GA_HARNESS_PROSPECT_ACCOUNT_QUERY" '{
     operation:"prospect.question.answer",
     arguments:{
-      question:"What has this named prospect or account said across calls about pricing, implementation, punchout, or manual process?",
+      question:"What has this named prospect or account said across calls about pricing, implementation, security review, or data migration?",
       query:"implementation",
       filter:{account_query:$account_query,from_date:"2026-01-01",to_date:"2026-05-08",transcript_status:"present"},
       include_account_names:true,
