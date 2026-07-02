@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-07-02
+
 - Removed tenant-specific wording from the business-signal extraction runtime
   warning, documented Salesforce-compatible CRM defaults as examples in the
   README, ignored local `gong-assistant-instructions.md`, and added
   `make public-surface-scan` to CI and release preflight.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.6.2`.
 
 ## 0.6.1 - 2026-07-02
 

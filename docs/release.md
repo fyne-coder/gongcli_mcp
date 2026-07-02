@@ -70,7 +70,22 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z`
 20. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-21. Run GoReleaser from the tag with Go 1.26.4 or newer.
+21. When publishing CLI/MCP archive artifacts, run GoReleaser from the tag with
+    Go 1.26.4 or newer. GoReleaser builds archives and checksums; its
+    `changelog: use: git` setting derives notes from commit messages and must
+    not replace the curated release description.
+22. Create or update the GitHub Release body from the matching `CHANGELOG.md`
+    section, for example:
+
+    ```bash
+    # Copy the curated ## X.Y.Z section from CHANGELOG.md into release-notes.md, then:
+    gh release create "v$(cat VERSION)" --notes-file release-notes.md
+    # or, if the release already exists:
+    gh release edit "v$(cat VERSION)" --notes-file release-notes.md
+    ```
+
+    Use the curated changelog section as the public release notes. Do not rely
+    on GoReleaser-generated commit-message notes for the GitHub Release body.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they
