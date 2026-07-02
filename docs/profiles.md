@@ -6,9 +6,14 @@ Profiles are optional for ingestion and basic MCP use. Without one, `gongctl`
 still syncs calls, transcripts, users, settings, and CRM context; transcript
 search, sync status, basic summaries, and generic CRM inspection still work. The
 tradeoff is interpretation quality: lifecycle separation, sales-vs-post-sales
-splits, attribution readiness, and tenant-specific methodology concepts use
+splits, attribution readiness, and deployment-specific methodology concepts use
 builtin compatibility behavior or report partial/unavailable readiness until a
 reviewed profile is imported.
+
+Some older read-model columns remain Salesforce-compatible compatibility
+defaults while profile-backed dimensions mature. Treat those as examples and
+migration aids, not universal Gong fields. The extraction plan is tracked in
+[CRM Genericity Roadmap](crm-genericity-roadmap.md).
 
 ## Flow
 
@@ -79,7 +84,7 @@ reviewed profile is imported.
    gongctl analyze transcript-backlog --db ~/gongctl-data/gong.db --lifecycle-source profile
    ```
 
-Run `gongctl sync status --db ~/gongctl-data/gong.db` after import to see the profile readiness report. It shows whether a profile is active, whether the profile read model is fresh, concept counts, unavailable concepts, and what blocks reliable tenant-specific lifecycle separation. Use `gongctl profile show`, `list_business_concepts`, and `list_unmapped_crm_fields` when you need the detailed mapped/unmapped field view.
+Run `gongctl sync status --db ~/gongctl-data/gong.db` after import to see the profile readiness report. It shows whether a profile is active, whether the profile read model is fresh, concept counts, unavailable concepts, and what blocks reliable deployment-specific lifecycle separation. Use `gongctl profile show`, `list_business_concepts`, and `list_unmapped_crm_fields` when you need the detailed mapped/unmapped field view.
 
 Do not expose profile-aware MCP answers to business users until:
 

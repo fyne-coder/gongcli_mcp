@@ -47,4 +47,16 @@ if grep -q "$tc_sales_phrase" "$tmp_dir/stdin-bad-stdout.txt" "$tmp_dir/stdin-ba
 	exit 1
 fi
 
+private_detail_phrase="tenant-""specific"
+if printf 'Generic body with %s wording.\n' "$private_detail_phrase" |
+	"$scanner" --stdin --label stdin-private-detail-fixture >"$tmp_dir/private-detail-stdout.txt" 2>"$tmp_dir/private-detail-stderr.txt"; then
+	echo "public-surface-scan-test: private-detail fixture unexpectedly passed" >&2
+	exit 1
+fi
+
+if grep -q "$private_detail_phrase" "$tmp_dir/private-detail-stdout.txt" "$tmp_dir/private-detail-stderr.txt"; then
+	echo "public-surface-scan-test: private-detail fixture leaked matching release text" >&2
+	exit 1
+fi
+
 printf '%s\n' 'public-surface-scan-test: fixtures passed'

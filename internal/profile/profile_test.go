@@ -1,6 +1,8 @@
 package profile
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -263,6 +265,40 @@ lifecycle:
 	}
 	if leftHash != rightHash {
 		t.Fatalf("canonical hashes differ: %s vs %s", leftHash, rightHash)
+	}
+}
+
+func TestExampleBusinessProfileSupportsNonSalesforceObjects(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "docs", "examples", "business-profile.example.yaml"))
+	if err != nil {
+		t.Fatalf("read example profile: %v", err)
+	}
+	p, err := ParseYAML(body)
+	if err != nil {
+		t.Fatalf("ParseYAML returned error: %v", err)
+	}
+	findings := Validate(p, &Inventory{
+		Objects: []ObjectInventory{
+			{ObjectType: "Deal", ObjectCount: 4},
+			{ObjectType: "Company", ObjectCount: 3},
+		},
+		Fields: []FieldInventory{
+			{ObjectType: "Deal", FieldName: "DealStage", ObjectCount: 4, PopulatedCount: 4},
+			{ObjectType: "Deal", FieldName: "Type", ObjectCount: 4, PopulatedCount: 4},
+			{ObjectType: "Deal", FieldName: "ForecastCategoryName", ObjectCount: 4, PopulatedCount: 3},
+			{ObjectType: "Deal", FieldName: "pain_point", ObjectCount: 4, PopulatedCount: 2},
+			{ObjectType: "Company", FieldName: "Industry", ObjectCount: 3, PopulatedCount: 3},
+			{ObjectType: "Company", FieldName: "customer_status", ObjectCount: 3, PopulatedCount: 3},
+		},
+	})
+	if !IsValid(findings) {
+		t.Fatalf("example non-Salesforce profile should validate: %+v", findings)
+	}
+	if _, ok := p.Objects["deal"]; !ok {
+		t.Fatalf("example profile missing deal object: %+v", p.Objects)
+	}
+	if got := p.Objects["account"].ObjectTypes; len(got) == 0 || got[len(got)-1] != "Company" {
+		t.Fatalf("example profile should include Company account object alias: %+v", got)
 	}
 }
 

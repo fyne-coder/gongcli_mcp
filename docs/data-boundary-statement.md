@@ -66,7 +66,7 @@ Default expectations:
 If the customer adds its own logging, SIEM, APM, or cloud-monitoring stack,
 that telemetry remains customer-managed and should stay metadata-oriented by
 default. Shared dashboards or ticket attachments should exclude transcript text,
-raw payloads, secrets, and tenant-specific identifiers unless explicitly
+raw payloads, secrets, and deployment-specific identifiers unless explicitly
 approved as an exception.
 
 ## Support Boundary

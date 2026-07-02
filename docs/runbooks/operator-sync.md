@@ -11,7 +11,7 @@ data for an enterprise pilot. It assumes the current product boundary:
   deployments
 - business users consume approved MCP tools and do not run sync jobs
 
-Do not paste secrets, transcript text, raw payloads, or tenant-specific IDs
+Do not paste secrets, transcript text, raw payloads, or deployment-specific IDs
 into tickets, docs, or chat while executing this runbook.
 
 ## Prerequisites

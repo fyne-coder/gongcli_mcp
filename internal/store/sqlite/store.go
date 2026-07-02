@@ -4765,7 +4765,7 @@ func inventoryTableVisible(name string, tableSQL string) bool {
 func (s *Store) profileReadiness(ctx context.Context) (ProfileReadiness, error) {
 	readiness := ProfileReadiness{
 		Status:      "not_configured",
-		Detail:      "No active business profile is imported. Builtin lifecycle buckets are available, but reliable tenant-specific sales-vs-post-sales separation requires a reviewed profile.",
+		Detail:      "No active business profile is imported. Builtin lifecycle buckets are available, but reliable deployment-specific sales-vs-post-sales separation requires a reviewed profile.",
 		CacheStatus: "not_applicable",
 		Blocking:    []string{"run gongctl profile discover, review the YAML, then run profile validate and profile import"},
 	}
@@ -4860,9 +4860,9 @@ func buildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
 		out.AttributionReadiness = ReadinessFlag{
 			Ready:  summary.ProfileReadiness.Active && summary.ProfileReadiness.Status == "ready",
 			Status: "partial",
-			Detail: "Cached attribution signals (call_facts and/or embedded CRM context) are available; tenant-specific field mapping may still be needed for precise attribution concepts.",
+			Detail: "Cached attribution signals (call_facts and/or embedded CRM context) are available; deployment-specific field mapping may still be needed for precise attribution concepts.",
 			Requirements: []string{
-				"review unmapped CRM fields and import a business profile for tenant-specific attribution concepts",
+				"review unmapped CRM fields and import a business profile for deployment-specific attribution concepts",
 			},
 		}
 		if out.AttributionReadiness.Ready {
@@ -4879,13 +4879,13 @@ func buildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
 		out.LifecycleSeparation = ReadinessFlag{
 			Ready:  true,
 			Status: "ready",
-			Detail: "A reviewed active profile is available for tenant-specific lifecycle separation.",
+			Detail: "A reviewed active profile is available for deployment-specific lifecycle separation.",
 		}
 	} else if hasCRMSegmentationSignal {
 		out.LifecycleSeparation = ReadinessFlag{
 			Ready:  false,
 			Status: "partial",
-			Detail: "Builtin lifecycle buckets can separate some sales/post-sales patterns, but reliable tenant-specific separation needs a reviewed active profile.",
+			Detail: "Builtin lifecycle buckets can separate some sales/post-sales patterns, but reliable deployment-specific separation needs a reviewed active profile.",
 			Requirements: []string{
 				"run gongctl profile discover",
 				"review/edit the generated YAML",
@@ -4893,7 +4893,7 @@ func buildPublicReadiness(summary *SyncStatusSummary) PublicReadiness {
 			},
 		}
 	} else {
-		out.LifecycleSeparation = readinessFlag(false, "ready", "needs_crm_context", "Lifecycle separation needs CRM context and, for tenant-specific accuracy, an imported profile.", "Sync calls with --preset business and import a reviewed profile.")
+		out.LifecycleSeparation = readinessFlag(false, "ready", "needs_crm_context", "Lifecycle separation needs CRM context and, for deployment-specific accuracy, an imported profile.", "Sync calls with --preset business and import a reviewed profile.")
 	}
 
 	switch {

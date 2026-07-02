@@ -113,7 +113,7 @@ Ready: conversation volume, transcript coverage, scorecard themes, CRM segmentat
 Partial: lifecycle separation, attribution readiness
 Not configured: business profile
 Recommended next action: run profile discover, review the generated YAML, then
-profile validate and profile import to enable tenant-specific lifecycle
+profile validate and profile import to enable deployment-specific lifecycle
 separation and attribution mapping.
 ```
 

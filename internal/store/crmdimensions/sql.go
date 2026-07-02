@@ -15,8 +15,8 @@ func quoteSQLString(value string) string {
 func SQLiteObjectFieldExtractLines() string {
 	var lines []string
 	for _, field := range PromotedFields {
-		when := make([]string, 0, len(field.SFDCNames))
-		for _, name := range field.SFDCNames {
+		when := make([]string, 0, len(field.CRMFieldNames))
+		for _, name := range field.CRMFieldNames {
 			when = append(when, fmt.Sprintf("f.field_name = %s", quoteSQLString(name)))
 		}
 		expr := "TRIM(f.field_value_text)"
@@ -104,8 +104,8 @@ func PostgresCRMPromotionLinesForScope(scope ObjectScope) string {
 		if field.Scope != scope {
 			continue
 		}
-		when := make([]string, 0, len(field.SFDCNames))
-		for _, name := range field.SFDCNames {
+		when := make([]string, 0, len(field.CRMFieldNames))
+		for _, name := range field.CRMFieldNames {
 			when = append(when, fmt.Sprintf("f.field_name = %s", quoteSQLString(name)))
 		}
 		objectKey := "sa.object_key"
@@ -623,7 +623,7 @@ func IsExcludedFilterDimension(dimension string) bool {
 			return true
 		}
 	}
-	for _, name := range ExcludedSFDCFieldNames {
+	for _, name := range ExcludedCRMFieldNames {
 		if normalized == strings.ToLower(name) {
 			return true
 		}

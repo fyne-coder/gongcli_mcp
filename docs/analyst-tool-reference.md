@@ -116,7 +116,7 @@ advertised by `gong_discover_capabilities`; the default promoted set is
 a fixed reviewed standard Account/Opportunity mapping set rather than a
 generic all-CRM-field abstraction. Numeric and date CRM fields are groupable
 through bucket, month, or quarter dimensions instead of their raw values, and
-tenant-specific lifecycle or methodology concepts still belong in reviewed
+deployment-specific lifecycle or methodology concepts still belong in reviewed
 business profiles.
 
 Multiple entries are combined with AND semantics; values inside one `in` entry

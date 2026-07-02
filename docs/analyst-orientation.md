@@ -50,7 +50,7 @@ the model to call a tool you didn't intend.
 Profile mapping is the single biggest determinant of whether you can answer
 questions like "compare won vs lost themes by industry across Q1 and Q2".
 Without a profile, lifecycle separation falls back to builtin compatibility
-behavior and many analyst tools report `unavailable` for tenant-specific
+behavior and many analyst tools report `unavailable` for deployment-specific
 concepts. See [Business profiles](profiles.md) for the full reference.
 
 The required lifecycle core is fixed:
@@ -167,7 +167,7 @@ Gong CRM context, such as `account_rating`. Treat these as
 backed dimensions returned by `gong_discover_capabilities`, not as permission
 to probe arbitrary CRM fields. The built-in promoted fields are a fixed
 reviewed standard Account/Opportunity mapping set, not a generic custom-field
-discovery mechanism; non-Salesforce lifecycle, methodology, and tenant-specific
+discovery mechanism; non-Salesforce lifecycle, methodology, and deployment-specific
 segmentation should remain in a reviewed business profile until the operator
 advertises a supported dimension. Numeric and date CRM fields use bucket,
 month, or quarter dimensions for grouping.

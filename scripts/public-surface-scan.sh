@@ -1,9 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-# Public-surface preflight for exact customer/internal wording.
+# Public-surface preflight for exact customer/internal wording and wording that
+# suggests private deployment details belong in public docs or release notes.
 # Avoid bare "tc" so test variables and unrelated abbreviations are not flagged.
-patterns='(trade[[:space:]_-]*centric|TC[[:space:]/-]+sales|Mihai|Gerco|ofid_[A-Za-z0-9]+|docker\.transcripts|fyne-llc|jc-direct|jumpcloud-clean|tc-jumpcloud|review-agent)'
+patterns='(trade[[:space:]_-]*centric|TC[[:space:]/-]+sales|tenant[[:space:]_-]*specific|client[[:space:]_-]*specific|client-facing[[:space:]]+wording|Mihai|Gerco|ofid_[A-Za-z0-9]+|docker\.transcripts|fyne-llc|jc-direct|jumpcloud-clean|tc-jumpcloud|review-agent)'
 
 usage() {
 	cat <<'EOF'

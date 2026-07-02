@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Renamed the reviewed CRM-dimension registry internals from Salesforce-specific
+  wording to CRM-neutral field names, added non-Salesforce profile fixture
+  coverage, and documented the remaining compatibility-column extraction plan.
 - Added request-level `topic_packs` for `extract.buyer_questions` and
   `extract.objection_signals`. Generic B2B topic aliases and default seeds remain
   enabled by default; the opt-in `procurement` pack adds punchout/e-procurement
@@ -11,7 +14,7 @@
 
 ## 0.6.2 - 2026-07-02
 
-- Removed tenant-specific wording from the business-signal extraction runtime
+- Removed integration-specific runtime text from the business-signal extraction
   warning, documented Salesforce-compatible CRM defaults as examples in the
   README, ignored local `gong-assistant-instructions.md`, and added
   `make public-surface-scan` to CI and release preflight.
@@ -61,7 +64,7 @@
 - Operator note: the built-in promoted CRM dimensions are a fixed reviewed
   standard Account/Opportunity mapping set backed by cached Gong CRM context,
   not a generic custom-field discovery mechanism. Non-Salesforce and
-  tenant-specific methodology/lifecycle mappings should still come from
+  deployment-specific methodology/lifecycle mappings should still come from
   reviewed business profiles and the dimensions advertised by
   `gong_discover_capabilities`.
 

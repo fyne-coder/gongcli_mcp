@@ -21,10 +21,10 @@ const (
 // PromotedField maps a governed call_facts column to one or more CRM field API
 // names on Account or Opportunity context objects.
 type PromotedField struct {
-	Column    string
-	SFDCNames []string
-	Scope     ObjectScope
-	Kind      ValueKind
+	Column        string
+	CRMFieldNames []string
+	Scope         ObjectScope
+	Kind          ValueKind
 }
 
 // BucketDimension is a stable, business-friendly grouping surface for a
@@ -49,26 +49,28 @@ const (
 )
 
 // PromotedFields is the canonical business-safe standard-field registry shared
-// by SQLite, Postgres, and MCP capability surfaces.
+// by SQLite, Postgres, and MCP capability surfaces. Field-name values are
+// Salesforce-compatible compatibility defaults; deployment-specific fields belong
+// in reviewed profiles or future profile-backed dimensions.
 var PromotedFields = []PromotedField{
 	// Account categorical
-	{Column: "account_ownership", SFDCNames: []string{"Ownership"}, Scope: ScopeAccount, Kind: KindCategorical},
-	{Column: "account_rating", SFDCNames: []string{"Rating"}, Scope: ScopeAccount, Kind: KindCategorical},
+	{Column: "account_ownership", CRMFieldNames: []string{"Ownership"}, Scope: ScopeAccount, Kind: KindCategorical},
+	{Column: "account_rating", CRMFieldNames: []string{"Rating"}, Scope: ScopeAccount, Kind: KindCategorical},
 
 	// Account numeric
-	{Column: "account_annual_revenue", SFDCNames: []string{"AnnualRevenue"}, Scope: ScopeAccount, Kind: KindNumeric},
-	{Column: "account_employee_count", SFDCNames: []string{"NumberOfEmployees"}, Scope: ScopeAccount, Kind: KindNumeric},
+	{Column: "account_annual_revenue", CRMFieldNames: []string{"AnnualRevenue"}, Scope: ScopeAccount, Kind: KindNumeric},
+	{Column: "account_employee_count", CRMFieldNames: []string{"NumberOfEmployees"}, Scope: ScopeAccount, Kind: KindNumeric},
 
 	// Account dates
-	{Column: "account_created_date", SFDCNames: []string{"CreatedDate"}, Scope: ScopeAccount, Kind: KindDate},
+	{Column: "account_created_date", CRMFieldNames: []string{"CreatedDate"}, Scope: ScopeAccount, Kind: KindDate},
 
 	// Opportunity categorical / boolean
-	{Column: "opportunity_currency_iso_code", SFDCNames: []string{"CurrencyIsoCode"}, Scope: ScopeOpportunity, Kind: KindCategorical},
-	{Column: "opportunity_is_deleted", SFDCNames: []string{"IsDeleted"}, Scope: ScopeOpportunity, Kind: KindBoolean},
+	{Column: "opportunity_currency_iso_code", CRMFieldNames: []string{"CurrencyIsoCode"}, Scope: ScopeOpportunity, Kind: KindCategorical},
+	{Column: "opportunity_is_deleted", CRMFieldNames: []string{"IsDeleted"}, Scope: ScopeOpportunity, Kind: KindBoolean},
 
 	// Opportunity dates
-	{Column: "opportunity_close_date", SFDCNames: []string{"CloseDate"}, Scope: ScopeOpportunity, Kind: KindDate},
-	{Column: "opportunity_created_date", SFDCNames: []string{"CreatedDate"}, Scope: ScopeOpportunity, Kind: KindDate},
+	{Column: "opportunity_close_date", CRMFieldNames: []string{"CloseDate"}, Scope: ScopeOpportunity, Kind: KindDate},
+	{Column: "opportunity_created_date", CRMFieldNames: []string{"CreatedDate"}, Scope: ScopeOpportunity, Kind: KindDate},
 }
 
 // BucketDimensions lists stable group-by dimensions for numeric/date promoted
@@ -87,8 +89,8 @@ var BucketDimensions = []BucketDimension{
 	{Dimension: "opportunity_created_quarter", SourceColumn: "opportunity_created_date", Kind: BucketDateQuarter},
 }
 
-// ExcludedSFDCFieldNames must never be advertised as analyst dimensions.
-var ExcludedSFDCFieldNames = []string{
+// ExcludedCRMFieldNames must never be advertised as analyst dimensions.
+var ExcludedCRMFieldNames = []string{
 	"OwnerId",
 	"Name", "Website",
 	"Description", "NextStep",

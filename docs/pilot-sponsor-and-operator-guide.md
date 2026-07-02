@@ -447,7 +447,7 @@ cache has those fields. If opportunity outcome or loss reason is missing, say
 so directly and avoid causal claims.
 ```
 
-Customer configuration note: loss reasons and close reasons are tenant-specific
+Customer configuration note: loss reasons and close reasons are deployment-specific
 CRM fields. The operator must map and validate them in the customer profile
 before the MCP can answer "why did these close lost?" questions reliably. When
 the profile or source data is missing, use the empty/limitation status as a
@@ -750,7 +750,7 @@ Why this allowlist:
   workspace, question text, or question IDs as configuration metadata. Enable
   them only when the pilot checklist includes "coaching configuration exposure
   approved."
-- It keeps business users away from tools that can expose tenant-specific schema
+- It keeps business users away from tools that can expose deployment-specific schema
   details, exact calls, or sensitive search pivots.
 
 ## MCP Tools Not Approved For Business Users
