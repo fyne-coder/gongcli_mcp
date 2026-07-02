@@ -138,9 +138,11 @@ host-assistant contract is documented in
    seedless candidate terms alone.
 2. Run `gong_analyze` operation `theme_intelligence_report` with a concrete
    `theme_query` such as `pricing`, `implementation effort`, `manual order
-   entry`, `ERP integration`, `punchout`, `security review`, `timeline`, or
+   entry`, `ERP integration`, `security review`, `timeline`, or
    `ROI`. The business policy excludes outbound prospecting and likely
    voicemail/IVR by default and reports that policy in `evidence_policy`.
+   For procurement or punchout review, use the extraction operations with
+   `topic_packs: ["procurement"]` so that vocabulary is an explicit opt-in.
 3. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
    the source of truth for drill-down terms.
 4. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`
@@ -209,7 +211,7 @@ ask the MCP to list possible customers and then choose one. Use
 prospect and asks a bounded question such as:
 
 > For ProspectCo, what have they said across calls about manual order entry,
-> punchout, and implementation timeline?
+> integration, and implementation timeline?
 
 The operation returns `ai_condensed_evidence` from Gong brief/keyPoint/highlight
 rows and `transcript_evidence`/`quotes` when a bounded transcript query is

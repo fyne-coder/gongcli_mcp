@@ -323,6 +323,11 @@ signals instead of inventing an `icp` filter or hidden classification.
   Use transcript quote evidence for customer-facing claims.
 - For Sales coaching, use `extract.objection_signals` with seeded topics.
 - For Marketing content gaps, use `extract.buyer_questions` with seeded topics.
+- For procurement/punchout/e-procurement reviews, pass
+  `topic_packs: ["procurement"]` on `extract.buyer_questions` or
+  `extract.objection_signals`. Default extraction keeps generic B2B topic seeds
+  and does not expand punchout/Coupa/Ariba/Jaggaer synonyms unless that pack is
+  requested.
 - For a question about one named prospect or account across calls, use
   `prospect.question.answer` only when the user supplied the prospect/account
   name. Set `filter.account_query` and `include_account_names=true`; do not use

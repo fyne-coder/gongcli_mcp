@@ -231,7 +231,7 @@ func (s *Server) buildBoundedSeededThemeSummaries(ctx context.Context, filter ca
 	summaries := make([]discoveryThemeSummary, 0, len(seeds))
 	allItems := make([]businessAnalysisItem, 0)
 	for _, seed := range seeds {
-		expandedQueries := businessSignalTopicQueries(OpAnalyzeDiscoverySummary, seed)
+		expandedQueries := businessSignalTopicQueries(OpAnalyzeDiscoverySummary, seed, defaultTopicPackSet())
 		items, quotes, err := s.businessAnalysisEvidenceForTopicQueries(ctx, filter, expandedQueries, perThemeLimit, baArgs)
 		if err != nil {
 			return nil, nil, err

@@ -874,17 +874,12 @@ func businessBriefCandidatePhrases(text string) []string {
 		"customer-driven urgency",
 		"preferred vendor",
 		"lost business",
-		"punchout",
-		"punch out",
 		"bigcommerce migration",
 		"bigcommerce",
 		"oracle fusion",
 		"sap business network",
 		"sap s/4hana",
 		"shopify",
-		"coupa",
-		"ariba",
-		"jaggaer",
 	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, 8)
@@ -907,9 +902,9 @@ func businessBriefCandidatePhrases(text string) []string {
 
 	tokens := businessBriefThemeTokens(normalized)
 	anchors := map[string]struct{}{
-		"ariba": {}, "automation": {}, "bigcommerce": {}, "budget": {}, "catalog": {}, "catalogs": {},
-		"compliance": {}, "coupa": {}, "ecommerce": {}, "integration": {}, "jaggaer": {}, "migration": {},
-		"oracle": {}, "pricing": {}, "procurement": {}, "punchout": {}, "quote": {}, "quotes": {},
+		"automation": {}, "bigcommerce": {}, "budget": {}, "catalog": {}, "catalogs": {},
+		"compliance": {}, "ecommerce": {}, "integration": {}, "migration": {},
+		"oracle": {}, "pricing": {}, "procurement": {}, "quote": {}, "quotes": {},
 		"roi": {}, "rollout": {}, "security": {}, "shopify": {}, "supplier": {}, "timeline": {},
 	}
 	for n := 3; n >= 2; n-- {
@@ -994,7 +989,7 @@ func businessBriefMatchesTopic(text string, seed string) bool {
 	if businessBriefMatchesSeed(text, seed) {
 		return true
 	}
-	for _, alias := range businessSignalTopicAliases("", seed) {
+	for _, alias := range businessSignalTopicAliases("", seed, defaultTopicPackSet()) {
 		if businessBriefMatchesSeed(text, alias) {
 			return true
 		}
