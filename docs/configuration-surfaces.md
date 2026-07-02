@@ -150,8 +150,8 @@ paths:
   backups: backups
 
 images:
-  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.4
-  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.4
+  cli: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.5
+  mcp: ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.5
 ```
 
 Use published image tags only after the corresponding tag workflow has
