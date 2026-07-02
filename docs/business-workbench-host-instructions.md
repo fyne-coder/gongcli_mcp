@@ -96,6 +96,22 @@ or affiliation is missing, say "unattributed transcript evidence" or
 "external-or-unknown evidence" instead of "buyers said." Keep coverage caveats,
 sparse data, missing profiles, and stale cache warnings visible.
 
+Business-user meaning: use transcript-backed excerpts for claims such as
+"the customer said" or "buyers asked for." Use Gong AI condensed evidence as a
+directional lead for where to look next. If Gong AI mentions a date, amount,
+timeline, competitor, or priority but the transcript excerpts do not, do not
+present that detail as buyer-validated. Say it is AI-condensed context and
+recommend transcript drilldown before turning it into sales, marketing, or
+enablement messaging.
+
+For evidence.call_drilldown specifically, keep the two evidence sections
+separate: ai_condensed_evidence is Gong AI condensed evidence;
+verbatim_transcript_excerpts is transcript-backed quote evidence. Never merge
+them into one claim. A date, amount, or other figure that appears only in
+ai_condensed_evidence stays AI-condensed-only even when transcript keyword hits
+exist in the same call; classify each claim by row evidence_class before using
+it in customer-facing prose.
+
 When a tool errors, is unavailable, or returns a governance or coverage block,
 say so directly and recommend the smallest operator action that would unblock
 the answer. Do not retry blindly, swap in raw transcript search, or fabricate
@@ -322,6 +338,18 @@ signals instead of inventing an `icp` filter or hidden classification.
   classification.
 - `verbatim_transcript_quote`: strongest evidence for customer-facing claims.
 - `dimension_rollup`: only reliable when `dimension_readiness` is `ready`.
+
+For business users, this distinction means Gong AI summaries are leads, not
+customer quotes. A finding is rep-ready or customer-facing only when the
+transcript-backed evidence supports it. If the only support is
+`ai_condensed_evidence`, label it directional and use it to decide which call
+or theme to inspect next.
+
+`evidence.call_drilldown` can return both `ai_condensed_evidence` and
+`verbatim_transcript_excerpts`. Treat each row according to `evidence_class`.
+Never merge AI-condensed rows and transcript excerpts into one claim. A date,
+amount, or other figure that appears only in AI-condensed rows remains
+directional even when transcript keyword hits exist in the same call.
 
 Never say "buyers said" when `speaker_role` is `unknown` or
 `speaker_role_status` is `affiliation_missing`. Use "unattributed transcript

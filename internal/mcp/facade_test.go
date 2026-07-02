@@ -1490,10 +1490,13 @@ func TestFacadeEvidenceCallDrilldownReturnsHighlightsWithoutTranscriptWhenNoQuer
 		t.Fatalf("ai_condensed_evidence len=%d want 2: %v", len(ai), inner)
 	}
 	first, _ := ai[0].(map[string]any)
-	for _, want := range []string{"highlight_type", "highlight_text", "highlight_index", "source_path"} {
+	for _, want := range []string{"evidence_class", "highlight_type", "highlight_text", "highlight_index", "source_path"} {
 		if _, ok := first[want]; !ok {
 			t.Fatalf("ai_condensed_evidence row missing %q: %v", want, first)
 		}
+	}
+	if got, _ := first["evidence_class"].(string); got != evidenceTypeGongAICondensedCandidate {
+		t.Fatalf("ai evidence_class=%q want %s row=%v", got, evidenceTypeGongAICondensedCandidate, first)
 	}
 	verbatim, _ := inner["verbatim_transcript_excerpts"].([]any)
 	if len(verbatim) != 0 {
@@ -1501,13 +1504,24 @@ func TestFacadeEvidenceCallDrilldownReturnsHighlightsWithoutTranscriptWhenNoQuer
 	}
 	warnings, _ := inner["warnings"].([]any)
 	hasNoQuoteWarning := false
+	hasAIOnlyWarning := false
 	for _, w := range warnings {
-		if strings.Contains(fmt.Sprintf("%v", w), "no_transcript_quotes") || strings.Contains(fmt.Sprintf("%v", w), "no_theme_query") {
+		warning := fmt.Sprintf("%v", w)
+		if strings.Contains(warning, "no_transcript_quotes") || strings.Contains(warning, "no_theme_query") {
 			hasNoQuoteWarning = true
+		}
+		if strings.Contains(warning, "ai_condensed_only_drilldown_evidence") {
+			hasAIOnlyWarning = true
+		}
+		if strings.Contains(warning, "mixed_provenance_drilldown_evidence") {
+			t.Fatalf("AI-only drilldown should not emit mixed provenance warning: %v", warnings)
 		}
 	}
 	if !hasNoQuoteWarning {
 		t.Fatalf("expected warning about absent theme_query/quote evidence, got %v", warnings)
+	}
+	if !hasAIOnlyWarning {
+		t.Fatalf("expected AI-only drilldown warning, got %v", warnings)
 	}
 	limitations, _ := inner["limitations"].([]any)
 	hasInstructionsCaveat := false
@@ -1591,6 +1605,9 @@ func TestFacadeEvidenceCallDrilldownReturnsHighlightsAndTranscriptForTheme(t *te
 		if got, _ := r["call_ref"].(string); got != callRef {
 			t.Fatalf("verbatim row call_ref=%q want %q: %v", got, callRef, r)
 		}
+		if got, _ := r["evidence_class"].(string); got != evidenceTypeTranscriptQuote {
+			t.Fatalf("verbatim row evidence_class=%q want %s: %v", got, evidenceTypeTranscriptQuote, r)
+		}
 		if _, ok := r["call_id"]; ok {
 			t.Fatalf("verbatim row leaked raw call_id: %v", r)
 		}
@@ -1603,6 +1620,27 @@ func TestFacadeEvidenceCallDrilldownReturnsHighlightsAndTranscriptForTheme(t *te
 	ai, _ := inner["ai_condensed_evidence"].([]any)
 	if len(ai) == 0 {
 		t.Fatalf("expected ai_condensed_evidence: %v", inner)
+	}
+	aiRow, _ := ai[0].(map[string]any)
+	if got, _ := aiRow["evidence_class"].(string); got != evidenceTypeGongAICondensedCandidate {
+		t.Fatalf("ai evidence_class=%q want %s: %v", got, evidenceTypeGongAICondensedCandidate, aiRow)
+	}
+	warnings := strings.ToLower(mustJSONText(t, inner["warnings"]))
+	if !strings.Contains(warnings, "mixed_provenance_drilldown_evidence") {
+		t.Fatalf("call drilldown should warn on mixed AI/transcript provenance: %s", warnings)
+	}
+	if strings.Contains(warnings, "ai_condensed_only_drilldown_evidence") {
+		t.Fatalf("mixed drilldown should not emit AI-only warning: %s", warnings)
+	}
+	limitations := strings.ToLower(mustJSONText(t, inner["limitations"]))
+	if !strings.Contains(limitations, "ai_condensed_evidence_is_gong_generated_accelerator_text_not_verbatim_buyer_quotes") {
+		t.Fatalf("call drilldown limitations missing AI-condensed caveat: %s", limitations)
+	}
+	contract := strings.ToLower(mustJSONText(t, inner["answer_contract"]))
+	for _, want := range []string{"mixed evidence classes", "ai-condensed-only", "evidence_class"} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("call drilldown answer_contract missing %q: %s", want, contract)
+		}
 	}
 	coverage, _ := inner["coverage_markers"].(map[string]any)
 	if coverage == nil {

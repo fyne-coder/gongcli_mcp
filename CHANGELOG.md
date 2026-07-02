@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-07-02
+
+- Added row-level evidence provenance to Business Workbench
+  `evidence.call_drilldown` responses so Gong AI condensed evidence and
+  transcript-backed excerpts are explicitly distinguishable.
+- Added drilldown answer-contract guidance and warnings for mixed-provenance
+  and AI-condensed-only drilldowns so host assistants do not treat Gong AI
+  dates, amounts, or summaries as buyer transcript quotes.
+- Updated Business Workbench host instructions with business-user guidance for
+  using `verbatim_transcript_excerpts` as customer-facing evidence and
+  treating `ai_condensed_evidence` as directional context unless transcript
+  excerpts support the claim.
+- Fixed the Proxmox lab auth shim bearer challenge to advertise the
+  endpoint-scoped protected-resource metadata URL and extended the lab smoke
+  to verify that URL directly.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.6.1`.
+
 ## 0.6.0 - 2026-07-01
 
 - Added a governed CRM-dimension registry for a fixed reviewed set of standard

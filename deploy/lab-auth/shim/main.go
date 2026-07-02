@@ -328,7 +328,7 @@ func (a *app) resourceURL() string {
 }
 
 func (a *app) resourceMetadataURL() string {
-	return a.cfg.publicBaseURL + "/.well-known/oauth-protected-resource"
+	return a.cfg.publicBaseURL + "/.well-known/oauth-protected-resource/mcp"
 }
 
 func (a *app) wwwAuthenticateHeader() string {
