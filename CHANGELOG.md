@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-07-02
+
 - Renamed the reviewed CRM-dimension registry internals from Salesforce-specific
   wording to CRM-neutral field names, added non-Salesforce profile fixture
   coverage, and documented the remaining compatibility-column extraction plan.
@@ -11,6 +13,8 @@
   vendor vocabulary.
 - Added release-body public-surface scanning, fixture coverage, and CI/release
   gates so GitHub Release notes are checked before and after publication.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.6.3`.
 
 ## 0.6.2 - 2026-07-02
 
