@@ -60,7 +60,11 @@ jobs:
           ./scripts/postgres-backup-restore-smoke.sh
           go vet ./...
           make public-surface-scan
+          make public-surface-scan-test
+          make release-public-surface-scan
           make secret-scan
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 

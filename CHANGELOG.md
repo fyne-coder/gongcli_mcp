@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added release-body public-surface scanning, fixture coverage, and CI/release
+  gates so GitHub Release notes are checked before and after publication.
+
 ## 0.6.2 - 2026-07-02
 
 - Removed tenant-specific wording from the business-signal extraction runtime

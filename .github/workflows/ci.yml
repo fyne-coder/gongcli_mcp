@@ -29,6 +29,10 @@ jobs:
         with:
           go-version: "1.26.4"
       - run: make public-surface-scan
+      - run: make public-surface-scan-test
+      - run: make release-public-surface-scan
+        env:
+          GH_TOKEN: ${{ github.token }}
       - run: make secret-scan
       - run: |
           bash -n \
