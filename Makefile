@@ -4,7 +4,7 @@ DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 IMAGE_BASE ?= ghcr.io/fyne-coder/gongcli_mcp
 LDFLAGS := -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$(VERSION) -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$(COMMIT) -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$(DATE)
 
-.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-build-mcp-gateway docker-build-ghcr docker-build-ghcr-mcp docker-build-ghcr-mcp-gateway docker-smoke postgres-backup-restore-smoke clean
+.PHONY: build test fmt vet secret-scan public-surface-scan sbom checksums docker-build docker-build-mcp docker-build-mcp-gateway docker-build-ghcr docker-build-ghcr-mcp docker-build-ghcr-mcp-gateway docker-smoke postgres-backup-restore-smoke clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gongctl ./cmd/gongctl
@@ -22,6 +22,9 @@ vet:
 
 secret-scan:
 	./scripts/secret-scan.sh
+
+public-surface-scan:
+	./scripts/public-surface-scan.sh
 
 sbom:
 	./scripts/generate-sbom.sh

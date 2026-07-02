@@ -132,6 +132,10 @@ gongctl profile schema
 
 ### MCP tool presets at a glance
 
+Built-in CRM and business defaults are Salesforce-compatible examples and a
+fixed reviewed dimension set. Tenant-specific CRM fields, lifecycle
+definitions, and methodology vocabulary belong in profiles/configuration.
+
 `gongmcp --list-tool-presets` is the source of truth. Common presets:
 
 | Preset | Surface | When to use |

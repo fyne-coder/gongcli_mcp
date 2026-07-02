@@ -150,7 +150,7 @@ func (s *Server) executeBusinessSignalExtraction(ctx context.Context, operation 
 	if totalEvidence == 0 {
 		warnings = append(warnings, "no_seeded_signal_evidence_returned: try narrower domain topics such as pricing, implementation, security review, ERP integration, or timeline")
 	}
-	warnings = append(warnings, "seeded_topic_synonym_expansion: topic buckets transparently try common TC sales/marketing synonyms and expose expanded_queries")
+	warnings = append(warnings, "seeded_topic_synonym_expansion: topic buckets transparently try common sales/marketing synonyms and expose expanded_queries")
 	status := "seeded_extraction_ready"
 	if totalEvidence == 0 {
 		status = "no_seeded_evidence"

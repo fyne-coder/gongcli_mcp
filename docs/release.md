@@ -23,6 +23,7 @@ For production-readiness checks:
 go version  # must be go1.26.4 or newer
 go test -count=1 ./...
 go vet ./...
+make public-surface-scan
 make secret-scan
 make sbom
 make checksums
@@ -46,29 +47,30 @@ and archive `dist/checksums.txt`, `dist/sbom-go-modules.json`, and
    artifacts with an older Go toolchain.
 4. Run `go test -count=1 ./...`.
 5. Run `go vet ./...`.
-6. Run `make secret-scan`.
-7. Run `make sbom`.
-8. Run `make checksums`.
-9. Run `make postgres-backup-restore-smoke`.
-10. Render the Kubernetes Postgres pilot starter:
+6. Run `make public-surface-scan`.
+7. Run `make secret-scan`.
+8. Run `make sbom`.
+9. Run `make checksums`.
+10. Run `make postgres-backup-restore-smoke`.
+11. Render the Kubernetes Postgres pilot starter:
    `kubectl kustomize deploy/kubernetes/postgres-pilot`.
-11. Run `make docker-build`.
-12. Run `make docker-build-mcp`.
-13. Run `make docker-build-mcp-gateway`.
-14. Run `make docker-build-ghcr`.
-15. Run `make docker-build-ghcr-mcp`.
-16. Run `make docker-build-ghcr-mcp-gateway`.
-17. Tag the release as `v$(cat VERSION)`.
-18. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
-    Go tests, the synthetic Postgres backup/restore smoke, vet, secret scan,
-    Docker smoke builds, and image vulnerability scans before it
+12. Run `make docker-build`.
+13. Run `make docker-build-mcp`.
+14. Run `make docker-build-mcp-gateway`.
+15. Run `make docker-build-ghcr`.
+16. Run `make docker-build-ghcr-mcp`.
+17. Run `make docker-build-ghcr-mcp-gateway`.
+18. Tag the release as `v$(cat VERSION)`.
+19. Push the tag; `.github/workflows/publish-images.yml` reruns Postgres-backed
+    Go tests, the synthetic Postgres backup/restore smoke, vet, public-surface
+    scan, secret scan, Docker smoke builds, and image vulnerability scans before it
     publishes:
     - `ghcr.io/fyne-coder/gongcli_mcp/gongctl:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:vX.Y.Z`
     - `ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:vX.Y.Z`
-19. After the first publish, confirm the GHCR packages are public if the GitHub
+20. After the first publish, confirm the GHCR packages are public if the GitHub
     repository is public and external consumption is intended.
-20. Run GoReleaser from the tag with Go 1.26.4 or newer.
+21. Run GoReleaser from the tag with Go 1.26.4 or newer.
 
 For pre-GA validation, push a release-candidate tag such as `v0.4.0-rc1`.
 Release-candidate tags publish immutable candidate tags and SHA tags only; they

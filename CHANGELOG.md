@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Removed tenant-specific wording from the business-signal extraction runtime
+  warning, documented Salesforce-compatible CRM defaults as examples in the
+  README, ignored local `gong-assistant-instructions.md`, and added
+  `make public-surface-scan` to CI and release preflight.
+
 ## 0.6.1 - 2026-07-02
 
 - Added row-level evidence provenance to Business Workbench
