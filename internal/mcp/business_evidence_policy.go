@@ -85,6 +85,17 @@ func businessEvidenceAnswerContract(evidenceType string) []string {
 	}
 }
 
+func callDrilldownAnswerContract() []string {
+	return []string{
+		"Use returned verbatim_transcript_excerpts for customer-facing transcript-backed claims; if no excerpt supports a claim, label it as directional or omit it.",
+		"Unknown or affiliation_missing speaker evidence is unattributed and must not be phrased as buyer speech.",
+		"evidence.call_drilldown returns mixed evidence classes: ai_condensed_evidence is Gong AI condensed evidence, while verbatim_transcript_excerpts is transcript-backed quote evidence.",
+		"Claims supported only by ai_condensed_evidence are directional and must not be described as transcript-backed or buyer-validated.",
+		"Dates, amounts, or other figures that appear only in ai_condensed_evidence stay AI-condensed-only even when transcript keyword hits exist in the same call.",
+		"Classify each claim from evidence.call_drilldown by its row evidence_class before using it in customer-facing claims.",
+	}
+}
+
 func (p businessEvidencePolicy) applyFilter(filter callFilter) callFilter {
 	if len(filter.ExcludeLifecycleBuckets) == 0 && strings.TrimSpace(filter.LifecycleBucket) == "" {
 		filter.ExcludeLifecycleBuckets = append([]string(nil), p.ExcludeLifecycleBuckets...)

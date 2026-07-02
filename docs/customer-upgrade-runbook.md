@@ -256,9 +256,9 @@ substitute for these adversarial assertions:
 - missing required scope is rejected
 - missing or wrong group membership is rejected
 
-## 0.5.x and 0.6.0 Upgrade Notes
+## 0.5.x and 0.6.x Upgrade Notes
 
-The 0.5.x and 0.6.0 releases introduced several operational surfaces that
+The 0.5.x and 0.6.x releases introduced several operational surfaces that
 affect upgrades:
 
 | Release | Upgrade consideration |
@@ -270,8 +270,9 @@ affect upgrades:
 | 0.5.4 | Added explicit `--no-governance-exclusions` / `GONGMCP_NO_GOVERNANCE_EXCLUSIONS=1`. No-exclusions deployments must refresh the serving DB with the matching policy fingerprint before `gongmcp` starts. |
 | 0.5.5 | Added business-analysis function migrations, dimension filters, participant rollups, serving-refresh timeout controls, failed-step JSON, and expanded deploy support diagnostics. Deploy matching `gongctl` and `gongmcp` binaries with the migrated database. |
 | 0.6.0 | Adds promoted CRM dimensions to `call_facts`, Business Workbench capability discovery, scoped Postgres reader grants, and business-analysis functions. Run migrations with the matching `gongctl` binary, refresh the serving/read model where applicable, reapply scoped grants, and confirm `gong_discover_capabilities` advertises only the dimensions expected for the deployment. |
+| 0.6.1 | Clarifies Business Workbench drilldown evidence provenance. No data migration is required; deploy the matching `gongmcp` image and confirm `evidence.call_drilldown` responses expose row-level `evidence_class` plus AI-only or mixed-provenance warnings. |
 
-The main 0.5.x/0.6.0 schema risk is Postgres SECURITY DEFINER function
+The main 0.5.x/0.6.x schema risk is Postgres SECURITY DEFINER function
 signature drift. Candidate `gongctl` migrations drop and recreate superseded
 business-analysis helper signatures. After migration, run the matching
 `gongmcp` image and reapply scoped grants through the deploy command or

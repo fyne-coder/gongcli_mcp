@@ -70,6 +70,25 @@ func TestMCPRewritePreservesInternalBearerAgainstHopByHopHeader(t *testing.T) {
 	}
 }
 
+func TestUnauthenticatedMCPChallengeUsesEndpointResourceMetadata(t *testing.T) {
+	app := &app{cfg: config{
+		publicBaseURL: "https://lab.example.test",
+		issuer:        "https://lab.example.test/realms/gong-lab",
+	}}
+	req := httptest.NewRequest(http.MethodPost, "http://example.test/mcp", strings.NewReader("{}"))
+	recorder := httptest.NewRecorder()
+
+	app.mcp(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d want %d body=%q", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	challenge := recorder.Header().Get("WWW-Authenticate")
+	if !strings.Contains(challenge, `resource_metadata="https://lab.example.test/.well-known/oauth-protected-resource/mcp"`) {
+		t.Fatalf("challenge missing endpoint resource metadata: %q", challenge)
+	}
+}
+
 func TestAuthenticateRejectsForgedProxyHeaderFromUntrustedRemote(t *testing.T) {
 	app := &app{cfg: config{
 		allowedEmails:     csvSet("approved@example.test"),

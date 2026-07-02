@@ -2654,6 +2654,7 @@ type callDrilldownArgs struct {
 type callDrilldownAIRow struct {
 	CallRef        string `json:"call_ref,omitempty"`
 	CallID         string `json:"call_id,omitempty"`
+	EvidenceClass  string `json:"evidence_class"`
 	HighlightIndex int    `json:"highlight_index"`
 	HighlightType  string `json:"highlight_type"`
 	HighlightText  string `json:"highlight_text"`
@@ -2664,6 +2665,7 @@ type callDrilldownAIRow struct {
 type callDrilldownTranscriptRow struct {
 	CallRef               string `json:"call_ref,omitempty"`
 	CallID                string `json:"call_id,omitempty"`
+	EvidenceClass         string `json:"evidence_class"`
 	SegmentIndex          int    `json:"segment_index"`
 	SpeakerID             string `json:"speaker_id,omitempty"`
 	SpeakerRef            string `json:"speaker_ref,omitempty"`
@@ -2842,6 +2844,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	aiRows := make([]callDrilldownAIRow, 0, len(highlightRows))
 	for _, row := range highlightRows {
 		out := callDrilldownAIRow{
+			EvidenceClass:  evidenceTypeGongAICondensedCandidate,
 			HighlightIndex: row.HighlightIndex,
 			HighlightType:  row.HighlightType,
 			HighlightText:  row.HighlightText,
@@ -2864,6 +2867,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		}
 		out := callDrilldownTranscriptRow{
 			CallRef:               resolvedCallRef,
+			EvidenceClass:         evidenceTypeTranscriptQuote,
 			SegmentIndex:          row.SegmentIndex,
 			SpeakerID:             row.SpeakerID,
 			StartMS:               row.StartMS,
@@ -2929,6 +2933,11 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 	if args.FieldProfile == fieldProfileLimited && len(aiRows) > 0 {
 		warnings = append(warnings, "limited_field_profile_does_not_redact_ai_condensed_evidence_text: field_profile=limited suppresses structured attribution fields, but Gong AI brief/keyPoint text may still contain names or customer terms")
 	}
+	if len(aiRows) > 0 && len(transcriptOut) == 0 {
+		warnings = append(warnings, "ai_condensed_only_drilldown_evidence: ai_condensed_evidence is directional and not transcript-backed; rerun with a theme_query and use verbatim_transcript_excerpts before making customer-facing claims")
+	} else if len(aiRows) > 0 && len(transcriptOut) > 0 {
+		warnings = append(warnings, "mixed_provenance_drilldown_evidence: ai_condensed_evidence is directional and may contain dates, amounts, or other figures not present in verbatim_transcript_excerpts; classify each claim by evidence_class")
+	}
 
 	coverage := map[string]any{
 		"transcript_excerpt_count":     len(transcriptOut),
@@ -2947,6 +2956,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"speaker_attribution_uses_exact_gong_party_speaker_id_only_no_crm_contact_or_lead_matching_in_this_phase",
 		"person_title_is_never_inferred_from_transcript_text_or_persona_buckets",
 		"field_profile_controls_structured_metadata_not_names_inside_evidence_text",
+		"ai_condensed_evidence_is_gong_generated_accelerator_text_not_verbatim_buyer_quotes",
 	}
 	if !callDrilldownSpeakerRolesAvailable(transcriptOut) {
 		limitations = append(limitations, "buyer_versus_rep_role_is_not_proven_by_this_evidence_pack_callers_must_treat_attribution_confidence_as_authoritative")
@@ -2973,6 +2983,7 @@ func (s *Server) executeCallDrilldown(ctx context.Context, raw json.RawMessage) 
 		"limits":                       limitsBlock,
 		"drilldown_truncated":          transcriptTruncated || highlightTruncated,
 		"theme_query":                  themeQuery,
+		"answer_contract":              callDrilldownAnswerContract(),
 	}
 	addBusinessEvidenceMetadata(payload, defaultBusinessEvidencePolicy(), evidenceTypeTranscriptQuote, nil, args.FieldProfile, len(aiRows) > 0, speakerAttributionSummaryFromCallDrilldown(transcriptOut))
 	return newToolResult(payload)

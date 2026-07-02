@@ -129,6 +129,9 @@ echo "$metadata_response" | jq -e --arg issuer "$LAB_PUBLIC_BASE_URL/realms/gong
 echo "$metadata_response" | jq -e '.scopes_supported | index("openid")' >/dev/null
 echo "$metadata_response" | jq -e '.scopes_supported | index("offline_access")' >/dev/null
 echo "$metadata_response" | jq -e '.audiences_supported | index("gong-lab-proxy")' >/dev/null
+endpoint_metadata_response="$(curl -fsS "$LAB_PUBLIC_BASE_URL/.well-known/oauth-protected-resource/mcp")"
+echo "$endpoint_metadata_response" | jq -e --arg resource "$LAB_PUBLIC_BASE_URL/mcp" '.resource == $resource' >/dev/null
+echo "$endpoint_metadata_response" | jq -e --arg issuer "$LAB_PUBLIC_BASE_URL/realms/gong-lab" '.authorization_servers[] == $issuer' >/dev/null
 
 echo "== anonymous dynamic client registration is accepted =="
 dcr_body="$(jq -n '{
