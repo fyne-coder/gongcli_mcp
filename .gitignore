@@ -26,6 +26,9 @@ node_modules/
 *.jsonl
 *.ndjson
 
+# Local assistant instructions (tenant-specific, not for public surface)
+gong-assistant-instructions.md
+
 # Local work tracking
 AGENTS.md
 CHECKPOINT.md

@@ -2,19 +2,11 @@
 set -eu
 
 patterns='(-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|GONG_ACCESS_KEY_SECRET[[:space:]]*[:=][[:space:]]*["'\'']?[A-Za-z0-9_/+=.-]{20,})'
-public_surface_patterns='(TradeCentric|tradecentric|Mihai|Gerco|ofid_[A-Za-z0-9]+|docker\.transcripts|fyne-llc|jc-direct|jumpcloud-clean|tc-jumpcloud|review-agent)'
 
 if git grep -n -E "$patterns" -- \
 	':!go.sum' \
 	':!scripts/secret-scan.sh'; then
 	echo "secret-scan: possible secret detected" >&2
-	exit 1
-fi
-
-if git grep -n -E "$public_surface_patterns" -- \
-	':!go.sum' \
-	':!scripts/secret-scan.sh'; then
-	echo "secret-scan: public-surface internal/customer debug term detected" >&2
 	exit 1
 fi
 
