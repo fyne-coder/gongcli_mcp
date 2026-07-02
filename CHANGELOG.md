@@ -14,9 +14,9 @@
   using `verbatim_transcript_excerpts` as customer-facing evidence and
   treating `ai_condensed_evidence` as directional context unless transcript
   excerpts support the claim.
-- Fixed the Proxmox lab auth shim bearer challenge to advertise the
-  endpoint-scoped protected-resource metadata URL and extended the lab smoke
-  to verify that URL directly.
+- Fixed remote MCP auth bearer challenge metadata to advertise the
+  endpoint-scoped protected-resource metadata URL and extended smoke
+  verification for that URL.
 - Updated release-facing Docker image examples and deployment defaults to point
   at `v0.6.1`.
 
@@ -57,8 +57,8 @@
 - Added participant domain, affiliation, and email dimension rollups with
   configurable internal participant domains and `hide_contact_emails` policy
   suppression for raw email buckets.
-- Added Business Workbench host docs and Proxmox OAuth lab configuration
-  coverage for the new query operations.
+- Added Business Workbench host docs and remote MCP OAuth deployment
+  configuration coverage for the new query operations.
 - Added governed `filter.dimension_filters` support for Business Workbench
   business-analysis tools, starting with reviewed dimensions such as
   `account_revenue_range`, so ICP-style segmentation can be expressed without
@@ -429,8 +429,8 @@
 
 ## 0.3.2 - 2026-05-02
 
-- Added a Proxmox/Cloudflare/Keycloak lab-auth deployment harness for remote
-  MCP OAuth rehearsal, including protected-resource metadata,
+- Added a disposable lab-auth deployment harness for remote MCP OAuth
+  rehearsal, including protected-resource metadata,
   dynamic-client-registration checks, offline-token and audience/group claim
   validation, OpenAI Responses API smoke testing, and ChatGPT manual connector
   guidance.
