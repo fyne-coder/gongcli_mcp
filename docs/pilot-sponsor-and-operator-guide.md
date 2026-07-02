@@ -137,12 +137,13 @@ host-assistant contract is documented in
    candidate evidence. Do not let the host synthesize final themes from
    seedless candidate terms alone.
 2. Run `gong_analyze` operation `theme_intelligence_report` with a concrete
-   `theme_query` such as `pricing`, `implementation effort`, `manual order
-   entry`, `ERP integration`, `security review`, `timeline`, or
-   `ROI`. The business policy excludes outbound prospecting and likely
-   voicemail/IVR by default and reports that policy in `evidence_policy`.
-   For procurement or punchout review, use the extraction operations with
-   `topic_packs: ["procurement"]` so that vocabulary is an explicit opt-in.
+   `theme_query` such as `pricing`, `implementation effort`, `ERP integration`,
+   `security review`, `timeline`, `data migration`, or `ROI`. The business
+   policy excludes outbound prospecting and likely voicemail/IVR by default and
+   reports that policy in `evidence_policy`. For implementation, security, and
+   integration-readiness review, use the extraction operations with
+   `topic_packs: ["technical_readiness"]` so that vocabulary is an explicit
+   opt-in.
 3. Use the returned `top_quotes_by_theme` and `drilldown_workflow_inputs` as
    the source of truth for drill-down terms.
 4. Pass each `{call_ref, drilldown_term}` pair into `gong_get_evidence`

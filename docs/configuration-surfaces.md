@@ -228,13 +228,17 @@ Supported packs:
 - `generic_b2b` — default when `topic_packs` is omitted. Keeps generic B2B
   aliases and seeds such as pricing, implementation, integration, security,
   support, timeline, data, and ERP.
-- `procurement` — opt-in pack that adds punchout/e-procurement vendor
-  vocabulary such as `punchout integration`, `Coupa`, `Ariba`, and `Jaggaer`.
+- `technical_readiness` — opt-in pack that adds implementation, security, and
+  integration-readiness vocabulary such as `launch readiness`, `SSO
+  integration`, `sandbox testing`, and `data migration`.
 
 Responses include `topic_packs` and `topic_pack_provenance` so hosts can see
 which pack shaped synonym expansion. Unknown pack names return a clear input
 error. Packs are additive; `generic_b2b` remains active when an opt-in pack such
-as `procurement` is requested.
+as `technical_readiness` is requested.
+
+Deployment-specific domain vocabulary should be reviewed and distributed
+outside compiled public defaults.
 
 Example:
 
@@ -246,8 +250,8 @@ Example:
       "quarter": "2026-Q2",
       "transcript_status": "present"
     },
-    "topic_packs": ["procurement"],
-    "topics": ["integration", "punchout"]
+    "topic_packs": ["technical_readiness"],
+    "topics": ["integration", "security"]
   }
 }
 ```

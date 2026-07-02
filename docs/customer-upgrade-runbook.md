@@ -272,7 +272,15 @@ affect upgrades:
 | 0.6.0 | Adds promoted CRM dimensions to `call_facts`, Business Workbench capability discovery, scoped Postgres reader grants, and business-analysis functions. Run migrations with the matching `gongctl` binary, refresh the serving/read model where applicable, reapply scoped grants, and confirm `gong_discover_capabilities` advertises only the dimensions expected for the deployment. |
 | 0.6.1 | Clarifies Business Workbench drilldown evidence provenance. No data migration is required; deploy the matching `gongmcp` image and confirm `evidence.call_drilldown` responses expose row-level `evidence_class` plus AI-only or mixed-provenance warnings. |
 | 0.6.2 | Cleans public genericity wording and release preflight surfaces. No data migration is required; deploy matching images if you want the forward-clean public runtime warning and release-facing defaults. |
-| 0.6.3 | Ships release-body public-surface scanning, configurable business topic packs, and the CRM genericity roadmap. No data migration is required; deploy matching images if you want the stricter release gates, opt-in procurement topic pack, and CRM-neutral capability wording. |
+| 0.6.3 | Ships release-body public-surface scanning, configurable business topic packs, and the CRM genericity roadmap. No data migration is required; deploy matching images if you want the stricter release gates, schema-advertised topic packs, and CRM-neutral capability wording. |
+
+When upgrading from releases before 0.6.3, `topic_packs` is a new optional
+request field on business-signal extraction operations. Existing MCP hosts can
+omit it and keep default generic extraction behavior. Hosts that send
+`topic_packs` should discover the supported pack names from the candidate
+`tools/list` schema before promotion; unsupported names fail fast as input
+errors. Builds after 0.6.3 may change opt-in pack names, so do not carry pack
+names forward from older examples without checking the candidate schema.
 
 The main 0.5.x/0.6.x schema risk is Postgres SECURITY DEFINER function
 signature drift. Candidate `gongctl` migrations drop and recreate superseded

@@ -588,36 +588,36 @@ func TestFacadeExtractBuyerQuestionsUsesGenericSynonymExpansion(t *testing.T) {
 		t.Fatalf("buyer-question security aliases should match objection alias breadth: %s", securityExpanded)
 	}
 
-	procurementResult, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
+	readinessResult, err := server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
 		"filter": map[string]any{
 			"from_date":         "2026-04-01",
 			"to_date":           "2026-04-30",
 			"transcript_status": "present",
 		},
 		"topics":      []string{"integration"},
-		"topic_packs": []string{"procurement"},
+		"topic_packs": []string{"technical_readiness"},
 		"limit":       10,
 	}))
 	if err != nil {
-		t.Fatalf("extract buyer questions with procurement pack: %v", err)
+		t.Fatalf("extract buyer questions with technical_readiness pack: %v", err)
 	}
-	if procurementResult.IsError {
-		t.Fatalf("unexpected procurement pack isError: %+v", procurementResult)
+	if readinessResult.IsError {
+		t.Fatalf("unexpected technical_readiness pack isError: %+v", readinessResult)
 	}
-	procurementInner, _ := decodeFacadeWrapper(t, procurementResult)["result"].(map[string]any)
-	if packs := strings.ToLower(mustJSONText(t, procurementInner["topic_packs"])); !strings.Contains(packs, "generic_b2b") || !strings.Contains(packs, "procurement") {
-		t.Fatalf("topic_packs missing additive generic/procurement packs: %s", packs)
+	readinessInner, _ := decodeFacadeWrapper(t, readinessResult)["result"].(map[string]any)
+	if packs := strings.ToLower(mustJSONText(t, readinessInner["topic_packs"])); !strings.Contains(packs, "generic_b2b") || !strings.Contains(packs, "technical_readiness") {
+		t.Fatalf("topic_packs missing additive generic/technical_readiness packs: %s", packs)
 	}
-	if warnings := strings.ToLower(mustJSONText(t, procurementInner["warnings"])); !strings.Contains(warnings, "topic_pack_procurement_active") {
-		t.Fatalf("procurement pack warning missing: %s", warnings)
+	if warnings := strings.ToLower(mustJSONText(t, readinessInner["warnings"])); !strings.Contains(warnings, "topic_pack_technical_readiness_active") {
+		t.Fatalf("technical_readiness pack warning missing: %s", warnings)
 	}
-	procurementBuckets, _ := procurementInner["buckets"].([]any)
-	if len(procurementBuckets) != 1 {
-		t.Fatalf("procurement buckets len=%d want 1: %v", len(procurementBuckets), procurementInner)
+	readinessBuckets, _ := readinessInner["buckets"].([]any)
+	if len(readinessBuckets) != 1 {
+		t.Fatalf("technical_readiness buckets len=%d want 1: %v", len(readinessBuckets), readinessInner)
 	}
-	procurementBucket, _ := procurementBuckets[0].(map[string]any)
-	if expanded := strings.ToLower(mustJSONText(t, procurementBucket["expanded_queries"])); !strings.Contains(expanded, "punchout integration") {
-		t.Fatalf("procurement pack expanded_queries missing opt-in punchout synonym: %s", expanded)
+	readinessBucket, _ := readinessBuckets[0].(map[string]any)
+	if expanded := strings.ToLower(mustJSONText(t, readinessBucket["expanded_queries"])); !strings.Contains(expanded, "sso integration") {
+		t.Fatalf("technical_readiness pack expanded_queries missing opt-in readiness synonym: %s", expanded)
 	}
 
 	_, err = server.executeFacadeDispatch(t.Context(), FacadeToolAnalyze, mustFacadeArgs(t, OpExtractBuyerQuestions, map[string]any{
