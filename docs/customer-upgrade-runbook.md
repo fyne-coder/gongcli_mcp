@@ -274,6 +274,7 @@ affect upgrades:
 | 0.6.2 | Cleans public genericity wording and release preflight surfaces. No data migration is required; deploy matching images if you want the forward-clean public runtime warning and release-facing defaults. |
 | 0.6.3 | Ships release-body public-surface scanning, configurable business topic packs, and the CRM genericity roadmap. No data migration is required; deploy matching images if you want the stricter release gates, schema-advertised topic packs, and CRM-neutral capability wording. |
 | 0.6.4 | Replaces the public opt-in topic-pack example with a generic `technical_readiness` pack and updates release-facing image defaults. No data migration is required beyond the existing 0.6.0 read-model and scoped-grant path. |
+| 0.6.5 | Adds YAML-backed custom business topic packs for `gongmcp` with strict validation and capability discovery. No data migration is required; deploy matching images and pass `--business-topic-packs-config` or `GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG` when custom vocabulary should be available. |
 
 ### Direct 0.5.x or Later to Current 0.6.x Upgrade Path
 

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-07-02
+
+- Added YAML-backed custom business topic packs for `gongmcp`, configurable
+  with `--business-topic-packs-config` or
+  `GONGMCP_BUSINESS_TOPIC_PACKS_CONFIG`, and surfaced configured pack names and
+  descriptions through capability discovery.
+- Added strict validation for custom topic packs, including duplicate-name
+  checks, operation scoping, alias/default seed bounds, and FTS-safe search
+  terms.
+- Generalized 0.5.x and 0.6.x upgrade guidance and updated release-facing
+  Docker image examples and deployment defaults to point at `v0.6.5`.
+
 ## 0.6.4 - 2026-07-02
 
 - Replaced the public opt-in topic pack with a generic `technical_readiness`
