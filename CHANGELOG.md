@@ -2,12 +2,19 @@
 
 ## Unreleased
 
-- Replaced the public opt-in topic-pack example with a generic
-  `technical_readiness` pack; deployment-specific commerce vocabulary should
-  stay outside compiled public defaults.
-- Builds after `v0.6.3` should discover supported `topic_packs` from the
-  candidate `tools/list` schema; older unadvertised pack names now fail fast as
-  input errors.
+## 0.6.4 - 2026-07-02
+
+- Replaced the public opt-in topic pack with a generic `technical_readiness`
+  pack. Domain-specific vocabulary should stay outside compiled public
+  defaults.
+- Clarified upgrade guidance for operators moving from `0.5.5` to current
+  `0.6.x` releases: run the writable migration/read-model path before
+  read-only MCP, promote matching images, reapply scoped Postgres grants where
+  applicable, and treat `topic_packs` as optional request configuration.
+  Opt-in pack names not advertised by the candidate `tools/list` schema fail
+  fast as input errors.
+- Updated release-facing Docker image examples and deployment defaults to point
+  at `v0.6.4`.
 
 ## 0.6.3 - 2026-07-02
 

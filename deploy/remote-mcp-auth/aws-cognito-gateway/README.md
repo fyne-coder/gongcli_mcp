@@ -437,12 +437,12 @@ Replace every `vX.Y.Z` image tag in the Kubernetes manifests with the release
 tag or internal registry image that the customer approved, for example:
 
 ```text
-ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.3
-ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.3
-ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:v0.6.3
+ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.4
+ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.4
+ghcr.io/fyne-coder/gongcli_mcp/gongmcp-gateway:v0.6.4
 ```
 
-If `gongmcp-gateway:v0.6.3` is not published yet, mirror or build the branch
+If `gongmcp-gateway:v0.6.4` is not published yet, mirror or build the branch
 image first. Once this PR is released, the publish workflow builds and scans
 the `gongmcp-gateway` image alongside `gongctl` and `gongmcp`.
 

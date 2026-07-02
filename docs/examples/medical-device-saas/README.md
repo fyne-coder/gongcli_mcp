@@ -128,7 +128,7 @@ trails from one system instead of stitching together exports from multiple tools
 
 Claude can use the synthetic bundle through the existing MCP-only Docker image.
 No demo-specific image is required as long as the local MCP-only image or the
-published `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.3` image is current.
+published `ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.4` image is current.
 Use `gongctl:mcp-local` from a local build when validating unreleased changes.
 Add a separate MCP server entry named `gong-demo` so the synthetic dataset stays
 separate from the real Q1 cache:
@@ -148,7 +148,7 @@ separate from the real Q1 cache:
         "GONGMCP_TOOL_ALLOWLIST=get_sync_status,search_calls,summarize_calls_by_lifecycle,summarize_call_facts,rank_transcript_backlog,search_transcript_segments,missing_transcripts",
         "-v",
         "/ABSOLUTE/PATH/TO/gongctl-data:/data:ro",
-        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.3",
+        "ghcr.io/fyne-coder/gongcli_mcp/gongmcp:v0.6.4",
         "--db",
         "/data/public-example-q1-2026/gong-example-q1-2026.db"
       ]

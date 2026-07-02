@@ -94,11 +94,11 @@ command. In Kubernetes, override `args` for a single command:
 ```yaml
 containers:
   - name: gongctl
-    image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.3
+    image: ghcr.io/fyne-coder/gongcli_mcp/gongctl:v0.6.4
     args: ["sync", "status"]
 ```
 
-If the `v0.6.3` image has not been published yet, pin the latest published tag
+If the `v0.6.4` image has not been published yet, pin the latest published tag
 or build and push a customer-owned image before applying the Kubernetes
 manifests.
 

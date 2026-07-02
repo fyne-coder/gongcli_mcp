@@ -273,6 +273,42 @@ affect upgrades:
 | 0.6.1 | Clarifies Business Workbench drilldown evidence provenance. No data migration is required; deploy the matching `gongmcp` image and confirm `evidence.call_drilldown` responses expose row-level `evidence_class` plus AI-only or mixed-provenance warnings. |
 | 0.6.2 | Cleans public genericity wording and release preflight surfaces. No data migration is required; deploy matching images if you want the forward-clean public runtime warning and release-facing defaults. |
 | 0.6.3 | Ships release-body public-surface scanning, configurable business topic packs, and the CRM genericity roadmap. No data migration is required; deploy matching images if you want the stricter release gates, schema-advertised topic packs, and CRM-neutral capability wording. |
+| 0.6.4 | Replaces the public opt-in topic-pack example with a generic `technical_readiness` pack and updates release-facing image defaults. No data migration is required beyond the existing 0.6.0 read-model and scoped-grant path. |
+
+### Direct 0.5.5 to 0.6.4 Upgrade Path
+
+An operator on `0.5.5` can upgrade directly to `0.6.4`; intermediate binaries
+do not need to be run one by one. Treat it as a normal stack promotion:
+
+1. Record the currently deployed image tags or digests for `gongctl`,
+   `gongmcp`, and `gongmcp-gateway` where used.
+2. Back up the SQLite cache or restore the Postgres backup into an isolated
+   validation database. Include transcript files, profile YAML, governance YAML,
+   and MCP host configuration in the rollback bundle.
+3. Pull the matching `v0.6.4` images, preferably by digest after the release
+   images are inspectable.
+4. Run the writable `gongctl` operator path against the copied cache or
+   restored database. For Postgres, run the deploy/read-model refresh path with
+   the `v0.6.4` operator image and reapply scoped reader grants through the
+   deploy command or `gongctl mcp postgres-reader-apply`.
+5. Validate readiness with the matching `gongctl` image:
+
+   ```bash
+   gongctl sync status --db /path/to/copied/gong.db
+   ```
+
+   For Postgres, also run the deployment doctor or support-bundle check used by
+   the deployment.
+6. Start the candidate `gongmcp` image only after the writable validation path
+   succeeds. Use a read-only SQLite mount or read-only Postgres role.
+7. Run MCP smoke checks: `initialize`, `tools/list`, `get_sync_status`, and
+   `gong_discover_capabilities`. Confirm the advertised dimensions and tool
+   schema match the deployment.
+8. If MCP hosts send `topic_packs`, discover supported pack names from the
+   candidate `tools/list` schema before promotion. Hosts that do not send
+   `topic_packs` keep the default generic extraction behavior.
+9. Promote the candidate image digests and keep the `0.5.5` digests and backup
+   available until operator smoke and business-user read-only checks pass.
 
 When upgrading from releases before 0.6.3, `topic_packs` is a new optional
 request field on business-signal extraction operations. Existing MCP hosts can
