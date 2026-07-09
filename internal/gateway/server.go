@@ -310,7 +310,7 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func (s *Server) LogConfig() string {
-	return fmt.Sprintf("addr=%s upstream=%s auth_profile=%s issuer=%s client_id=%s required_scope=%s required_group=%s group_claim=%s allowed_subjects=%d allowed_emails=%d dcr_enabled=%t dcr_redirect_uris=%d dcr_scopes=%d dcr_identity_providers=%d",
+	return fmt.Sprintf("addr=%s upstream=%s auth_profile=%s issuer=%s client_id=%s required_scope=%s required_group=%s group_claim=%s app_assignment_only=%t allowed_subjects=%d allowed_emails=%d dcr_enabled=%t dcr_redirect_uris=%d dcr_scopes=%d dcr_identity_providers=%d",
 		s.cfg.Addr,
 		s.cfg.Upstream.Redacted(),
 		s.cfg.AuthProfile,
@@ -319,6 +319,7 @@ func (s *Server) LogConfig() string {
 		s.cfg.RequiredScope,
 		s.cfg.RequiredGroupLogValue(),
 		s.cfg.GroupClaim,
+		s.cfg.AppAssignmentOnly,
 		len(s.cfg.AllowedSubjects),
 		len(s.cfg.AllowedEmails),
 		s.cfg.DCREnabled,

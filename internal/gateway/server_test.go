@@ -522,6 +522,120 @@ func TestVerifyAccessTokenDirectOIDCAcceptsJumpCloudAccessTokenShape(t *testing.
 	}
 }
 
+func TestVerifyAccessTokenDirectOIDCAcceptsAppAssignmentOnly(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.RequiredScope = "openid"
+	cfg.ScopesSupported = []string{"openid", "email", "profile"}
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = nil
+	cfg.GroupClaim = "memberOf"
+	cfg.AppAssignmentOnly = true
+	cfg.AllowedEmails = nil
+	cfg.AllowedSubjects = nil
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["iss"] = "https://oauth.id.jumpcloud.com/"
+		claims["sub"] = "6a1a0585f1a38a8d1ccfc7e6"
+		claims["aud"] = []string{}
+		claims["client_id"] = cfg.ClientID
+		claims["scp"] = []string{"openid", "email", "profile"}
+		delete(claims, "token_use")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	principal, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err != nil {
+		t.Fatalf("VerifyAccessToken failed: %v", err)
+	}
+	if principal.Subject != "6a1a0585f1a38a8d1ccfc7e6" {
+		t.Fatalf("subject=%q", principal.Subject)
+	}
+	if len(principal.Groups) != 0 {
+		t.Fatalf("groups=%v want no group gate", principal.Groups)
+	}
+	if !contains(principal.Scopes, "openid") {
+		t.Fatalf("scopes=%v", principal.Scopes)
+	}
+}
+
+func TestVerifyAccessTokenDirectOIDCRejectsEmptyAccessPolicyWithoutAppAssignmentOnly(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.RequiredScope = "openid"
+	cfg.ScopesSupported = []string{"openid", "email", "profile"}
+	cfg.RequiredGroup = ""
+	cfg.RequiredGroups = nil
+	cfg.GroupClaim = "memberOf"
+	cfg.AppAssignmentOnly = false
+	cfg.AllowedEmails = nil
+	cfg.AllowedSubjects = nil
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["iss"] = "https://oauth.id.jumpcloud.com/"
+		claims["sub"] = "6a1a0585f1a38a8d1ccfc7e6"
+		claims["aud"] = []string{}
+		claims["client_id"] = cfg.ClientID
+		claims["scp"] = []string{"openid", "email", "profile"}
+		delete(claims, "token_use")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	_, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err == nil {
+		t.Fatal("expected empty policy without app assignment mode to fail")
+	}
+	if !strings.Contains(err.Error(), "access policy gate is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerifyAccessTokenAppAssignmentOnlyStillEnforcesConfiguredGroup(t *testing.T) {
+	key := mustKey(t)
+	cfg := testConfig(t, nil)
+	cfg.AuthProfile = AuthProfileDirectOIDC
+	cfg.Issuer = "https://oauth.id.jumpcloud.com"
+	cfg.JWKSURL = "https://oauth.id.jumpcloud.com/.well-known/jwks.json"
+	cfg.RequiredScope = "openid"
+	cfg.ScopesSupported = []string{"openid", "email", "profile"}
+	cfg.RequiredGroup = "GongMCP-Users"
+	cfg.RequiredGroups = []string{"GongMCP-Users"}
+	cfg.GroupClaim = "memberOf"
+	cfg.AppAssignmentOnly = true
+	cfg.AllowedEmails = nil
+	cfg.AllowedSubjects = nil
+	authorizer := testAuthorizer(t, cfg, key)
+	token := signToken(t, key, cfg, func(claims jwt.MapClaims) {
+		claims["iss"] = "https://oauth.id.jumpcloud.com/"
+		claims["sub"] = "6a1a0585f1a38a8d1ccfc7e6"
+		claims["aud"] = []string{}
+		claims["client_id"] = cfg.ClientID
+		claims["scp"] = []string{"openid", "email", "profile"}
+		delete(claims, "token_use")
+		delete(claims, "scope")
+		delete(claims, "email")
+		delete(claims, "cognito:groups")
+	})
+
+	_, err := authorizer.VerifyAccessToken(t.Context(), token)
+	if err == nil {
+		t.Fatal("expected configured group gate to remain enforced")
+	}
+	if !strings.Contains(err.Error(), `required group "GongMCP-Users" missing`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestVerifyAccessTokenDirectOIDCAcceptsEmailAllowlistWithoutGroup(t *testing.T) {
 	key := mustKey(t)
 	cfg := testConfig(t, nil)
@@ -958,6 +1072,61 @@ func TestLoadConfigAcceptsOIDCEmailAllowlistWithoutRequiredGroup(t *testing.T) {
 	}
 	if _, ok := cfg.AllowedEmails["approved@example.test"]; !ok {
 		t.Fatalf("allowed emails=%v", cfg.AllowedEmails)
+	}
+}
+
+func TestLoadConfigAcceptsDirectOIDCAppAssignmentOnly(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	t.Setenv("OIDC_AUTH_PROFILE", "direct-oidc")
+	t.Setenv("COGNITO_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUPS", "")
+	t.Setenv("OIDC_ALLOWED_GROUPS", "")
+	t.Setenv("COGNITO_REQUIRED_GROUPS", "")
+	t.Setenv("COGNITO_ALLOWED_GROUPS", "")
+	t.Setenv("COGNITO_ALLOWED_SUBJECTS", "")
+	t.Setenv("OIDC_ALLOWED_SUBJECTS", "")
+	t.Setenv("COGNITO_ALLOWED_EMAILS", "")
+	t.Setenv("OIDC_ALLOWED_EMAILS", "")
+	t.Setenv("OIDC_ALLOW_APP_ASSIGNMENT_ONLY", "true")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if !cfg.AppAssignmentOnly {
+		t.Fatal("expected app assignment only mode")
+	}
+	if cfg.RequiredGroup != "" || len(cfg.RequiredGroups) != 0 {
+		t.Fatalf("required group=%q groups=%v want no group gate", cfg.RequiredGroup, cfg.RequiredGroups)
+	}
+	if len(cfg.AllowedSubjects) != 0 || len(cfg.AllowedEmails) != 0 {
+		t.Fatalf("allowed subjects=%v emails=%v want no explicit allowlists", cfg.AllowedSubjects, cfg.AllowedEmails)
+	}
+}
+
+func TestLoadConfigRejectsAppAssignmentOnlyOutsideDirectOIDC(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	t.Setenv("OIDC_AUTH_PROFILE", "cognito")
+	t.Setenv("GATEWAY_AUTH_PROFILE", "")
+	t.Setenv("COGNITO_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUP", "")
+	t.Setenv("OIDC_REQUIRED_GROUPS", "")
+	t.Setenv("OIDC_ALLOWED_GROUPS", "")
+	t.Setenv("COGNITO_REQUIRED_GROUPS", "")
+	t.Setenv("COGNITO_ALLOWED_GROUPS", "")
+	t.Setenv("COGNITO_ALLOWED_SUBJECTS", "")
+	t.Setenv("OIDC_ALLOWED_SUBJECTS", "")
+	t.Setenv("COGNITO_ALLOWED_EMAILS", "")
+	t.Setenv("OIDC_ALLOWED_EMAILS", "")
+	t.Setenv("OIDC_ALLOW_APP_ASSIGNMENT_ONLY", "true")
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected app assignment only without direct-oidc to fail")
+	}
+	if !strings.Contains(err.Error(), "requires OIDC_AUTH_PROFILE=direct-oidc") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

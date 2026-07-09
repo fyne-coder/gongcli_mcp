@@ -10,26 +10,27 @@ import (
 )
 
 type Config struct {
-	Addr            string
-	Upstream        *url.URL
-	InternalToken   string
-	PublicBaseURL   string
-	AuthProfile     string
-	Issuer          string
-	JWKSURL         string
-	ClientID        string
-	RequiredScope   string
-	ScopesSupported []string
-	RequiredGroup   string
-	RequiredGroups  []string
-	GroupClaim      string
-	AllowedSubjects map[string]struct{}
-	AllowedEmails   map[string]struct{}
-	AllowedOrigins  []string
-	AuthLeeway      time.Duration
-	MaxRequestBytes int64
-	MaxBearerBytes  int
-	UpstreamTimeout time.Duration
+	Addr              string
+	Upstream          *url.URL
+	InternalToken     string
+	PublicBaseURL     string
+	AuthProfile       string
+	Issuer            string
+	JWKSURL           string
+	ClientID          string
+	RequiredScope     string
+	ScopesSupported   []string
+	RequiredGroup     string
+	RequiredGroups    []string
+	GroupClaim        string
+	AppAssignmentOnly bool
+	AllowedSubjects   map[string]struct{}
+	AllowedEmails     map[string]struct{}
+	AllowedOrigins    []string
+	AuthLeeway        time.Duration
+	MaxRequestBytes   int64
+	MaxBearerBytes    int
+	UpstreamTimeout   time.Duration
 
 	DCREnabled             bool
 	CognitoDomainURL       string
@@ -105,8 +106,12 @@ func LoadConfig() (Config, error) {
 	}
 	allowedSubjects := csvSet(envFirst("OIDC_ALLOWED_SUBJECTS", "COGNITO_ALLOWED_SUBJECTS"))
 	allowedEmails := csvSet(envFirst("OIDC_ALLOWED_EMAILS", "COGNITO_ALLOWED_EMAILS"))
-	if len(requiredGroups) == 0 && len(allowedSubjects) == 0 && len(allowedEmails) == 0 {
-		return Config{}, errors.New("at least one of OIDC_REQUIRED_GROUP, OIDC_REQUIRED_GROUPS, OIDC_ALLOWED_GROUPS, OIDC_ALLOWED_SUBJECTS, OIDC_ALLOWED_EMAILS, COGNITO_REQUIRED_GROUP, COGNITO_REQUIRED_GROUPS, COGNITO_ALLOWED_GROUPS, COGNITO_ALLOWED_SUBJECTS, or COGNITO_ALLOWED_EMAILS is required")
+	appAssignmentOnly := envBool("OIDC_ALLOW_APP_ASSIGNMENT_ONLY")
+	if appAssignmentOnly && authProfile != AuthProfileDirectOIDC {
+		return Config{}, errors.New("OIDC_ALLOW_APP_ASSIGNMENT_ONLY requires OIDC_AUTH_PROFILE=direct-oidc")
+	}
+	if len(requiredGroups) == 0 && len(allowedSubjects) == 0 && len(allowedEmails) == 0 && !appAssignmentOnly {
+		return Config{}, errors.New("at least one of OIDC_REQUIRED_GROUP, OIDC_REQUIRED_GROUPS, OIDC_ALLOWED_GROUPS, OIDC_ALLOWED_SUBJECTS, OIDC_ALLOWED_EMAILS, COGNITO_REQUIRED_GROUP, COGNITO_REQUIRED_GROUPS, COGNITO_ALLOWED_GROUPS, COGNITO_ALLOWED_SUBJECTS, or COGNITO_ALLOWED_EMAILS is required, or set OIDC_ALLOW_APP_ASSIGNMENT_ONLY=1 for direct-oidc")
 	}
 	groupClaimDefault := "cognito:groups"
 	if authProfile == AuthProfileDirectOIDC {
@@ -158,26 +163,27 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
-		Addr:            envDefault("GATEWAY_ADDR", ":8090"),
-		Upstream:        upstream,
-		InternalToken:   token,
-		PublicBaseURL:   publicBaseURL,
-		AuthProfile:     authProfile,
-		Issuer:          issuer,
-		JWKSURL:         jwksURL,
-		ClientID:        clientID,
-		RequiredScope:   requiredScope,
-		ScopesSupported: scopesSupported,
-		RequiredGroup:   requiredGroup,
-		RequiredGroups:  requiredGroups,
-		GroupClaim:      groupClaim,
-		AllowedSubjects: allowedSubjects,
-		AllowedEmails:   allowedEmails,
-		AllowedOrigins:  splitList(os.Getenv("GATEWAY_ALLOWED_ORIGINS")),
-		AuthLeeway:      60 * time.Second,
-		MaxRequestBytes: 8 << 20,
-		MaxBearerBytes:  8 << 10,
-		UpstreamTimeout: 90 * time.Second,
+		Addr:              envDefault("GATEWAY_ADDR", ":8090"),
+		Upstream:          upstream,
+		InternalToken:     token,
+		PublicBaseURL:     publicBaseURL,
+		AuthProfile:       authProfile,
+		Issuer:            issuer,
+		JWKSURL:           jwksURL,
+		ClientID:          clientID,
+		RequiredScope:     requiredScope,
+		ScopesSupported:   scopesSupported,
+		RequiredGroup:     requiredGroup,
+		RequiredGroups:    requiredGroups,
+		GroupClaim:        groupClaim,
+		AppAssignmentOnly: appAssignmentOnly,
+		AllowedSubjects:   allowedSubjects,
+		AllowedEmails:     allowedEmails,
+		AllowedOrigins:    splitList(os.Getenv("GATEWAY_ALLOWED_ORIGINS")),
+		AuthLeeway:        60 * time.Second,
+		MaxRequestBytes:   8 << 20,
+		MaxBearerBytes:    8 << 10,
+		UpstreamTimeout:   90 * time.Second,
 
 		DCREnabled:             dcrEnabled,
 		CognitoDomainURL:       cognitoDomainURL,

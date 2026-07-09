@@ -86,6 +86,7 @@ OIDC_REQUIRED_SCOPE: gongmcp/read
 OIDC_SCOPES_SUPPORTED: gongmcp/read
 OIDC_REQUIRED_GROUP: <dedicated MCP group>
 OIDC_GROUP_CLAIM: <access-token group claim, often groups or memberOf>
+OIDC_ALLOW_APP_ASSIGNMENT_ONLY: "0"
 OIDC_ALLOWED_SUBJECTS: ""
 OIDC_ALLOWED_EMAILS: ""
 GATEWAY_DCR_ENABLED: "0"
@@ -131,6 +132,37 @@ for the configured IdP client.
 When more than one gate is configured, the checks combine with AND semantics.
 For example, setting both `OIDC_REQUIRED_GROUPS` and `OIDC_ALLOWED_EMAILS`
 narrows access to users who match an allowed group and an allowed email.
+
+When the IdP application assignment list is the intended access-control
+boundary, direct OIDC can explicitly use app-assignment-only mode instead of a
+group, subject, or email gate:
+
+```yaml
+OIDC_AUTH_PROFILE: direct-oidc
+OIDC_REQUIRED_GROUP: ""
+OIDC_REQUIRED_GROUPS: ""
+OIDC_ALLOWED_GROUPS: ""
+OIDC_ALLOWED_SUBJECTS: ""
+OIDC_ALLOWED_EMAILS: ""
+OIDC_ALLOW_APP_ASSIGNMENT_ONLY: "1"
+```
+
+Use this only when the OIDC client is dedicated to this MCP connector, every
+assigned user is approved for the same read-only MCP surface, and the token
+still validates against the configured issuer, client binding, audience, and
+required scope. Keep `OIDC_ALLOW_APP_ASSIGNMENT_ONLY` disabled for shared IdP
+apps, broad business apps, or deployments where group or subject policy is the
+auditable access boundary. This option is direct-OIDC only; Cognito deployments
+must keep an explicit group, subject, or email gate.
+
+If any group, subject, or email gate is configured alongside
+`OIDC_ALLOW_APP_ASSIGNMENT_ONLY=1`, that gate is still enforced. The flag only
+removes the startup requirement for an additional access gate when no such gate
+is configured.
+
+Removing a user from the IdP app assignment list does not revoke already issued
+JWTs before their expiration. Size access-token lifetime accordingly when this
+mode is the only per-user access boundary.
 
 ## Give All Approved Users The Same Read-Only MCP Access
 
