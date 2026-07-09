@@ -215,6 +215,10 @@ func audienceClientIDAllowed(ctx context.Context, verifier ClientVerifier, audie
 }
 
 func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) error {
+	if a.cfg.AppAssignmentOnly && a.cfg.AuthProfile != AuthProfileDirectOIDC {
+		return errors.New("app assignment only requires direct-oidc")
+	}
+
 	hasSubjectGate := len(a.cfg.AllowedSubjects) > 0
 	hasEmailGate := len(a.cfg.AllowedEmails) > 0
 	requiredGroups := a.cfg.configuredRequiredGroups()
@@ -240,11 +244,8 @@ func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) 
 		return errors.New("required group membership missing")
 	}
 	if !hasSubjectGate && !hasEmailGate && !hasGroupGate {
-		if a.cfg.AppAssignmentOnly && a.cfg.AuthProfile == AuthProfileDirectOIDC {
-			return nil
-		}
 		if a.cfg.AppAssignmentOnly {
-			return errors.New("app assignment only requires direct-oidc")
+			return nil
 		}
 		return errors.New("access policy gate is required")
 	}

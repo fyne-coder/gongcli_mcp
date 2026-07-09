@@ -121,7 +121,10 @@ func LoadConfig() (Config, error) {
 	if authProfile == AuthProfileDirectOIDC {
 		groupClaimDefault = "groups"
 	}
-	groupClaim := envDefaultFromFirst([]string{"OIDC_GROUP_CLAIM", "COGNITO_GROUP_CLAIM"}, groupClaimDefault)
+	groupClaim := strings.TrimSpace(os.Getenv(policyPrefix + "_GROUP_CLAIM"))
+	if groupClaim == "" {
+		groupClaim = groupClaimDefault
+	}
 
 	dcrEnabled := envBool("GATEWAY_DCR_ENABLED")
 	cognitoDomainURL := strings.TrimRight(strings.TrimSpace(os.Getenv("COGNITO_DOMAIN_URL")), "/")
@@ -273,17 +276,20 @@ func envDefaultFromFirst(keys []string, fallback string) string {
 	return fallback
 }
 
-var oidcAccessPolicyEnvKeys = []string{
-	"OIDC_REQUIRED_GROUP",
-	"OIDC_REQUIRED_GROUPS",
-	"OIDC_ALLOWED_GROUPS",
-	"OIDC_ALLOWED_SUBJECTS",
-	"OIDC_ALLOWED_EMAILS",
-	"OIDC_ALLOW_APP_ASSIGNMENT_ONLY",
+func oidcAccessPolicyEnvKeys() []string {
+	return []string{
+		"OIDC_REQUIRED_GROUP",
+		"OIDC_REQUIRED_GROUPS",
+		"OIDC_ALLOWED_GROUPS",
+		"OIDC_GROUP_CLAIM",
+		"OIDC_ALLOWED_SUBJECTS",
+		"OIDC_ALLOWED_EMAILS",
+		"OIDC_ALLOW_APP_ASSIGNMENT_ONLY",
+	}
 }
 
 func accessPolicyEnvPrefix() string {
-	for _, key := range oidcAccessPolicyEnvKeys {
+	for _, key := range oidcAccessPolicyEnvKeys() {
 		if _, ok := os.LookupEnv(key); ok {
 			return "OIDC"
 		}

@@ -777,22 +777,35 @@ func TestVerifyAccessTokenDirectOIDCAppAssignmentOnlyRejectsInvalidSignatureAndA
 }
 
 func TestVerifyAccessTokenAppAssignmentOnlyRejectsRuntimeCognitoConfig(t *testing.T) {
-	key := mustKey(t)
-	cfg := testConfig(t, nil)
-	cfg.AppAssignmentOnly = true
-	cfg.RequiredGroup = ""
-	cfg.RequiredGroups = nil
-	cfg.AllowedSubjects = nil
-	cfg.AllowedEmails = nil
-	authorizer := testAuthorizer(t, cfg, key)
-	token := signToken(t, key, cfg, func(jwt.MapClaims) {})
-
-	_, err := authorizer.VerifyAccessToken(t.Context(), token)
-	if err == nil {
-		t.Fatal("expected cognito profile with app assignment only to fail")
+	tests := []struct {
+		name       string
+		clearGates bool
+	}{
+		{name: "without policy gates", clearGates: true},
+		{name: "with matching policy gates"},
 	}
-	if !strings.Contains(err.Error(), "app assignment only requires direct-oidc") {
-		t.Fatalf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := mustKey(t)
+			cfg := testConfig(t, nil)
+			cfg.AppAssignmentOnly = true
+			if tt.clearGates {
+				cfg.RequiredGroup = ""
+				cfg.RequiredGroups = nil
+				cfg.AllowedSubjects = nil
+				cfg.AllowedEmails = nil
+			}
+			authorizer := testAuthorizer(t, cfg, key)
+			token := signToken(t, key, cfg, func(jwt.MapClaims) {})
+
+			_, err := authorizer.VerifyAccessToken(t.Context(), token)
+			if err == nil {
+				t.Fatal("expected cognito profile with app assignment only to fail")
+			}
+			if !strings.Contains(err.Error(), "app assignment only requires direct-oidc") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -1355,13 +1368,38 @@ func TestLoadConfigOIDCAccessPolicyFamilyDoesNotMixLegacyAliases(t *testing.T) {
 	}
 }
 
+func TestLoadConfigOIDCGroupGateIgnoresLegacyGroupClaim(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	clearOIDCAccessPolicyEnv(t)
+	t.Setenv("OIDC_AUTH_PROFILE", "direct-oidc")
+	t.Setenv("OIDC_REQUIRED_GROUP", "oidc-group")
+	t.Setenv("COGNITO_GROUP_CLAIM", "stale-legacy-claim")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.GroupClaim != "groups" {
+		t.Fatalf("group claim=%q want direct OIDC default", cfg.GroupClaim)
+	}
+}
+
 func TestLoadConfigExplicitEmptyOIDCAccessPolicySuppressesLegacyAliases(t *testing.T) {
 	legacyGates := map[string]string{
 		"COGNITO_REQUIRED_GROUP":   "stale-legacy-group",
 		"COGNITO_ALLOWED_SUBJECTS": "stale-subject",
 		"COGNITO_ALLOWED_EMAILS":   "stale@example.test",
 	}
-	for _, selectorKey := range oidcAccessPolicyEnvKeys {
+	oidcSelectors := []string{
+		"OIDC_REQUIRED_GROUP",
+		"OIDC_REQUIRED_GROUPS",
+		"OIDC_ALLOWED_GROUPS",
+		"OIDC_GROUP_CLAIM",
+		"OIDC_ALLOWED_SUBJECTS",
+		"OIDC_ALLOWED_EMAILS",
+		"OIDC_ALLOW_APP_ASSIGNMENT_ONLY",
+	}
+	for _, selectorKey := range oidcSelectors {
 		t.Run(selectorKey, func(t *testing.T) {
 			setLoadConfigBaseEnv(t)
 			clearOIDCAccessPolicyEnv(t)
@@ -1391,6 +1429,7 @@ func TestLoadConfigDirectOIDCAppAssignmentOnlyIgnoresLegacyPolicyAliases(t *test
 	t.Setenv("OIDC_ISSUER_URL", "https://issuer.example.test")
 	t.Setenv("OIDC_CLIENT_ID", "oidc-client")
 	t.Setenv("COGNITO_REQUIRED_GROUP", "stale-legacy-group")
+	t.Setenv("COGNITO_GROUP_CLAIM", "stale-legacy-claim")
 	t.Setenv("COGNITO_ALLOWED_SUBJECTS", "stale-subject")
 	t.Setenv("COGNITO_ALLOWED_EMAILS", "stale@example.test")
 	t.Setenv("OIDC_ALLOW_APP_ASSIGNMENT_ONLY", "true")
@@ -1407,6 +1446,9 @@ func TestLoadConfigDirectOIDCAppAssignmentOnlyIgnoresLegacyPolicyAliases(t *test
 	}
 	if len(cfg.AllowedSubjects) != 0 || len(cfg.AllowedEmails) != 0 {
 		t.Fatalf("allowed subjects=%v emails=%v want no explicit allowlists", cfg.AllowedSubjects, cfg.AllowedEmails)
+	}
+	if cfg.GroupClaim != "groups" {
+		t.Fatalf("group claim=%q want direct OIDC default", cfg.GroupClaim)
 	}
 }
 
@@ -1459,6 +1501,21 @@ func TestLoadConfigLegacyOnlyAccessPolicyAliasesRemainSupported(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLoadConfigLegacyOnlyGroupClaimRemainsSupported(t *testing.T) {
+	setLoadConfigBaseEnv(t)
+	clearOIDCAccessPolicyEnv(t)
+	t.Setenv("COGNITO_REQUIRED_GROUP", "legacy-group")
+	t.Setenv("COGNITO_GROUP_CLAIM", "memberOf")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.GroupClaim != "memberOf" {
+		t.Fatalf("group claim=%q", cfg.GroupClaim)
 	}
 }
 
@@ -1851,7 +1908,7 @@ func setLoadConfigBaseEnv(t *testing.T) {
 
 func clearOIDCAccessPolicyEnv(t *testing.T) {
 	t.Helper()
-	withoutEnvKeys(t, oidcAccessPolicyEnvKeys...)
+	withoutEnvKeys(t, oidcAccessPolicyEnvKeys()...)
 }
 
 func withoutEnvKeys(t *testing.T, keys ...string) {

@@ -318,7 +318,7 @@ func fetchJSONCheck(ctx context.Context, client *http.Client, rawURL string, tar
 func validateProtectedResourceMetadata(name string, metadata protectedResourceMetadata, expectedResource, expectedAuthServer, baseURL, requiredScope string, expectDCR bool) []postgresdeploy.Check {
 	checks := []postgresdeploy.Check{}
 	if metadata.Resource != expectedResource {
-		checks = append(checks, failCheck(name+"_resource", "resource_mismatch", "protected-resource metadata resource does not match /mcp URL", fmt.Sprintf("resource=%s", metadata.Resource), "set metadata resource to the exact public MCP URL entered in Claude"))
+		checks = append(checks, failCheck(name+"_resource", "resource_mismatch", "protected-resource metadata resource does not match /mcp URL", fmt.Sprintf("resource=%s", metadata.Resource), "set metadata resource to the exact public MCP URL configured in the hosted client"))
 	} else {
 		checks = append(checks, passCheck(name+"_resource", "metadata resource matches public /mcp URL"))
 	}
@@ -526,13 +526,13 @@ func checkOAuthAuthorizationServerMetadata(ctx context.Context, client *http.Cli
 	case tokenErr != nil || tokenEndpoint.Path == "":
 		return failCheck("oauth_authorization_server_metadata", "token_endpoint_invalid", "OAuth authorization-server metadata token_endpoint is invalid", "", "publish an absolute https token endpoint")
 	case !containsString(metadata.ResponseTypesSupported, "code"):
-		return failCheck("oauth_authorization_server_metadata", "authorization_code_response_missing", "OAuth authorization-server metadata must advertise response_types_supported containing code", "", "enable authorization-code flow for the client used by Claude")
+		return failCheck("oauth_authorization_server_metadata", "authorization_code_response_missing", "OAuth authorization-server metadata must advertise response_types_supported containing code", "", "enable authorization-code flow for the configured hosted client")
 	case len(metadata.GrantTypesSupported) > 0 && !containsString(metadata.GrantTypesSupported, "authorization_code"):
-		return failCheck("oauth_authorization_server_metadata", "authorization_code_grant_missing", "OAuth authorization-server metadata grant_types_supported does not include authorization_code", "", "enable authorization-code grant for the client used by Claude")
+		return failCheck("oauth_authorization_server_metadata", "authorization_code_grant_missing", "OAuth authorization-server metadata grant_types_supported does not include authorization_code", "", "enable authorization-code grant for the configured hosted client")
 	case len(metadata.CodeChallengeMethodsSupported) > 0 && !containsString(metadata.CodeChallengeMethodsSupported, "S256"):
 		return failCheck("oauth_authorization_server_metadata", "pkce_s256_missing", "OAuth authorization-server metadata does not advertise PKCE S256", "", "enable PKCE S256 or omit the field only if the provider does not advertise PKCE methods")
 	case !hasCompatibleTokenEndpointAuthMethod(metadata.TokenEndpointAuthMethodsSupported):
-		return failCheck("oauth_authorization_server_metadata", "token_endpoint_auth_method_missing", "OAuth authorization-server metadata does not advertise a Claude-compatible token endpoint auth method", "", "advertise client_secret_post, client_secret_basic, or none for the configured client")
+		return failCheck("oauth_authorization_server_metadata", "token_endpoint_auth_method_missing", "OAuth authorization-server metadata does not advertise a supported token endpoint auth method", "", "advertise client_secret_post, client_secret_basic, or none for the configured client")
 	case requiredScope != "" && len(metadata.ScopesSupported) > 0 && !containsString(metadata.ScopesSupported, requiredScope):
 		return failCheck("oauth_authorization_server_metadata", "required_scope_missing", "OAuth authorization-server metadata scopes_supported does not include the required MCP scope", fmt.Sprintf("required_scope=%s", requiredScope), "advertise the same MCP scope in authorization-server and protected-resource metadata")
 	case metadata.RegistrationEndpoint == "" && !supportsClientIDMetadata(metadata):
@@ -540,7 +540,7 @@ func checkOAuthAuthorizationServerMetadata(ctx context.Context, client *http.Cli
 			Name:        "oauth_authorization_server_metadata",
 			Status:      postgresdeploy.CheckWarn,
 			Message:     "OAuth authorization-server metadata is static-client only",
-			Remediation: "for hosted Claude, verify custom connector OAuth Client ID/secret token exchange evidence, use Anthropic-held credentials, or put a DCR/CIMD-capable broker in front of this IdP",
+			Remediation: "for a hosted client, verify static OAuth client ID/secret token exchange evidence, use credentials managed by the hosted client provider, or put a DCR/CIMD-capable broker in front of this IdP",
 			Evidence: []postgresdeploy.Evidence{
 				{Key: "url", Value: selectedURL},
 				{Key: "registration_endpoint", Value: "absent"},
@@ -904,7 +904,7 @@ func checkTokenShapeClientBinding(claims jwt.MapClaims, expectedClientID string,
 			Status:      postgresdeploy.CheckFail,
 			ErrorKind:   "client_id_mismatch",
 			Message:     "token includes client_id but it does not match --client-id",
-			Remediation: "verify the Claude connector client ID and gateway OIDC_CLIENT_ID",
+			Remediation: "verify the hosted connector client ID and gateway OIDC_CLIENT_ID",
 			Evidence:    evidence,
 		}
 	case binding == "aud" || (directOIDC && binding == "aud_present"):

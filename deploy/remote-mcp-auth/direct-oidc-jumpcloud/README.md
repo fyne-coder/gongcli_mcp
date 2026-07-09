@@ -119,20 +119,23 @@ The example file fails closed until the operator deliberately selects one
 complete policy block below. Do not uncomment only `OIDC_ALLOW_APP_ASSIGNMENT_ONLY`
 while a group, subject, or email gate remains configured.
 
-Before deploying either policy mode, remove these legacy variables from the
+Before deploying any policy mode, remove these legacy variables from the
 deployment source rather than leaving stale parallel policy behind:
 
 ```text
 COGNITO_REQUIRED_GROUP
 COGNITO_REQUIRED_GROUPS
 COGNITO_ALLOWED_GROUPS
+COGNITO_GROUP_CLAIM
 COGNITO_ALLOWED_SUBJECTS
 COGNITO_ALLOWED_EMAILS
 ```
 
-If any provider-neutral `OIDC_*` access-policy variable is present, the gateway
-loads only the OIDC policy family. Explicit empty `OIDC_*` values override stale
-legacy aliases instead of silently reactivating them.
+If any provider-neutral `OIDC_*` access-policy variable is present, including a
+group claim, authorization gate, or the `OIDC_ALLOW_APP_ASSIGNMENT_ONLY` mode
+variable, the gateway loads only the OIDC policy family. Explicit empty values
+for those variables override stale legacy aliases instead of silently
+reactivating them.
 
 ### Group-gated direct OIDC
 
