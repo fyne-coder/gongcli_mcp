@@ -99,14 +99,18 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 
-	requiredGroups := loadRequiredGroups()
+	policyPrefix := accessPolicyEnvPrefix()
+	requiredGroups := loadRequiredGroups(policyPrefix)
 	requiredGroup := ""
 	if len(requiredGroups) == 1 {
 		requiredGroup = requiredGroups[0]
 	}
-	allowedSubjects := csvSet(envFirst("OIDC_ALLOWED_SUBJECTS", "COGNITO_ALLOWED_SUBJECTS"))
-	allowedEmails := csvSet(envFirst("OIDC_ALLOWED_EMAILS", "COGNITO_ALLOWED_EMAILS"))
-	appAssignmentOnly := envBool("OIDC_ALLOW_APP_ASSIGNMENT_ONLY")
+	allowedSubjects := csvSet(os.Getenv(policyPrefix + "_ALLOWED_SUBJECTS"))
+	allowedEmails := csvSet(os.Getenv(policyPrefix + "_ALLOWED_EMAILS"))
+	appAssignmentOnly := false
+	if policyPrefix == "OIDC" {
+		appAssignmentOnly = envBool("OIDC_ALLOW_APP_ASSIGNMENT_ONLY")
+	}
 	if appAssignmentOnly && authProfile != AuthProfileDirectOIDC {
 		return Config{}, errors.New("OIDC_ALLOW_APP_ASSIGNMENT_ONLY requires OIDC_AUTH_PROFILE=direct-oidc")
 	}
@@ -269,18 +273,31 @@ func envDefaultFromFirst(keys []string, fallback string) string {
 	return fallback
 }
 
-func loadRequiredGroups() []string {
-	for _, key := range []string{
-		"OIDC_REQUIRED_GROUPS",
-		"OIDC_ALLOWED_GROUPS",
-		"COGNITO_REQUIRED_GROUPS",
-		"COGNITO_ALLOWED_GROUPS",
-	} {
-		if groups := splitList(os.Getenv(key)); len(groups) > 0 {
+var oidcAccessPolicyEnvKeys = []string{
+	"OIDC_REQUIRED_GROUP",
+	"OIDC_REQUIRED_GROUPS",
+	"OIDC_ALLOWED_GROUPS",
+	"OIDC_ALLOWED_SUBJECTS",
+	"OIDC_ALLOWED_EMAILS",
+	"OIDC_ALLOW_APP_ASSIGNMENT_ONLY",
+}
+
+func accessPolicyEnvPrefix() string {
+	for _, key := range oidcAccessPolicyEnvKeys {
+		if _, ok := os.LookupEnv(key); ok {
+			return "OIDC"
+		}
+	}
+	return "COGNITO"
+}
+
+func loadRequiredGroups(prefix string) []string {
+	for _, suffix := range []string{"REQUIRED_GROUPS", "ALLOWED_GROUPS"} {
+		if groups := splitList(os.Getenv(prefix + "_" + suffix)); len(groups) > 0 {
 			return groups
 		}
 	}
-	if single := strings.TrimSpace(envFirst("OIDC_REQUIRED_GROUP", "COGNITO_REQUIRED_GROUP")); single != "" {
+	if single := strings.TrimSpace(os.Getenv(prefix + "_REQUIRED_GROUP")); single != "" {
 		return []string{single}
 	}
 	return nil
