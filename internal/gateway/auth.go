@@ -218,6 +218,9 @@ func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) 
 	if a.cfg.AppAssignmentOnly && a.cfg.AuthProfile != AuthProfileDirectOIDC {
 		return errors.New("app assignment only requires direct-oidc")
 	}
+	if a.cfg.AppAssignmentOnly && strings.TrimSpace(subject) == "" {
+		return errors.New("subject is required for app assignment only")
+	}
 
 	hasSubjectGate := len(a.cfg.AllowedSubjects) > 0
 	hasEmailGate := len(a.cfg.AllowedEmails) > 0

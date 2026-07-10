@@ -703,6 +703,16 @@ func TestVerifyAccessTokenDirectOIDCAppAssignmentOnlyRejectsInvalidTokens(t *tes
 			wantErr: `required scope "api.read" missing`,
 		},
 		{
+			name:    "missing subject",
+			mutate:  func(claims jwt.MapClaims) { delete(claims, "sub") },
+			wantErr: "subject is required for app assignment only",
+		},
+		{
+			name:    "blank subject",
+			mutate:  func(claims jwt.MapClaims) { claims["sub"] = "   " },
+			wantErr: "subject is required for app assignment only",
+		},
+		{
 			name:    "expired",
 			mutate:  func(claims jwt.MapClaims) { claims["exp"] = time.Now().Add(-2 * time.Hour).Unix() },
 			wantErr: "invalid access token",

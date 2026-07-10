@@ -73,6 +73,8 @@ the per-user access-control boundary.
 
 1. Create one dedicated OAuth/OIDC app client for the hosted MCP connector.
 2. Enable authorization-code flow with PKCE S256 when the hosted client uses it.
+   For app-assignment-only mode, disable `client_credentials` and every other
+   machine or non-user grant on this client.
 3. Add the hosted connector callback URL required by the client.
 4. Add the approved scope observed in real access tokens and provider metadata.
 5. Choose one access-policy mode:
@@ -202,6 +204,10 @@ Use this only when all of the following are true:
 - the OIDC application/client is dedicated to this connector;
 - the identity provider prevents unassigned users from obtaining tokens for the
   application;
+- the application issues only user tokens through the approved interactive
+  flow; machine and non-user grants such as `client_credentials` are disabled;
+- every accepted access token has a non-empty signed `sub` that maps to the
+  assigned directory user;
 - every assigned user is approved for the same read-only MCP surface;
 - the gateway still validates signature/algorithm, expiration, issuer, client
   binding, and the configured required scope; and
@@ -320,10 +326,12 @@ Expected:
 - no public route reaches raw `gongmcp`
 
 The local doctor proves metadata consistency, token shape, and an authenticated
-`tools/list` call. It cannot prove the IdP's assignment rule. Production smoke
-must separately show that an assigned user can obtain a fresh token and an
-unassigned user cannot obtain one for the dedicated client; deassignment must be
-tested with a fresh token after existing-token expiration.
+`tools/list` call. It cannot prove the IdP's assignment rule or distinguish a
+human subject from a service principal. Production smoke must separately show
+that an assigned user can obtain a fresh token whose signed `sub` maps to that
+directory user, an unassigned user cannot obtain one for the dedicated client,
+and a machine or non-user grant cannot obtain an accepted token. Test
+deassignment with a fresh token after existing-token expiration.
 
 ## Hosted Connector Smoke
 
