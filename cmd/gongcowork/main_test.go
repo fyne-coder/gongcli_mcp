@@ -75,7 +75,7 @@ func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 				"arguments": map[string]any{
 					"operation": "persist_preflight_response",
 					"kind":      "capabilities",
-					"response":  map[string]any{"operations": []any{map[string]any{"name": "evidence.call_drilldown"}}},
+					"response":  map[string]any{"operations": []any{map[string]any{"operation": "evidence.call_drilldown"}}},
 				},
 			})}) +
 			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "5", Method: "tools/call", Params: mustRaw(t, map[string]any{

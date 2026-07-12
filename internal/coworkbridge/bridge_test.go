@@ -283,7 +283,7 @@ func TestPreflightResponseGateSequence(t *testing.T) {
 	if _, err := runner.IssuePreDrilldownGate(ctx, "capture-session:test", "2099-01-01T00:00:00Z"); err == nil {
 		t.Fatal("expected gate refusal before capabilities")
 	}
-	if _, err := runner.PersistPreflightResponse("capabilities", json.RawMessage(`{"operations":[{"name":"evidence.call_drilldown"}]}`)); err != nil {
+	if _, err := runner.PersistPreflightResponse("capabilities", json.RawMessage(`{"operations":[{"operation":"evidence.call_drilldown"}]}`)); err != nil {
 		t.Fatalf("persist capabilities: %v", err)
 	}
 	if _, err := runner.IssuePreDrilldownGate(ctx, "capture-session:test", "2099-01-01T00:00:00Z"); err != nil {
@@ -736,7 +736,7 @@ func prepareSyntheticPreflight(t *testing.T, contract *ResolvedContract) {
 	t.Helper()
 	for path, body := range map[string]string{
 		contract.StatusResponsePath:       `{"facade_status":"ok"}`,
-		contract.CapabilitiesResponsePath: `{"operations":[{"name":"evidence.call_drilldown"}]}`,
+		contract.CapabilitiesResponsePath: `{"operations":[{"operation":"evidence.call_drilldown"}]}`,
 		contract.PreDrilldownGatePath:     `{"ok":true,"synthetic":true}`,
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
