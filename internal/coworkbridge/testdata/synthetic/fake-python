@@ -59,6 +59,18 @@ pending_item_ids_json() {
 }
 
 case "$MODULE" in
+	 gong_quarterly_review.segment_pipeline)
+		if [[ "${1:-}" != "check-freshness" ]]; then
+			echo "segment_pipeline only supports check-freshness in synthetic companion" >&2
+			exit 2
+		fi
+		if [[ -f "${ROOT}/freshness-not-ok" ]]; then
+			echo '{"ok":false,"reason":"synthetic stale gate"}'
+			exit 1
+		fi
+		echo '{"ok":true,"freshness":{"synthetic":true},"age_seconds":1}'
+		exit 0
+		;;
   gong_quarterly_review.local_bridge_readiness)
     if [[ -f "${ROOT}/readiness-not-ok" ]]; then
       echo '{"ok":false,"stage":"synthetic-refused","checks":{"approved_root":{"ok":false}}}'

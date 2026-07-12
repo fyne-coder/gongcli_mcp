@@ -2,6 +2,8 @@ package coworkbridge
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,6 +50,8 @@ type ResolvedContract struct {
 	ReadinessScratchRoot       string
 	FinalizationResultPath     string
 	CompletionArtifactPaths    []string
+	SegmentConfigPath          string // absolute; empty means legacy Slice 4D
+	SegmentConfigSHA256        string // hex SHA-256 pinned at load when SegmentConfigPath set
 	Items                      []ResolvedItem
 	CommandTimeout             time.Duration
 	MaxResponseBytes           int
@@ -80,6 +84,7 @@ type contractFile struct {
 	FinalizationResultPath   string         `json:"finalization_result_path"`
 	CompletionMarkerPaths    []string       `json:"completion_marker_paths"`
 	CompletionPinPath        string         `json:"completion_pin_path"`
+	SegmentConfigPath        string         `json:"segment_config_path,omitempty"`
 	Items                    []ContractItem `json:"items"`
 }
 
@@ -222,6 +227,30 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("finalization_result_path: %w", err)
 	}
+	segmentConfigAbs := ""
+	segmentConfigSHA256 := ""
+	if segmentConfigRel := strings.TrimSpace(parsed.SegmentConfigPath); segmentConfigRel != "" {
+		if err := requireRelativePath(segmentConfigRel, "segment_config_path"); err != nil {
+			return nil, err
+		}
+		segmentConfigAbs, err = resolveContainedPath(approvedRoot, segmentConfigRel, true)
+		if err != nil {
+			return nil, fmt.Errorf("segment_config_path: %w", err)
+		}
+		info, err := os.Stat(segmentConfigAbs)
+		if err != nil {
+			return nil, fmt.Errorf("segment_config_path: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("segment_config_path must be a regular file")
+		}
+		payload, err := os.ReadFile(segmentConfigAbs)
+		if err != nil {
+			return nil, fmt.Errorf("read segment_config_path: %w", err)
+		}
+		sum := sha256.Sum256(payload)
+		segmentConfigSHA256 = hex.EncodeToString(sum[:])
+	}
 
 	seenIDs := make(map[string]struct{}, len(parsed.Items))
 	seenPaths := make(map[string]string)
@@ -235,6 +264,12 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 			return nil, fmt.Errorf("duplicate output path %q used by %s and %s", path, owner, label)
 		}
 		seenPaths[path] = label
+	}
+	if segmentConfigAbs != "" {
+		if owner, ok := seenPaths[segmentConfigAbs]; ok {
+			return nil, fmt.Errorf("segment_config_path collides with output path used by %s", owner)
+		}
+		seenPaths[segmentConfigAbs] = "segment_config_path"
 	}
 	completionArtifacts := make([]string, 0, len(parsed.CompletionMarkerPaths)+1)
 	if len(parsed.CompletionMarkerPaths) == 0 {
@@ -335,6 +370,8 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		ReadinessScratchRoot:       scratchAbs,
 		FinalizationResultPath:     finalAbs,
 		CompletionArtifactPaths:    completionArtifacts,
+		SegmentConfigPath:          segmentConfigAbs,
+		SegmentConfigSHA256:        segmentConfigSHA256,
 		Items:                      items,
 		CommandTimeout:             DefaultCommandTimeout,
 		MaxResponseBytes:           MaxResponseBytes,

@@ -3,6 +3,8 @@ package coworkbridge
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -62,6 +64,22 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 	if _, err := LoadContract(writeContract("ok.json", nil)); err != nil {
 		t.Fatalf("valid contract: %v", err)
 	}
+	segmentConfig := filepath.Join(root, "runs", "demo", "segment-run-config.json")
+	if err := os.MkdirAll(filepath.Dir(segmentConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(segmentConfig, []byte(`{"schema_version":"1.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	segmentContract, err := LoadContract(writeContract("segment-ok.json", func(doc map[string]any) {
+		doc["segment_config_path"] = "runs/demo/segment-run-config.json"
+	}))
+	if err != nil {
+		t.Fatalf("valid segment contract: %v", err)
+	}
+	if segmentContract.SegmentConfigPath == "" || len(segmentContract.SegmentConfigSHA256) != 64 {
+		t.Fatalf("segment config was not resolved and pinned: %+v", segmentContract)
+	}
 
 	if _, err := LoadContract(writeContract("abs.json", func(doc map[string]any) {
 		doc["run_root"] = "/tmp/escape"
@@ -109,6 +127,18 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 		doc["finalization_result_path"] = "runs/demo/q/preflight/status.json"
 	})); err == nil {
 		t.Fatal("expected preflight output collision rejection")
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "runs", "demo", "q", "preflight"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "runs", "demo", "q", "preflight", "status.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadContract(writeContract("segment-collision.json", func(doc map[string]any) {
+		doc["segment_config_path"] = "runs/demo/q/preflight/status.json"
+	})); err == nil {
+		t.Fatal("expected segment config/output collision rejection")
 	}
 
 	outside := t.TempDir()
@@ -329,6 +359,35 @@ func TestGateFailureStopsBeforeItemPersistence(t *testing.T) {
 	}
 }
 
+func TestSegmentGateDispatchIncludesFrozenConfig(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	enableSyntheticSegmentConfig(t, env)
+	removeSyntheticPreflight(t, env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	if _, err := runner.PersistPreflightResponse("status", json.RawMessage(`{"facade_status":"ok"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistPreflightResponse("capabilities", json.RawMessage(`{"operations":[{"operation":"evidence.call_drilldown"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.IssuePreDrilldownGate(context.Background(), "capture-session:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	lines := readArgvLog(t, env.root)
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "gong_quarterly_review.preflight_gate_cli") &&
+			strings.Contains(line, "--segment-config\t"+env.contract.SegmentConfigPath) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("gate CLI did not receive pinned segment config: %v", lines)
+	}
+}
+
 func TestStopAfterReceiptFailure(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
@@ -507,6 +566,50 @@ func TestDispatchRejectsUnknownOperationAndExtraFields(t *testing.T) {
 	}
 	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"persist_response","item_id":"item-1","response":{},"attested_by":"test","captured_at":"now"}`)); err == nil {
 		t.Fatal("expected captured_at rejection for persist_response")
+	}
+	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"check_freshness","item_id":"item-1"}`)); err == nil {
+		t.Fatal("expected extra field rejection for check_freshness")
+	}
+}
+
+func TestSegmentFreshnessOperationAndPreWriteRefusal(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	enableSyntheticSegmentConfig(t, env)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	ctx := context.Background()
+
+	if _, err := Dispatch(ctx, runner, json.RawMessage(`{"operation":"check_freshness"}`)); err != nil {
+		t.Fatalf("check freshness: %v", err)
+	}
+	modules := modulesFromArgv(readArgvLog(t, env.root))
+	if !containsModule(modules, "gong_quarterly_review.segment_pipeline") {
+		t.Fatalf("freshness module not invoked: %v", modules)
+	}
+
+	if err := os.WriteFile(filepath.Join(env.root, "freshness-not-ok"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err == nil {
+		t.Fatal("expected stale freshness to refuse persistence")
+	}
+	if _, err := os.Stat(env.contract.Items[0].RawResponsePath); !os.IsNotExist(err) {
+		t.Fatalf("raw response must not be written after freshness refusal, err=%v", err)
+	}
+}
+
+func TestSegmentConfigMutationAfterStartupRefused(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	enableSyntheticSegmentConfig(t, env)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	if err := os.WriteFile(env.contract.SegmentConfigPath, []byte(`{"changed":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.CheckFreshness(context.Background()); err == nil || !strings.Contains(err.Error(), "changed after startup") {
+		t.Fatalf("expected pinned config mutation refusal, got %v", err)
 	}
 }
 
@@ -708,6 +811,18 @@ func newSyntheticEnv(t *testing.T) syntheticEnv {
 	}
 	prepareSyntheticPreflight(t, contract)
 	return syntheticEnv{root: root, contract: contract}
+}
+
+func enableSyntheticSegmentConfig(t *testing.T, env syntheticEnv) {
+	t.Helper()
+	path := filepath.Join(env.contract.ApprovedProjectRoot, "runs", "demo", "segment-run-config.json")
+	payload := []byte(`{"schema_version":"1.0","synthetic":true}`)
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	env.contract.SegmentConfigPath = path
+	env.contract.SegmentConfigSHA256 = hex.EncodeToString(sum[:])
 }
 
 func writeMinimalContract(t *testing.T, root string) string {

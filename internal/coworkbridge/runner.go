@@ -3,6 +3,8 @@ package coworkbridge
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,6 +79,9 @@ func (r *Runner) lstatContained(abs string) (os.FileInfo, error) {
 }
 
 func (r *Runner) runModule(ctx context.Context, module string, args ...string) (CommandResult, []byte, error) {
+	if err := r.verifySegmentConfigPinned(); err != nil {
+		return CommandResult{Module: module}, nil, err
+	}
 	resolvedInterpreter, err := filepath.EvalSymlinks(r.Contract.PythonInterpreter)
 	if err != nil {
 		return CommandResult{Module: module}, nil, fmt.Errorf("resolve python_interpreter before module %s: %w", module, err)
@@ -128,6 +133,53 @@ func (r *Runner) runModule(ctx context.Context, module string, args ...string) (
 		return result, stdout.Bytes(), fmt.Errorf("module %s failed (exit %d): %s", module, result.ExitCode, msg)
 	}
 	return result, stdout.Bytes(), nil
+}
+
+func (r *Runner) verifySegmentConfigPinned() error {
+	if r.Contract.SegmentConfigPath == "" {
+		return nil
+	}
+	info, err := r.lstatContained(r.Contract.SegmentConfigPath)
+	if err != nil {
+		return fmt.Errorf("segment_config_path changed after startup: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("segment_config_path changed after startup: no longer a regular file")
+	}
+	payload, err := os.ReadFile(r.Contract.SegmentConfigPath)
+	if err != nil {
+		return fmt.Errorf("read segment_config_path: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	if hex.EncodeToString(sum[:]) != r.Contract.SegmentConfigSHA256 {
+		return fmt.Errorf("segment_config_path bytes changed after startup; refusing module execution")
+	}
+	return nil
+}
+
+// CheckFreshness runs the project's read-only generic segment freshness gate.
+// Legacy Slice 4D contracts intentionally omit segment_config_path and cannot
+// call this operation.
+func (r *Runner) CheckFreshness(ctx context.Context) (map[string]any, error) {
+	if r.Contract.SegmentConfigPath == "" {
+		return nil, fmt.Errorf("check_freshness requires segment_config_path in the frozen companion contract")
+	}
+	result, stdout, err := r.runModule(ctx, "gong_quarterly_review.segment_pipeline",
+		"check-freshness",
+		"--config", r.Contract.SegmentConfigPath,
+		"--run-root", r.Contract.RunRoot,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verdict, err := parseVerifierVerdict(stdout)
+	if err != nil {
+		return nil, fmt.Errorf("parse freshness verdict: %w", err)
+	}
+	if ok, _ := verdict["ok"].(bool); !ok {
+		return nil, fmt.Errorf("freshness check returned ok other than true")
+	}
+	return map[string]any{"ok": true, "command": result, "verdict": verdict}, nil
 }
 
 type limitedWriter struct {
@@ -251,7 +303,7 @@ func (r *Runner) IssuePreDrilldownGate(ctx context.Context, attestedBy, captured
 	if err != nil {
 		return nil, err
 	}
-	result, stdout, err := r.runModule(ctx, "gong_quarterly_review.preflight_gate_cli",
+	args := []string{
 		"--quarter-root", r.Contract.QuarterRoot,
 		"--quarter-id", r.Contract.QuarterID,
 		"--version", r.Contract.Version,
@@ -262,7 +314,11 @@ func (r *Runner) IssuePreDrilldownGate(ctx context.Context, attestedBy, captured
 		"--cowork-ui-display-name", r.Contract.CoworkUIDisplayName,
 		"--attested-by", attestedBy,
 		"--captured-at", capturedAt,
-	)
+	}
+	if r.Contract.SegmentConfigPath != "" {
+		args = append(args, "--segment-config", r.Contract.SegmentConfigPath)
+	}
+	result, stdout, err := r.runModule(ctx, "gong_quarterly_review.preflight_gate_cli", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +361,11 @@ func (r *Runner) PersistResponse(ctx context.Context, itemID string, response js
 			return nil, fmt.Errorf("pre-drilldown gate must exist before item persistence")
 		}
 		return nil, err
+	}
+	if r.Contract.SegmentConfigPath != "" {
+		if _, err := r.CheckFreshness(ctx); err != nil {
+			return nil, fmt.Errorf("freshness check failed before response persistence: %w", err)
+		}
 	}
 
 	item, err := r.Contract.Item(itemID)

@@ -26,13 +26,13 @@ type workflowArgs struct {
 func Tool(runner *Runner) mcp.CustomTool {
 	return mcp.CustomTool{
 		Name:        ToolName,
-		Description: "Fail-closed Gong Quarterly Review workflow operations for Claude Cowork. Operations: preflight, persist_preflight_response, issue_pre_drilldown_gate, persist_response, validate_item, finalize_run, get_run_status.",
+		Description: "Fail-closed Gong Quarterly Review workflow operations for Claude Cowork. Operations: preflight, persist_preflight_response, issue_pre_drilldown_gate, check_freshness, persist_response, validate_item, finalize_run, get_run_status.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"operation": map[string]any{
 					"type": "string",
-					"enum": []any{"preflight", "persist_preflight_response", "issue_pre_drilldown_gate", "persist_response", "validate_item", "finalize_run", "get_run_status"},
+					"enum": []any{"preflight", "persist_preflight_response", "issue_pre_drilldown_gate", "check_freshness", "persist_response", "validate_item", "finalize_run", "get_run_status"},
 				},
 				"kind": map[string]any{
 					"type": "string", "enum": []any{"status", "capabilities"},
@@ -97,6 +97,11 @@ func Dispatch(ctx context.Context, runner *Runner, arguments json.RawMessage) (a
 			return nil, err
 		}
 		return runner.IssuePreDrilldownGate(ctx, args.AttestedBy, args.CapturedAt)
+	case "check_freshness":
+		if err := rejectUnexpectedFields(args, false, false, false, false, false); err != nil {
+			return nil, err
+		}
+		return runner.CheckFreshness(ctx)
 	case "persist_response":
 		if strings.TrimSpace(args.ItemID) == "" {
 			return nil, fmt.Errorf("item_id is required for persist_response")
