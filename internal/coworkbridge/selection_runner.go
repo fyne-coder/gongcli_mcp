@@ -228,13 +228,9 @@ func (r *SelectionRunner) PersistQueryResponse(ctx context.Context, queryID stri
 	if !json.Valid(response) {
 		return nil, fmt.Errorf("response must be valid JSON")
 	}
-	var responseValue any
-	if err := json.Unmarshal(response, &responseValue); err != nil {
-		return nil, fmt.Errorf("response must be valid JSON: %w", err)
-	}
 	envelope, err := json.Marshal(map[string]any{
 		"query_id": queryID,
-		"response": responseValue,
+		"response": json.RawMessage(response),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode query response envelope: %w", err)
