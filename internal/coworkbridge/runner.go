@@ -163,6 +163,118 @@ func (r *Runner) Preflight(ctx context.Context) (map[string]any, error) {
 	}, nil
 }
 
+// PersistPreflightResponse saves one verbatim facade response in the fixed
+// status -> capabilities order. It never interprets or augments the response.
+func (r *Runner) PersistPreflightResponse(kind string, response json.RawMessage) (map[string]any, error) {
+	kind = strings.TrimSpace(kind)
+	if len(bytes.TrimSpace(response)) == 0 {
+		return nil, fmt.Errorf("response is required")
+	}
+	if len(response) > r.Contract.MaxResponseBytes {
+		return nil, fmt.Errorf("response exceeds maximum %d bytes", r.Contract.MaxResponseBytes)
+	}
+	if !json.Valid(response) {
+		return nil, fmt.Errorf("response must be valid JSON")
+	}
+	if _, err := r.lstatContained(r.Contract.PreDrilldownGatePath); err == nil {
+		return nil, fmt.Errorf("pre-drilldown gate already exists; preflight responses are immutable")
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	var output string
+	switch kind {
+	case "status":
+		if _, err := r.lstatContained(r.Contract.CapabilitiesResponsePath); err == nil {
+			return nil, fmt.Errorf("capabilities response already exists before status persistence")
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+		output = r.Contract.StatusResponsePath
+	case "capabilities":
+		if _, err := r.lstatContained(r.Contract.StatusResponsePath); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("status response must exist before capabilities persistence")
+			}
+			return nil, err
+		}
+		output = r.Contract.CapabilitiesResponsePath
+	default:
+		return nil, fmt.Errorf("unknown preflight response kind %q", kind)
+	}
+	if err := r.writeJSONExclusive(output, response); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true, "kind": kind, "path": output}, nil
+}
+
+// IssuePreDrilldownGate derives and issues the fixed project gate from the two
+// saved preflight responses. Observed MCP fields are derived by Python from the
+// saved bytes rather than accepted from the caller.
+func (r *Runner) IssuePreDrilldownGate(ctx context.Context, attestedBy, capturedAt string) (map[string]any, error) {
+	attestedBy = strings.TrimSpace(attestedBy)
+	capturedAt = strings.TrimSpace(capturedAt)
+	if attestedBy == "" {
+		return nil, fmt.Errorf("attested_by is required")
+	}
+	if capturedAt == "" {
+		return nil, fmt.Errorf("captured_at is required")
+	}
+	if _, err := r.lstatContained(r.Contract.PreDrilldownGatePath); err == nil {
+		return nil, fmt.Errorf("pre-drilldown gate already exists")
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	for label, path := range map[string]string{
+		"status":       r.Contract.StatusResponsePath,
+		"capabilities": r.Contract.CapabilitiesResponsePath,
+	} {
+		if _, err := r.lstatContained(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("%s response must exist before issuing gate", label)
+			}
+			return nil, err
+		}
+	}
+	statusRel, err := filepath.Rel(r.Contract.QuarterRoot, r.Contract.StatusResponsePath)
+	if err != nil {
+		return nil, err
+	}
+	capabilitiesRel, err := filepath.Rel(r.Contract.QuarterRoot, r.Contract.CapabilitiesResponsePath)
+	if err != nil {
+		return nil, err
+	}
+	result, stdout, err := r.runModule(ctx, "gong_quarterly_review.preflight_gate_cli",
+		"--quarter-root", r.Contract.QuarterRoot,
+		"--quarter-id", r.Contract.QuarterID,
+		"--version", r.Contract.Version,
+		"--segment-id", r.Contract.SegmentID,
+		"--status-response", statusRel,
+		"--capabilities-response", capabilitiesRel,
+		"--contract-model-id", r.Contract.ContractModelID,
+		"--cowork-ui-display-name", r.Contract.CoworkUIDisplayName,
+		"--attested-by", attestedBy,
+		"--captured-at", capturedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verdict, err := parseVerifierVerdict(stdout)
+	if err != nil {
+		return nil, fmt.Errorf("parse pre-drilldown gate verdict: %w", err)
+	}
+	if ok, _ := verdict["ok"].(bool); !ok {
+		return nil, fmt.Errorf("pre-drilldown gate CLI returned ok other than true")
+	}
+	if _, err := r.lstatContained(r.Contract.PreDrilldownGatePath); err != nil {
+		return nil, fmt.Errorf("gate CLI returned accepted verdict but gate is missing: %w", err)
+	}
+	return map[string]any{
+		"ok": true, "command": result, "verdict": verdict,
+		"path": r.Contract.PreDrilldownGatePath,
+	}, nil
+}
+
 func (r *Runner) PersistResponse(ctx context.Context, itemID string, response json.RawMessage, attestedBy string) (map[string]any, error) {
 	itemID = strings.TrimSpace(itemID)
 	attestedBy = strings.TrimSpace(attestedBy)
@@ -180,6 +292,12 @@ func (r *Runner) PersistResponse(ctx context.Context, itemID string, response js
 	}
 	if !json.Valid(response) {
 		return nil, fmt.Errorf("response must be valid JSON")
+	}
+	if _, err := r.lstatContained(r.Contract.PreDrilldownGatePath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("pre-drilldown gate must exist before item persistence")
+		}
+		return nil, err
 	}
 
 	item, err := r.Contract.Item(itemID)

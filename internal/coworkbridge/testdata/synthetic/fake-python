@@ -67,6 +67,27 @@ case "$MODULE" in
     echo '{"ok":true,"synthetic":true,"module":"local_bridge_readiness"}'
     exit 0
     ;;
+  gong_quarterly_review.preflight_gate_cli)
+    QUARTER_ROOT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --quarter-root) QUARTER_ROOT="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -f "${ROOT}/fail-gate" ]]; then
+      echo '{"ok":false,"stage":"synthetic-gate-refused"}'
+      exit 0
+    fi
+    if [[ -z "$QUARTER_ROOT" ]]; then
+      echo "gate requires --quarter-root" >&2
+      exit 2
+    fi
+    mkdir -p "$QUARTER_ROOT"
+    printf '{"ok":true,"synthetic":true}\n' >"${QUARTER_ROOT}/pre-drilldown-gate.json"
+    echo '{"ok":true,"gate":{"synthetic":true}}'
+    exit 0
+    ;;
   gong_quarterly_review.response_receipt)
     ITEM=""
     while [[ $# -gt 0 ]]; do

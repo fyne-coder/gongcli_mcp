@@ -65,6 +65,30 @@ func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "3", Method: "tools/call", Params: mustRaw(t, map[string]any{
 				"name": "gong_workflow",
 				"arguments": map[string]any{
+					"operation": "persist_preflight_response",
+					"kind":      "status",
+					"response":  map[string]any{"facade_status": "ok"},
+				},
+			})}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "4", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_workflow",
+				"arguments": map[string]any{
+					"operation": "persist_preflight_response",
+					"kind":      "capabilities",
+					"response":  map[string]any{"operations": []any{map[string]any{"name": "evidence.call_drilldown"}}},
+				},
+			})}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "5", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_workflow",
+				"arguments": map[string]any{
+					"operation":   "issue_pre_drilldown_gate",
+					"attested_by": "capture-session:stdio-test",
+					"captured_at": "2099-01-01T00:00:00Z",
+				},
+			})}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "6", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_workflow",
+				"arguments": map[string]any{
 					"operation":   "persist_response",
 					"item_id":     "item-1",
 					"response":    map[string]any{"hello": "world"},
@@ -77,8 +101,8 @@ func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
 	}
 	frames := readFrames(t, stdout.Bytes())
-	if len(frames) != 3 {
-		t.Fatalf("frame count=%d want 3", len(frames))
+	if len(frames) != 6 {
+		t.Fatalf("frame count=%d want 6", len(frames))
 	}
 	rawPath := filepath.Join(env.root, "runs", "demo", "out", "item-1.json")
 	body, err := os.ReadFile(rawPath)
@@ -103,6 +127,7 @@ func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 	}
 	for _, module := range []string{
 		"gong_quarterly_review.local_bridge_readiness",
+		"gong_quarterly_review.preflight_gate_cli",
 		"gong_quarterly_review.response_receipt",
 		"gong_quarterly_review.response_adapter",
 		"gong_quarterly_review.stage_rehearsal_capture",
@@ -154,14 +179,22 @@ func newMainSyntheticEnv(t *testing.T) mainEnv {
 	}
 	contractPath := filepath.Join(root, "contract.json")
 	doc := map[string]any{
-		"schema_version":           "1.0",
-		"approved_project_root":    root,
-		"python_interpreter":       ".venv-host/bin/python",
-		"run_root":                 "runs/demo",
-		"quarter_root":             "runs/demo/q",
-		"readiness_target_dir":     "runs/demo/target",
-		"readiness_scratch_root":   "runs/demo/scratch",
-		"finalization_result_path": "runs/demo/final.json",
+		"schema_version":             "1.0",
+		"approved_project_root":      root,
+		"python_interpreter":         ".venv-host/bin/python",
+		"run_root":                   "runs/demo",
+		"quarter_root":               "runs/demo/q",
+		"status_response_path":       "runs/demo/q/preflight/status.json",
+		"capabilities_response_path": "runs/demo/q/preflight/capabilities.json",
+		"pre_drilldown_gate_path":    "runs/demo/q/pre-drilldown-gate.json",
+		"quarter_id":                 "2099-q1",
+		"version":                    "v1",
+		"segment_id":                 "segment-test",
+		"contract_model_id":          "claude-haiku-4-5-20251001",
+		"cowork_ui_display_name":     "Claude Haiku 4.5",
+		"readiness_target_dir":       "runs/demo/target",
+		"readiness_scratch_root":     "runs/demo/scratch",
+		"finalization_result_path":   "runs/demo/final.json",
 		"completion_marker_paths": []any{
 			"runs/demo/markers/capture-complete.marker.json",
 		},

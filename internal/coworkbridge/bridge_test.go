@@ -19,16 +19,24 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 	writeContract := func(name string, mutate func(map[string]any)) string {
 		t.Helper()
 		doc := map[string]any{
-			"schema_version":           "1.0",
-			"approved_project_root":    root,
-			"python_interpreter":       ".venv-host/bin/python",
-			"run_root":                 "runs/demo",
-			"quarter_root":             "runs/demo/q",
-			"readiness_target_dir":     "runs/demo/target",
-			"readiness_scratch_root":   "runs/demo/scratch",
-			"finalization_result_path": "runs/demo/final.json",
-			"completion_marker_paths":  []any{"runs/demo/q/complete.marker.json"},
-			"completion_pin_path":      "runs/demo/completion.pin.json",
+			"schema_version":             "1.0",
+			"approved_project_root":      root,
+			"python_interpreter":         ".venv-host/bin/python",
+			"run_root":                   "runs/demo",
+			"quarter_root":               "runs/demo/q",
+			"status_response_path":       "runs/demo/q/preflight/status.json",
+			"capabilities_response_path": "runs/demo/q/preflight/capabilities.json",
+			"pre_drilldown_gate_path":    "runs/demo/q/pre-drilldown-gate.json",
+			"quarter_id":                 "2099-q1",
+			"version":                    "v1",
+			"segment_id":                 "segment-test",
+			"contract_model_id":          "claude-haiku-4-5-20251001",
+			"cowork_ui_display_name":     "Claude Haiku 4.5",
+			"readiness_target_dir":       "runs/demo/target",
+			"readiness_scratch_root":     "runs/demo/scratch",
+			"finalization_result_path":   "runs/demo/final.json",
+			"completion_marker_paths":    []any{"runs/demo/q/complete.marker.json"},
+			"completion_pin_path":        "runs/demo/completion.pin.json",
 			"items": []any{
 				map[string]any{
 					"item_id":           "item-1",
@@ -83,6 +91,24 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 		}
 	})); err == nil {
 		t.Fatal("expected duplicate path rejection")
+	}
+
+	if _, err := LoadContract(writeContract("preflight-outside-quarter.json", func(doc map[string]any) {
+		doc["status_response_path"] = "runs/demo/status.json"
+	})); err == nil {
+		t.Fatal("expected preflight path outside quarter_root rejection")
+	}
+
+	if _, err := LoadContract(writeContract("gate-name.json", func(doc map[string]any) {
+		doc["pre_drilldown_gate_path"] = "runs/demo/q/different-gate.json"
+	})); err == nil {
+		t.Fatal("expected fixed gate path rejection")
+	}
+
+	if _, err := LoadContract(writeContract("preflight-collision.json", func(doc map[string]any) {
+		doc["finalization_result_path"] = "runs/demo/q/preflight/status.json"
+	})); err == nil {
+		t.Fatal("expected preflight output collision rejection")
 	}
 
 	outside := t.TempDir()
@@ -165,6 +191,82 @@ func TestPersistResponseOrderingAndStopAfterFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "stage failed") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestPreflightResponseGateSequence(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	removeSyntheticPreflight(t, env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	ctx := context.Background()
+
+	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err == nil {
+		t.Fatal("expected item persistence refusal before gate")
+	}
+	if _, err := os.Stat(env.contract.Items[0].RawResponsePath); !os.IsNotExist(err) {
+		t.Fatalf("raw item response written before gate, err=%v", err)
+	}
+	if _, err := runner.PersistPreflightResponse("capabilities", json.RawMessage(`{"operations":[]}`)); err == nil {
+		t.Fatal("expected capabilities refusal before status")
+	}
+	if _, err := runner.IssuePreDrilldownGate(ctx, "capture-session:test", "2099-01-01T00:00:00Z"); err == nil {
+		t.Fatal("expected gate refusal before responses")
+	}
+
+	if _, err := runner.PersistPreflightResponse("status", json.RawMessage(`{"facade_status":"ok"}`)); err != nil {
+		t.Fatalf("persist status: %v", err)
+	}
+	if _, err := runner.PersistPreflightResponse("status", json.RawMessage(`{"facade_status":"ok"}`)); err == nil {
+		t.Fatal("expected duplicate status refusal")
+	}
+	if _, err := runner.IssuePreDrilldownGate(ctx, "capture-session:test", "2099-01-01T00:00:00Z"); err == nil {
+		t.Fatal("expected gate refusal before capabilities")
+	}
+	if _, err := runner.PersistPreflightResponse("capabilities", json.RawMessage(`{"operations":[{"name":"evidence.call_drilldown"}]}`)); err != nil {
+		t.Fatalf("persist capabilities: %v", err)
+	}
+	if _, err := runner.IssuePreDrilldownGate(ctx, "capture-session:test", "2099-01-01T00:00:00Z"); err != nil {
+		t.Fatalf("issue gate: %v", err)
+	}
+	if _, err := os.Stat(env.contract.PreDrilldownGatePath); err != nil {
+		t.Fatalf("gate missing: %v", err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err != nil {
+		t.Fatalf("persist item after gate: %v", err)
+	}
+	assertModuleOrder(t, readArgvLog(t, env.root), []string{
+		"gong_quarterly_review.preflight_gate_cli",
+		"gong_quarterly_review.response_receipt",
+		"gong_quarterly_review.response_adapter",
+		"gong_quarterly_review.stage_rehearsal_capture",
+	})
+}
+
+func TestGateFailureStopsBeforeItemPersistence(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	removeSyntheticPreflight(t, env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	if _, err := runner.PersistPreflightResponse("status", json.RawMessage(`{"facade_status":"ok"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistPreflightResponse("capabilities", json.RawMessage(`{"operations":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.root, "fail-gate"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.IssuePreDrilldownGate(context.Background(), "capture-session:test", "2099-01-01T00:00:00Z"); err == nil {
+		t.Fatal("expected gate verdict refusal")
+	}
+	if _, err := runner.PersistResponse(context.Background(), "item-1", json.RawMessage(`{"n":1}`), "tester"); err == nil {
+		t.Fatal("expected item refusal after failed gate")
+	}
+	if _, err := os.Stat(env.contract.Items[0].RawResponsePath); !os.IsNotExist(err) {
+		t.Fatalf("raw item response written after failed gate, err=%v", err)
 	}
 }
 
@@ -318,6 +420,15 @@ func TestDispatchRejectsUnknownOperationAndExtraFields(t *testing.T) {
 	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"preflight"}{"operation":"evil"}`)); err == nil {
 		t.Fatal("expected trailing JSON rejection")
 	}
+	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"persist_preflight_response","kind":"status","response":{},"item_id":"item-1"}`)); err == nil {
+		t.Fatal("expected item_id rejection for persist_preflight_response")
+	}
+	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"issue_pre_drilldown_gate","attested_by":"test","captured_at":"now","response":{}}`)); err == nil {
+		t.Fatal("expected response rejection for issue_pre_drilldown_gate")
+	}
+	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"persist_response","item_id":"item-1","response":{},"attested_by":"test","captured_at":"now"}`)); err == nil {
+		t.Fatal("expected captured_at rejection for persist_response")
+	}
 }
 
 func TestOversizedResponseRejected(t *testing.T) {
@@ -354,16 +465,24 @@ func TestPostStartupSymlinkCannotRedirectWrite(t *testing.T) {
 	}
 	// Deliberately do not create runs/demo/out so LoadContract appends it lexically.
 	doc := map[string]any{
-		"schema_version":           "1.0",
-		"approved_project_root":    root,
-		"python_interpreter":       ".venv-host/bin/python",
-		"run_root":                 "runs/demo",
-		"quarter_root":             "runs/demo/q",
-		"readiness_target_dir":     "runs/demo/target",
-		"readiness_scratch_root":   "runs/demo/scratch",
-		"finalization_result_path": "runs/demo/final.json",
-		"completion_marker_paths":  []any{"runs/demo/q/complete.marker.json"},
-		"completion_pin_path":      "runs/demo/completion.pin.json",
+		"schema_version":             "1.0",
+		"approved_project_root":      root,
+		"python_interpreter":         ".venv-host/bin/python",
+		"run_root":                   "runs/demo",
+		"quarter_root":               "runs/demo/q",
+		"status_response_path":       "runs/demo/q/preflight/status.json",
+		"capabilities_response_path": "runs/demo/q/preflight/capabilities.json",
+		"pre_drilldown_gate_path":    "runs/demo/q/pre-drilldown-gate.json",
+		"quarter_id":                 "2099-q1",
+		"version":                    "v1",
+		"segment_id":                 "segment-test",
+		"contract_model_id":          "claude-haiku-4-5-20251001",
+		"cowork_ui_display_name":     "Claude Haiku 4.5",
+		"readiness_target_dir":       "runs/demo/target",
+		"readiness_scratch_root":     "runs/demo/scratch",
+		"finalization_result_path":   "runs/demo/final.json",
+		"completion_marker_paths":    []any{"runs/demo/q/complete.marker.json"},
+		"completion_pin_path":        "runs/demo/completion.pin.json",
 		"items": []any{
 			map[string]any{
 				"item_id":           "item-1",
@@ -383,6 +502,7 @@ func TestPostStartupSymlinkCannotRedirectWrite(t *testing.T) {
 	}
 	runner := mustNewRunner(t, contract)
 	defer runner.Close()
+	prepareSyntheticPreflight(t, contract)
 
 	outParent := filepath.Join(root, "runs", "demo", "out")
 	if err := os.Symlink(outside, outParent); err != nil {
@@ -465,14 +585,22 @@ func newSyntheticEnv(t *testing.T) syntheticEnv {
 	_ = os.MkdirAll(filepath.Join(root, "runs", "demo", "scratch"), 0o755)
 
 	doc := map[string]any{
-		"schema_version":           "1.0",
-		"approved_project_root":    root,
-		"python_interpreter":       ".venv-host/bin/python",
-		"run_root":                 "runs/demo",
-		"quarter_root":             "runs/demo/q",
-		"readiness_target_dir":     "runs/demo/target",
-		"readiness_scratch_root":   "runs/demo/scratch",
-		"finalization_result_path": "runs/demo/final.json",
+		"schema_version":             "1.0",
+		"approved_project_root":      root,
+		"python_interpreter":         ".venv-host/bin/python",
+		"run_root":                   "runs/demo",
+		"quarter_root":               "runs/demo/q",
+		"status_response_path":       "runs/demo/q/preflight/status.json",
+		"capabilities_response_path": "runs/demo/q/preflight/capabilities.json",
+		"pre_drilldown_gate_path":    "runs/demo/q/pre-drilldown-gate.json",
+		"quarter_id":                 "2099-q1",
+		"version":                    "v1",
+		"segment_id":                 "segment-test",
+		"contract_model_id":          "claude-haiku-4-5-20251001",
+		"cowork_ui_display_name":     "Claude Haiku 4.5",
+		"readiness_target_dir":       "runs/demo/target",
+		"readiness_scratch_root":     "runs/demo/scratch",
+		"finalization_result_path":   "runs/demo/final.json",
 		"completion_marker_paths": []any{
 			"runs/demo/markers/capture-complete.marker.json",
 		},
@@ -499,7 +627,37 @@ func newSyntheticEnv(t *testing.T) syntheticEnv {
 	if err != nil {
 		t.Fatalf("LoadContract: %v", err)
 	}
+	prepareSyntheticPreflight(t, contract)
 	return syntheticEnv{root: root, contract: contract}
+}
+
+func prepareSyntheticPreflight(t *testing.T, contract *ResolvedContract) {
+	t.Helper()
+	for path, body := range map[string]string{
+		contract.StatusResponsePath:       `{"facade_status":"ok"}`,
+		contract.CapabilitiesResponsePath: `{"operations":[{"name":"evidence.call_drilldown"}]}`,
+		contract.PreDrilldownGatePath:     `{"ok":true,"synthetic":true}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func removeSyntheticPreflight(t *testing.T, contract *ResolvedContract) {
+	t.Helper()
+	for _, path := range []string{
+		contract.PreDrilldownGatePath,
+		contract.CapabilitiesResponsePath,
+		contract.StatusResponsePath,
+	} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
 }
 
 func mustNewRunner(t *testing.T, contract *ResolvedContract) *Runner {

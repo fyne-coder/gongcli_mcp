@@ -35,6 +35,14 @@ type ResolvedContract struct {
 	PythonInterpreter          string
 	RunRoot                    string
 	QuarterRoot                string
+	StatusResponsePath         string
+	CapabilitiesResponsePath   string
+	PreDrilldownGatePath       string
+	QuarterID                  string
+	Version                    string
+	SegmentID                  string
+	ContractModelID            string
+	CoworkUIDisplayName        string
 	ReadinessTargetDir         string
 	ReadinessScratchRoot       string
 	FinalizationResultPath     string
@@ -53,17 +61,25 @@ type ResolvedItem struct {
 }
 
 type contractFile struct {
-	SchemaVersion          string         `json:"schema_version"`
-	ApprovedProjectRoot    string         `json:"approved_project_root"`
-	PythonInterpreter      string         `json:"python_interpreter"`
-	RunRoot                string         `json:"run_root"`
-	QuarterRoot            string         `json:"quarter_root"`
-	ReadinessTargetDir     string         `json:"readiness_target_dir"`
-	ReadinessScratchRoot   string         `json:"readiness_scratch_root"`
-	FinalizationResultPath string         `json:"finalization_result_path"`
-	CompletionMarkerPaths  []string       `json:"completion_marker_paths"`
-	CompletionPinPath      string         `json:"completion_pin_path"`
-	Items                  []ContractItem `json:"items"`
+	SchemaVersion            string         `json:"schema_version"`
+	ApprovedProjectRoot      string         `json:"approved_project_root"`
+	PythonInterpreter        string         `json:"python_interpreter"`
+	RunRoot                  string         `json:"run_root"`
+	QuarterRoot              string         `json:"quarter_root"`
+	StatusResponsePath       string         `json:"status_response_path"`
+	CapabilitiesResponsePath string         `json:"capabilities_response_path"`
+	PreDrilldownGatePath     string         `json:"pre_drilldown_gate_path"`
+	QuarterID                string         `json:"quarter_id"`
+	Version                  string         `json:"version"`
+	SegmentID                string         `json:"segment_id"`
+	ContractModelID          string         `json:"contract_model_id"`
+	CoworkUIDisplayName      string         `json:"cowork_ui_display_name"`
+	ReadinessTargetDir       string         `json:"readiness_target_dir"`
+	ReadinessScratchRoot     string         `json:"readiness_scratch_root"`
+	FinalizationResultPath   string         `json:"finalization_result_path"`
+	CompletionMarkerPaths    []string       `json:"completion_marker_paths"`
+	CompletionPinPath        string         `json:"completion_pin_path"`
+	Items                    []ContractItem `json:"items"`
 }
 
 // LoadContract loads and validates a frozen contract from an absolute path.
@@ -126,6 +142,9 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 
 	runRootRel := strings.TrimSpace(parsed.RunRoot)
 	quarterRootRel := strings.TrimSpace(parsed.QuarterRoot)
+	statusRel := strings.TrimSpace(parsed.StatusResponsePath)
+	capabilitiesRel := strings.TrimSpace(parsed.CapabilitiesResponsePath)
+	gateRel := strings.TrimSpace(parsed.PreDrilldownGatePath)
 	targetRel := strings.TrimSpace(parsed.ReadinessTargetDir)
 	scratchRel := strings.TrimSpace(parsed.ReadinessScratchRoot)
 	finalRel := strings.TrimSpace(parsed.FinalizationResultPath)
@@ -135,6 +154,9 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	}{
 		{"run_root", runRootRel},
 		{"quarter_root", quarterRootRel},
+		{"status_response_path", statusRel},
+		{"capabilities_response_path", capabilitiesRel},
+		{"pre_drilldown_gate_path", gateRel},
 		{"readiness_target_dir", targetRel},
 		{"readiness_scratch_root", scratchRel},
 		{"finalization_result_path", finalRel},
@@ -152,6 +174,41 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("quarter_root: %w", err)
 	}
+	statusAbs, err := resolveContainedPath(approvedRoot, statusRel, false)
+	if err != nil {
+		return nil, fmt.Errorf("status_response_path: %w", err)
+	}
+	capabilitiesAbs, err := resolveContainedPath(approvedRoot, capabilitiesRel, false)
+	if err != nil {
+		return nil, fmt.Errorf("capabilities_response_path: %w", err)
+	}
+	gateAbs, err := resolveContainedPath(approvedRoot, gateRel, false)
+	if err != nil {
+		return nil, fmt.Errorf("pre_drilldown_gate_path: %w", err)
+	}
+	for label, path := range map[string]string{
+		"status_response_path":       statusAbs,
+		"capabilities_response_path": capabilitiesAbs,
+		"pre_drilldown_gate_path":    gateAbs,
+	} {
+		if !underRoot(quarterRootAbs, path) {
+			return nil, fmt.Errorf("%s must be under quarter_root", label)
+		}
+	}
+	if gateAbs != filepath.Join(quarterRootAbs, "pre-drilldown-gate.json") {
+		return nil, fmt.Errorf("pre_drilldown_gate_path must be quarter_root/pre-drilldown-gate.json")
+	}
+	for label, value := range map[string]string{
+		"quarter_id":             parsed.QuarterID,
+		"version":                parsed.Version,
+		"segment_id":             parsed.SegmentID,
+		"contract_model_id":      parsed.ContractModelID,
+		"cowork_ui_display_name": parsed.CoworkUIDisplayName,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("%s is required", label)
+		}
+	}
 	targetAbs, err := resolveContainedPath(approvedRoot, targetRel, false)
 	if err != nil {
 		return nil, fmt.Errorf("readiness_target_dir: %w", err)
@@ -166,8 +223,17 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	}
 
 	seenIDs := make(map[string]struct{}, len(parsed.Items))
-	seenPaths := map[string]string{
-		finalAbs: "finalization_result_path",
+	seenPaths := make(map[string]string)
+	for label, path := range map[string]string{
+		"finalization_result_path":   finalAbs,
+		"status_response_path":       statusAbs,
+		"capabilities_response_path": capabilitiesAbs,
+		"pre_drilldown_gate_path":    gateAbs,
+	} {
+		if owner, ok := seenPaths[path]; ok {
+			return nil, fmt.Errorf("duplicate output path %q used by %s and %s", path, owner, label)
+		}
+		seenPaths[path] = label
 	}
 	completionArtifacts := make([]string, 0, len(parsed.CompletionMarkerPaths)+1)
 	if len(parsed.CompletionMarkerPaths) == 0 {
@@ -255,6 +321,14 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		PythonInterpreter:          interpreterAbs,
 		RunRoot:                    runRootAbs,
 		QuarterRoot:                quarterRootAbs,
+		StatusResponsePath:         statusAbs,
+		CapabilitiesResponsePath:   capabilitiesAbs,
+		PreDrilldownGatePath:       gateAbs,
+		QuarterID:                  strings.TrimSpace(parsed.QuarterID),
+		Version:                    strings.TrimSpace(parsed.Version),
+		SegmentID:                  strings.TrimSpace(parsed.SegmentID),
+		ContractModelID:            strings.TrimSpace(parsed.ContractModelID),
+		CoworkUIDisplayName:        strings.TrimSpace(parsed.CoworkUIDisplayName),
 		ReadinessTargetDir:         targetAbs,
 		ReadinessScratchRoot:       scratchAbs,
 		FinalizationResultPath:     finalAbs,

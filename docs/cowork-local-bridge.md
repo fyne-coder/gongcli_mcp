@@ -9,6 +9,8 @@ Gong reads.
 `gongcowork` exposes exactly one tool, `gong_workflow`, with operations:
 
 - `preflight`
+- `persist_preflight_response`
+- `issue_pre_drilldown_gate`
 - `persist_response`
 - `validate_item`
 - `finalize_run`
@@ -45,6 +47,14 @@ Create an absolute-path contract JSON:
   "python_interpreter": ".venv-host/bin/python",
   "run_root": "evidence/slice4d/rehearsal-run",
   "quarter_root": "evidence/slice4d/rehearsal-run/<quarter>",
+  "status_response_path": "evidence/slice4d/rehearsal-run/<quarter>/preflight/gong-status-response.json",
+  "capabilities_response_path": "evidence/slice4d/rehearsal-run/<quarter>/preflight/gong-discover-capabilities-response.json",
+  "pre_drilldown_gate_path": "evidence/slice4d/rehearsal-run/<quarter>/pre-drilldown-gate.json",
+  "quarter_id": "2026-q2",
+  "version": "v1",
+  "segment_id": "segment-clean-ordering-rehearsal",
+  "contract_model_id": "claude-haiku-4-5-20251001",
+  "cowork_ui_display_name": "Claude Haiku 4.5",
   "readiness_target_dir": "evidence/slice4d",
   "readiness_scratch_root": "evidence/slice4d/.local-bridge-scratch",
   "finalization_result_path": "evidence/slice4d/rehearsal-run/finalization-result.json",
@@ -63,6 +73,12 @@ Create an absolute-path contract JSON:
 ```
 
 All child paths are project-relative and must stay under `approved_project_root`.
+The two preflight response paths and fixed `pre-drilldown-gate.json` path must
+also stay under `quarter_root` and cannot collide with any other output. The
+bridge enforces status → capabilities → gate before it will write item 1. Gate
+issuance runs only `gong_quarterly_review.preflight_gate_cli`; that module
+derives MCP version, preset, readiness, and advertised operations from the two
+saved response files instead of accepting caller-supplied observations.
 `completion_marker_paths` (at least one) and `completion_pin_path` are required
 and checked before
 `finalize_run`; if any exist, finalization is refused without invoking the
@@ -108,7 +124,9 @@ does not mutate Claude configuration.
 3. Do not pass shell commands, module names, interpreters, environment
    variables, or absolute output paths through the tool. The contract freezes
    those values.
-4. `persist_response` fails closed on duplicates and stops the receipt →
+4. Persist status and capabilities separately, issue the pre-drilldown gate,
+   and proceed only when the local tool returns `ok:true` and the gate exists.
+5. `persist_response` fails closed on duplicates and stops the receipt →
    adapter → stage chain on the first failure.
-5. Actual Claude Desktop installation remains a separate approved step after
+6. Actual Claude Desktop installation remains a separate approved step after
    local synthetic proof.
