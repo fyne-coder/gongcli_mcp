@@ -10,9 +10,13 @@ configuration unless an operator later passes explicit --install.
 
 Usage:
   scripts/install-claude-cowork-bridge.sh --contract /abs/contract.json --binary /abs/gongcowork [options]
+  scripts/install-claude-cowork-bridge.sh --selection-contract /abs/selection-contract.json --binary /abs/gongcowork [options]
 
 Options:
-  --contract PATH   Absolute frozen contract JSON path. Required.
+  --contract PATH   Absolute frozen capture contract JSON path.
+  --selection-contract PATH
+                    Absolute frozen candidate-selection contract JSON path.
+                    Mutually exclusive with --contract.
   --binary PATH     Absolute gongcowork binary path. Required.
   --server-name NAME  Claude MCP server name. Default: gongcowork.
   --config PATH     Claude config path. Defaults to macOS Claude Desktop config.
@@ -26,6 +30,11 @@ Prerequisite:
 Examples:
   scripts/install-claude-cowork-bridge.sh \
     --contract /absolute/example/contract.json \
+    --binary /absolute/example/gongcowork \
+    --print
+
+  scripts/install-claude-cowork-bridge.sh \
+    --selection-contract /absolute/example/selection-contract.json \
     --binary /absolute/example/gongcowork \
     --print
 USAGE
@@ -42,6 +51,7 @@ abs_path() {
 }
 
 CONTRACT_PATH=""
+SELECTION_CONTRACT_PATH=""
 BINARY_PATH=""
 SERVER_NAME="gongcowork"
 CONFIG_PATH="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
@@ -51,6 +61,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --contract)
       CONTRACT_PATH="${2:?--contract requires a path}"
+      shift 2
+      ;;
+    --selection-contract)
+      SELECTION_CONTRACT_PATH="${2:?--selection-contract requires a path}"
       shift 2
       ;;
     --binary)
@@ -85,8 +99,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$CONTRACT_PATH" || -z "$BINARY_PATH" ]]; then
-  echo "--contract and --binary are required" >&2
+if [[ -z "$BINARY_PATH" ]]; then
+  echo "--binary is required" >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -n "$CONTRACT_PATH" && -n "$SELECTION_CONTRACT_PATH" ]]; then
+  echo "--contract and --selection-contract are mutually exclusive" >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ -z "$CONTRACT_PATH" && -z "$SELECTION_CONTRACT_PATH" ]]; then
+  echo "exactly one of --contract or --selection-contract is required" >&2
   usage >&2
   exit 2
 fi
@@ -102,18 +128,31 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-CONTRACT_PATH="$(abs_path "$CONTRACT_PATH")"
 BINARY_PATH="$(abs_path "$BINARY_PATH")"
 
-ENTRY_JSON="$(
-  jq -n \
-    --arg command "$BINARY_PATH" \
-    --arg contract "$CONTRACT_PATH" \
-    '{
-      command: $command,
-      args: ["--contract", $contract]
-    }'
-)"
+if [[ -n "$CONTRACT_PATH" ]]; then
+  CONTRACT_PATH="$(abs_path "$CONTRACT_PATH")"
+  ENTRY_JSON="$(
+    jq -n \
+      --arg command "$BINARY_PATH" \
+      --arg contract "$CONTRACT_PATH" \
+      '{
+        command: $command,
+        args: ["--contract", $contract]
+      }'
+  )"
+else
+  SELECTION_CONTRACT_PATH="$(abs_path "$SELECTION_CONTRACT_PATH")"
+  ENTRY_JSON="$(
+    jq -n \
+      --arg command "$BINARY_PATH" \
+      --arg contract "$SELECTION_CONTRACT_PATH" \
+      '{
+        command: $command,
+        args: ["--selection-contract", $contract]
+      }'
+  )"
+fi
 
 jq -n --arg name "$SERVER_NAME" --argjson entry "$ENTRY_JSON" '{mcpServers: {($name): $entry}}'
 exit 0

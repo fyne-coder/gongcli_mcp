@@ -47,6 +47,119 @@ func TestGongcoworkToolsListOnlyWorkflowTool(t *testing.T) {
 	}
 }
 
+func TestGongcoworkSelectionToolsListOnlySelectionTool(t *testing.T) {
+	env := newMainSyntheticSelectionEnv(t)
+	var stdout, stderr bytes.Buffer
+	stdin := bytes.NewBufferString(
+		mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "1", Method: "initialize", Params: json.RawMessage(`{}`)}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", Method: "notifications/initialized"}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "2", Method: "tools/list"}),
+	)
+	code := run([]string{"--selection-contract", env.contractPath}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	frames := readFrames(t, stdout.Bytes())
+	if len(frames) != 2 {
+		t.Fatalf("frame count=%d want 2", len(frames))
+	}
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frames[1], &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Result.Tools) != 1 || listed.Result.Tools[0].Name != "gong_candidate_selection" {
+		t.Fatalf("tools=%v want [gong_candidate_selection]", listed.Result.Tools)
+	}
+}
+
+func TestGongcoworkMutuallyExclusiveContracts(t *testing.T) {
+	env := newMainSyntheticEnv(t)
+	sel := newMainSyntheticSelectionEnv(t)
+	var stderr bytes.Buffer
+	code := run([]string{"--contract", env.contractPath, "--selection-contract", sel.contractPath}, bytes.NewReader(nil), io.Discard, &stderr)
+	if code != 2 {
+		t.Fatalf("exit=%d want 2 stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "mutually exclusive") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func TestGongcoworkRequiresOneContractFlag(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run(nil, bytes.NewReader(nil), io.Discard, &stderr)
+	if code != 2 {
+		t.Fatalf("exit=%d want 2", code)
+	}
+}
+
+func TestGongcoworkSelectionStdioStdinForwarding(t *testing.T) {
+	env := newMainSyntheticSelectionEnv(t)
+	contract, err := coworkbridge.LoadSelectionContract(env.contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	stdin := bytes.NewBufferString(
+		mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "1", Method: "initialize", Params: json.RawMessage(`{}`)}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "2", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_candidate_selection",
+				"arguments": map[string]any{
+					"operation": "preflight",
+				},
+			})}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "3", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_candidate_selection",
+				"arguments": map[string]any{
+					"operation": "persist_discovery_response",
+					"response":  map[string]any{"discovery": true},
+				},
+			})}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "4", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_candidate_selection",
+				"arguments": map[string]any{
+					"operation": "persist_query_response",
+					"query_id":  "q-1",
+					"response":  map[string]any{"hits": []any{}},
+				},
+			})}),
+	)
+	code := run([]string{"--selection-contract", env.contractPath}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	argvLog, err := os.ReadFile(filepath.Join(env.root, "argv.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(argvLog)
+	if !strings.Contains(text, "gong_quarterly_review.candidate_selection_workflow") {
+		t.Fatalf("missing selection module:\n%s", text)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "ARGS\t") && (strings.Contains(line, `"discovery"`) || strings.Contains(line, `"hits"`)) {
+			t.Fatalf("body leaked into argv: %s", line)
+		}
+	}
+	if !strings.Contains(text, "STDIN\tpersist_discovery_response\t") || !strings.Contains(text, "STDIN\tpersist_query_response\t") {
+		t.Fatalf("missing stdin markers:\n%s", text)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if !strings.HasPrefix(line, "ARGS\t") {
+			continue
+		}
+		if !strings.HasPrefix(line, "ARGS\t"+contract.PythonInterpreter+"\t-m\tgong_quarterly_review.candidate_selection_workflow\t") {
+			t.Fatalf("argv not pinned: %s", line)
+		}
+	}
+}
+
 func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 	env := newMainSyntheticEnv(t)
 	contract, err := coworkbridge.LoadContract(env.contractPath)
@@ -146,6 +259,14 @@ func TestGongcoworkRequiresAbsoluteContract(t *testing.T) {
 	}
 }
 
+func TestGongcoworkRequiresAbsoluteSelectionContract(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"--selection-contract", "relative.json"}, bytes.NewReader(nil), io.Discard, &stderr)
+	if code != 2 {
+		t.Fatalf("exit=%d want 2", code)
+	}
+}
+
 type mainEnv struct {
 	root         string
 	contractPath string
@@ -211,6 +332,53 @@ func newMainSyntheticEnv(t *testing.T) mainEnv {
 				"staged_input_path": "runs/demo/out/item-2.staged.json",
 			},
 		},
+	}
+	payload, _ := json.Marshal(doc)
+	if err := os.WriteFile(contractPath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return mainEnv{root: root, contractPath: contractPath}
+}
+
+func newMainSyntheticSelectionEnv(t *testing.T) mainEnv {
+	t.Helper()
+	root := t.TempDir()
+	src := filepath.Join("..", "..", "internal", "coworkbridge", "testdata", "synthetic", "fake-python")
+	dst := filepath.Join(root, ".venv-host", "bin", "python")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, raw, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "src"),
+		filepath.Join(root, "selection", "target"),
+		filepath.Join(root, "selection", "scratch"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "selection", "config.json"), []byte(`{"schema_version":"1.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join(root, "selection-contract.json")
+	doc := map[string]any{
+		"schema_version":         "1.0",
+		"approved_project_root":  root,
+		"python_interpreter":     ".venv-host/bin/python",
+		"selection_config_path":  "selection/config.json",
+		"selection_state_path":   "selection/state.json",
+		"selection_output_path":  "selection/output.json",
+		"readiness_target_dir":   "selection/target",
+		"readiness_scratch_root": "selection/scratch",
+		"contract_model_id":      "claude-haiku-4-5-20251001",
+		"cowork_ui_display_name": "Claude Haiku 4.5",
 	}
 	payload, _ := json.Marshal(doc)
 	if err := os.WriteFile(contractPath, payload, 0o644); err != nil {

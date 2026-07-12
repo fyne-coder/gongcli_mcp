@@ -154,6 +154,106 @@ case "$MODULE" in
     echo "{\"ok\":true,\"item_id\":\"${ITEM}\",\"module\":\"stage_rehearsal_capture\"}"
     exit 0
     ;;
+  gong_quarterly_review.candidate_selection_workflow)
+    SUBCOMMAND="${1:-}"
+    shift || true
+    CONFIG=""
+    STATE=""
+    OUTPUT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --config) CONFIG="$2"; shift 2 ;;
+        --state) STATE="$2"; shift 2 ;;
+        --output) OUTPUT="$2"; shift 2 ;;
+        --approved-root|--target-dir|--scratch-root|--contract-model-id|--cowork-ui-display-name) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -z "$CONFIG" || -z "$STATE" || -z "$OUTPUT" ]]; then
+      echo "selection workflow requires --config --state --output" >&2
+      exit 2
+    fi
+    # Record whether stdin was supplied without writing a temp body file.
+    if [[ -f "${ROOT}/fail-selection" ]]; then
+      echo "synthetic selection failure" >&2
+      exit 1
+    fi
+    case "$SUBCOMMAND" in
+      preflight)
+        if [[ -f "${ROOT}/selection-not-ok" ]]; then
+          echo '{"ok":false,"stage":"synthetic-selection-refused"}'
+          exit 0
+        fi
+        mkdir -p "$(dirname "$STATE")" "$(dirname "$OUTPUT")"
+        printf '{"ok":true,"stage":"preflight"}\n' >"$STATE"
+        echo '{"ok":true,"stage":"preflight","synthetic":true}'
+        exit 0
+        ;;
+      persist_discovery_response)
+        if [[ -t 0 ]]; then
+          echo "discovery response requires stdin JSON" >&2
+          exit 2
+        fi
+        BODY="$(cat)"
+        if [[ -z "$BODY" ]]; then
+          echo "empty discovery stdin" >&2
+          exit 2
+        fi
+        # Refuse argv-shaped leakage of body fields.
+        printf 'STDIN\tpersist_discovery_response\t%d\n' "${#BODY}" >>"$LOG"
+        mkdir -p "$(dirname "$STATE")"
+        printf '%s\n' "$BODY" >"${STATE}.discovery.json"
+        echo '{"ok":true,"stage":"discovery-persisted","synthetic":true}'
+        exit 0
+        ;;
+      get_next_query)
+        echo '{"ok":true,"stage":"next-query","query_id":"q-1","synthetic":true}'
+        exit 0
+        ;;
+      persist_query_response)
+        if [[ -t 0 ]]; then
+          echo "query response requires stdin JSON envelope" >&2
+          exit 2
+        fi
+        BODY="$(cat)"
+        if [[ -z "$BODY" ]]; then
+          echo "empty query stdin" >&2
+          exit 2
+        fi
+        printf 'STDIN\tpersist_query_response\t%d\n' "${#BODY}" >>"$LOG"
+        if [[ "$BODY" != *'"query_id"'* || "$BODY" != *'"response"'* ]]; then
+          echo "query envelope missing query_id/response" >&2
+          exit 2
+        fi
+        mkdir -p "$(dirname "$STATE")"
+        printf '%s\n' "$BODY" >"${STATE}.query.json"
+        echo '{"ok":true,"stage":"query-persisted","synthetic":true}'
+        exit 0
+        ;;
+      finalize_selection)
+        if [[ -f "${ROOT}/selection-finalize-not-ok" ]]; then
+          echo '{"ok":false,"stage":"finalize-refused"}'
+          exit 0
+        fi
+        mkdir -p "$(dirname "$OUTPUT")"
+        printf '{"ok":true,"stage":"finalized","synthetic":true}\n' >"$OUTPUT"
+        echo '{"ok":true,"stage":"finalized","synthetic":true}'
+        exit 0
+        ;;
+      get_selection_status)
+        if [[ -f "${ROOT}/selection-status-not-ok" ]]; then
+          echo '{"ok":false,"stage":"status-refused","synthetic":true}'
+          exit 0
+        fi
+        echo '{"ok":true,"stage":"status","synthetic":true}'
+        exit 0
+        ;;
+      *)
+        echo "unknown selection subcommand: $SUBCOMMAND" >&2
+        exit 2
+        ;;
+    esac
+    ;;
   gong_quarterly_review.verify_ordering_rehearsal)
     FINALIZE=0
     OUTPUT=""
