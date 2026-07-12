@@ -77,6 +77,13 @@ func (r *Runner) lstatContained(abs string) (os.FileInfo, error) {
 }
 
 func (r *Runner) runModule(ctx context.Context, module string, args ...string) (CommandResult, []byte, error) {
+	resolvedInterpreter, err := filepath.EvalSymlinks(r.Contract.PythonInterpreter)
+	if err != nil {
+		return CommandResult{Module: module}, nil, fmt.Errorf("resolve python_interpreter before module %s: %w", module, err)
+	}
+	if resolvedInterpreter != r.Contract.PythonInterpreterResolved {
+		return CommandResult{Module: module}, nil, fmt.Errorf("python_interpreter target changed after startup; refusing module %s", module)
+	}
 	timeout := r.Contract.CommandTimeout
 	if timeout <= 0 {
 		timeout = DefaultCommandTimeout
@@ -97,7 +104,7 @@ func (r *Runner) runModule(ctx context.Context, module string, args ...string) (
 	cmd.Stderr = &limitedWriter{limit: MaxCommandOutputBytes, buf: &stderr}
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	result := CommandResult{
 		Module:      module,
 		DurationMS:  time.Since(start).Milliseconds(),

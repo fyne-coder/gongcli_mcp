@@ -33,6 +33,7 @@ type ResolvedContract struct {
 	ContractPath               string
 	ApprovedProjectRoot        string
 	PythonInterpreter          string
+	PythonInterpreterResolved  string
 	RunRoot                    string
 	QuarterRoot                string
 	StatusResponsePath         string
@@ -128,11 +129,11 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	if err := requireRelativePath(interpreterRel, "python_interpreter"); err != nil {
 		return nil, err
 	}
-	interpreterAbs, err := resolveInterpreterPath(approvedRoot, interpreterRel)
+	interpreterAbs, interpreterResolved, err := resolveInterpreterPath(approvedRoot, interpreterRel)
 	if err != nil {
 		return nil, fmt.Errorf("python_interpreter: %w", err)
 	}
-	info, err := os.Stat(interpreterAbs)
+	info, err := os.Stat(interpreterResolved)
 	if err != nil {
 		return nil, fmt.Errorf("python_interpreter: %w", err)
 	}
@@ -319,6 +320,7 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		ContractPath:               absContract,
 		ApprovedProjectRoot:        approvedRoot,
 		PythonInterpreter:          interpreterAbs,
+		PythonInterpreterResolved:  interpreterResolved,
 		RunRoot:                    runRootAbs,
 		QuarterRoot:                quarterRootAbs,
 		StatusResponsePath:         statusAbs,
@@ -409,26 +411,26 @@ func canonicalizeExistingDir(path string) (string, error) {
 // Homebrew/framework Python). The parent directory itself must remain inside
 // the approved root. The resolved executable path is pinned at startup, so a
 // later symlink replacement cannot redirect execution.
-func resolveInterpreterPath(root, rel string) (string, error) {
+func resolveInterpreterPath(root, rel string) (string, string, error) {
 	if err := requireRelativePath(rel, "python_interpreter"); err != nil {
-		return "", err
+		return "", "", err
 	}
 	lexical := filepath.Join(root, filepath.Clean(rel))
 	if !underRoot(root, lexical) {
-		return "", fmt.Errorf("python_interpreter escapes approved root")
+		return "", "", fmt.Errorf("python_interpreter escapes approved root")
 	}
 	resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(lexical))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !underRoot(root, resolvedParent) {
-		return "", fmt.Errorf("python_interpreter parent escapes approved root via symlink")
+		return "", "", fmt.Errorf("python_interpreter parent escapes approved root via symlink")
 	}
 	resolved, err := filepath.EvalSymlinks(lexical)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return resolved, nil
+	return lexical, resolved, nil
 }
 
 // resolveContainedPath joins root/rel, canonicalizes through any existing

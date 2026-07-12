@@ -155,8 +155,29 @@ func TestLoadContractAcceptsFinalVenvInterpreterSymlinkOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contract.PythonInterpreter != expectedExternal {
-		t.Fatalf("interpreter=%q want pinned resolved %q", contract.PythonInterpreter, expectedExternal)
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedLexical := filepath.Join(resolvedRoot, ".venv-host", "bin", "python")
+	if contract.PythonInterpreter != expectedLexical {
+		t.Fatalf("interpreter=%q want venv launcher %q", contract.PythonInterpreter, expectedLexical)
+	}
+	if contract.PythonInterpreterResolved != expectedExternal {
+		t.Fatalf("resolved interpreter=%q want pinned %q", contract.PythonInterpreterResolved, expectedExternal)
+	}
+	runner := mustNewRunner(t, contract)
+	defer runner.Close()
+	replacement := filepath.Join(t.TempDir(), "python-replacement")
+	mustWriteExecutable(t, replacement, "#!/bin/sh\nexit 0\n")
+	if err := os.Remove(expectedLexical); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(replacement, expectedLexical); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Preflight(context.Background()); err == nil || !strings.Contains(err.Error(), "target changed") {
+		t.Fatalf("expected replaced interpreter refusal, got %v", err)
 	}
 
 	root2 := t.TempDir()
