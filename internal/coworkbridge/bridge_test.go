@@ -421,6 +421,26 @@ func TestFinalizeRequiresFinalizedVerdict(t *testing.T) {
 	}
 }
 
+func TestItemAcceptanceAllowsVerifierCompleteStagesWithoutPendingList(t *testing.T) {
+	t.Parallel()
+	for _, stage := range []string{"captured-pending-finalize", "finalized"} {
+		verdict := map[string]any{
+			"ok": true, "stage": stage,
+			"ordering_journal": map[string]any{"ok": true},
+		}
+		if err := requireItemAccepted(verdict, "item-2"); err != nil {
+			t.Fatalf("stage %s should accept complete item: %v", stage, err)
+		}
+	}
+	verdict := map[string]any{
+		"ok": true, "stage": "pending-items",
+		"ordering_journal": map[string]any{"ok": true},
+	}
+	if err := requireItemAccepted(verdict, "item-2"); err == nil {
+		t.Fatal("pending-items without pending_item_ids must remain refused")
+	}
+}
+
 func TestFinalizeRefusesConfiguredCompletionArtifacts(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)

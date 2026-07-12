@@ -513,6 +513,10 @@ func requireItemAccepted(verdict map[string]any, itemID string) error {
 	}
 	pending, err := pendingItemIDsRequired(verdict)
 	if err != nil {
+		stage, _ := verdict["stage"].(string)
+		if stage == "captured-pending-finalize" || stage == "finalized" {
+			return nil
+		}
 		return err
 	}
 	for _, pendingID := range pending {
