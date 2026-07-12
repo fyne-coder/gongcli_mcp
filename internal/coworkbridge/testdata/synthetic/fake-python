@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Synthetic interpreter for gongcowork tests. Records argv and simulates
+# fixed gong_quarterly_review module outputs. Makes zero Gong network calls.
+set -euo pipefail
+
+# Installed as <project>/.venv-host/bin/python in synthetic fixtures.
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+LOG="${ROOT}/argv.log"
+mkdir -p "$(dirname "$LOG")"
+{
+  printf 'ARGS'
+  for arg in "$@"; do
+    printf '\t%s' "$arg"
+  done
+  printf '\n'
+} >>"$LOG"
+
+if [[ "${1:-}" != "-m" ]]; then
+  echo "expected -m <module>" >&2
+  exit 2
+fi
+MODULE="${2:-}"
+shift 2 || true
+
+case "$MODULE" in
+  gong_quarterly_review.local_bridge_readiness)
+    echo '{"ok":true,"synthetic":true,"module":"local_bridge_readiness"}'
+    exit 0
+    ;;
+  gong_quarterly_review.response_receipt)
+    ITEM=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --item-id) ITEM="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -f "${ROOT}/fail-receipt" ]]; then
+      echo "synthetic receipt failure" >&2
+      exit 1
+    fi
+    echo "{\"ok\":true,\"item_id\":\"${ITEM}\",\"module\":\"response_receipt\"}"
+    exit 0
+    ;;
+  gong_quarterly_review.response_adapter)
+    ITEM=""
+    OUTPUT=""
+    RAW=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --item-id) ITEM="$2"; shift 2 ;;
+        --output) OUTPUT="$2"; shift 2 ;;
+        --raw-response) RAW="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -f "${ROOT}/fail-adapter" ]]; then
+      echo "synthetic adapter failure" >&2
+      exit 1
+    fi
+    mkdir -p "$(dirname "$OUTPUT")"
+    printf '{"item_id":"%s","status":"ok","body_text":"synthetic","source":"%s"}\n' "$ITEM" "$RAW" >"$OUTPUT"
+    echo "{\"ok\":true,\"item_id\":\"${ITEM}\",\"module\":\"response_adapter\"}"
+    exit 0
+    ;;
+  gong_quarterly_review.stage_rehearsal_capture)
+    INPUT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --input) INPUT="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -f "${ROOT}/fail-stage" ]]; then
+      echo "synthetic stage failure" >&2
+      exit 1
+    fi
+    ITEM="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["item_id"])' "$INPUT")"
+    MARK="${ROOT}/staged-${ITEM}.ok"
+    printf 'staged\n' >"$MARK"
+    echo "{\"ok\":true,\"item_id\":\"${ITEM}\",\"module\":\"stage_rehearsal_capture\"}"
+    exit 0
+    ;;
+  gong_quarterly_review.verify_ordering_rehearsal)
+    FINALIZE=0
+    OUTPUT=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --finalize) FINALIZE=1; shift ;;
+        --recover-pin)
+          echo "recover-pin is forbidden in synthetic companion" >&2
+          exit 2
+          ;;
+        --output) OUTPUT="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ "$FINALIZE" -eq 1 ]]; then
+      if [[ -z "$OUTPUT" ]]; then
+        echo "finalize requires --output" >&2
+        exit 2
+      fi
+      mkdir -p "$(dirname "$OUTPUT")"
+      printf '{"ok":true,"stage":"finalized","synthetic":true}\n' >"$OUTPUT"
+      echo '{"ok":true,"stage":"finalized","synthetic":true}'
+      exit 0
+    fi
+    echo '{"ok":true,"stage":"pending-or-captured","synthetic":true,"finalize":false}'
+    exit 0
+    ;;
+  *)
+    echo "unknown synthetic module: $MODULE" >&2
+    exit 2
+    ;;
+esac

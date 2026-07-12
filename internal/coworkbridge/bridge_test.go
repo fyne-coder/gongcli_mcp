@@ -248,7 +248,7 @@ type syntheticEnv struct {
 func newSyntheticEnv(t *testing.T) syntheticEnv {
 	t.Helper()
 	root := t.TempDir()
-	fakeSrc := filepath.Join("testdata", "synthetic", "bin", "fake-python")
+	fakeSrc := filepath.Join("testdata", "synthetic", "fake-python")
 	fakeDst := filepath.Join(root, ".venv-host", "bin", "python")
 	mustCopyExecutable(t, fakeSrc, fakeDst)
 	_ = os.MkdirAll(filepath.Join(root, "src"), 0o755)

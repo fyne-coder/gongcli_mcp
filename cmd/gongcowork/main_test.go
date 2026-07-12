@@ -119,7 +119,7 @@ type mainEnv struct {
 func newMainSyntheticEnv(t *testing.T) mainEnv {
 	t.Helper()
 	root := t.TempDir()
-	src := filepath.Join("..", "..", "internal", "coworkbridge", "testdata", "synthetic", "bin", "fake-python")
+	src := filepath.Join("..", "..", "internal", "coworkbridge", "testdata", "synthetic", "fake-python")
 	dst := filepath.Join(root, ".venv-host", "bin", "python")
 	raw, err := os.ReadFile(src)
 	if err != nil {
