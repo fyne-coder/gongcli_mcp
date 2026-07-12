@@ -141,7 +141,7 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 }
 
 func (r *Runner) Preflight(ctx context.Context) (map[string]any, error) {
-	result, _, err := r.runModule(ctx, "gong_quarterly_review.local_bridge_readiness",
+	result, stdout, err := r.runModule(ctx, "gong_quarterly_review.local_bridge_readiness",
 		"--approved-root", r.Contract.ApprovedProjectRoot,
 		"--target-dir", r.Contract.ReadinessTargetDir,
 		"--scratch-root", r.Contract.ReadinessScratchRoot,
@@ -149,9 +149,17 @@ func (r *Runner) Preflight(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	verdict, err := parseVerifierVerdict(stdout)
+	if err != nil {
+		return nil, fmt.Errorf("parse readiness verdict: %w", err)
+	}
+	if err := requireReadinessAccepted(verdict); err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"ok":      true,
 		"command": result,
+		"verdict": verdict,
 	}, nil
 }
 
@@ -288,6 +296,11 @@ func (r *Runner) FinalizeRun(ctx context.Context) (map[string]any, error) {
 	if err := requireFinalizeAccepted(verdict); err != nil {
 		return nil, err
 	}
+	for _, artifact := range r.Contract.CompletionArtifactPaths {
+		if _, err := r.lstatContained(artifact); err != nil {
+			return nil, fmt.Errorf("finalizer returned accepted verdict but completion artifact is missing at %s: %w", artifact, err)
+		}
+	}
 	return map[string]any{
 		"ok":      true,
 		"command": result,
@@ -373,7 +386,11 @@ func requireItemAccepted(verdict map[string]any, itemID string) error {
 			return fmt.Errorf("verifier ordering_journal.ok is not true for item %q", itemID)
 		}
 	}
-	for _, pendingID := range pendingItemIDs(verdict) {
+	pending, err := pendingItemIDsRequired(verdict)
+	if err != nil {
+		return err
+	}
+	for _, pendingID := range pending {
 		if pendingID == itemID {
 			stage, _ := verdict["stage"].(string)
 			return fmt.Errorf("verifier has not accepted item %q (still pending; stage=%s)", itemID, stage)
@@ -401,7 +418,59 @@ func requireFinalizeAccepted(verdict map[string]any) error {
 			return fmt.Errorf("finalize ordering_journal.ok is not true")
 		}
 	}
+	stage, _ := verdict["stage"].(string)
+	if stage != "finalized" {
+		return fmt.Errorf("finalize verdict stage=%q, want finalized", stage)
+	}
 	return nil
+}
+
+func requireReadinessAccepted(verdict map[string]any) error {
+	ok, _ := verdict["ok"].(bool)
+	if !ok {
+		stage, _ := verdict["stage"].(string)
+		return fmt.Errorf("readiness rejected (ok is not true, stage=%q)", stage)
+	}
+	rawChecks, present := verdict["checks"]
+	if !present || rawChecks == nil {
+		// Older/synthetic readiness implementations may expose only top-level ok.
+		return nil
+	}
+	checks, ok := rawChecks.(map[string]any)
+	if !ok || len(checks) == 0 {
+		return fmt.Errorf("readiness checks must be a non-empty object")
+	}
+	for name, raw := range checks {
+		check, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("readiness check %q must be an object", name)
+		}
+		checkOK, _ := check["ok"].(bool)
+		if !checkOK {
+			return fmt.Errorf("readiness check %q is not accepted", name)
+		}
+	}
+	return nil
+}
+
+func pendingItemIDsRequired(verdict map[string]any) ([]string, error) {
+	raw, present := verdict["pending_item_ids"]
+	if !present || raw == nil {
+		return nil, fmt.Errorf("verifier verdict is missing pending_item_ids")
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("verifier pending_item_ids must be an array")
+	}
+	out := make([]string, 0, len(values))
+	for idx, value := range values {
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("verifier pending_item_ids[%d] must be a non-empty string", idx)
+		}
+		out = append(out, text)
+	}
+	return out, nil
 }
 
 func pendingItemIDs(verdict map[string]any) []string {

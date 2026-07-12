@@ -63,7 +63,8 @@ Create an absolute-path contract JSON:
 ```
 
 All child paths are project-relative and must stay under `approved_project_root`.
-`completion_marker_paths` and optional `completion_pin_path` are checked before
+`completion_marker_paths` (at least one) and `completion_pin_path` are required
+and checked before
 `finalize_run`; if any exist, finalization is refused without invoking the
 module. The Python verifier remains the authoritative one-time guard for marker
 and pin issuance.

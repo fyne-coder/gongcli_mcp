@@ -60,6 +60,10 @@ pending_item_ids_json() {
 
 case "$MODULE" in
   gong_quarterly_review.local_bridge_readiness)
+    if [[ -f "${ROOT}/readiness-not-ok" ]]; then
+      echo '{"ok":false,"stage":"synthetic-refused","checks":{"approved_root":{"ok":false}}}'
+      exit 0
+    fi
     echo '{"ok":true,"synthetic":true,"module":"local_bridge_readiness"}'
     exit 0
     ;;
@@ -145,8 +149,19 @@ case "$MODULE" in
         exit 2
       fi
       mkdir -p "$(dirname "$OUTPUT")"
+      if [[ -f "${ROOT}/verifier-wrong-final-stage" ]]; then
+        echo '{"ok":true,"stage":"captured-pending-finalize","ordering_journal":{"ok":true},"synthetic":true}'
+        exit 0
+      fi
+      mkdir -p "${ROOT}/runs/demo/markers" "${ROOT}/runs/demo"
+      printf '{"complete":true}\n' >"${ROOT}/runs/demo/markers/capture-complete.marker.json"
+      printf '{"complete":true}\n' >"${ROOT}/runs/demo/completion.pin.json"
       printf '{"ok":true,"stage":"finalized","ordering_journal":{"ok":true},"synthetic":true}\n' >"$OUTPUT"
       echo '{"ok":true,"stage":"finalized","ordering_journal":{"ok":true},"synthetic":true}'
+      exit 0
+    fi
+    if [[ -f "${ROOT}/verifier-missing-pending" ]]; then
+      echo '{"ok":true,"stage":"pending-items","ordering_journal":{"ok":true},"synthetic":true}'
       exit 0
     fi
     PENDING="$(pending_item_ids_json)"

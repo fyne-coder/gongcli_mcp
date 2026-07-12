@@ -170,6 +170,9 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		finalAbs: "finalization_result_path",
 	}
 	completionArtifacts := make([]string, 0, len(parsed.CompletionMarkerPaths)+1)
+	if len(parsed.CompletionMarkerPaths) == 0 {
+		return nil, fmt.Errorf("completion_marker_paths must contain at least one path")
+	}
 	for idx, markerRel := range parsed.CompletionMarkerPaths {
 		markerRel = strings.TrimSpace(markerRel)
 		if err := requireRelativePath(markerRel, fmt.Sprintf("completion_marker_paths[%d]", idx)); err != nil {
@@ -186,7 +189,10 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		completionArtifacts = append(completionArtifacts, markerAbs)
 	}
 	pinRel := strings.TrimSpace(parsed.CompletionPinPath)
-	if pinRel != "" {
+	if pinRel == "" {
+		return nil, fmt.Errorf("completion_pin_path is required")
+	}
+	{
 		if err := requireRelativePath(pinRel, "completion_pin_path"); err != nil {
 			return nil, err
 		}

@@ -27,6 +27,8 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 			"readiness_target_dir":     "runs/demo/target",
 			"readiness_scratch_root":   "runs/demo/scratch",
 			"finalization_result_path": "runs/demo/final.json",
+			"completion_marker_paths":  []any{"runs/demo/q/complete.marker.json"},
+			"completion_pin_path":      "runs/demo/completion.pin.json",
 			"items": []any{
 				map[string]any{
 					"item_id":           "item-1",
@@ -185,6 +187,19 @@ func TestStopAfterReceiptFailure(t *testing.T) {
 	}
 }
 
+func TestPreflightRejectsExitZeroNotOK(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	if err := os.WriteFile(filepath.Join(env.root, "readiness-not-ok"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Preflight(context.Background()); err == nil {
+		t.Fatal("expected readiness ok:false refusal even with exit code zero")
+	}
+}
+
 func TestFinalizeOnceAndStatusReadOnly(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
@@ -222,6 +237,26 @@ func TestFinalizeOnceAndStatusReadOnly(t *testing.T) {
 	}
 	if _, err := runner.FinalizeRun(ctx); err == nil {
 		t.Fatal("expected one-time finalization refusal")
+	}
+}
+
+func TestFinalizeRequiresFinalizedVerdict(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	ctx := context.Background()
+	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-2", json.RawMessage(`{"n":2}`), "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.root, "verifier-wrong-final-stage"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.FinalizeRun(ctx); err == nil {
+		t.Fatal("expected finalize refusal when verifier stage is not finalized")
 	}
 }
 
@@ -327,6 +362,8 @@ func TestPostStartupSymlinkCannotRedirectWrite(t *testing.T) {
 		"readiness_target_dir":     "runs/demo/target",
 		"readiness_scratch_root":   "runs/demo/scratch",
 		"finalization_result_path": "runs/demo/final.json",
+		"completion_marker_paths":  []any{"runs/demo/q/complete.marker.json"},
+		"completion_pin_path":      "runs/demo/completion.pin.json",
 		"items": []any{
 			map[string]any{
 				"item_id":           "item-1",
@@ -386,6 +423,15 @@ func TestVerifierVerdictGate(t *testing.T) {
 	}
 
 	if err := os.Remove(filepath.Join(env.root, "verifier-not-accepted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.root, "verifier-missing-pending"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-2", json.RawMessage(`{"n":2}`), "tester"); err == nil {
+		t.Fatal("expected refusal when verifier omits pending_item_ids")
+	}
+	if err := os.Remove(filepath.Join(env.root, "verifier-missing-pending")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(env.root, "verifier-refuse"), []byte("1"), 0o644); err != nil {
