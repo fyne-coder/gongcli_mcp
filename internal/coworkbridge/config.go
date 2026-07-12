@@ -128,7 +128,7 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	if err := requireRelativePath(interpreterRel, "python_interpreter"); err != nil {
 		return nil, err
 	}
-	interpreterAbs, err := resolveContainedPath(approvedRoot, interpreterRel, true)
+	interpreterAbs, err := resolveInterpreterPath(approvedRoot, interpreterRel)
 	if err != nil {
 		return nil, fmt.Errorf("python_interpreter: %w", err)
 	}
@@ -400,6 +400,33 @@ func canonicalizeExistingDir(path string) (string, error) {
 	}
 	if !info.IsDir() {
 		return "", fmt.Errorf("not a directory: %s", resolved)
+	}
+	return resolved, nil
+}
+
+// resolveInterpreterPath permits the final venv interpreter entry to resolve
+// outside the project root (the standard macOS venv layout symlinks it to the
+// Homebrew/framework Python). The parent directory itself must remain inside
+// the approved root. The resolved executable path is pinned at startup, so a
+// later symlink replacement cannot redirect execution.
+func resolveInterpreterPath(root, rel string) (string, error) {
+	if err := requireRelativePath(rel, "python_interpreter"); err != nil {
+		return "", err
+	}
+	lexical := filepath.Join(root, filepath.Clean(rel))
+	if !underRoot(root, lexical) {
+		return "", fmt.Errorf("python_interpreter escapes approved root")
+	}
+	resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(lexical))
+	if err != nil {
+		return "", err
+	}
+	if !underRoot(root, resolvedParent) {
+		return "", fmt.Errorf("python_interpreter parent escapes approved root via symlink")
+	}
+	resolved, err := filepath.EvalSymlinks(lexical)
+	if err != nil {
+		return "", err
 	}
 	return resolved, nil
 }

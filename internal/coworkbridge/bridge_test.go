@@ -135,6 +135,44 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 	}
 }
 
+func TestLoadContractAcceptsFinalVenvInterpreterSymlinkOnly(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	external := filepath.Join(t.TempDir(), "python3.14")
+	mustWriteExecutable(t, external, "#!/bin/sh\nexit 0\n")
+	if err := os.MkdirAll(filepath.Join(root, ".venv-host", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(root, ".venv-host", "bin", "python")); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := writeMinimalContract(t, root)
+	contract, err := LoadContract(contractPath)
+	if err != nil {
+		t.Fatalf("standard venv interpreter symlink should load: %v", err)
+	}
+	expectedExternal, err := filepath.EvalSymlinks(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.PythonInterpreter != expectedExternal {
+		t.Fatalf("interpreter=%q want pinned resolved %q", contract.PythonInterpreter, expectedExternal)
+	}
+
+	root2 := t.TempDir()
+	externalBin := t.TempDir()
+	mustWriteExecutable(t, filepath.Join(externalBin, "python"), "#!/bin/sh\nexit 0\n")
+	if err := os.MkdirAll(filepath.Join(root2, ".venv-host"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalBin, filepath.Join(root2, ".venv-host", "bin")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadContract(writeMinimalContract(t, root2)); err == nil {
+		t.Fatal("expected interpreter parent symlink escape rejection")
+	}
+}
+
 func TestPersistResponseOrderingAndStopAfterFailure(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
@@ -629,6 +667,48 @@ func newSyntheticEnv(t *testing.T) syntheticEnv {
 	}
 	prepareSyntheticPreflight(t, contract)
 	return syntheticEnv{root: root, contract: contract}
+}
+
+func writeMinimalContract(t *testing.T, root string) string {
+	t.Helper()
+	for _, dir := range []string{
+		filepath.Join(root, "runs", "demo", "q"),
+		filepath.Join(root, "runs", "demo", "target"),
+		filepath.Join(root, "runs", "demo", "scratch"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := map[string]any{
+		"schema_version": "1.0", "approved_project_root": root,
+		"python_interpreter": ".venv-host/bin/python",
+		"run_root":           "runs/demo", "quarter_root": "runs/demo/q",
+		"status_response_path":       "runs/demo/q/preflight/status.json",
+		"capabilities_response_path": "runs/demo/q/preflight/capabilities.json",
+		"pre_drilldown_gate_path":    "runs/demo/q/pre-drilldown-gate.json",
+		"quarter_id":                 "2099-q1", "version": "v1", "segment_id": "segment-test",
+		"contract_model_id":        "claude-haiku-4-5-20251001",
+		"cowork_ui_display_name":   "Claude Haiku 4.5",
+		"readiness_target_dir":     "runs/demo/target",
+		"readiness_scratch_root":   "runs/demo/scratch",
+		"finalization_result_path": "runs/demo/final.json",
+		"completion_marker_paths":  []any{"runs/demo/q/capture-complete.marker.json"},
+		"completion_pin_path":      "runs/demo/capture-complete.pin.json",
+		"items": []any{map[string]any{
+			"item_id": "item-1", "raw_response_path": "runs/demo/out/item-1.json",
+			"staged_input_path": "runs/demo/out/item-1.staged.json",
+		}},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "contract.json")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func prepareSyntheticPreflight(t *testing.T, contract *ResolvedContract) {
