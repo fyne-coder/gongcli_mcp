@@ -223,7 +223,7 @@ Primary references:
 
 ## Install From Source
 
-This repo requires Go 1.26.4 or newer for local builds and release artifacts.
+This repo requires Go 1.26.5 or newer for local builds and release artifacts.
 
 ```bash
 go test -count=1 ./...
