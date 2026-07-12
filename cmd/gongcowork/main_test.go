@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fyne-coder/gongcli_mcp/internal/coworkbridge"
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
 )
 
@@ -48,6 +49,10 @@ func TestGongcoworkToolsListOnlyWorkflowTool(t *testing.T) {
 
 func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 	env := newMainSyntheticEnv(t)
+	contract, err := coworkbridge.LoadContract(env.contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout, stderr bytes.Buffer
 	stdin := bytes.NewBufferString(
 		mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "1", Method: "initialize", Params: json.RawMessage(`{}`)}) +
@@ -88,6 +93,14 @@ func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(argvLog)
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "ARGS\t"+contract.PythonInterpreter+"\t-m\tgong_quarterly_review.") {
+			t.Fatalf("argv line not pinned to fake interpreter/module: %s", line)
+		}
+	}
 	for _, module := range []string{
 		"gong_quarterly_review.local_bridge_readiness",
 		"gong_quarterly_review.response_receipt",
@@ -97,9 +110,6 @@ func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
 		if !strings.Contains(text, module) {
 			t.Fatalf("argv log missing %s:\n%s", module, text)
 		}
-	}
-	if strings.Contains(text, "gong") && strings.Contains(strings.ToLower(text), "https://") {
-		t.Fatalf("unexpected network-looking argv: %s", text)
 	}
 }
 
@@ -152,6 +162,10 @@ func newMainSyntheticEnv(t *testing.T) mainEnv {
 		"readiness_target_dir":     "runs/demo/target",
 		"readiness_scratch_root":   "runs/demo/scratch",
 		"finalization_result_path": "runs/demo/final.json",
+		"completion_marker_paths": []any{
+			"runs/demo/markers/capture-complete.marker.json",
+		},
+		"completion_pin_path": "runs/demo/completion.pin.json",
 		"items": []any{
 			map[string]any{
 				"item_id":           "item-1",

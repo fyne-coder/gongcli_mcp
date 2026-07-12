@@ -15,30 +15,68 @@ import (
 
 // CommandResult is metadata about one fixed module invocation.
 type CommandResult struct {
-	Module     string `json:"module"`
-	ExitCode   int    `json:"exit_code"`
-	DurationMS int64  `json:"duration_ms"`
-	StdoutBytes int   `json:"stdout_bytes"`
-	StderrBytes int   `json:"stderr_bytes"`
+	Module      string `json:"module"`
+	ExitCode    int    `json:"exit_code"`
+	DurationMS  int64  `json:"duration_ms"`
+	StdoutBytes int    `json:"stdout_bytes"`
+	StderrBytes int    `json:"stderr_bytes"`
 }
 
 // Runner executes fixed gong_quarterly_review module invocations only.
 type Runner struct {
 	Contract *ResolvedContract
+	root     *os.Root
 	// execCommand is replaceable in tests; production uses exec.CommandContext.
 	execCommand func(ctx context.Context, name string, argv ...string) *exec.Cmd
 }
 
-func NewRunner(contract *ResolvedContract) *Runner {
+func NewRunner(contract *ResolvedContract) (*Runner, error) {
+	if contract == nil {
+		return nil, fmt.Errorf("contract is required")
+	}
+	root, err := os.OpenRoot(contract.ApprovedProjectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open approved project root: %w", err)
+	}
 	return &Runner{
 		Contract: contract,
+		root:     root,
 		execCommand: func(ctx context.Context, name string, argv ...string) *exec.Cmd {
 			return exec.CommandContext(ctx, name, argv...)
 		},
-	}
+	}, nil
 }
 
-func (r *Runner) runModule(ctx context.Context, module string, args ...string) (CommandResult, error) {
+// Close releases the approved-root handle.
+func (r *Runner) Close() error {
+	if r == nil || r.root == nil {
+		return nil
+	}
+	err := r.root.Close()
+	r.root = nil
+	return err
+}
+
+func (r *Runner) rel(abs string) (string, error) {
+	rel, err := filepath.Rel(r.Contract.ApprovedProjectRoot, abs)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes approved root: %s", abs)
+	}
+	return rel, nil
+}
+
+func (r *Runner) lstatContained(abs string) (os.FileInfo, error) {
+	rel, err := r.rel(abs)
+	if err != nil {
+		return nil, err
+	}
+	return r.root.Lstat(rel)
+}
+
+func (r *Runner) runModule(ctx context.Context, module string, args ...string) (CommandResult, []byte, error) {
 	timeout := r.Contract.CommandTimeout
 	if timeout <= 0 {
 		timeout = DefaultCommandTimeout
@@ -71,7 +109,7 @@ func (r *Runner) runModule(ctx context.Context, module string, args ...string) (
 	}
 	if err != nil {
 		if runCtx.Err() != nil {
-			return result, fmt.Errorf("module %s timed out after %s", module, timeout)
+			return result, stdout.Bytes(), fmt.Errorf("module %s timed out after %s", module, timeout)
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
@@ -80,9 +118,9 @@ func (r *Runner) runModule(ctx context.Context, module string, args ...string) (
 		if len(msg) > 512 {
 			msg = msg[:512] + "…"
 		}
-		return result, fmt.Errorf("module %s failed (exit %d): %s", module, result.ExitCode, msg)
+		return result, stdout.Bytes(), fmt.Errorf("module %s failed (exit %d): %s", module, result.ExitCode, msg)
 	}
-	return result, nil
+	return result, stdout.Bytes(), nil
 }
 
 type limitedWriter struct {
@@ -103,7 +141,7 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 }
 
 func (r *Runner) Preflight(ctx context.Context) (map[string]any, error) {
-	result, err := r.runModule(ctx, "gong_quarterly_review.local_bridge_readiness",
+	result, _, err := r.runModule(ctx, "gong_quarterly_review.local_bridge_readiness",
 		"--approved-root", r.Contract.ApprovedProjectRoot,
 		"--target-dir", r.Contract.ReadinessTargetDir,
 		"--scratch-root", r.Contract.ReadinessScratchRoot,
@@ -146,7 +184,7 @@ func (r *Runner) PersistResponse(ctx context.Context, itemID string, response js
 	}
 	if idx > 0 {
 		prev := r.Contract.Items[idx-1]
-		if _, err := os.Lstat(prev.RawResponsePath); err != nil {
+		if _, err := r.lstatContained(prev.RawResponsePath); err != nil {
 			return nil, fmt.Errorf("refusing to persist %q until previous item %q raw response exists", itemID, prev.ItemID)
 		}
 		if _, err := r.ValidateItem(ctx, prev.ItemID); err != nil {
@@ -154,12 +192,12 @@ func (r *Runner) PersistResponse(ctx context.Context, itemID string, response js
 		}
 	}
 
-	if err := writeJSONExclusive(item.RawResponsePath, response); err != nil {
+	if err := r.writeJSONExclusive(item.RawResponsePath, response); err != nil {
 		return nil, err
 	}
 
 	commands := make([]CommandResult, 0, 3)
-	receipt, err := r.runModule(ctx, "gong_quarterly_review.response_receipt",
+	receipt, _, err := r.runModule(ctx, "gong_quarterly_review.response_receipt",
 		"--quarter-root", r.Contract.QuarterRoot,
 		"--item-id", item.ItemID,
 		"--raw-response", item.RawResponsePath,
@@ -169,7 +207,7 @@ func (r *Runner) PersistResponse(ctx context.Context, itemID string, response js
 		return nil, fmt.Errorf("receipt failed; adapter and stage were not run: %w", err)
 	}
 
-	adapter, err := r.runModule(ctx, "gong_quarterly_review.response_adapter",
+	adapter, _, err := r.runModule(ctx, "gong_quarterly_review.response_adapter",
 		"--quarter-root", r.Contract.QuarterRoot,
 		"--item-id", item.ItemID,
 		"--raw-response", item.RawResponsePath,
@@ -181,7 +219,7 @@ func (r *Runner) PersistResponse(ctx context.Context, itemID string, response js
 		return nil, fmt.Errorf("adapter failed; stage was not run: %w", err)
 	}
 
-	stage, err := r.runModule(ctx, "gong_quarterly_review.stage_rehearsal_capture",
+	stage, _, err := r.runModule(ctx, "gong_quarterly_review.stage_rehearsal_capture",
 		"--run-root", r.Contract.RunRoot,
 		"--input", item.StagedInputPath,
 	)
@@ -204,22 +242,24 @@ func (r *Runner) ValidateItem(ctx context.Context, itemID string) (map[string]an
 	if err != nil {
 		return nil, err
 	}
-	status, err := r.runModule(ctx, "gong_quarterly_review.verify_ordering_rehearsal",
-		"--run-root", r.Contract.RunRoot,
-	)
+	status, verdict, err := r.runOrderingVerifier(ctx, false, "")
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Lstat(item.RawResponsePath); err != nil {
+	if err := requireItemAccepted(verdict, item.ItemID); err != nil {
+		return nil, err
+	}
+	if _, err := r.lstatContained(item.RawResponsePath); err != nil {
 		return nil, fmt.Errorf("item %q raw response is not present", itemID)
 	}
-	if _, err := os.Lstat(item.StagedInputPath); err != nil {
+	if _, err := r.lstatContained(item.StagedInputPath); err != nil {
 		return nil, fmt.Errorf("item %q staged input is not present", itemID)
 	}
 	return map[string]any{
 		"ok":      true,
 		"item_id": item.ItemID,
 		"command": status,
+		"verdict": verdict,
 		"paths": map[string]string{
 			"raw_response_path": item.RawResponsePath,
 			"staged_input_path": item.StagedInputPath,
@@ -228,59 +268,171 @@ func (r *Runner) ValidateItem(ctx context.Context, itemID string) (map[string]an
 }
 
 func (r *Runner) FinalizeRun(ctx context.Context) (map[string]any, error) {
-	if _, err := os.Lstat(r.Contract.FinalizationResultPath); err == nil {
+	if _, err := r.lstatContained(r.Contract.FinalizationResultPath); err == nil {
 		return nil, fmt.Errorf("finalization already recorded at %s", r.Contract.FinalizationResultPath)
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	for _, marker := range completionArtifactCandidates(r.Contract.QuarterRoot, r.Contract.RunRoot) {
-		if _, err := os.Lstat(marker); err == nil {
+	for _, marker := range r.Contract.CompletionArtifactPaths {
+		if _, err := r.lstatContained(marker); err == nil {
 			return nil, fmt.Errorf("completion artifact already exists at %s", marker)
 		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
 	}
 
-	result, err := r.runModule(ctx, "gong_quarterly_review.verify_ordering_rehearsal",
-		"--run-root", r.Contract.RunRoot,
-		"--finalize",
-		"--output", r.Contract.FinalizationResultPath,
-	)
+	result, verdict, err := r.runOrderingVerifier(ctx, true, r.Contract.FinalizationResultPath)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireFinalizeAccepted(verdict); err != nil {
 		return nil, err
 	}
 	return map[string]any{
 		"ok":      true,
 		"command": result,
+		"verdict": verdict,
 		"output":  r.Contract.FinalizationResultPath,
 	}, nil
 }
 
 func (r *Runner) GetRunStatus(ctx context.Context) (map[string]any, error) {
-	result, err := r.runModule(ctx, "gong_quarterly_review.verify_ordering_rehearsal",
-		"--run-root", r.Contract.RunRoot,
-	)
+	result, verdict, err := r.runOrderingVerifier(ctx, false, "")
 	if err != nil {
 		return nil, err
 	}
+	ok, _ := verdict["ok"].(bool)
 	return map[string]any{
-		"ok":      true,
+		"ok":      ok,
 		"command": result,
+		"verdict": verdict,
 	}, nil
 }
 
-func completionArtifactCandidates(quarterRoot, runRoot string) []string {
-	return []string{
-		filepath.Join(quarterRoot, "markers", "capture-complete.marker.json"),
-		filepath.Join(quarterRoot, "capture-complete.marker.json"),
-		filepath.Join(runRoot, "markers", "capture-complete.marker.json"),
-		filepath.Join(runRoot, "capture-complete.marker.json"),
+func (r *Runner) runOrderingVerifier(ctx context.Context, finalize bool, outputPath string) (CommandResult, map[string]any, error) {
+	args := []string{"--run-root", r.Contract.RunRoot}
+	if finalize {
+		args = append(args, "--finalize", "--output", outputPath)
+	}
+	result, stdout, err := r.runModule(ctx, "gong_quarterly_review.verify_ordering_rehearsal", args...)
+	if err != nil {
+		verdict, parseErr := parseVerifierVerdict(stdout)
+		if parseErr == nil {
+			return result, verdict, err
+		}
+		return result, nil, err
+	}
+	verdict, err := parseVerifierVerdict(stdout)
+	if err != nil {
+		return result, nil, err
+	}
+	return result, verdict, nil
+}
+
+func parseVerifierVerdict(stdout []byte) (map[string]any, error) {
+	payload := bytes.TrimSpace(stdout)
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("verifier produced empty stdout")
+	}
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	var verdict map[string]any
+	if err := dec.Decode(&verdict); err != nil {
+		return nil, fmt.Errorf("parse verifier verdict: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("verifier stdout contains trailing JSON")
+		}
+		return nil, fmt.Errorf("verifier stdout contains trailing data: %w", err)
+	}
+	if verdict == nil {
+		return nil, fmt.Errorf("verifier verdict must be a JSON object")
+	}
+	return verdict, nil
+}
+
+// requireItemAccepted encodes the smallest stable acceptance rule confirmed
+// against the real verify_ordering_rehearsal JSON: top-level ok:true can coexist
+// with stage pending-items, so ok alone is never sufficient.
+func requireItemAccepted(verdict map[string]any, itemID string) error {
+	ok, _ := verdict["ok"].(bool)
+	if !ok {
+		stage, _ := verdict["stage"].(string)
+		if stage != "" {
+			return fmt.Errorf("verifier rejected item %q (ok=false, stage=%s)", itemID, stage)
+		}
+		return fmt.Errorf("verifier rejected item %q (ok=false)", itemID)
+	}
+	if rawJournal, present := verdict["ordering_journal"]; present && rawJournal != nil {
+		journal, ok := rawJournal.(map[string]any)
+		if !ok {
+			return fmt.Errorf("verifier ordering_journal must be an object")
+		}
+		journalOK, _ := journal["ok"].(bool)
+		if !journalOK {
+			return fmt.Errorf("verifier ordering_journal.ok is not true for item %q", itemID)
+		}
+	}
+	for _, pendingID := range pendingItemIDs(verdict) {
+		if pendingID == itemID {
+			stage, _ := verdict["stage"].(string)
+			return fmt.Errorf("verifier has not accepted item %q (still pending; stage=%s)", itemID, stage)
+		}
+	}
+	return nil
+}
+
+func requireFinalizeAccepted(verdict map[string]any) error {
+	ok, _ := verdict["ok"].(bool)
+	if !ok {
+		stage, _ := verdict["stage"].(string)
+		if stage != "" {
+			return fmt.Errorf("finalize rejected (ok=false, stage=%s)", stage)
+		}
+		return fmt.Errorf("finalize rejected (ok=false)")
+	}
+	if rawJournal, present := verdict["ordering_journal"]; present && rawJournal != nil {
+		journal, ok := rawJournal.(map[string]any)
+		if !ok {
+			return fmt.Errorf("finalize ordering_journal must be an object")
+		}
+		journalOK, _ := journal["ok"].(bool)
+		if !journalOK {
+			return fmt.Errorf("finalize ordering_journal.ok is not true")
+		}
+	}
+	return nil
+}
+
+func pendingItemIDs(verdict map[string]any) []string {
+	raw, ok := verdict["pending_item_ids"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch values := raw.(type) {
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			out = append(out, fmt.Sprint(value))
+		}
+		return out
+	case []string:
+		return append([]string(nil), values...)
+	default:
+		return nil
 	}
 }
 
-func writeJSONExclusive(path string, response json.RawMessage) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func (r *Runner) writeJSONExclusive(absPath string, response json.RawMessage) error {
+	rel, err := r.rel(absPath)
+	if err != nil {
 		return err
+	}
+	dir := filepath.Dir(rel)
+	if dir != "." && dir != "" {
+		if err := r.root.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
 	}
 	var compact bytes.Buffer
 	if err := json.Compact(&compact, response); err != nil {
@@ -288,21 +440,39 @@ func writeJSONExclusive(path string, response json.RawMessage) error {
 	}
 	compact.WriteByte('\n')
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := r.root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
-			return fmt.Errorf("refusing duplicate persistence: %s already exists", path)
+			return fmt.Errorf("refusing duplicate persistence: %s already exists", absPath)
 		}
 		return err
 	}
-	defer f.Close()
 	if _, err := io.Copy(f, &compact); err != nil {
-		_ = os.Remove(path)
+		_ = f.Close()
+		_ = r.root.Remove(rel)
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		_ = os.Remove(path)
+		_ = f.Close()
+		_ = r.root.Remove(rel)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = r.root.Remove(rel)
+		return err
+	}
+
+	if dir == "." || dir == "" {
+		dir = "."
+	}
+	dirFile, err := r.root.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open parent directory for fsync: %w", err)
+	}
+	syncErr := dirFile.Sync()
+	closeErr := dirFile.Close()
+	if syncErr != nil {
+		return fmt.Errorf("fsync parent directory: %w", syncErr)
+	}
+	return closeErr
 }

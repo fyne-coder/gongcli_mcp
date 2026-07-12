@@ -45,13 +45,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "load contract: %v\n", err)
 		return 2
 	}
-	runner := coworkbridge.NewRunner(contract)
+	if contract.ContractInsideApprovedRoot {
+		fmt.Fprintf(stderr, "warning: contract path %s resolves inside approved_project_root; prefer an operator-owned path outside any Cowork-writable directory\n", contract.ContractPath)
+	}
+	runner, err := coworkbridge.NewRunner(contract)
+	if err != nil {
+		fmt.Fprintf(stderr, "open runner: %v\n", err)
+		return 2
+	}
+	defer runner.Close()
 	server := mcp.NewServerWithOptions(
 		nil,
 		"gongcowork",
 		version.Version,
 		mcp.WithToolAllowlist([]string{coworkbridge.ToolName}),
 		mcp.WithCustomTools(coworkbridge.Tool(runner)),
+		mcp.WithMaxFrameBytes(mcp.CompanionMaxFrameBytes),
 		mcp.WithRuntimeInfo(mcp.RuntimeInfo{
 			Commit:     version.Commit,
 			BuildDate:  version.Date,

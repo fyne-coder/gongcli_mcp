@@ -18,6 +18,7 @@ test:
 	go test ./...
 
 coding-check:
+	test -z "$$(gofmt -l internal/mcp/server.go internal/mcp/custom_tool_test.go internal/coworkbridge/*.go cmd/gongcowork/*.go)"
 	git diff --check
 	go test -count=1 ./internal/mcp ./internal/coworkbridge ./cmd/gongcowork
 	go vet ./internal/mcp ./internal/coworkbridge ./cmd/gongcowork

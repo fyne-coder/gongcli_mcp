@@ -1,8 +1,10 @@
 package coworkbridge
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +14,9 @@ import (
 const (
 	ContractSchemaVersion = "1.0"
 	DefaultCommandTimeout = 60 * time.Second
-	MaxResponseBytes      = 1 << 20 // 1 MiB
+	// MaxResponseBytes is kept comfortably below the gongcowork MCP frame cap
+	// (4 MiB) so the tool-layer limit binds before transport framing.
+	MaxResponseBytes      = 3 << 20 // 3 MiB
 	MaxCommandOutputBytes = 256 << 10
 )
 
@@ -25,18 +29,20 @@ type ContractItem struct {
 
 // ResolvedContract is the startup-validated absolute path view of a contract.
 type ResolvedContract struct {
-	SchemaVersion          string
-	ContractPath           string
-	ApprovedProjectRoot    string
-	PythonInterpreter      string
-	RunRoot                string
-	QuarterRoot            string
-	ReadinessTargetDir     string
-	ReadinessScratchRoot   string
-	FinalizationResultPath string
-	Items                  []ResolvedItem
-	CommandTimeout         time.Duration
-	MaxResponseBytes       int
+	SchemaVersion              string
+	ContractPath               string
+	ApprovedProjectRoot        string
+	PythonInterpreter          string
+	RunRoot                    string
+	QuarterRoot                string
+	ReadinessTargetDir         string
+	ReadinessScratchRoot       string
+	FinalizationResultPath     string
+	CompletionArtifactPaths    []string
+	Items                      []ResolvedItem
+	CommandTimeout             time.Duration
+	MaxResponseBytes           int
+	ContractInsideApprovedRoot bool
 }
 
 // ResolvedItem holds absolute paths for one frozen item.
@@ -55,6 +61,8 @@ type contractFile struct {
 	ReadinessTargetDir     string         `json:"readiness_target_dir"`
 	ReadinessScratchRoot   string         `json:"readiness_scratch_root"`
 	FinalizationResultPath string         `json:"finalization_result_path"`
+	CompletionMarkerPaths  []string       `json:"completion_marker_paths"`
+	CompletionPinPath      string         `json:"completion_pin_path"`
 	Items                  []ContractItem `json:"items"`
 }
 
@@ -73,10 +81,16 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		return nil, fmt.Errorf("read contract: %w", err)
 	}
 	var parsed contractFile
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&parsed); err != nil {
 		return nil, fmt.Errorf("parse contract: %w", err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("parse contract: trailing JSON after contract document")
+		}
+		return nil, fmt.Errorf("parse contract: trailing data after contract document: %w", err)
 	}
 	if strings.TrimSpace(parsed.SchemaVersion) != ContractSchemaVersion {
 		return nil, fmt.Errorf("unsupported contract schema_version %q (want %q)", parsed.SchemaVersion, ContractSchemaVersion)
@@ -92,6 +106,7 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("approved_project_root: %w", err)
 	}
+	contractInsideRoot := underRoot(approvedRoot, absContract)
 
 	interpreterRel := strings.TrimSpace(parsed.PythonInterpreter)
 	if err := requireRelativePath(interpreterRel, "python_interpreter"); err != nil {
@@ -151,7 +166,41 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 	}
 
 	seenIDs := make(map[string]struct{}, len(parsed.Items))
-	seenPaths := map[string]string{}
+	seenPaths := map[string]string{
+		finalAbs: "finalization_result_path",
+	}
+	completionArtifacts := make([]string, 0, len(parsed.CompletionMarkerPaths)+1)
+	for idx, markerRel := range parsed.CompletionMarkerPaths {
+		markerRel = strings.TrimSpace(markerRel)
+		if err := requireRelativePath(markerRel, fmt.Sprintf("completion_marker_paths[%d]", idx)); err != nil {
+			return nil, err
+		}
+		markerAbs, err := resolveContainedPath(approvedRoot, markerRel, false)
+		if err != nil {
+			return nil, fmt.Errorf("completion_marker_paths[%d]: %w", idx, err)
+		}
+		if owner, ok := seenPaths[markerAbs]; ok {
+			return nil, fmt.Errorf("duplicate completion artifact path %q used by %s", markerAbs, owner)
+		}
+		seenPaths[markerAbs] = fmt.Sprintf("completion_marker_paths[%d]", idx)
+		completionArtifacts = append(completionArtifacts, markerAbs)
+	}
+	pinRel := strings.TrimSpace(parsed.CompletionPinPath)
+	if pinRel != "" {
+		if err := requireRelativePath(pinRel, "completion_pin_path"); err != nil {
+			return nil, err
+		}
+		pinAbs, err := resolveContainedPath(approvedRoot, pinRel, false)
+		if err != nil {
+			return nil, fmt.Errorf("completion_pin_path: %w", err)
+		}
+		if owner, ok := seenPaths[pinAbs]; ok {
+			return nil, fmt.Errorf("duplicate completion artifact path %q used by %s", pinAbs, owner)
+		}
+		seenPaths[pinAbs] = "completion_pin_path"
+		completionArtifacts = append(completionArtifacts, pinAbs)
+	}
+
 	items := make([]ResolvedItem, 0, len(parsed.Items))
 	for idx, item := range parsed.Items {
 		id := strings.TrimSpace(item.ItemID)
@@ -186,32 +235,28 @@ func LoadContract(contractPath string) (*ResolvedContract, error) {
 		}
 		seenPaths[rawAbs] = id + ":raw"
 		seenPaths[stagedAbs] = id + ":staged"
-		if rawAbs == finalAbs || stagedAbs == finalAbs {
-			return nil, fmt.Errorf("item %q output path collides with finalization_result_path", id)
-		}
 		items = append(items, ResolvedItem{
 			ItemID:          id,
 			RawResponsePath: rawAbs,
 			StagedInputPath: stagedAbs,
 		})
 	}
-	if _, ok := seenPaths[finalAbs]; ok {
-		return nil, fmt.Errorf("finalization_result_path collides with an item output path")
-	}
 
 	return &ResolvedContract{
-		SchemaVersion:          ContractSchemaVersion,
-		ContractPath:           absContract,
-		ApprovedProjectRoot:    approvedRoot,
-		PythonInterpreter:      interpreterAbs,
-		RunRoot:                runRootAbs,
-		QuarterRoot:            quarterRootAbs,
-		ReadinessTargetDir:     targetAbs,
-		ReadinessScratchRoot:   scratchAbs,
-		FinalizationResultPath: finalAbs,
-		Items:                  items,
-		CommandTimeout:         DefaultCommandTimeout,
-		MaxResponseBytes:       MaxResponseBytes,
+		SchemaVersion:              ContractSchemaVersion,
+		ContractPath:               absContract,
+		ApprovedProjectRoot:        approvedRoot,
+		PythonInterpreter:          interpreterAbs,
+		RunRoot:                    runRootAbs,
+		QuarterRoot:                quarterRootAbs,
+		ReadinessTargetDir:         targetAbs,
+		ReadinessScratchRoot:       scratchAbs,
+		FinalizationResultPath:     finalAbs,
+		CompletionArtifactPaths:    completionArtifacts,
+		Items:                      items,
+		CommandTimeout:             DefaultCommandTimeout,
+		MaxResponseBytes:           MaxResponseBytes,
+		ContractInsideApprovedRoot: contractInsideRoot,
 	}, nil
 }
 

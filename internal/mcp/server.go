@@ -28,7 +28,21 @@ const maxFrameBytes = 1 << 20
 const maxToolResultBytes = maxFrameBytes - 4096
 const DefaultHTTPToolCallTimeout = 60 * time.Second
 
+// CompanionMaxFrameBytes is the larger stdio frame cap used by gongcowork only.
+const CompanionMaxFrameBytes = 4 << 20
+
 var errHTTPPayloadTooLarge = fmt.Errorf("request body exceeds maximum %d bytes", maxFrameBytes)
+
+// errFrameTooLarge is returned after an oversized Content-Length body has been
+// discarded so the stdio loop can reply with a JSON-RPC error and continue.
+type errFrameTooLarge struct {
+	length int
+	max    int
+}
+
+func (e *errFrameTooLarge) Error() string {
+	return fmt.Sprintf("Content-Length %d exceeds maximum %d", e.length, e.max)
+}
 
 type frameMode int
 
@@ -104,6 +118,7 @@ type Server struct {
 	governanceCheck              func(context.Context) error
 	policySwitches               PolicySwitches
 	blocklistGuard               *governance.BlocklistGuard
+	maxFrameBytes                int
 }
 
 // CustomToolHandler executes one optionally registered custom MCP tool.
@@ -581,9 +596,22 @@ func (s *Server) applyCustomTools() {
 	if s.customHandlers == nil {
 		s.customHandlers = make(map[string]CustomToolHandler, len(s.customTools))
 	}
+	existing := make(map[string]struct{}, len(s.tools)+len(s.customTools))
+	for _, item := range s.tools {
+		existing[item.Name] = struct{}{}
+	}
 	for _, item := range s.customTools {
 		name := strings.TrimSpace(item.Name)
 		if name == "" || item.Handler == nil {
+			continue
+		}
+		if _, collision := existing[name]; collision {
+			// Fail closed: collisions would duplicate tools/list and shadow handlers.
+			tracef("rejecting custom tool %q: name collision", name)
+			continue
+		}
+		if _, dup := s.customHandlers[name]; dup {
+			tracef("rejecting custom tool %q: duplicate custom name", name)
 			continue
 		}
 		if len(s.allowedToolNames) > 0 {
@@ -604,16 +632,44 @@ func (s *Server) applyCustomTools() {
 			InputSchema: schema,
 		})
 		s.customHandlers[name] = item.Handler
+		existing[name] = struct{}{}
 	}
 }
 
 // WithCustomTools registers optional instance-local tools. When omitted, the
-// default Gong MCP catalog and presets are unchanged.
+// default Gong MCP catalog and presets are unchanged. Custom tools whose names
+// collide with an existing tool or with another custom tool are rejected
+// (ignored) so tools/list stays unique and default handlers are never shadowed.
 func WithCustomTools(tools ...CustomTool) ServerOption {
 	copied := append([]CustomTool(nil), tools...)
 	return func(s *Server) {
 		s.customTools = append(s.customTools, copied...)
 	}
+}
+
+// WithMaxFrameBytes sets the per-instance JSON-RPC frame size cap. Zero or
+// negative values keep the default gongmcp 1 MiB limit.
+func WithMaxFrameBytes(n int) ServerOption {
+	return func(s *Server) {
+		if n > 0 {
+			s.maxFrameBytes = n
+		}
+	}
+}
+
+func (s *Server) frameLimit() int {
+	if s != nil && s.maxFrameBytes > 0 {
+		return s.maxFrameBytes
+	}
+	return maxFrameBytes
+}
+
+func (s *Server) toolResultLimit() int {
+	limit := s.frameLimit() - 4096
+	if limit < 1 {
+		return 1
+	}
+	return limit
 }
 
 func WithRuntimeInfo(info RuntimeInfo) ServerOption {
@@ -1211,14 +1267,28 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	writer := bufio.NewWriter(w)
 	defer writer.Flush()
 	tracef("serve start")
+	frameLimit := s.frameLimit()
 
 	for {
 		tracef("waiting for frame")
-		payload, mode, err := readMessage(reader)
+		payload, mode, err := readMessageLimited(reader, frameLimit)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				tracef("read eof")
 				return nil
+			}
+			var tooLarge *errFrameTooLarge
+			if errors.As(err, &tooLarge) {
+				tracef("oversize frame: %v", err)
+				resp := s.err(nil, -32700, err.Error())
+				if writeErr := writeMessageLimited(writer, resp, mode, frameLimit); writeErr != nil {
+					tracef("write oversize error response: %v", writeErr)
+					return writeErr
+				}
+				if flushErr := writer.Flush(); flushErr != nil {
+					return flushErr
+				}
+				continue
 			}
 			tracef("read error: %v", err)
 			return err
@@ -1231,7 +1301,7 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 			continue
 		}
 		tracef("writing response")
-		if err := writeMessage(writer, resp, mode); err != nil {
+		if err := writeMessageLimited(writer, resp, mode, frameLimit); err != nil {
 			tracef("write error: %v", err)
 			return err
 		}
@@ -1283,8 +1353,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "encode response", http.StatusInternalServerError)
 		return
 	}
-	if len(body) > maxFrameBytes {
-		http.Error(w, fmt.Sprintf("response frame exceeds maximum %d bytes", maxFrameBytes), http.StatusInternalServerError)
+	if len(body) > s.frameLimit() {
+		http.Error(w, fmt.Sprintf("response frame exceeds maximum %d bytes", s.frameLimit()), http.StatusInternalServerError)
 		return
 	}
 
@@ -1363,7 +1433,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req Request) *response {
 	if err != nil {
 		return s.ok(req.ID, toolErrorResult(err))
 	}
-	if err := ensureToolResultFits(req.ID, result); err != nil {
+	if err := ensureToolResultFits(req.ID, result, s.frameLimit()); err != nil {
 		return s.ok(req.ID, toolErrorResult(err))
 	}
 	return s.ok(req.ID, result)
@@ -1388,7 +1458,7 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 		if err != nil {
 			return toolCallResult{}, err
 		}
-		return newToolResult(value)
+		return s.wrapToolResult(value)
 	}
 	if isFacadeTool(params.Name) {
 		return s.executeFacadeTool(ctx, params)
@@ -2548,11 +2618,18 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 }
 
 func readMessage(r *bufio.Reader) ([]byte, frameMode, error) {
+	return readMessageLimited(r, maxFrameBytes)
+}
+
+func readMessageLimited(r *bufio.Reader, maxBytes int) ([]byte, frameMode, error) {
+	if maxBytes <= 0 {
+		maxBytes = maxFrameBytes
+	}
 	contentLength := -1
 	sawHeader := false
 
 	for {
-		line, err := readLineLimited(r, maxFrameBytes)
+		line, err := readLineLimited(r, maxBytes)
 		if err != nil {
 			if errors.Is(err, io.EOF) && !sawHeader && len(line) == 0 {
 				return nil, frameModeHeader, io.EOF
@@ -2580,15 +2657,18 @@ func readMessage(r *bufio.Reader) ([]byte, frameMode, error) {
 			if err != nil || n < 0 {
 				return nil, frameModeHeader, fmt.Errorf("invalid Content-Length %q", strings.TrimSpace(value))
 			}
-			if n > maxFrameBytes {
-				return nil, frameModeHeader, fmt.Errorf("Content-Length %d exceeds maximum %d", n, maxFrameBytes)
-			}
 			contentLength = n
 		}
 	}
 
 	if contentLength < 0 {
 		return nil, frameModeHeader, errors.New("missing Content-Length header")
+	}
+	if contentLength > maxBytes {
+		if _, discardErr := io.CopyN(io.Discard, r, int64(contentLength)); discardErr != nil && !errors.Is(discardErr, io.EOF) && !errors.Is(discardErr, io.ErrUnexpectedEOF) {
+			return nil, frameModeHeader, discardErr
+		}
+		return nil, frameModeHeader, &errFrameTooLarge{length: contentLength, max: maxBytes}
 	}
 	tracef("frame content length=%d", contentLength)
 
@@ -2600,12 +2680,19 @@ func readMessage(r *bufio.Reader) ([]byte, frameMode, error) {
 }
 
 func writeFrame(w io.Writer, value any) error {
+	return writeFrameLimited(w, value, maxFrameBytes)
+}
+
+func writeFrameLimited(w io.Writer, value any, maxBytes int) error {
+	if maxBytes <= 0 {
+		maxBytes = maxFrameBytes
+	}
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	if len(payload) > maxFrameBytes {
-		return fmt.Errorf("response frame exceeds maximum %d bytes", maxFrameBytes)
+	if len(payload) > maxBytes {
+		return fmt.Errorf("response frame exceeds maximum %d bytes", maxBytes)
 	}
 	if _, err := fmt.Fprintf(w, "Content-Length: %d\r\n\r\n", len(payload)); err != nil {
 		return err
@@ -2615,15 +2702,22 @@ func writeFrame(w io.Writer, value any) error {
 }
 
 func writeMessage(w io.Writer, value any, mode frameMode) error {
+	return writeMessageLimited(w, value, mode, maxFrameBytes)
+}
+
+func writeMessageLimited(w io.Writer, value any, mode frameMode, maxBytes int) error {
 	if mode != frameModeLine {
-		return writeFrame(w, value)
+		return writeFrameLimited(w, value, maxBytes)
+	}
+	if maxBytes <= 0 {
+		maxBytes = maxFrameBytes
 	}
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	if len(payload) > maxFrameBytes {
-		return fmt.Errorf("response frame exceeds maximum %d bytes", maxFrameBytes)
+	if len(payload) > maxBytes {
+		return fmt.Errorf("response frame exceeds maximum %d bytes", maxBytes)
 	}
 	if _, err := w.Write(payload); err != nil {
 		return err
@@ -2664,6 +2758,21 @@ func stripMCPMeta(payload []byte) ([]byte, error) {
 
 func newToolResult(value any) (toolCallResult, error) {
 	text, err := jsonText(value)
+	if err != nil {
+		return toolCallResult{}, err
+	}
+	return toolCallResult{
+		Content: []toolContent{
+			{
+				Type: "text",
+				Text: text,
+			},
+		},
+	}, nil
+}
+
+func (s *Server) wrapToolResult(value any) (toolCallResult, error) {
+	text, err := jsonTextLimited(value, s.toolResultLimit())
 	if err != nil {
 		return toolCallResult{}, err
 	}
@@ -3033,7 +3142,10 @@ func minimizeCallDetail(detail *sqlite.CallDetail) {
 	}
 }
 
-func ensureToolResultFits(id any, result toolCallResult) error {
+func ensureToolResultFits(id any, result toolCallResult, maxBytes int) error {
+	if maxBytes <= 0 {
+		maxBytes = maxFrameBytes
+	}
 	payload, err := json.Marshal(response{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -3042,20 +3154,27 @@ func ensureToolResultFits(id any, result toolCallResult) error {
 	if err != nil {
 		return err
 	}
-	if len(payload) > maxFrameBytes {
-		return fmt.Errorf("tool result exceeds maximum %d bytes after MCP framing", maxFrameBytes)
+	if len(payload) > maxBytes {
+		return fmt.Errorf("tool result exceeds maximum %d bytes after MCP framing", maxBytes)
 	}
 	return nil
 }
 
 func jsonText(value any) (string, error) {
+	return jsonTextLimited(value, maxToolResultBytes)
+}
+
+func jsonTextLimited(value any, maxBytes int) (string, error) {
+	if maxBytes <= 0 {
+		maxBytes = maxToolResultBytes
+	}
 	switch raw := value.(type) {
 	case json.RawMessage:
 		if !json.Valid(raw) {
 			return "", errors.New("invalid JSON payload")
 		}
-		if len(raw) > maxToolResultBytes {
-			return "", fmt.Errorf("tool result exceeds maximum %d bytes", maxToolResultBytes)
+		if len(raw) > maxBytes {
+			return "", fmt.Errorf("tool result exceeds maximum %d bytes", maxBytes)
 		}
 		return string(raw), nil
 	default:
@@ -3063,8 +3182,8 @@ func jsonText(value any) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if len(payload) > maxToolResultBytes {
-			return "", fmt.Errorf("tool result exceeds maximum %d bytes", maxToolResultBytes)
+		if len(payload) > maxBytes {
+			return "", fmt.Errorf("tool result exceeds maximum %d bytes", maxBytes)
 		}
 		return string(payload), nil
 	}

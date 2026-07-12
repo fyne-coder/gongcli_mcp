@@ -1,9 +1,11 @@
 package coworkbridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
@@ -112,18 +114,20 @@ func rejectUnexpectedFields(args workflowArgs, allowItem, allowResponse, allowAt
 }
 
 func decodeStrict(raw json.RawMessage, dst any) error {
-	payload := bytesTrimSpace(raw)
+	payload := bytes.TrimSpace(raw)
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	dec := json.NewDecoder(strings.NewReader(string(payload)))
+	dec := json.NewDecoder(bytes.NewReader(payload))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("trailing JSON after arguments document")
+		}
+		return fmt.Errorf("trailing data after arguments document: %w", err)
+	}
 	return nil
-}
-
-func bytesTrimSpace(raw json.RawMessage) []byte {
-	return []byte(strings.TrimSpace(string(raw)))
 }

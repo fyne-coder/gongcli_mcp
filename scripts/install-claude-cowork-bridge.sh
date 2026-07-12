@@ -16,9 +16,12 @@ Options:
   --binary PATH     Absolute gongcowork binary path. Required.
   --server-name NAME  Claude MCP server name. Default: gongcowork.
   --config PATH     Claude config path. Defaults to macOS Claude Desktop config.
-  --install         Merge into Claude config with a timestamped backup.
+  --install         Reserved/refused in this slice; does not mutate Claude config.
   --print           Print the JSON server entry. Default behavior.
   -h, --help        Show this help.
+
+Prerequisite:
+  jq must be installed (not stock on macOS).
 
 Examples:
   scripts/install-claude-cowork-bridge.sh \
@@ -88,8 +91,14 @@ if [[ -z "$CONTRACT_PATH" || -z "$BINARY_PATH" ]]; then
   exit 2
 fi
 
+if [[ "$INSTALL" -ne 0 ]]; then
+  echo "--install is reserved for a later operator-approved slice; refusing to mutate Claude config in this dry-run companion build." >&2
+  echo "Re-run with --print to emit the entry, then install only after explicit operator approval." >&2
+  exit 2
+fi
+
 if ! command -v jq >/dev/null 2>&1; then
-  echo "jq is required to generate Claude Desktop JSON" >&2
+  echo "jq is required to generate Claude Desktop JSON (not stock on macOS; install via brew install jq)" >&2
   exit 1
 fi
 
@@ -106,11 +115,5 @@ ENTRY_JSON="$(
     }'
 )"
 
-if [[ "$INSTALL" -eq 0 ]]; then
-  jq -n --arg name "$SERVER_NAME" --argjson entry "$ENTRY_JSON" '{mcpServers: {($name): $entry}}'
-  exit 0
-fi
-
-echo "--install is reserved for a later operator-approved slice; refusing to mutate Claude config in this dry-run companion build." >&2
-echo "Re-run with --print to emit the entry, then install only after explicit operator approval." >&2
-exit 2
+jq -n --arg name "$SERVER_NAME" --argjson entry "$ENTRY_JSON" '{mcpServers: {($name): $entry}}'
+exit 0

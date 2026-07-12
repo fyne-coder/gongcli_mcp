@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +56,69 @@ func TestCustomToolRegistrationDoesNotChangeDefaultCatalog(t *testing.T) {
 		if name == "probe_custom_tool" {
 			t.Fatalf("custom tool leaked into shared ToolCatalogNames")
 		}
+	}
+}
+
+func TestCustomToolNameCollisionsAreRejected(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+
+	defaultName := ToolCatalogNames()[0]
+	called := false
+	server := NewServerWithOptions(store, "gongmcp", "test", WithCustomTools(
+		CustomTool{
+			Name:        defaultName,
+			Description: "should be rejected",
+			Handler: func(ctx context.Context, arguments json.RawMessage) (any, error) {
+				called = true
+				return map[string]any{"shadow": true}, nil
+			},
+		},
+		CustomTool{
+			Name:        "dup_custom",
+			Description: "first",
+			Handler: func(ctx context.Context, arguments json.RawMessage) (any, error) {
+				return map[string]any{"which": "first"}, nil
+			},
+		},
+		CustomTool{
+			Name:        "dup_custom",
+			Description: "second",
+			Handler: func(ctx context.Context, arguments json.RawMessage) (any, error) {
+				called = true
+				return map[string]any{"which": "second"}, nil
+			},
+		},
+	))
+
+	names := toolNames(server)
+	seen := map[string]int{}
+	for _, name := range names {
+		seen[name]++
+	}
+	if seen[defaultName] != 1 {
+		t.Fatalf("default tool %q count=%d want 1", defaultName, seen[defaultName])
+	}
+	if seen["dup_custom"] != 1 {
+		t.Fatalf("dup_custom count=%d want 1", seen["dup_custom"])
+	}
+
+	responses := runServer(t, server, requestFrame(Request{
+		JSONRPC: "2.0",
+		ID:      "call-default",
+		Method:  "tools/call",
+		Params: mustJSON(t, map[string]any{
+			"name":      defaultName,
+			"arguments": map[string]any{},
+		}),
+	}))
+	if len(responses) != 1 {
+		t.Fatalf("response count=%d", len(responses))
+	}
+	if called {
+		t.Fatal("colliding custom handler shadowed default tool")
 	}
 }
 
@@ -123,6 +188,69 @@ func TestCustomToolAllowlistOnlyExposesRegisteredTool(t *testing.T) {
 	}
 	if body["pong"] != "hello" {
 		t.Fatalf("pong=%v want hello", body["pong"])
+	}
+}
+
+func TestServeContinuesAfterOversizedContentLength(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	server := NewServerWithOptions(store, "gongmcp", "test", WithMaxFrameBytes(1024))
+
+	oversizeBody := strings.Repeat("x", 1100)
+	input := "Content-Length: 1100\r\n\r\n" + oversizeBody +
+		requestFrame(Request{JSONRPC: "2.0", ID: "1", Method: "initialize", Params: json.RawMessage(`{}`)})
+
+	responses := runServer(t, server, input)
+	if len(responses) < 2 {
+		t.Fatalf("response count=%d want at least 2 (oversize error + initialize)", len(responses))
+	}
+	var first struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(responses[0], &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Error == nil || !strings.Contains(first.Error.Message, "exceeds maximum") {
+		t.Fatalf("first response=%s", responses[0])
+	}
+	var second struct {
+		Result *struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(responses[1], &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.Result == nil || second.Result.ProtocolVersion == "" {
+		t.Fatalf("initialize response=%s", responses[1])
+	}
+}
+
+func TestCompanionFrameLimitAllowsLargerThanDefault(t *testing.T) {
+	t.Parallel()
+
+	store := openSeededStore(t)
+	defer store.Close()
+	server := NewServerWithOptions(store, "gongcowork", "test", WithMaxFrameBytes(CompanionMaxFrameBytes))
+	if got := server.frameLimit(); got != CompanionMaxFrameBytes {
+		t.Fatalf("frameLimit=%d want %d", got, CompanionMaxFrameBytes)
+	}
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` + strings.Repeat(" ", maxFrameBytes) + `}}`
+	if len(body) <= maxFrameBytes {
+		t.Fatalf("test body size=%d should exceed default maxFrameBytes", len(body))
+	}
+	if len(body) > CompanionMaxFrameBytes {
+		t.Fatalf("test body size=%d exceeds companion cap", len(body))
+	}
+	frame := "Content-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
+	responses := runServer(t, server, frame)
+	if len(responses) != 1 {
+		t.Fatalf("response count=%d want 1 (accepted under companion cap)", len(responses))
 	}
 }
 

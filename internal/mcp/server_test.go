@@ -3642,7 +3642,7 @@ func TestToolResultEnvelopeRejectsDoubleEncodedOverflow(t *testing.T) {
 
 	err := ensureToolResultFits("large-call", toolCallResult{
 		Content: []toolContent{{Type: "text", Text: string(largeRaw)}},
-	})
+	}, maxFrameBytes)
 	if err == nil {
 		t.Fatal("ensureToolResultFits allowed double-encoded response overflow")
 	}

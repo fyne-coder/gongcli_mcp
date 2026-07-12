@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG="${ROOT}/argv.log"
 mkdir -p "$(dirname "$LOG")"
 {
-  printf 'ARGS'
+  printf 'ARGS\t%s' "$0"
   for arg in "$@"; do
     printf '\t%s' "$arg"
   done
@@ -21,6 +21,42 @@ if [[ "${1:-}" != "-m" ]]; then
 fi
 MODULE="${2:-}"
 shift 2 || true
+
+extract_item_id() {
+  # Prefer staged-*.ok markers / known synthetic JSON shape without host python3.
+  local input="$1"
+  local line
+  line="$(tr '\n' ' ' <"$input")"
+  if [[ "$line" =~ \"item_id\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  echo "unable to extract item_id from $input" >&2
+  return 1
+}
+
+pending_item_ids_json() {
+  local pending=()
+  local item
+  for item in item-1 item-2; do
+    if [[ ! -f "${ROOT}/staged-${item}.ok" ]]; then
+      pending+=("$item")
+    fi
+  done
+  if [[ ${#pending[@]} -eq 0 ]]; then
+    printf '[]'
+    return
+  fi
+  printf '['
+  local i
+  for i in "${!pending[@]}"; do
+    if [[ $i -gt 0 ]]; then
+      printf ','
+    fi
+    printf '"%s"' "${pending[$i]}"
+  done
+  printf ']'
+}
 
 case "$MODULE" in
   gong_quarterly_review.local_bridge_readiness)
@@ -75,7 +111,7 @@ case "$MODULE" in
       echo "synthetic stage failure" >&2
       exit 1
     fi
-    ITEM="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["item_id"])' "$INPUT")"
+    ITEM="$(extract_item_id "$INPUT")"
     MARK="${ROOT}/staged-${ITEM}.ok"
     printf 'staged\n' >"$MARK"
     echo "{\"ok\":true,\"item_id\":\"${ITEM}\",\"module\":\"stage_rehearsal_capture\"}"
@@ -95,17 +131,30 @@ case "$MODULE" in
         *) shift ;;
       esac
     done
+    if [[ -f "${ROOT}/verifier-refuse" ]]; then
+      echo '{"ok":false,"stage":"refused","pending_item_ids":["item-1"],"ordering_journal":{"ok":true},"synthetic":true}'
+      exit 1
+    fi
+    if [[ -f "${ROOT}/verifier-not-accepted" ]]; then
+      echo '{"ok":true,"stage":"pending-items","pending_item_ids":["item-1"],"ordering_journal":{"ok":true},"synthetic":true}'
+      exit 0
+    fi
     if [[ "$FINALIZE" -eq 1 ]]; then
       if [[ -z "$OUTPUT" ]]; then
         echo "finalize requires --output" >&2
         exit 2
       fi
       mkdir -p "$(dirname "$OUTPUT")"
-      printf '{"ok":true,"stage":"finalized","synthetic":true}\n' >"$OUTPUT"
-      echo '{"ok":true,"stage":"finalized","synthetic":true}'
+      printf '{"ok":true,"stage":"finalized","ordering_journal":{"ok":true},"synthetic":true}\n' >"$OUTPUT"
+      echo '{"ok":true,"stage":"finalized","ordering_journal":{"ok":true},"synthetic":true}'
       exit 0
     fi
-    echo '{"ok":true,"stage":"pending-or-captured","synthetic":true,"finalize":false}'
+    PENDING="$(pending_item_ids_json)"
+    if [[ "$PENDING" == "[]" ]]; then
+      echo '{"ok":true,"stage":"captured-pending-finalize","pending_item_ids":[],"ordering_journal":{"ok":true},"synthetic":true,"finalize":false}'
+    else
+      echo "{\"ok\":true,\"stage\":\"pending-items\",\"pending_item_ids\":${PENDING},\"ordering_journal\":{\"ok\":true},\"synthetic\":true,\"finalize\":false}"
+    fi
     exit 0
     ;;
   *)

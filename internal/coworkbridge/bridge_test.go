@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,12 +93,25 @@ func TestLoadContractRejectsEscapesAndDuplicates(t *testing.T) {
 	})); err == nil {
 		t.Fatal("expected symlink rejection")
 	}
+
+	trailing := writeContract("trailing.json", nil)
+	raw, err := os.ReadFile(trailing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trailing, append(raw, []byte(`{"schema_version":"evil"}`)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadContract(trailing); err == nil {
+		t.Fatal("expected trailing JSON rejection")
+	}
 }
 
 func TestPersistResponseOrderingAndStopAfterFailure(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
-	runner := NewRunner(env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
 
 	ctx := context.Background()
 	if _, err := runner.PersistResponse(ctx, "item-2", json.RawMessage(`{"n":2}`), "tester"); err == nil {
@@ -115,11 +129,8 @@ func TestPersistResponseOrderingAndStopAfterFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw1) != "{\"keep\":true,\"n\":1}\n" && string(raw1) != "{\"n\":1,\"keep\":true}\n" {
-		// json.Compact preserves key order from input
-		if string(raw1) != "{\"n\":1,\"keep\":true}\n" {
-			t.Fatalf("raw bytes=%q", raw1)
-		}
+	if string(raw1) != "{\"n\":1,\"keep\":true}\n" {
+		t.Fatalf("raw bytes=%q", raw1)
 	}
 	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err == nil {
 		t.Fatal("expected duplicate persistence refusal")
@@ -143,21 +154,23 @@ func TestPersistResponseOrderingAndStopAfterFailure(t *testing.T) {
 	after := readArgvLog(t, env.root)
 	added := after[len(before):]
 	modules := modulesFromArgv(added)
-	if containsModule(modules, "gong_quarterly_review.stage_rehearsal_capture") &&
-		!strings.Contains(err.Error(), "stage failed") {
-		t.Fatalf("unexpected modules after failure setup: %v err=%v", modules, err)
-	}
-	// receipt+adapter may run; nothing after a failed stage in the same persist.
 	stageIdx := indexOfModule(modules, "gong_quarterly_review.stage_rehearsal_capture")
-	if stageIdx >= 0 && stageIdx != len(modules)-1 {
+	if stageIdx < 0 {
+		t.Fatalf("expected failed stage invocation, modules=%v", modules)
+	}
+	if stageIdx != len(modules)-1 {
 		t.Fatalf("commands continued after stage: %v", modules)
+	}
+	if !strings.Contains(err.Error(), "stage failed") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
 func TestStopAfterReceiptFailure(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
-	runner := NewRunner(env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
 	if err := os.WriteFile(filepath.Join(env.root, "fail-receipt"), []byte("1"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +188,8 @@ func TestStopAfterReceiptFailure(t *testing.T) {
 func TestFinalizeOnceAndStatusReadOnly(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
-	runner := NewRunner(env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
 	ctx := context.Background()
 
 	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err != nil {
@@ -190,8 +204,8 @@ func TestFinalizeOnceAndStatusReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status["ok"] != true {
-		t.Fatalf("status=%#v", status)
+	if status["verdict"] == nil {
+		t.Fatalf("status missing verdict: %#v", status)
 	}
 	statusArgv := readArgvLog(t, env.root)[len(before):]
 	for _, line := range statusArgv {
@@ -211,10 +225,52 @@ func TestFinalizeOnceAndStatusReadOnly(t *testing.T) {
 	}
 }
 
+func TestFinalizeRefusesConfiguredCompletionArtifacts(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	env.contract.CompletionArtifactPaths = []string{
+		filepath.Join(env.root, "runs", "demo", "markers", "capture-complete.marker.json"),
+		filepath.Join(env.root, "runs", "demo", "completion.pin.json"),
+	}
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	ctx := context.Background()
+	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-2", json.RawMessage(`{"n":2}`), "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, artifact := range env.contract.CompletionArtifactPaths {
+		if err := os.MkdirAll(filepath.Dir(artifact), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(artifact, []byte(`{"ok":true}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := readArgvLog(t, env.root)
+		_, err := runner.FinalizeRun(ctx)
+		if err == nil {
+			t.Fatalf("expected refusal for artifact %s", artifact)
+		}
+		after := readArgvLog(t, env.root)
+		for _, line := range after[len(before):] {
+			if strings.Contains(line, "verify_ordering_rehearsal") {
+				t.Fatalf("finalize invoked verifier despite artifact %s: %s", artifact, line)
+			}
+		}
+		if err := os.Remove(artifact); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestDispatchRejectsUnknownOperationAndExtraFields(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
-	runner := NewRunner(env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
 	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"shell"}`)); err == nil {
 		t.Fatal("expected unknown operation rejection")
 	}
@@ -224,13 +280,17 @@ func TestDispatchRejectsUnknownOperationAndExtraFields(t *testing.T) {
 	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"preflight","command":"rm -rf /"}`)); err == nil {
 		t.Fatal("expected unknown field rejection")
 	}
+	if _, err := Dispatch(context.Background(), runner, json.RawMessage(`{"operation":"preflight"}{"operation":"evil"}`)); err == nil {
+		t.Fatal("expected trailing JSON rejection")
+	}
 }
 
 func TestOversizedResponseRejected(t *testing.T) {
 	t.Parallel()
 	env := newSyntheticEnv(t)
 	env.contract.MaxResponseBytes = 32
-	runner := NewRunner(env.contract)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
 	big := json.RawMessage(`{"pad":"` + strings.Repeat("x", 64) + `"}`)
 	if _, err := runner.PersistResponse(context.Background(), "item-1", big, "tester"); err == nil {
 		t.Fatal("expected oversized rejection")
@@ -238,6 +298,108 @@ func TestOversizedResponseRejected(t *testing.T) {
 	if _, err := os.Stat(env.contract.Items[0].RawResponsePath); !os.IsNotExist(err) {
 		t.Fatalf("raw file should not exist, err=%v", err)
 	}
+}
+
+func TestPostStartupSymlinkCannotRedirectWrite(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	outside := t.TempDir()
+	fakeSrc := filepath.Join("testdata", "synthetic", "fake-python")
+	fakeDst := filepath.Join(root, ".venv-host", "bin", "python")
+	mustCopyExecutable(t, fakeSrc, fakeDst)
+	for _, dir := range []string{
+		filepath.Join(root, "src"),
+		filepath.Join(root, "runs", "demo", "target"),
+		filepath.Join(root, "runs", "demo", "scratch"),
+		filepath.Join(root, "runs", "demo", "q"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Deliberately do not create runs/demo/out so LoadContract appends it lexically.
+	doc := map[string]any{
+		"schema_version":           "1.0",
+		"approved_project_root":    root,
+		"python_interpreter":       ".venv-host/bin/python",
+		"run_root":                 "runs/demo",
+		"quarter_root":             "runs/demo/q",
+		"readiness_target_dir":     "runs/demo/target",
+		"readiness_scratch_root":   "runs/demo/scratch",
+		"finalization_result_path": "runs/demo/final.json",
+		"items": []any{
+			map[string]any{
+				"item_id":           "item-1",
+				"raw_response_path": "runs/demo/out/item-1.json",
+				"staged_input_path": "runs/demo/out/item-1.staged.json",
+			},
+		},
+	}
+	contractPath := filepath.Join(root, "contract.json")
+	raw, _ := json.Marshal(doc)
+	if err := os.WriteFile(contractPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contract, err := LoadContract(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := mustNewRunner(t, contract)
+	defer runner.Close()
+
+	outParent := filepath.Join(root, "runs", "demo", "out")
+	if err := os.Symlink(outside, outParent); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.PersistResponse(context.Background(), "item-1", json.RawMessage(`{"n":1}`), "tester")
+	if err == nil {
+		t.Fatal("expected persist refusal after post-startup symlink")
+	}
+	entries, _ := os.ReadDir(outside)
+	if len(entries) != 0 {
+		t.Fatalf("wrote outside approved root: %v", entries)
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "item-1.json")); !os.IsNotExist(err) {
+		t.Fatalf("outside raw file exists, err=%v", err)
+	}
+}
+
+func TestVerifierVerdictGate(t *testing.T) {
+	t.Parallel()
+	env := newSyntheticEnv(t)
+	runner := mustNewRunner(t, env.contract)
+	defer runner.Close()
+	ctx := context.Background()
+
+	if _, err := runner.PersistResponse(ctx, "item-1", json.RawMessage(`{"n":1}`), "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(env.root, "verifier-not-accepted"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-2", json.RawMessage(`{"n":2}`), "tester"); err == nil {
+		t.Fatal("expected exit-0 not-accepted refusal")
+	}
+	if _, err := os.Stat(env.contract.Items[1].RawResponsePath); !os.IsNotExist(err) {
+		t.Fatal("item-2 should not be persisted when previous verdict is not accepted")
+	}
+
+	if err := os.Remove(filepath.Join(env.root, "verifier-not-accepted")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.root, "verifier-refuse"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.PersistResponse(ctx, "item-2", json.RawMessage(`{"n":2}`), "tester"); err == nil {
+		t.Fatal("expected nonzero verifier refusal")
+	}
+
+	status, err := runner.GetRunStatus(ctx)
+	if err == nil {
+		t.Fatal("expected get_run_status to surface nonzero verifier failure")
+	}
+	_ = status
 }
 
 type syntheticEnv struct {
@@ -265,6 +427,10 @@ func newSyntheticEnv(t *testing.T) syntheticEnv {
 		"readiness_target_dir":     "runs/demo/target",
 		"readiness_scratch_root":   "runs/demo/scratch",
 		"finalization_result_path": "runs/demo/final.json",
+		"completion_marker_paths": []any{
+			"runs/demo/markers/capture-complete.marker.json",
+		},
+		"completion_pin_path": "runs/demo/completion.pin.json",
 		"items": []any{
 			map[string]any{
 				"item_id":           "item-1",
@@ -288,6 +454,15 @@ func newSyntheticEnv(t *testing.T) syntheticEnv {
 		t.Fatalf("LoadContract: %v", err)
 	}
 	return syntheticEnv{root: root, contract: contract}
+}
+
+func mustNewRunner(t *testing.T, contract *ResolvedContract) *Runner {
+	t.Helper()
+	runner, err := NewRunner(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runner
 }
 
 func mustWriteExecutable(t *testing.T, path, body string) {
@@ -371,12 +546,18 @@ func indexOfModule(modules []string, name string) int {
 func TestWriteJSONExclusivePreservesBytes(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	path := filepath.Join(dir, "resp.json")
-	input := json.RawMessage("{\n  \"b\": 2, \"a\": 1\n}")
-	if err := writeJSONExclusive(path, input); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(path)
+	defer root.Close()
+	contract := &ResolvedContract{ApprovedProjectRoot: dir, MaxResponseBytes: MaxResponseBytes}
+	runner := &Runner{Contract: contract, root: root}
+	input := json.RawMessage("{\n  \"b\": 2, \"a\": 1\n}")
+	if err := runner.writeJSONExclusive(filepath.Join(dir, "resp.json"), input); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "resp.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,5 +566,39 @@ func TestWriteJSONExclusivePreservesBytes(t *testing.T) {
 	compact.WriteByte('\n')
 	if !bytes.Equal(got, compact.Bytes()) {
 		t.Fatalf("got %q want %q", got, compact.Bytes())
+	}
+}
+
+func TestInstallScriptRefusesWithoutMutatingConfig(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "claude_desktop_config.json")
+	original := []byte(`{"mcpServers":{"keep":{"command":"/bin/true"}}}`)
+	if err := os.WriteFile(configPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	contract := filepath.Join(dir, "contract.json")
+	binary := filepath.Join(dir, "gongcowork")
+	if err := os.WriteFile(contract, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join("..", "..", "scripts", "install-claude-cowork-bridge.sh")
+	cmd := exec.Command("bash", script, "--contract", contract, "--binary", binary, "--config", configPath, "--install")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected --install refusal, output=%s", out)
+	}
+	if code := cmd.ProcessState.ExitCode(); code != 2 {
+		t.Fatalf("exit=%d want 2 output=%s", code, out)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("config mutated: %s", got)
 	}
 }
