@@ -1,0 +1,236 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/fyne-coder/gongcli_mcp/internal/mcp"
+)
+
+func TestGongcoworkToolsListOnlyWorkflowTool(t *testing.T) {
+	env := newMainSyntheticEnv(t)
+	var stdout, stderr bytes.Buffer
+	stdin := bytes.NewBufferString(
+		mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "1", Method: "initialize", Params: json.RawMessage(`{}`)}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", Method: "notifications/initialized"}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "2", Method: "tools/list"}),
+	)
+	code := run([]string{"--contract", env.contractPath}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	frames := readFrames(t, stdout.Bytes())
+	if len(frames) != 2 {
+		t.Fatalf("frame count=%d want 2 (init+tools/list)", len(frames))
+	}
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frames[1], &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Result.Tools) != 1 || listed.Result.Tools[0].Name != "gong_workflow" {
+		t.Fatalf("tools=%v want [gong_workflow]", listed.Result.Tools)
+	}
+}
+
+func TestGongcoworkPreflightAndPersistViaStdio(t *testing.T) {
+	env := newMainSyntheticEnv(t)
+	var stdout, stderr bytes.Buffer
+	stdin := bytes.NewBufferString(
+		mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "1", Method: "initialize", Params: json.RawMessage(`{}`)}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "2", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_workflow",
+				"arguments": map[string]any{
+					"operation": "preflight",
+				},
+			})}) +
+			mcpFrame(mcp.Request{JSONRPC: "2.0", ID: "3", Method: "tools/call", Params: mustRaw(t, map[string]any{
+				"name": "gong_workflow",
+				"arguments": map[string]any{
+					"operation":   "persist_response",
+					"item_id":     "item-1",
+					"response":    map[string]any{"hello": "world"},
+					"attested_by": "stdio-test",
+				},
+			})}),
+	)
+	code := run([]string{"--contract", env.contractPath}, stdin, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	frames := readFrames(t, stdout.Bytes())
+	if len(frames) != 3 {
+		t.Fatalf("frame count=%d want 3", len(frames))
+	}
+	rawPath := filepath.Join(env.root, "runs", "demo", "out", "item-1.json")
+	body, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "{\"hello\":\"world\"}\n" {
+		t.Fatalf("persisted body=%q", body)
+	}
+	argvLog, err := os.ReadFile(filepath.Join(env.root, "argv.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(argvLog)
+	for _, module := range []string{
+		"gong_quarterly_review.local_bridge_readiness",
+		"gong_quarterly_review.response_receipt",
+		"gong_quarterly_review.response_adapter",
+		"gong_quarterly_review.stage_rehearsal_capture",
+	} {
+		if !strings.Contains(text, module) {
+			t.Fatalf("argv log missing %s:\n%s", module, text)
+		}
+	}
+	if strings.Contains(text, "gong") && strings.Contains(strings.ToLower(text), "https://") {
+		t.Fatalf("unexpected network-looking argv: %s", text)
+	}
+}
+
+func TestGongcoworkRequiresAbsoluteContract(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"--contract", "relative.json"}, bytes.NewReader(nil), io.Discard, &stderr)
+	if code != 2 {
+		t.Fatalf("exit=%d want 2", code)
+	}
+}
+
+type mainEnv struct {
+	root         string
+	contractPath string
+}
+
+func newMainSyntheticEnv(t *testing.T) mainEnv {
+	t.Helper()
+	root := t.TempDir()
+	src := filepath.Join("..", "..", "internal", "coworkbridge", "testdata", "synthetic", "bin", "fake-python")
+	dst := filepath.Join(root, ".venv-host", "bin", "python")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, raw, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "src"),
+		filepath.Join(root, "runs", "demo", "out"),
+		filepath.Join(root, "runs", "demo", "target"),
+		filepath.Join(root, "runs", "demo", "scratch"),
+		filepath.Join(root, "runs", "demo", "q"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	contractPath := filepath.Join(root, "contract.json")
+	doc := map[string]any{
+		"schema_version":           "1.0",
+		"approved_project_root":    root,
+		"python_interpreter":       ".venv-host/bin/python",
+		"run_root":                 "runs/demo",
+		"quarter_root":             "runs/demo/q",
+		"readiness_target_dir":     "runs/demo/target",
+		"readiness_scratch_root":   "runs/demo/scratch",
+		"finalization_result_path": "runs/demo/final.json",
+		"items": []any{
+			map[string]any{
+				"item_id":           "item-1",
+				"raw_response_path": "runs/demo/out/item-1.json",
+				"staged_input_path": "runs/demo/out/item-1.staged.json",
+			},
+			map[string]any{
+				"item_id":           "item-2",
+				"raw_response_path": "runs/demo/out/item-2.json",
+				"staged_input_path": "runs/demo/out/item-2.staged.json",
+			},
+		},
+	}
+	payload, _ := json.Marshal(doc)
+	if err := os.WriteFile(contractPath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return mainEnv{root: root, contractPath: contractPath}
+}
+
+func mcpFrame(req mcp.Request) string {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		panic(err)
+	}
+	return "Content-Length: " + strconv.Itoa(len(payload)) + "\r\n\r\n" + string(payload)
+}
+
+func mustRaw(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func readFrames(t *testing.T, raw []byte) [][]byte {
+	t.Helper()
+	reader := bufio.NewReader(bytes.NewReader(raw))
+	var frames [][]byte
+	for {
+		payload, err := readContentLengthFrame(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return frames
+			}
+			t.Fatal(err)
+		}
+		frames = append(frames, payload)
+	}
+}
+
+func readContentLengthFrame(r *bufio.Reader) ([]byte, error) {
+	var contentLength int
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			break
+		}
+		const prefix = "Content-Length:"
+		if strings.HasPrefix(strings.ToLower(line), strings.ToLower(prefix)) {
+			n, err := strconv.Atoi(strings.TrimSpace(line[len(prefix):]))
+			if err != nil {
+				return nil, err
+			}
+			contentLength = n
+		}
+	}
+	if contentLength <= 0 {
+		return nil, io.EOF
+	}
+	payload := make([]byte, contentLength)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}

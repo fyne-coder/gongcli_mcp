@@ -4,15 +4,24 @@ DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 IMAGE_BASE ?= ghcr.io/fyne-coder/gongcli_mcp
 LDFLAGS := -X github.com/fyne-coder/gongcli_mcp/internal/version.Version=$(VERSION) -X github.com/fyne-coder/gongcli_mcp/internal/version.Commit=$(COMMIT) -X github.com/fyne-coder/gongcli_mcp/internal/version.Date=$(DATE)
 
-.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-build-mcp-gateway docker-build-ghcr docker-build-ghcr-mcp docker-build-ghcr-mcp-gateway docker-smoke postgres-backup-restore-smoke clean
+.PHONY: build test fmt vet secret-scan sbom checksums docker-build docker-build-mcp docker-build-mcp-gateway docker-build-ghcr docker-build-ghcr-mcp docker-build-ghcr-mcp-gateway docker-smoke postgres-backup-restore-smoke clean coding-check gongcowork
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/gongctl ./cmd/gongctl
 	go build -ldflags "$(LDFLAGS)" -o bin/gongmcp ./cmd/gongmcp
 	go build -ldflags "$(LDFLAGS)" -o bin/gongmcp-gateway ./cmd/gongmcp-gateway
 
+gongcowork:
+	go build -ldflags "$(LDFLAGS)" -o bin/gongcowork ./cmd/gongcowork
+
 test:
 	go test ./...
+
+coding-check:
+	git diff --check
+	go test -count=1 ./internal/mcp ./internal/coworkbridge ./cmd/gongcowork
+	go vet ./internal/mcp ./internal/coworkbridge ./cmd/gongcowork
+	bash -n scripts/install-claude-cowork-bridge.sh
 
 fmt:
 	gofmt -w cmd internal

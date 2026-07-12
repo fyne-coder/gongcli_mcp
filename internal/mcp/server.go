@@ -90,6 +90,8 @@ type Server struct {
 	version                      string
 	runtimeInfo                  RuntimeInfo
 	tools                        []tool
+	customTools                  []CustomTool
+	customHandlers               map[string]CustomToolHandler
 	limitPolicy                  LimitPolicy
 	transcriptEvidenceProvenance TranscriptEvidenceProvenance
 	httpToolCallTimeout          time.Duration
@@ -102,6 +104,20 @@ type Server struct {
 	governanceCheck              func(context.Context) error
 	policySwitches               PolicySwitches
 	blocklistGuard               *governance.BlocklistGuard
+}
+
+// CustomToolHandler executes one optionally registered custom MCP tool.
+// Handlers return a JSON-serializable value that is wrapped as a normal tool
+// result; they must not mutate the default Gong tool catalog.
+type CustomToolHandler func(ctx context.Context, arguments json.RawMessage) (any, error)
+
+// CustomTool registers an additional MCP tool on a Server instance only.
+// Default catalogs and presets remain unchanged unless a caller opts in.
+type CustomTool struct {
+	Name        string
+	Description string
+	InputSchema map[string]any
+	Handler     CustomToolHandler
 }
 
 // BlocklistGuard is re-exported from the governance package so MCP
@@ -554,7 +570,50 @@ func NewServerWithOptions(store Store, name, version string, opts ...ServerOptio
 		}
 		server.tools = filtered
 	}
+	server.applyCustomTools()
 	return server
+}
+
+func (s *Server) applyCustomTools() {
+	if len(s.customTools) == 0 {
+		return
+	}
+	if s.customHandlers == nil {
+		s.customHandlers = make(map[string]CustomToolHandler, len(s.customTools))
+	}
+	for _, item := range s.customTools {
+		name := strings.TrimSpace(item.Name)
+		if name == "" || item.Handler == nil {
+			continue
+		}
+		if len(s.allowedToolNames) > 0 {
+			if _, ok := s.allowedToolNames[name]; !ok {
+				continue
+			}
+		}
+		schema := item.InputSchema
+		if schema == nil {
+			schema = map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}
+		}
+		s.tools = append(s.tools, tool{
+			Name:        name,
+			Description: strings.TrimSpace(item.Description),
+			InputSchema: schema,
+		})
+		s.customHandlers[name] = item.Handler
+	}
+}
+
+// WithCustomTools registers optional instance-local tools. When omitted, the
+// default Gong MCP catalog and presets are unchanged.
+func WithCustomTools(tools ...CustomTool) ServerOption {
+	copied := append([]CustomTool(nil), tools...)
+	return func(s *Server) {
+		s.customTools = append(s.customTools, copied...)
+	}
 }
 
 func WithRuntimeInfo(info RuntimeInfo) ServerOption {
@@ -1323,6 +1382,13 @@ func (s *Server) executeTool(ctx context.Context, params toolsCallParams) (toolC
 		if err := s.governanceCheck(ctx); err != nil {
 			return toolCallResult{}, err
 		}
+	}
+	if handler, ok := s.customHandlers[params.Name]; ok {
+		value, err := handler(ctx, params.Arguments)
+		if err != nil {
+			return toolCallResult{}, err
+		}
+		return newToolResult(value)
 	}
 	if isFacadeTool(params.Name) {
 		return s.executeFacadeTool(ctx, params)
