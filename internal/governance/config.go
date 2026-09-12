@@ -77,6 +77,103 @@ type CandidateStore interface {
 	GovernanceDataFingerprint(ctx context.Context) (string, error)
 }
 
+// StreamingCandidateStore is an optional extension of CandidateStore. When a
+// store implements it, BuildAudit consumes candidates row-by-row instead of
+// materializing the full slice.
+type StreamingCandidateStore interface {
+	StreamGovernanceNameCandidates(ctx context.Context, consume func(Candidate) error) error
+}
+
+// AuditAccumulator builds an Audit without retaining candidate value strings.
+// CandidateValues counts every Consume call, including blank-normalized values,
+// matching AuditCandidates' use of len(candidates). Consume is for a single
+// goroutine and is not safe for concurrent calls.
+type AuditAccumulator struct {
+	targets         []Target
+	configEntries   int
+	configAliases   int
+	candidateValues int
+	callsByTarget   map[string]map[string]struct{}
+	suppressed      map[string]struct{}
+}
+
+// NewAuditAccumulator precomputes targets and config entry/alias counts.
+func NewAuditAccumulator(cfg *Config) *AuditAccumulator {
+	targets := cfg.Targets()
+	entries := map[string]struct{}{}
+	aliases := 0
+	for _, target := range targets {
+		entries[target.List+"\x00"+target.Name] = struct{}{}
+		if strings.TrimSpace(target.Alias) != "" {
+			aliases++
+		}
+	}
+	return &AuditAccumulator{
+		targets:       targets,
+		configEntries: len(entries),
+		configAliases: aliases,
+		callsByTarget: map[string]map[string]struct{}{},
+		suppressed:    map[string]struct{}{},
+	}
+}
+
+// Consume records one candidate. Blank-normalized values still increment the
+// candidate count but do not match targets.
+func (a *AuditAccumulator) Consume(candidate Candidate) {
+	if a == nil {
+		return
+	}
+	a.candidateValues++
+	normalized := NormalizeName(candidate.Value)
+	if normalized == "" {
+		return
+	}
+	for _, target := range a.targets {
+		if !normalizedContainsTarget(normalized, target.Normalized) {
+			continue
+		}
+		key := targetKey(target)
+		if a.callsByTarget[key] == nil {
+			a.callsByTarget[key] = map[string]struct{}{}
+		}
+		a.callsByTarget[key][candidate.CallID] = struct{}{}
+		a.suppressed[candidate.CallID] = struct{}{}
+	}
+}
+
+// Result finalizes matched/unmatched entries in stable target order and sorts
+// suppressed call IDs.
+func (a *AuditAccumulator) Result() *Audit {
+	if a == nil {
+		return &Audit{}
+	}
+	audit := &Audit{
+		ConfigEntries:   a.configEntries,
+		ConfigAliases:   a.configAliases,
+		CandidateValues: a.candidateValues,
+	}
+	for _, target := range a.targets {
+		calls := a.callsByTarget[targetKey(target)]
+		if len(calls) == 0 {
+			audit.UnmatchedEntries = append(audit.UnmatchedEntries, target)
+			continue
+		}
+		audit.MatchedEntries = append(audit.MatchedEntries, Match{
+			List:       target.List,
+			Name:       target.Name,
+			Alias:      target.Alias,
+			Normalized: target.Normalized,
+			CallCount:  len(calls),
+		})
+	}
+	for callID := range a.suppressed {
+		audit.SuppressedCallIDs = append(audit.SuppressedCallIDs, callID)
+	}
+	sort.Strings(audit.SuppressedCallIDs)
+	audit.SuppressedCallCount = len(audit.SuppressedCallIDs)
+	return audit
+}
+
 type RuntimeSnapshot struct {
 	ConfigSize    int64
 	ConfigModTime int64
@@ -226,6 +323,16 @@ func (c *Config) Fingerprint() string {
 }
 
 func BuildAudit(ctx context.Context, store CandidateStore, cfg *Config) (*Audit, error) {
+	if streamer, ok := store.(StreamingCandidateStore); ok {
+		acc := NewAuditAccumulator(cfg)
+		if err := streamer.StreamGovernanceNameCandidates(ctx, func(candidate Candidate) error {
+			acc.Consume(candidate)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return acc.Result(), nil
+	}
 	candidates, err := store.GovernanceNameCandidates(ctx)
 	if err != nil {
 		return nil, err
@@ -233,62 +340,13 @@ func BuildAudit(ctx context.Context, store CandidateStore, cfg *Config) (*Audit,
 	return AuditCandidates(candidates, cfg), nil
 }
 
+// AuditCandidates is a compatibility wrapper around AuditAccumulator.
 func AuditCandidates(candidates []Candidate, cfg *Config) *Audit {
-	targets := cfg.Targets()
-	entries := map[string]struct{}{}
-	aliases := 0
-	for _, target := range targets {
-		entries[target.List+"\x00"+target.Name] = struct{}{}
-		if strings.TrimSpace(target.Alias) != "" {
-			aliases++
-		}
-	}
-
-	callsByTarget := map[string]map[string]struct{}{}
-	suppressed := map[string]struct{}{}
+	acc := NewAuditAccumulator(cfg)
 	for _, candidate := range candidates {
-		normalized := NormalizeName(candidate.Value)
-		if normalized == "" {
-			continue
-		}
-		for _, target := range targets {
-			if !normalizedContainsTarget(normalized, target.Normalized) {
-				continue
-			}
-			key := targetKey(target)
-			if callsByTarget[key] == nil {
-				callsByTarget[key] = map[string]struct{}{}
-			}
-			callsByTarget[key][candidate.CallID] = struct{}{}
-			suppressed[candidate.CallID] = struct{}{}
-		}
+		acc.Consume(candidate)
 	}
-
-	audit := &Audit{
-		ConfigEntries:   len(entries),
-		ConfigAliases:   aliases,
-		CandidateValues: len(candidates),
-	}
-	for _, target := range targets {
-		calls := callsByTarget[targetKey(target)]
-		if len(calls) == 0 {
-			audit.UnmatchedEntries = append(audit.UnmatchedEntries, target)
-			continue
-		}
-		audit.MatchedEntries = append(audit.MatchedEntries, Match{
-			List:       target.List,
-			Name:       target.Name,
-			Alias:      target.Alias,
-			Normalized: target.Normalized,
-			CallCount:  len(calls),
-		})
-	}
-	for callID := range suppressed {
-		audit.SuppressedCallIDs = append(audit.SuppressedCallIDs, callID)
-	}
-	sort.Strings(audit.SuppressedCallIDs)
-	audit.SuppressedCallCount = len(audit.SuppressedCallIDs)
-	return audit
+	return acc.Result()
 }
 
 func targetKey(target Target) string {
