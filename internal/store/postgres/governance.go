@@ -54,6 +54,10 @@ func (s *Store) StreamGovernanceNameCandidates(ctx context.Context, consume func
 	return streamGovernanceNameCandidates(ctx, s.db, consume)
 }
 
+// Compile-time pin: renaming/removing StreamGovernanceNameCandidates must fail
+// the build instead of silently restoring BuildAudit's materializing fallback.
+var _ governance.StreamingCandidateStore = (*Store)(nil)
+
 func governanceNameCandidates(ctx context.Context, queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }) ([]governance.Candidate, error) {

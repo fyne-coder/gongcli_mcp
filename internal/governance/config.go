@@ -86,7 +86,8 @@ type StreamingCandidateStore interface {
 
 // AuditAccumulator builds an Audit without retaining candidate value strings.
 // CandidateValues counts every Consume call, including blank-normalized values,
-// matching AuditCandidates' use of len(candidates).
+// matching AuditCandidates' use of len(candidates). Consume is for a single
+// goroutine and is not safe for concurrent calls.
 type AuditAccumulator struct {
 	targets         []Target
 	configEntries   int

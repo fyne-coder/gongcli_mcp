@@ -151,9 +151,6 @@ lists:
 	if err != nil {
 		t.Fatalf("BuildAudit streaming returned error: %v", err)
 	}
-	if streamStore.materializeCalls != 0 {
-		t.Fatalf("materialize path called %d times; streaming should win", streamStore.materializeCalls)
-	}
 	if audit.SuppressedCallCount != 1 || audit.SuppressedCallIDs[0] != "call-1" {
 		t.Fatalf("unexpected streaming audit: %+v", audit)
 	}
@@ -249,13 +246,11 @@ func (s *fakeLegacyStore) GovernanceDataFingerprint(context.Context) (string, er
 }
 
 type fakeStreamingStore struct {
-	candidates       []Candidate
-	err              error
-	materializeCalls int
+	candidates []Candidate
+	err        error
 }
 
 func (s *fakeStreamingStore) GovernanceNameCandidates(context.Context) ([]Candidate, error) {
-	s.materializeCalls++
 	panic("legacy GovernanceNameCandidates must not be used when streaming is available")
 }
 

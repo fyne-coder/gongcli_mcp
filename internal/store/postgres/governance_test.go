@@ -143,15 +143,31 @@ lists:
 		t.Fatalf("ParseYAML returned error: %v", err)
 	}
 
+	const wantCandidateCount = 9 // 2 titles + 2 raw_json + 2 CRM names + 2 CRM fields + 1 transcript
+	var sqlCandidateCount int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM (`+governanceNameCandidatesSQL+`) AS governance_name_candidates`).Scan(&sqlCandidateCount); err != nil {
+		t.Fatalf("candidate COUNT(*) returned error: %v", err)
+	}
+	if sqlCandidateCount != wantCandidateCount {
+		t.Fatalf("fixture candidate count=%d want %d (stop: independent oracle disagrees with SQL)", sqlCandidateCount, wantCandidateCount)
+	}
+
+	// Independent oracle: do not derive want from AuditCandidates/materialized slice.
+	want := &governance.Audit{
+		ConfigEntries:   1,
+		ConfigAliases:   0,
+		CandidateValues: wantCandidateCount,
+		MatchedEntries: []governance.Match{
+			{List: governance.ListNoAI, Name: "Postgres Stream NoAI", Normalized: "postgres stream noai", CallCount: 1},
+		},
+		SuppressedCallIDs:   []string{"pg-stream-blocked"},
+		SuppressedCallCount: 1,
+	}
+
 	streamAudit, err := governance.BuildAudit(ctx, store, cfg)
 	if err != nil {
 		t.Fatalf("BuildAudit streaming returned error: %v", err)
 	}
-	materialized, err := store.GovernanceNameCandidates(ctx)
-	if err != nil {
-		t.Fatalf("GovernanceNameCandidates returned error: %v", err)
-	}
-	want := governance.AuditCandidates(materialized, cfg)
 	if !reflect.DeepEqual(streamAudit, want) {
 		t.Fatalf("streaming BuildAudit mismatch\ngot:  %+v\nwant: %+v", streamAudit, want)
 	}
