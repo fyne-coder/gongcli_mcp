@@ -215,18 +215,29 @@ func audienceClientIDAllowed(ctx context.Context, verifier ClientVerifier, audie
 }
 
 func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) error {
-	if len(a.cfg.AllowedSubjects) > 0 {
+	if a.cfg.AppAssignmentOnly && a.cfg.AuthProfile != AuthProfileDirectOIDC {
+		return errors.New("app assignment only requires direct-oidc")
+	}
+	if a.cfg.AppAssignmentOnly && strings.TrimSpace(subject) == "" {
+		return errors.New("subject is required for app assignment only")
+	}
+
+	hasSubjectGate := len(a.cfg.AllowedSubjects) > 0
+	hasEmailGate := len(a.cfg.AllowedEmails) > 0
+	requiredGroups := a.cfg.configuredRequiredGroups()
+	hasGroupGate := len(requiredGroups) > 0
+
+	if hasSubjectGate {
 		if _, ok := a.cfg.AllowedSubjects[strings.ToLower(subject)]; !ok {
 			return errors.New("subject is not allowed")
 		}
 	}
-	if len(a.cfg.AllowedEmails) > 0 {
+	if hasEmailGate {
 		if _, ok := a.cfg.AllowedEmails[strings.ToLower(email)]; !ok {
 			return errors.New("email is not allowed")
 		}
 	}
-	requiredGroups := a.cfg.configuredRequiredGroups()
-	if len(requiredGroups) > 0 {
+	if hasGroupGate {
 		if hasAnyRequiredGroup(groups, requiredGroups) {
 			return nil
 		}
@@ -234,6 +245,12 @@ func (a *Authorizer) authorizePrincipal(subject, email string, groups []string) 
 			return fmt.Errorf("required group %q missing", requiredGroups[0])
 		}
 		return errors.New("required group membership missing")
+	}
+	if !hasSubjectGate && !hasEmailGate && !hasGroupGate {
+		if a.cfg.AppAssignmentOnly {
+			return nil
+		}
+		return errors.New("access policy gate is required")
 	}
 	return nil
 }

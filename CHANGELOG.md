@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added an explicit direct-OIDC `OIDC_ALLOW_APP_ASSIGNMENT_ONLY` gateway mode
+  for deployments where a dedicated IdP application assignment list is the
+  access-control boundary, while preserving the default requirement for a
+  group, subject, or email access gate.
+
 ## 0.6.5 - 2026-07-02
 
 - Added YAML-backed custom business topic packs for `gongmcp`, configurable
