@@ -22,14 +22,7 @@ type GovernancePolicyState struct {
 	UpdatedAt           string   `json:"updated_at"`
 }
 
-func (s *Store) GovernanceNameCandidates(ctx context.Context) ([]governance.Candidate, error) {
-	return governanceNameCandidates(ctx, s.db)
-}
-
-func governanceNameCandidates(ctx context.Context, queryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}) ([]governance.Candidate, error) {
-	rows, err := queryer.QueryContext(ctx, `
+const governanceNameCandidatesSQL = `
 SELECT call_id, 'call_title' AS source, title AS value
   FROM calls
  WHERE TRIM(title) <> ''
@@ -49,21 +42,63 @@ UNION ALL
 SELECT call_id, 'transcript_segment' AS source, text AS value
   FROM transcript_segments
  WHERE TRIM(text) <> ''
-`)
+`
+
+func (s *Store) GovernanceNameCandidates(ctx context.Context) ([]governance.Candidate, error) {
+	return governanceNameCandidates(ctx, s.db)
+}
+
+// StreamGovernanceNameCandidates scans candidates one row at a time and does
+// not retain raw title/JSON/CRM/transcript strings after each consume callback.
+func (s *Store) StreamGovernanceNameCandidates(ctx context.Context, consume func(governance.Candidate) error) error {
+	return streamGovernanceNameCandidates(ctx, s.db, consume)
+}
+
+func governanceNameCandidates(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) ([]governance.Candidate, error) {
+	out := make([]governance.Candidate, 0)
+	err := streamGovernanceNameCandidates(ctx, queryer, func(candidate governance.Candidate) error {
+		out = append(out, candidate)
+		return nil
+	})
+	return out, err
+}
+
+func streamGovernanceNameCandidates(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, consume func(governance.Candidate) error) error {
+	if consume == nil {
+		return errors.New("governance candidate consumer is required")
+	}
+	rows, err := queryer.QueryContext(ctx, governanceNameCandidatesSQL)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
+	return consumeGovernanceCandidateRows(ctx, rows, consume)
+}
 
-	out := make([]governance.Candidate, 0)
+type governanceCandidateRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+func consumeGovernanceCandidateRows(ctx context.Context, rows governanceCandidateRows, consume func(governance.Candidate) error) error {
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var candidate governance.Candidate
 		if err := rows.Scan(&candidate.CallID, &candidate.Source, &candidate.Value); err != nil {
-			return nil, err
+			return err
 		}
-		out = append(out, candidate)
+		if err := consume(candidate); err != nil {
+			return err
+		}
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 func (s *Store) GovernanceDataFingerprint(ctx context.Context) (string, error) {
@@ -100,15 +135,18 @@ func (s *Store) BuildAndSaveGovernancePolicy(ctx context.Context, configSHA256 s
 	if err := lockPostgresWriterTx(ctx, tx); err != nil {
 		return nil, nil, err
 	}
-	candidates, err := governanceNameCandidates(ctx, tx)
-	if err != nil {
+	acc := governance.NewAuditAccumulator(cfg)
+	if err := streamGovernanceNameCandidates(ctx, tx, func(candidate governance.Candidate) error {
+		acc.Consume(candidate)
+		return nil
+	}); err != nil {
 		return nil, nil, err
 	}
 	dataFingerprint, err := governanceDataFingerprint(ctx, tx)
 	if err != nil {
 		return nil, nil, err
 	}
-	audit := governance.AuditCandidates(candidates, cfg)
+	audit := acc.Result()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO governance_policy_state(
 	config_sha256, data_fingerprint, config_entries, config_aliases,
 	matched_entries, unmatched_entries, suppressed_call_count, updated_at
