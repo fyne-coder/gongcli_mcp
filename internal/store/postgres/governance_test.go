@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -40,6 +41,22 @@ func TestConsumeGovernanceCandidateRowsScanAndConsumerErrors(t *testing.T) {
 		t.Fatalf("seen=%d want 1 (stop after first consumer error)", seen)
 	}
 
+	rowsErr := errors.New("rows iteration failed")
+	seen = 0
+	err = consumeGovernanceCandidateRows(ctx, &fakeGovernanceRows{
+		values: [][]string{{"call-1", "call_title", "Acme"}},
+		err:    rowsErr,
+	}, func(governance.Candidate) error {
+		seen++
+		return nil
+	})
+	if !errors.Is(err, rowsErr) {
+		t.Fatalf("rows.Err=%v want %v", err, rowsErr)
+	}
+	if seen != 1 {
+		t.Fatalf("seen=%d want 1 (consume succeeded before terminal rows.Err)", seen)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err = consumeGovernanceCandidateRows(ctx, &fakeGovernanceRows{
@@ -50,6 +67,21 @@ func TestConsumeGovernanceCandidateRowsScanAndConsumerErrors(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error=%v want context.Canceled", err)
+	}
+}
+
+func TestStreamGovernanceNameCandidatesQueryContextError(t *testing.T) {
+	queryErr := errors.New("query failed")
+	var seen int
+	err := streamGovernanceNameCandidates(context.Background(), &fakeGovernanceQueryer{err: queryErr}, func(governance.Candidate) error {
+		seen++
+		return nil
+	})
+	if !errors.Is(err, queryErr) {
+		t.Fatalf("QueryContext error=%v want %v", err, queryErr)
+	}
+	if seen != 0 {
+		t.Fatalf("seen=%d want 0 (no consumer call after query error)", seen)
 	}
 }
 
@@ -134,6 +166,14 @@ lists:
 	if policy.SuppressedCallCount != want.SuppressedCallCount || !reflect.DeepEqual(policy.SuppressedCallIDs, want.SuppressedCallIDs) {
 		t.Fatalf("unexpected saved policy: %+v want suppressed %+v", policy, want.SuppressedCallIDs)
 	}
+}
+
+type fakeGovernanceQueryer struct {
+	err error
+}
+
+func (q *fakeGovernanceQueryer) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	return nil, q.err
 }
 
 type fakeGovernanceRows struct {

@@ -101,7 +101,22 @@ lists:
 		{CallID: "call-globex", Value: "talked with Globex today"},
 		{CallID: "call-z", Value: "no match here"},
 	}
-	want := AuditCandidates(candidates, cfg)
+	// Independent oracle: do not derive want from AuditCandidates/AuditAccumulator.
+	want := &Audit{
+		ConfigEntries:   3,
+		ConfigAliases:   1,
+		CandidateValues: 7,
+		MatchedEntries: []Match{
+			{List: ListNoAI, Name: "Acme, Inc.", Normalized: "acme inc", CallCount: 1},
+			{List: ListNoAI, Name: "Acme, Inc.", Alias: "ACME", Normalized: "acme", CallCount: 2},
+			{List: ListNotificationRequired, Name: "Globex", Normalized: "globex", CallCount: 1},
+		},
+		UnmatchedEntries: []Target{
+			{List: ListNotificationRequired, Name: "Unmatched Co", Normalized: "unmatched co"},
+		},
+		SuppressedCallIDs:   []string{"call-a", "call-b", "call-globex"},
+		SuppressedCallCount: 3,
+	}
 	acc := NewAuditAccumulator(cfg)
 	for _, candidate := range candidates {
 		acc.Consume(candidate)
@@ -110,24 +125,8 @@ lists:
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("accumulator result mismatch\ngot:  %+v\nwant: %+v", got, want)
 	}
-	if got.CandidateValues != len(candidates) {
-		t.Fatalf("CandidateValues=%d want %d (blank-normalized must still count)", got.CandidateValues, len(candidates))
-	}
-	if got.SuppressedCallIDs[0] != "call-a" || got.SuppressedCallIDs[1] != "call-b" || got.SuppressedCallIDs[2] != "call-globex" {
-		t.Fatalf("suppressed IDs not sorted uniquely: %+v", got.SuppressedCallIDs)
-	}
-	if len(got.UnmatchedEntries) != 1 || got.UnmatchedEntries[0].Name != "Unmatched Co" {
-		t.Fatalf("unexpected unmatched entries: %+v", got.UnmatchedEntries)
-	}
-	var acmeAlias *Match
-	for i := range got.MatchedEntries {
-		if got.MatchedEntries[i].Alias == "ACME" {
-			acmeAlias = &got.MatchedEntries[i]
-			break
-		}
-	}
-	if acmeAlias == nil || acmeAlias.CallCount != 2 {
-		t.Fatalf("alias match call count incorrect: %+v", got.MatchedEntries)
+	if wrapper := AuditCandidates(candidates, cfg); !reflect.DeepEqual(wrapper, want) {
+		t.Fatalf("AuditCandidates wrapper mismatch\ngot:  %+v\nwant: %+v", wrapper, want)
 	}
 }
 
